@@ -17,7 +17,7 @@ jobs:
 
       - name: Copy .env from server
         run: |
-          cp /etc/servana/servana_api.env .env
+          cp /home/github-runner/env/servana_api.env .env
           chmod 600 .env
 
       - name: Use Node.js 20
