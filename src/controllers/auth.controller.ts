@@ -19,6 +19,7 @@ const signin = async (req: Request, res: Response) => {
 
 const signup = async (req: Request, res: Response) => {
     try {
+        console.log("hello");
         const dbResponse = await authService.registerUser(req.body);
         successMessage.data = dbResponse;
         res.status(status.success).send(successMessage);

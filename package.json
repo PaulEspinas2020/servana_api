@@ -5,12 +5,12 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "tsc",
-    "start": "tsc -p . && cd dist && node app.js",
+    "build": "tsc && cp servana-serviceAccountKey.json ./dist",
+    "start": "tsc -p . && node dist/app.js",
     "dev": "nodemon --files src/app.ts"
   },
   "keywords": [],
-  "author": "",
+  "author": "Cla H.",
   "license": "ISC",
   "dependencies": {
     "@sendgrid/mail": "^8.1.6",
@@ -31,6 +31,7 @@
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/formidable": "^3.4.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/pg": "^8.16.0",
     "nodemon": "^3.1.11",

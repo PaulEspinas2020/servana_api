@@ -94,7 +94,7 @@ const registerUser = async (user: UserCredentialsReq) => {
             email: dbRegister.email,
         });
 
-        return dbRegister;
+        return {dbRegister, verify}; //to do
     } catch (error) {
         throw error;
     }

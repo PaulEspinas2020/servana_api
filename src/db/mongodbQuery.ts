@@ -1,7 +1,7 @@
 import { mongoConfig } from "../config";
 import { MongoClient, Db } from "mongodb";
 
-const URI = `mongodb+srv://${mongoConfig.mongoUser}:${mongoConfig.mongoPassword}@${mongoConfig.mongoHost}?retryWrites=true&w=majority&appName=${mongoConfig.appName}&ssl=true`;
+const URI = process.env.MONGO_URI as string;
 
 export const mongoClient = new MongoClient(URI, {
     retryWrites: false,

@@ -8,8 +8,8 @@ import { idGenerator } from "../helpers/idGenerator";
 
 const addUserAddress = async (userAddressReq: UserAddressReq, uid: string) => {
     const insertQuery = `INSERT INTO ${dbSchema}.user_address
-        (address_id, uid, location_id, address_one, address_two, zip_code, post_town, country, created_at, created_by, updated_at, updated_by, label, is_primary)
-        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning *`;
+        (address_id, uid, location_id, address_one, address_two, zip_code, post_town, country, created_by, updated_by, label, is_primary)
+        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning *`;
 
     const { userId, locationId, addressOne, addressTwo, zipCode, postTown, country, label, isPrimary, lat, lon } =
         userAddressReq;
@@ -27,9 +27,7 @@ const addUserAddress = async (userAddressReq: UserAddressReq, uid: string) => {
             zipCode,
             postTown,
             country,
-            now,
             uid,
-            now,
             uid,
             label,
             isPrimary,
@@ -89,24 +87,25 @@ const addLocationInDB = async (locationId: string, addressId: string, lat: numbe
     const collection = (await mongoDb).collection("addresses");
 
     try {
-        const insertToDB = await collection.updateOne(
-            {
-                locationId: locationId,
-            },
+        return collection.updateOne(
+            { addressId }, // ✅ single unique key
             {
                 $set: {
                     locationId,
                     addressId,
                     loc: {
                         type: "Point",
-                        coordinates: [lon, lat],
+                        coordinates: [lon, lat], // ✅ [lon, lat]
                     },
+                    updatedAt: new Date(),
+                },
+                $setOnInsert: {
+                    createdAt: new Date(),
                 },
             },
             { upsert: true }
         );
 
-        return insertToDB;
     } catch (error) {
         throw error;
     }
@@ -116,10 +115,8 @@ const updateLocationInDB = async (locationId: string, addressId: string, lat: nu
     const collection = (await mongoDb).collection("addresses");
 
     try {
-        const updateToDB = await collection.updateOne(
-            {
-                addressId,
-            },
+        return collection.updateOne(
+            { addressId },
             {
                 $set: {
                     locationId,
@@ -127,12 +124,10 @@ const updateLocationInDB = async (locationId: string, addressId: string, lat: nu
                         type: "Point",
                         coordinates: [lon, lat],
                     },
+                    updatedAt: new Date(),
                 },
-            },
-            { upsert: true }
+            }
         );
-
-        return updateToDB;
     } catch (error) {
         throw error;
     }
@@ -146,7 +141,7 @@ const getAllAddressesOfUser = async (userId: string) => {
 
         if (!rows || rows.length == 0) return [];
 
-        const dbResponse = Promise.all(rows.map(async(row: any) => await formattedAddress(row)));
+        const dbResponse = Promise.all(rows.map(async (row: any) => await formattedAddress(row)));
         return await dbResponse;
     } catch (error) {
         throw error;
@@ -217,7 +212,7 @@ const getLatLonByLocationId = async (locationId: string) => {
     }
 }
 
-const formattedAddress = async(raw: any) => {
+const formattedAddress = async (raw: any) => {
     const coordinates = await getLatLonByLocationId(raw.location_id);
 
     return {
