@@ -12,12 +12,17 @@ const router = express.Router();
 const whitelist = ["http://localhost:4200"];
 const corsOptionsDelegate = function (req: any, callback: any) {
     var corsOptions;
-    if (whitelist.indexOf(req.header("Origin")) !== -1) {
-        corsOptions = { origin: true }; // reflect (enable) the requested origin in the CORS response
+    const origin = req.header("Origin");
+
+    if (!origin) {
+    // allow curl/postman/server-to-server
+    corsOptions = { origin: true };
+    } else if (whitelist.includes(origin)) {
+    corsOptions = { origin: true };
     } else {
-        corsOptions = { origin: false }; // disable CORS for this request
+    corsOptions = { origin: false };
     }
-    callback(null, corsOptions); // callback expects two parameters: error and options
+    callback(null, corsOptions);
 };
 
 const port = process.env.PORT;
