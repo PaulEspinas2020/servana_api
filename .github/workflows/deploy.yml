@@ -1,0 +1,45 @@
+name: Deploy Servana API (Prod)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, Linux, x64]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run gcp-build
+
+      - name: Ensure .env exists
+        run: |
+          if [ ! -f .env ]; then
+            echo ".env missing! Create it on the server or inject via secrets."
+            exit 1
+          fi
+
+      - name: Restart PM2
+        run: |
+          pm2 describe servana-prod >/dev/null 2>&1 \
+            && pm2 restart servana-prod \
+            || pm2 start dist/app.js --name servana-prod
+          pm2 save
+
+      - name: Reload NGINX
+        run: sudo systemctl reload nginx
