@@ -15,6 +15,11 @@ jobs:
         with:
           clean: true
 
+      - name: Copy .env from server
+        run: |
+          cp /etc/servana/servana_api.env .env
+          chmod 600 .env
+
       - name: Use Node.js 20
         uses: actions/setup-node@v4
         with:
@@ -26,13 +31,6 @@ jobs:
 
       - name: Build
         run: npm run build
-
-      - name: Ensure .env exists
-        run: |
-          if [ ! -f .env ]; then
-            echo ".env missing! Create it on the server or inject via secrets."
-            exit 1
-          fi
 
       - name: Restart PM2
         run: |
