@@ -36,7 +36,7 @@ const addUserAddress = async (userAddressReq: UserAddressReq, uid: string) => {
         if (!rows || rows.length == 0) throw "Failed to insert address";
 
         // Add to mongoDB
-        await addLocationInDB(locationId, addressId, lon, lat);
+        await addLocationInDB(locationId, addressId, lat, lon);
 
         const dbResponse = await formattedAddress(rows[0]);
         return dbResponse;
@@ -74,7 +74,7 @@ const updateUserAddress = async (userAddressReq: UserAddressReq, uid: string, ad
         if (!rows || rows.length == 0) throw "Failed to update address";
 
         // update in mongoDB
-        await updateLocationInDB(locationId, addressId, lon, lat);
+        await updateLocationInDB(locationId, addressId, lat, lon);
 
         const dbResponse = await formattedAddress(rows[0]);
         return dbResponse;
@@ -226,8 +226,8 @@ const formattedAddress = async (raw: any) => {
         country: raw.country,
         label: raw.label,
         isPrimary: raw.is_primary,
-        lat: coordinates ? coordinates[1] : null,
         lon: coordinates ? coordinates[0] : null,
+        lat: coordinates ? coordinates[1] : null,
         createdAt: raw.created_at,
         createdBy: raw.created_by,
         updatedAt: raw.updated_at,
@@ -243,4 +243,5 @@ export {
     makeAddressPrimary,
     deleteAddress,
     makeOtherAddressNotPrimary,
+    getLatLonByLocationId
 };

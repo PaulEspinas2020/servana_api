@@ -59,6 +59,22 @@ app.use("/api", cors(corsOptionsDelegate), authRoute);
 import userRoute from "./routes/user.route";
 app.use("/api", cors(corsOptionsDelegate), userRoute);
 
+import serviceRoute from "./routes/service.route";
+app.use("/api", cors(corsOptionsDelegate), serviceRoute);
+
+import pricingRoutes from "./routes/pricing.routes";
+app.use("/api", cors(corsOptionsDelegate), pricingRoutes);
+
+import bookingRoutes from "./routes/booking.routes";
+app.use("/api", cors(corsOptionsDelegate), bookingRoutes);
+
+import technicianRoutes from "./routes/technician.routes";
+app.use("/api", cors(corsOptionsDelegate), technicianRoutes);
+
+// import paymentRoutes from "./routes/payment.routes";
+// app.use("/api", cors(corsOptionsDelegate), paymentRoutes);
+
+
 app.listen(port, () => {
     console.log(`Magic is running on port ${port}`);
 });

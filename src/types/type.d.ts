@@ -66,6 +66,15 @@ declare global {
         gender?: string;
         phoneNumber?: string;
     }
+
+    interface QuoteRequest {
+        optionId: number;
+        hpKey?: string;        // "1.5hp"
+        heightKey?: string;    // "2nd_floor"
+        distanceKey?: string;  // "5-10km"
+        addonOptionIds?: number[];
+        parts?: { part_name: string; qty: number; unit_price: number }[];
+    };
 }
 
-export {};
+export { };
