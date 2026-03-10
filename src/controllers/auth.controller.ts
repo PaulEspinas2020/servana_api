@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { successMessage, errorMessage, status } from "../helpers/status";
 import * as authService from "../services/auth.service";
+import * as firebaseFunction from "../services/firebaseFunctions.service";
 
 const signin = async (req: Request, res: Response) => {
     const { email, password, fcmToken } = req.body;
@@ -40,6 +41,20 @@ const resendVerification = async (req: Request, res: Response) => {
         errorMessage.error = "" + error;
         res.status(status.error).send(errorMessage);
     }
+};
+
+export const firebaseAuthLoginController = async (req: Request, res: Response) => {
+  try {
+    const { idToken } = req.body;
+
+    const result = await firebaseFunction.firebaseAuthLogin(idToken);
+
+    return res.status(200).json(result);
+  } catch (error: any) {
+    return res.status(401).json({
+      message: error.message || "Authentication failed",
+    });
+  }
 };
 
 export { signup, signin, resendVerification };

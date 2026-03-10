@@ -161,4 +161,4 @@ const changeArchiveStatus = async (userId: string, archiveStatus: boolean) => {
     }
 };
 
-export { registerUser, loginUserInDBAndFirebase, loggedInUser, getAndSendEmailVerificationLink, changeArchiveStatus };
+export { registerUser, loginUserInDBAndFirebase, loggedInUser, getAndSendEmailVerificationLink, changeArchiveStatus};

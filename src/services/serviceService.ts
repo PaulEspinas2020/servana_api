@@ -1,5 +1,6 @@
 import { db } from "../config";
 import dbQuery from "../db/dbQuery";
+import { toCamel } from "../helpers/idGenerator";
 const dbSchema = db.schema;
 
 export const getAllServices = async () => {
@@ -7,7 +8,8 @@ export const getAllServices = async () => {
 
     try {
         const res = await dbQuery.query(r, []);
-        return res.rows;
+        const toCamelRows = (rows: any[]) => rows.map(toCamel);
+        return toCamelRows(res.rows);
     } catch (error) {
         throw error;
 
@@ -63,15 +65,20 @@ export const getOptionsWithAddons = async (serviceId: number) => {
 
     const addonsByParent: Record<number, any[]> = {};
     for (const a of addonRes.rows) {
-        if (!a.parent_option_id) continue;
-        addonsByParent[a.parent_option_id] = addonsByParent[a.parent_option_id] || [];
-        addonsByParent[a.parent_option_id].push(a);
+        const addon = toCamel(a);
+        if (!addon.parentOptionId) continue;
+        addonsByParent[addon.parentOptionId] = addonsByParent[addon.parentOptionId] || [];
+        addonsByParent[addon.parentOptionId].push(addon);
     }
+    
+    return mainRes.rows.map((opt: { id: number }) => {
+        const option = toCamel(opt);
 
-    return mainRes.rows.map((opt: { id: number }) => ({
-        ...opt,
-        addons: addonsByParent[opt.id] || [],
-    }));
+        return {
+            ...option,
+            addons: addonsByParent[option.id] || [],
+        }
+    });
 };
 
 export const getBranchesByService = async (serviceId: number) => {

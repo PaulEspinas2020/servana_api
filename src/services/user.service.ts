@@ -39,6 +39,56 @@ const registerUserInDB = async (user: UserCredentialsReq) => {
     }
 };
 
+export const upsertFirebaseUser = async (payload: {
+  uid: string;
+  email?: string | null;
+  phoneNumber?: string | null;
+  firstName?: string;
+  lastName?: string;
+  role?: string;
+}) => {
+  const {
+    uid,
+    email = null,
+    phoneNumber = null,
+    firstName = "",
+    lastName = "",
+    role = "2",
+  } = payload;
+
+  const result = await dbQuery.query(
+    `
+    INSERT INTO ${dbSchema}.user_credentials (
+      uid,
+      email,
+      phone_number,
+      first_name,
+      last_name,
+      "role",
+      created_date
+    )
+    VALUES ($1,$2,$3,$4,$5,$6,$7)
+    ON CONFLICT (uid)
+    DO UPDATE SET
+      email = COALESCE(EXCLUDED.email, user_credentials.email),
+      phone_number = COALESCE(EXCLUDED.phone_number, user_credentials.phone_number),
+      created_date = NOW()
+    RETURNING *;
+    `,
+    [
+      uid,
+      email,
+      phoneNumber,
+      firstName,
+      lastName,
+      role,
+      now,
+    ]
+  );
+  const dbResponse = formatUserCredentials(result.rows[0]);
+  return dbResponse;
+};
+
 const getUserCredentialsByEmail = async (email: string, withPassword = false) => {
     const searchQuery = `
       Select 

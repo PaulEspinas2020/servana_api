@@ -10,8 +10,18 @@ const idGenerator = (length: number, prefix: string) => {
     )
   }
   
+  const toCamel = (row: any) => {
+  const newRow: any = {};
+  Object.keys(row).forEach((key) => {
+    const camelKey = key.replace(/_([a-z])/g, (g) => g[1].toUpperCase());
+    newRow[camelKey] = row[key];
+  });
+  return newRow;
+};
+
   export {
     idGenerator,
-    randomFixedInteger
+    randomFixedInteger,
+    toCamel
   }
   

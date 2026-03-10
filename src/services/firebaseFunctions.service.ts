@@ -9,9 +9,37 @@ import {
     sendEmailVerification,
     confirmPasswordReset,
 } from "firebase/auth";
+import * as userService from "../services/user.service";
 
 const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
 
+const firebaseAuthLogin = async (idToken: string) => {
+  if (!idToken) {
+    throw new Error("Missing Firebase ID token");
+  }
+
+  const decoded = await defaultAuthAdmin.verifyIdToken(idToken);
+  const firebaseUser = await defaultAuthAdmin.getUser(decoded.uid);
+
+  const dbUser = await userService.upsertFirebaseUser({
+    uid: firebaseUser.uid,
+    email: firebaseUser.email || null,
+    phoneNumber: firebaseUser.phoneNumber || null,
+    firstName: "",
+    lastName: "",
+    role: "2"
+  });
+
+  return {
+    message: "Authenticated successfully",
+    dbRegister: dbUser,
+    firebase: {
+      uid: firebaseUser.uid,
+      phoneNumber: firebaseUser.phoneNumber || null,
+      email: firebaseUser.email || null,
+    },
+  };
+};
 const checkUserIfExistInFirebase = async (email: string) => {
     return defaultAuthAdmin
         .getUserByEmail(email)
@@ -80,4 +108,4 @@ const signInUserAndGetTokeninFirebase = async (email: string, password: string) 
     }
 };
 
-export { checkUserIfExistInFirebase, registerNewUserInFirebase, sendEmailVerificationFirebase, signInUserAndGetTokeninFirebase };
+export { checkUserIfExistInFirebase, registerNewUserInFirebase, sendEmailVerificationFirebase, signInUserAndGetTokeninFirebase, firebaseAuthLogin };

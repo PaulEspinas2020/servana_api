@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { successMessage, errorMessage, status } from "../helpers/status";
 import * as serviceService from "../services/serviceService";
+import { toCamel } from "../helpers/idGenerator";
 
 export const listServices = async (req: Request, res: Response) => {
   try {
@@ -58,8 +59,8 @@ export const listAvailableSlots = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "date is required" });
 
     const slots = await serviceService.getAvailableSlots(branchId, date);
-
-    res.json({ success: true, slots });
+    const toCamelRows = (rows: any[]) => rows.map(toCamel);
+    res.json({ success: true, slots: toCamelRows(slots) });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -84,21 +85,21 @@ export const createSlot = async (req: Request, res: Response) => {
 export const create = async (req: Request, res: Response) => {
   try {
     const serviceId = Number(req.params.serviceId);
-    const { center_lat, center_lon, radius_km, is_active } = req.body;
+    const { centerLat, centerLon, radiusKm, isActive } = req.body;
 
-    if (center_lat == null || center_lon == null || radius_km == null) {
-      return res.status(400).json({ success: false, message: "center_lat, center_lon, radius_km required" });
+    if (centerLat == null || centerLon == null || radiusKm == null) {
+      return res.status(400).json({ success: false, message: "centerLat, centerLon, radiusKm required" });
     }
 
     const row = await serviceService.createCoverageGeo({
       service_id: serviceId,
-      center_lat: Number(center_lat),
-      center_lon: Number(center_lon),
-      radius_km: Number(radius_km),
-      is_active: is_active == null ? true : Boolean(is_active),
+      center_lat: Number(centerLat),
+      center_lon: Number(centerLon),
+      radius_km: Number(radiusKm),
+      is_active: isActive == null ? true : Boolean(isActive),
     });
 
-    res.json({ success: true, coverage: row });
+    res.json({ success: true, coverage: toCamel(row) });
   } catch (e: any) {
     res.status(400).json({ success: false, message: e.message });
   }
@@ -108,7 +109,8 @@ export const list = async (req: Request, res: Response) => {
   try {
     const serviceId = Number(req.params.serviceId);
     const rows = await serviceService.listCoverageGeoByService(serviceId);
-    res.json({ success: true, coverage: rows });
+    const toCamelRows = (rows: any[]) => rows.map(toCamel);
+    res.json({ success: true, coverage: toCamelRows(rows) });
   } catch (e: any) {
     res.status(500).json({ success: false, message: e.message });
   }
