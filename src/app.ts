@@ -71,8 +71,8 @@ app.use("/api", cors(corsOptionsDelegate), bookingRoutes);
 import technicianRoutes from "./routes/technician.routes";
 app.use("/api", cors(corsOptionsDelegate), technicianRoutes);
 
-// import paymentRoutes from "./routes/payment.routes";
-// app.use("/api", cors(corsOptionsDelegate), paymentRoutes);
+import paymentRoutes from "./routes/payment.routes";
+app.use("/api", cors(corsOptionsDelegate), paymentRoutes);
 
 
 app.listen(port, () => {

@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import * as technician from "../services/technicianService";
-
+import { toCamel } from "../helpers/idGenerator";
 
 export const listByRole = async (req: Request, res: Response) => {
   try {
@@ -14,10 +14,10 @@ export const listByRole = async (req: Request, res: Response) => {
     }
 
     const workers = await technician.listWorkersByRole(role);
-
+    const toCamelRows = (rows: any[]) => rows.map(toCamel);
     return res.json({
       success: true,
-      workers,
+      workers: toCamelRows(workers),
     });
   } catch (error: any) {
     return res.status(500).json({
@@ -49,7 +49,7 @@ export const getByUid = async (req: Request, res: Response) => {
 
     return res.json({
       success: true,
-      worker,
+      worker: toCamel(worker) ,
     });
   } catch (error: any) {
     return res.status(500).json({
@@ -61,7 +61,7 @@ export const getByUid = async (req: Request, res: Response) => {
 
 export const updateLocation = async (req: Request, res: Response) => {
   try {
-    const { uid, latitude, longitude, is_online } = req.body;
+    const { uid, latitude, longitude, isOnline } = req.body;
 
     if (!uid) {
       return res.status(400).json({
@@ -77,7 +77,7 @@ export const updateLocation = async (req: Request, res: Response) => {
       });
     }
 
-    if (is_online === undefined) {
+    if (isOnline === undefined) {
       return res.status(400).json({
         success: false,
         message: "is_online is required",
@@ -97,7 +97,7 @@ export const updateLocation = async (req: Request, res: Response) => {
       uid,
       latitude: Number(latitude),
       longitude: Number(longitude),
-      is_online: Boolean(is_online),
+      is_online: Boolean(isOnline),
     });
 
     return res.json({
@@ -134,7 +134,7 @@ export const getLocation = async (req: Request, res: Response) => {
 
     return res.json({
       success: true,
-      location,
+      location: toCamel(location),
     });
   } catch (error: any) {
     return res.status(500).json({

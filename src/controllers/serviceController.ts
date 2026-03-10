@@ -76,7 +76,7 @@ export const createSlot = async (req: Request, res: Response) => {
       maxCapacity
     );
 
-    res.json({ success: true, slot });
+    res.json({ success: true, slot: toCamel(slot) });
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });
   }

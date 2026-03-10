@@ -1,9 +1,10 @@
+import { db } from "../config";
 import dbQuery from "../db/dbQuery";
-
-export const submitGcash = async (bookingId: number, reference_no: string, proof_url?: string) => {
+const dbSchema = db.schema;
+export const submitGcash = async (bookingId: number, referenceNo: string, proofUrl?: string) => {
   const r = await dbQuery.query(
     `
-    UPDATE payments
+    UPDATE ${dbSchema}.payments
     SET method='GCASH',
         reference_no=$2,
         proof_url=$3,
@@ -11,7 +12,7 @@ export const submitGcash = async (bookingId: number, reference_no: string, proof
     WHERE booking_id=$1
     RETURNING *
     `,
-    [bookingId, reference_no, proof_url || null]
+    [bookingId, referenceNo, proofUrl || null]
   );
   if (!r.rowCount) throw new Error("Payment record not found.");
   return r.rows[0];
@@ -20,7 +21,7 @@ export const submitGcash = async (bookingId: number, reference_no: string, proof
 export const approvePayment = async (bookingId: number) => {
   const r = await dbQuery.query(
     `
-    UPDATE payments
+    UPDATE ${dbSchema}.payments
     SET status='PAID', paid_at=NOW()
     WHERE booking_id=$1
     RETURNING *
@@ -34,7 +35,7 @@ export const approvePayment = async (bookingId: number) => {
 export const markCashPaid = async (bookingId: number) => {
   const r = await dbQuery.query(
     `
-    UPDATE payments
+    UPDATE ${dbSchema}.payments
     SET method='CASH', status='PAID', paid_at=NOW()
     WHERE booking_id=$1
     RETURNING *

@@ -14,10 +14,10 @@ import { assignNearestWorker } from "../services/technicianService";
 export const createBooking = async (
     userId: string,
     payload: {
-        user_address_id: string;
-        service_option_id: number;
+        userAddressId: string;
+        serviceOptionId: number;
         schedule: string;
-        payment_method: "CASH" | "GCASH";
+        paymentMethod: "CASH" | "GCASH";
         pricing: any;
     }
 ) => {
@@ -30,7 +30,7 @@ export const createBooking = async (
       JOIN ${dbSchema}.services s ON s.id = so.service_id
       WHERE so.id = $1
       `,
-            [payload.service_option_id]
+            [payload.serviceOptionId]
         );
 
         if (!svcRes.rowCount) throw new Error("Invalid service option.");
@@ -45,7 +45,7 @@ export const createBooking = async (
       WHERE address_id = $1
         AND uid = $2
       `,
-            [payload.user_address_id, userId]
+            [payload.userAddressId, userId]
         );
 
         if (!addressRes.rowCount) throw new Error("Invalid address.");
@@ -64,7 +64,7 @@ export const createBooking = async (
 
         // 5) Compute quote
         payload.pricing = payload.pricing || {};
-        payload.pricing.optionId = payload.service_option_id;
+        payload.pricing.optionId = payload.serviceOptionId;
 
         const quote = await computeQuote(payload.pricing);
 
@@ -84,10 +84,10 @@ export const createBooking = async (
       `,
             [
                 userId,
-                payload.user_address_id,
-                payload.service_option_id,
+                payload.userAddressId,
+                payload.serviceOptionId,
                 payload.schedule,
-                payload.payment_method,
+                payload.paymentMethod,
                 otp,
                 quote.final,
                 quote.final,
@@ -103,15 +103,15 @@ export const createBooking = async (
       INSERT INTO ${dbSchema}.payments (booking_id, method, amount, status)
       VALUES ($1,$2,$3,'PENDING')
       `,
-            [booking.id, payload.payment_method, quote.final]
+            [booking.id, payload.paymentMethod, quote.final]
         );
 
         return {
             bookingId: booking.id,
             status: booking.status,
-            quoted_price: booking.quoted_price,
-            final_price: booking.final_price,
-            otp_dev_only: otp
+            quotedPrice: booking.quoted_price,
+            finalPrice: booking.final_price,
+            otpDevOnly: otp
         };
     } catch (error) {
         throw error;
