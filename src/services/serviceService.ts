@@ -34,7 +34,7 @@ export const getLevel2List = async (serviceId: number) => {
 };
 
 export const getOptionsWithAddons = async (serviceId: number) => {
-    // MAIN options + meta
+
     const mainRes = await dbQuery.query(
         `
     SELECT
@@ -51,7 +51,6 @@ export const getOptionsWithAddons = async (serviceId: number) => {
         [serviceId]
     );
 
-    // ADD_ON options grouped by parent_option_id
     const addonRes = await dbQuery.query(
         `
     SELECT *
@@ -98,7 +97,7 @@ export const getBranchesByService = async (serviceId: number) => {
 
 export const getAvailableSlots = async (
     branchId: number,
-    date: string // "2026-02-20"
+    date: string 
 ) => {
     const res = await dbQuery.query(
         `

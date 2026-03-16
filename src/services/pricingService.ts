@@ -3,7 +3,6 @@ import dbQuery from "../db/dbQuery";
 const dbSchema = db.schema;
 
 export const computeQuote = async (req: QuoteRequest) => {
-  // Base price
   const baseRes = await dbQuery.query(
     `SELECT id, base_price FROM ${dbSchema}.service_options WHERE id=$1 AND option_type='MAIN'`,
     [req.optionId]
@@ -26,7 +25,6 @@ export const computeQuote = async (req: QuoteRequest) => {
   const height = await getModifier("HEIGHT", req.heightKey);
   const distance = await getModifier("DISTANCE", req.distanceKey);
 
-  // Add-ons
   let addonsTotal = 0;
   let addons: { id: number; level_3: string; base_price: number }[] = [];
 
@@ -41,7 +39,6 @@ export const computeQuote = async (req: QuoteRequest) => {
     addonsTotal = addons.reduce((s, a) => s + Number(a.base_price || 0), 0);
   }
 
-  // Parts
   const parts = req.parts || [];
   const partsTotal = parts.reduce((s, p) => s + p.qty * p.unit_price, 0);
 

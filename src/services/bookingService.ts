@@ -5,11 +5,9 @@ import { generateOTP } from "../helpers/otp";
 import { computeQuote } from "./pricingService";
 
 import { checkCoverageGeo } from "../services/serviceService";
-import { getLatLonByLocationId } from "../services/address.service"; // returns [lon, lat]
+import { getLatLonByLocationId } from "../services/address.service"; 
 
 import { assignNearestWorker } from "../services/technicianService";
-
-// computeQuote, generateOTP, dbQuery, dbSchema assumed imported/available
 
 export const createBooking = async (
     userId: string,
@@ -22,7 +20,7 @@ export const createBooking = async (
     }
 ) => {
     try {
-        // 1) Validate selected option + get service id
+        
         const svcRes = await dbQuery.query(
             `
       SELECT s.id AS service_id
@@ -37,7 +35,6 @@ export const createBooking = async (
 
         const serviceId = Number(svcRes.rows[0].service_id);
 
-        // 2) Validate address belongs to user
         const addressRes = await dbQuery.query(
             `
       SELECT *
@@ -55,23 +52,18 @@ export const createBooking = async (
 
         if (!locationId) throw new Error("Address missing locationId.");
 
-        // 3) Get lat/lon from Mongo
         const [lon, lat] = await getLatLonByLocationId(String(locationId));
 
-        // 4) Geo coverage check
         const cov = await checkCoverageGeo(serviceId, Number(lat), Number(lon));
         if (!cov.covered) throw new Error("Service not available in your area.");
 
-        // 5) Compute quote
         payload.pricing = payload.pricing || {};
         payload.pricing.optionId = payload.serviceOptionId;
 
         const quote = await computeQuote(payload.pricing);
 
-        // 6) OTP
         const otp = generateOTP();
 
-        // 7) Create booking
         const bookingRes = await dbQuery.query(
             `
       INSERT INTO ${dbSchema}.bookings
@@ -97,7 +89,6 @@ export const createBooking = async (
 
         const booking = bookingRes.rows[0];
 
-        // 8) Create payment row
         await dbQuery.query(
             `
       INSERT INTO ${dbSchema}.payments (booking_id, method, amount, status)
@@ -187,13 +178,9 @@ export const confirmOtp = async (
   }
 };
 
-/**
- * Get booking details
- * Returns booking + payment + addons + (branch or address details if present)
- */
+
 export const getBookingById = async (
     bookingId: number
-    // userId?: string
 ) => {
     const bookingRes = await dbQuery.query(
         `
@@ -224,9 +211,6 @@ export const getBookingById = async (
 
     if (!bookingRes.rowCount) return null;
 
-    // Optional ownership check:
-    // if (userId && bookingRes.rows[0].user_id !== userId) throw new Error("Forbidden");
-
     const addonsRes = await dbQuery.query(
         `
     SELECT
@@ -250,18 +234,11 @@ export const getBookingById = async (
     };
 };
 
-/**
- * Get tracking history
- */
 export const getTracking = async (
     bookingId: number
-    // userId?: string
-) => {
-    // Optional ownership check:
-    // const own = await dbQuery.query(`SELECT user_id FROM ${dbSchema}.bookings WHERE id=$1`, [bookingId]);
-    // if (!own.rowCount) throw new Error("Booking not found");
-    // if (userId && own.rows[0].user_id !== userId) throw new Error("Forbidden");
 
+) => {
+  
     const r = await dbQuery.query(
         `
     SELECT status, note, created_at

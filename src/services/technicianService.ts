@@ -1,6 +1,6 @@
 import { db } from "../config";
 import dbQuery from "../db/dbQuery";
-import mongoDb from "../db/mongodbQuery"; // your existing mongo promise/connection
+import mongoDb from "../db/mongodbQuery";
 
 const dbSchema = db.schema;
 
@@ -49,7 +49,7 @@ export const upsertWorkerLocation = async (payload: {
         is_online: payload.is_online,
         loc: {
           type: "Point",
-          coordinates: [payload.longitude, payload.latitude] // [lon, lat]
+          coordinates: [payload.longitude, payload.latitude]
         },
         updatedAt: new Date(),
       },

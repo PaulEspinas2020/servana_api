@@ -8,7 +8,7 @@ if(mailerKey) sgMail.setApiKey(mailerKey);
 
 const templates: any = {
   // to add template here once created
-  //verify_email: "d-11bed1fea8dc49aaa735cbb5d11dee62",
+  verify_email: "d-ee375012cb0f40778805bcf86bea255f",
   //pw_reset: "d-7bfcedb6768a4f43a8b1655599d4faf6"
   // confirm_email: "d-b325fec0028c419c9ec48c9b5866f10c"
 };

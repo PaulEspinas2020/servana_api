@@ -1,7 +1,5 @@
 import { Router } from "express";
 import * as bookingController from "../controllers/bookingController";
-
-// OPTIONAL middleware: if you use JWT auth
 // import { requireAuth } from "../middlewares/requireAuth";
 
 const router = Router();
