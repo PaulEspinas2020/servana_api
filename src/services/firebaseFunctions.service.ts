@@ -108,4 +108,25 @@ const signInUserAndGetTokeninFirebase = async (email: string, password: string) 
     }
 };
 
-export { checkUserIfExistInFirebase, registerNewUserInFirebase, sendEmailVerificationFirebase, signInUserAndGetTokeninFirebase, firebaseAuthLogin };
+const getFirebaseUserByEmail = async (email: string) => {
+    try {
+        return await defaultAuthAdmin.getUserByEmail(email);
+    } catch (error: any) {
+        if (error.code === "auth/user-not-found") {
+            return null;
+        }
+        throw error;
+    }
+};
+
+const updateFirebaseEmailVerified = async (uid: string, emailVerified: boolean) => {
+    return await defaultAuthAdmin.updateUser(uid, {
+        emailVerified,
+    });
+};
+
+const deleteFirebaseUser = async (uid: string) => {
+    return await defaultAuthAdmin.deleteUser(uid);
+};
+
+export { checkUserIfExistInFirebase, registerNewUserInFirebase, sendEmailVerificationFirebase, signInUserAndGetTokeninFirebase, firebaseAuthLogin, getFirebaseUserByEmail, updateFirebaseEmailVerified, deleteFirebaseUser };

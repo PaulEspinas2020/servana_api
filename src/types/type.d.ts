@@ -27,6 +27,10 @@ declare global {
         firstName: string;
         lastName: string;
         role: number;
+        phoneNumber?: string | null;
+        isEmailVerified: boolean;
+        isPhoneVerified: boolean;
+        platform?: "web" | "mobile";
     }
 
     interface UserAddressReq {

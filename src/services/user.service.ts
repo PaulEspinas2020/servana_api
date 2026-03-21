@@ -1,15 +1,19 @@
 import { db } from "../config";
 import dbQuery from "../db/dbQuery";
+import bcrypt from "bcryptjs";
 const dbSchema = db.schema;
 import dayjs from "dayjs";
 import uploadInStorage from "../helpers/firebaseStorageUploader";
 
 const now = dayjs();
+const OTP_EXPIRY_MINUTES = 10;
 
 const registerUserInDB = async (user: UserCredentialsReq) => {
     const insertQueryInCredentials = `INSERT INTO ${dbSchema}.user_credentials
-      (uid, email, first_name, last_name, "role", created_date, "password")
-      VALUES($1, $2, $3, $4, $5, $6, $7) returning *;`;
+      (uid, email, first_name, last_name, "role", created_date, "password", phone_number,
+            is_email_verified,
+            is_phone_verified)
+      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *;`;
 
     try {
         const { rows } = await dbQuery.query(insertQueryInCredentials, [
@@ -20,6 +24,9 @@ const registerUserInDB = async (user: UserCredentialsReq) => {
             user.role,
             now,
             user.password,
+            user.phoneNumber,
+            user.isEmailVerified,
+            user.isPhoneVerified,
         ]);
 
         if (!rows && rows.length == 0) {
@@ -289,6 +296,96 @@ const formatUserProfile = (raw: any) => {
     };
 };
 
+const storeEmailOtp = async (email: string, code: string) => {
+    const codeHash = await bcrypt.hash(code, 10);
+
+    await dbQuery.query(
+        `
+        INSERT INTO ${dbSchema}.email_otps (email, code_hash, expires_at)
+        VALUES ($1, $2, NOW() + ($3 || ' minutes')::interval)
+        `,
+        [email, codeHash, OTP_EXPIRY_MINUTES]
+    );
+
+    return true;
+};
+
+const getLatestValidEmailOtp = async (email: string) => {
+    const result = await dbQuery.query(
+        `
+        SELECT *
+        FROM ${dbSchema}.email_otps
+        WHERE email = $1
+          AND used = FALSE
+          AND expires_at > NOW()
+        ORDER BY created_at DESC
+        LIMIT 1
+        `,
+        [email]
+    );
+
+    return result.rows[0] || null;
+};
+
+const markEmailOtpAsUsed = async (id: number) => {
+    await dbQuery.query(
+        `
+        UPDATE ${dbSchema}.email_otps
+        SET used = TRUE
+        WHERE id = $1
+        `,
+        [id]
+    );
+
+    return true;
+};
+
+const getUserByEmail = async (email: string) => {
+    const result = await dbQuery.query(
+        `
+        SELECT
+            uid AS id,
+            email,
+            first_name AS "firstName",
+            last_name AS "lastName",
+            role,
+            created_date AS "createdDate",
+            phone_number AS "phoneNumber",
+            is_email_verified AS "isEmailVerified",
+            is_phone_verified AS "isPhoneVerified"
+        FROM ${dbSchema}.user_credentials
+        WHERE email = $1
+        LIMIT 1
+        `,
+        [email]
+    );
+
+    return result.rows[0] || null;
+};
+
+const updateEmailVerifiedByUid = async (uid: string, isEmailVerified: boolean) => {
+    const result = await dbQuery.query(
+        `
+        UPDATE ${dbSchema}.user_credentials
+        SET is_email_verified = $2
+        WHERE uid = $1
+        RETURNING
+            uid AS id,
+            email,
+            first_name AS "firstName",
+            last_name AS "lastName",
+            role,
+            created_date AS "createdDate",
+            phone_number AS "phoneNumber",
+            is_email_verified AS "isEmailVerified",
+            is_phone_verified AS "isPhoneVerified"
+        `,
+        [uid, isEmailVerified]
+    );
+
+    return result.rows[0] || null;
+};
+
 export {
     registerUserInDB,
     getUserCredentialsByEmail,
@@ -299,5 +396,10 @@ export {
     getUserCount,
     getUserProfile,
     updateUserProfile,
-    updateUserPhoneNumber
+    updateUserPhoneNumber,
+    storeEmailOtp,
+    getLatestValidEmailOtp,
+    markEmailOtpAsUsed,
+    getUserByEmail,
+    updateEmailVerifiedByUid,
 };

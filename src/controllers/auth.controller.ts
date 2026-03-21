@@ -30,6 +30,38 @@ const signup = async (req: Request, res: Response) => {
     }
 };
 
+const verifyEmailOtpController = async (req: Request, res: Response) => {
+    try {
+        const result = await authService.verifyEmailOtp(req.body);
+
+        return res.status(200).json({
+            status: "success",
+            data: result,
+        });
+    } catch (error: any) {
+        return res.status(400).json({
+            status: "failed",
+            message: error?.message || error || "OTP verification failed",
+        });
+    }
+};
+
+const resendEmailOtpController = async (req: Request, res: Response) => {
+    try {
+        const result = await authService.resendEmailOtp(req.body);
+
+        return res.status(200).json({
+            status: "success",
+            data: result,
+        });
+    } catch (error: any) {
+        return res.status(400).json({
+            status: "failed",
+            message: error?.message || error || "Resend OTP failed",
+        });
+    }
+};
+
 const resendVerification = async (req: Request, res: Response) => {
     const email= req.query.email as string;
 
@@ -57,4 +89,4 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
   }
 };
 
-export { signup, signin, resendVerification };
+export { signup, signin, resendVerification, verifyEmailOtpController, resendEmailOtpController };
