@@ -36,3 +36,41 @@ export const markCashPaid = async (req: Request, res: Response) => {
     res.status(400).json({ success: false, message: e.message });
   }
 };
+
+export const createPaymongoPayment = async (req: Request, res: Response) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+
+    const result = await paymentService.createCheckoutSession(bookingId);
+
+    return res.json({
+      success: true,
+      checkout_url: result.checkout_url
+    });
+
+  } catch (error: any) {
+
+    return res.status(400).json({
+      success: false,
+      message: error.message
+    });
+
+  }
+};
+
+export const paymongoWebhook = async (req: Request, res: Response) => {
+  try {
+
+    await paymentService.processWebhook(req.body);
+
+    res.status(200).json({ received: true });
+
+  } catch (error: any) {
+
+    res.status(400).json({
+      success: false,
+      message: error.message
+    });
+
+  }
+};
