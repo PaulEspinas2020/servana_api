@@ -60,6 +60,10 @@ export const createPaymongoPayment = async (req: Request, res: Response) => {
 
 export const paymongoWebhook = async (req: Request, res: Response) => {
   try {
+    console.log("PAYMONGO WEBHOOK HIT");
+    console.log("Headers:", req.headers);
+    console.log("Body:", req.body);
+    console.log("RawBody:", (req as any).rawBody);
 
     await paymentService.processWebhook(req.body);
 

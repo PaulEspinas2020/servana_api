@@ -195,6 +195,10 @@ export const processWebhook = async (req: Request) => {
     (req.headers["paymongo-signature"] as string | undefined) ||
     (req.headers["Paymongo-Signature"] as string | undefined);
 
+  console.log("Webhook signature:", signatureHeader);
+  console.log("Webhook rawBody:", rawBody);
+  console.log("Webhook parsed body:", req.body);
+
   if (!verifySignature(rawBody, signatureHeader)) {
     throw new Error("Invalid PayMongo signature");
   }
