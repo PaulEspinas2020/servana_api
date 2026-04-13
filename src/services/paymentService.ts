@@ -208,7 +208,7 @@ export const processWebhook = async (req: Request) => {
   const eventType = payload?.data?.attributes?.type;
   const eventData = payload?.data?.attributes?.data;
   const providerPaymentId = eventData?.id;
-
+  console.log({ eventId, eventType, providerPaymentId });
   if (!eventId || !eventType || !providerPaymentId) {
     throw new Error("Invalid webhook payload");
   }
