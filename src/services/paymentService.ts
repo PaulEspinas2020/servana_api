@@ -106,17 +106,17 @@ export const createCheckoutSession = async (bookingId: number) => {
     },
     body: JSON.stringify(payload)
   });
- type PaymongoResponse = {
-  data?: {
-    id: string;
-    attributes: {
-      checkout_url?: string;
+  type PaymongoResponse = {
+    data?: {
+      id: string;
+      attributes: {
+        checkout_url?: string;
+      };
     };
+    errors?: {
+      detail: string;
+    }[];
   };
-  errors?: {
-    detail: string;
-  }[];
-};
   const result = (await response.json()) as PaymongoResponse;
 
   if (!response.ok) {
@@ -147,16 +147,31 @@ export const createCheckoutSession = async (bookingId: number) => {
 
 const PAYMONGO_WEBHOOK_SECRET = process.env.PAYMONGO_WEBHOOK_SECRET || "";
 
-const verifySignature = (rawBody: string, signatureHeader?: string) => {
-  if (!PAYMONGO_WEBHOOK_SECRET || !signatureHeader) return true;
+function verifySignature(rawBody: Buffer, signatureHeader: string): boolean {
+  const secret = process.env.PAYMONGO_WEBHOOK_SECRET!;
 
-  const digest = crypto
-    .createHmac("sha256", PAYMONGO_WEBHOOK_SECRET)
-    .update(rawBody)
+  const parts = signatureHeader.split(",");
+  let timestamp = "";
+  let signature = "";
+
+  for (const part of parts) {
+    const [key, value] = part.split("=");
+    if (key === "t") timestamp = value;
+    if (key === "te") signature = value;
+  }
+
+  const payload = `${timestamp}.${rawBody.toString("utf8")}`;
+
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(payload)
     .digest("hex");
 
-  return signatureHeader.includes(digest);
-};
+  return crypto.timingSafeEqual(
+    Buffer.from(expected),
+    Buffer.from(signature)
+  );
+}
 
 // const dispatchAfterPayment = async (bookingId: number) => {
 //   const r = await dbQuery.query(
@@ -187,21 +202,23 @@ const verifySignature = (rawBody: string, signatureHeader?: string) => {
 //   );
 // };
 
-export const processWebhook = async (req: Request) => {
-  const rawBody =
-    (req as any).rawBody?.toString?.() || JSON.stringify(req.body);
+export const processWebhook = async (req: Request, res: Response) => {
+  const rawBody = (req as any).rawBody as Buffer;
 
-  const signatureHeader =
-    (req.headers["paymongo-signature"] as string | undefined) ||
-    (req.headers["Paymongo-Signature"] as string | undefined);
+  if (!rawBody) {
+    throw new Error("Missing raw body");
+  }
 
-  console.log("Webhook signature:", signatureHeader);
-  console.log("Webhook rawBody:", rawBody);
-  console.log("Webhook parsed body:", req.body);
+  const signatureHeader = req.headers["paymongo-signature"] as string;
+
+  if (!signatureHeader) {
+    throw new Error("Missing signature header");
+  }
 
   if (!verifySignature(rawBody, signatureHeader)) {
-    throw new Error("Invalid PayMongo signature");
+    return res.status(400).send("Invalid signature");
   }
+
 
   const payload = req.body;
   const eventId = payload?.data?.id;

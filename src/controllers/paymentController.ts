@@ -65,7 +65,7 @@ export const paymongoWebhook = async (req: Request, res: Response) => {
     console.log("Body:", req.body);
     console.log("RawBody:", (req as any).rawBody);
 
-    await paymentService.processWebhook(req);
+    await paymentService.processWebhook(req, res);
 
     res.status(200).json({ received: true });
 
