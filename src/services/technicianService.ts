@@ -18,14 +18,48 @@ export const listWorkersByRole = async (role: number) => {
   return r.rows;
 };
 
+export const allWorkers = async () => {
+  const r = await dbQuery.query(
+    `
+    SELECT 
+      u.uid,
+      u.email,
+      u.first_name,
+      u.last_name,
+      u.phone_number,
+      u.role,
+      r.role_name,
+      r.description
+    FROM ${dbSchema}.user_credentials u
+    LEFT JOIN ${dbSchema}.roles r
+      ON u.role::int = r.role_id
+    WHERE u.role::int NOT IN (0, 1, 3)
+    ORDER BY u.first_name, u.last_name
+    `,
+    []
+  );
+
+  return r.rows;
+};
+
 export const getWorkerByUid = async (uid: string) => {
   const r = await dbQuery.query(
     `
-    SELECT uid, email, first_name, last_name, phone_number, role
-    FROM ${dbSchema}.user_credentials
-    WHERE uid = $1
-    LIMIT 1
-    `,
+    SELECT 
+      u.uid,
+      u.email,
+      u.first_name,
+      u.last_name,
+      u.phone_number,
+      u.role,
+      r.role_name,
+      r.description
+    FROM ${dbSchema}.user_credentials u
+    LEFT JOIN ${dbSchema}.roles r
+      ON u.role::int = r.role_id
+    WHERE u.uid = $1
+    LIMIT 1;
+        `,
     [uid]
   );
 
@@ -186,4 +220,171 @@ export const assignNearestWorker = async (
     worker_uid: best.uid,
     etaMinutes
   };
+};
+
+export const getWorkerSchedule = async (workerId: string) => {
+  const res = await dbQuery.query(
+    `
+    SELECT
+      b.id,
+      b.status,
+      b.schedule,
+      b.user_address_id,
+      ua.address_one,
+      ua.address_two,
+      ua.zip_code,
+      ua.post_town,
+      ua.country,
+      b.created_at,
+      p.status AS payment_status,
+      bw.status AS worker_status,
+      bw.assigned_at,
+      bw.started_at,
+      bw.completed_at
+    FROM ${dbSchema}.bookings b
+    LEFT JOIN ${dbSchema}.payments p
+      ON p.booking_id = b.id
+    LEFT JOIN ${dbSchema}.user_address ua
+      ON ua.address_id = b.user_address_id
+    LEFT JOIN ${dbSchema}.booking_workers bw
+      ON bw.booking_id = b.id AND bw.worker_uid = $1
+    WHERE b.worker_uid = $1
+    ORDER BY b.schedule ASC
+    `,
+    [workerId]
+  );
+
+  return res.rows;
+};
+
+export const getJobCardsByWorker = async (workerId: string) => {
+  const res = await dbQuery.query(
+    `
+    SELECT
+      b.id AS booking_id,
+      b.status,
+      b.schedule,
+
+      u.uid AS customer_id,
+      u.first_name,
+      u.last_name,
+      u.phone_number,
+
+      ua.address_one,
+      ua.address_two,
+      ua.post_town,
+      ua.zip_code,
+      ua.country,
+      ua.label,
+
+      s.level_2 AS service_name,
+      s.level_3 AS service_type,
+
+      b.pricing_breakdown,
+      bw.status AS worker_status,
+      bw.assigned_at,
+      bw.started_at,
+      bw.completed_at
+
+    FROM ${dbSchema}.bookings b
+
+    LEFT JOIN ${dbSchema}.user_credentials u
+      ON u.uid = b.user_id
+
+    LEFT JOIN ${dbSchema}.user_address ua
+      ON ua.address_id = b.user_address_id
+
+    LEFT JOIN ${dbSchema}.service_options s
+      ON s.id = b.service_option_id
+
+    LEFT JOIN ${dbSchema}.booking_workers bw
+      ON bw.booking_id = b.id AND bw.worker_uid = $1
+
+    WHERE b.worker_uid = $1
+    AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED')
+    ORDER BY b.schedule ASC
+    `,
+    [workerId]
+  );
+
+  return res.rows;
+};
+
+export const assignWorker = async (bookingId: number, workerUid: string) => {
+  const res = await dbQuery.query(
+    `
+    INSERT INTO ${dbSchema}.booking_workers (worker_uid, booking_id, status, assigned_at)
+    VALUES ($1,$2,'ASSIGNED', NOW())
+    RETURNING *
+    `,
+    [workerUid, bookingId]
+  );
+
+  if (!res.rowCount) {
+    throw new Error("Booking not found or not paid");
+  }
+
+  return res.rows[0];
+};
+
+export const acceptJob = async (bookingId: number, workerUid: string) => {
+  const res = await dbQuery.query(
+    `
+    UPDATE ${dbSchema}.booking_workers
+    SET status = 'ACCEPTED'
+    WHERE booking_id = $1
+    AND worker_uid = $2
+    AND status = 'ASSIGNED'
+    RETURNING *
+    `,
+    [bookingId, workerUid]
+  );
+
+  if (!res.rowCount) {
+    throw new Error("Job not available for acceptance");
+  }
+
+  return res.rows[0];
+};
+
+export const startJob = async (bookingId: number, workerUid: string) => {
+  const res = await dbQuery.query(
+    `
+    UPDATE ${dbSchema}.booking_workers
+    SET status = 'IN_PROGRESS',
+        started_at = NOW()
+    WHERE booking_id = $1
+    AND worker_uid = $2
+    AND status = 'ACCEPTED'
+    RETURNING *
+    `,
+    [bookingId, workerUid]
+  );
+
+  if (!res.rowCount) {
+    throw new Error("Job cannot be started");
+  }
+
+  return res.rows[0];
+};
+
+export const completeJob = async (bookingId: number, workerUid: string) => {
+  const res = await dbQuery.query(
+    `
+    UPDATE ${dbSchema}.booking_workers
+    SET status = 'COMPLETED',
+        completed_at = NOW()
+    WHERE booking_id = $1
+    AND worker_uid = $2
+    AND status = 'IN_PROGRESS'
+    RETURNING *
+    `,
+    [bookingId, workerUid]
+  );
+
+  if (!res.rowCount) {
+    throw new Error("Job cannot be completed");
+  }
+
+  return res.rows[0];
 };

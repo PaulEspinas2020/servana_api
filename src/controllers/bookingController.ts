@@ -59,6 +59,42 @@ export const getBooking = async (req: Request, res: Response) => {
   }
 };
 
+export const listAllBookings = async (_req: Request, res: Response) => {
+  try {
+    const bookings = await bookingService.getAllBookings();
+    const toCamelRows = (rows: any[]) => rows.map(toCamel);
+    res.json({ success: true, bookings: toCamelRows(bookings) });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch bookings",
+    });
+  }
+};
+
+export const listUserBookings = async (req: Request, res: Response) => {
+  try {
+    const userId = req.params.userId as string;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid userId",
+      });
+    }
+
+    const bookings = await bookingService.getBookingsByUserId(userId);
+
+    const toCamelRows = (rows: any[]) => rows.map(toCamel);
+    res.json({ success: true, bookings: toCamelRows(bookings) });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch user bookings",
+    });
+  }
+};
+
 export const getTracking = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.id);
@@ -73,5 +109,21 @@ export const getTracking = async (req: Request, res: Response) => {
     return res.json({ success: true, tracking: toCamelRows(tracking) });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+export const getAnalytics = async (_req: Request, res: Response) => {
+  try {
+    const data = await bookingService.getDashboardAnalytics();
+
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch analytics",
+    });
   }
 };

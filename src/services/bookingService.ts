@@ -196,7 +196,11 @@ export const getBookingById = async (
       ua.address_one AS address,
       ua.post_town AS post_town,
       ua.country AS country,
-      ua.zip_code AS zip_code
+      ua.zip_code AS zip_code,
+      bw.status AS worker_status,
+      bw.assigned_at,
+      bw.started_at,
+      bw.completed_at
     FROM ${dbSchema}.bookings b
     LEFT JOIN ${dbSchema}.payments p
       ON p.booking_id = b.id
@@ -204,9 +208,11 @@ export const getBookingById = async (
       ON br.id = b.branch_id
     LEFT JOIN ${dbSchema}.user_address ua
       ON ua.address_id = b.user_address_id
+    LEFT JOIN ${dbSchema}.booking_workers bw
+      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED')
     WHERE b.id = $1
     `,
-        [bookingId]
+      [bookingId]
     );
 
     if (!bookingRes.rowCount) return null;
@@ -234,6 +240,81 @@ export const getBookingById = async (
     };
 };
 
+export const getAllBookings = async () => {
+  const res = await dbQuery.query(
+    `
+    SELECT
+      b.*,
+      p.status AS payment_status,
+      p.method AS payment_method_used,
+      p.reference_no,
+      p.proof_url,
+      br.name AS branch_name,
+      br.address AS branch_address,
+      br.city AS branch_city,
+      ua.address_one AS address,
+      ua.post_town AS post_town,
+      ua.country AS country,
+      ua.zip_code AS zip_code,
+      bw.status AS worker_status,
+      bw.assigned_at,
+      bw.started_at,
+      bw.completed_at
+    FROM ${dbSchema}.bookings b
+    LEFT JOIN ${dbSchema}.payments p
+      ON p.booking_id = b.id
+    LEFT JOIN ${dbSchema}.branches br
+      ON br.id = b.branch_id
+    LEFT JOIN ${dbSchema}.user_address ua
+      ON ua.address_id = b.user_address_id
+    LEFT JOIN ${dbSchema}.booking_workers bw
+      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED')
+    ORDER BY b.created_at DESC
+    `,
+    []
+  );
+
+  return res.rows;
+};
+
+export const getBookingsByUserId = async (userId: string) => {
+  const res = await dbQuery.query(
+    `
+    SELECT
+      b.*,
+      p.status AS payment_status,
+      p.method AS payment_method_used,
+      p.reference_no,
+      p.proof_url,
+      br.name AS branch_name,
+      br.address AS branch_address,
+      br.city AS branch_city,
+      ua.address_one AS address,
+      ua.post_town AS post_town,
+      ua.country AS country,
+      ua.zip_code AS zip_code,
+      bw.status AS worker_status,
+      bw.assigned_at,
+      bw.started_at,
+      bw.completed_at
+    FROM ${dbSchema}.bookings b
+    LEFT JOIN ${dbSchema}.payments p
+      ON p.booking_id = b.id
+    LEFT JOIN ${dbSchema}.branches br
+      ON br.id = b.branch_id
+    LEFT JOIN ${dbSchema}.user_address ua
+      ON ua.address_id = b.user_address_id
+    LEFT JOIN ${dbSchema}.booking_workers bw
+      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED')
+    WHERE b.user_id = $1
+    ORDER BY b.created_at DESC
+    `,
+    [userId]
+  );
+
+  return res.rows;
+};
+
 export const getTracking = async (
     bookingId: number
 
@@ -250,4 +331,81 @@ export const getTracking = async (
     );
 
     return r.rows;
+};
+
+export const getDashboardAnalytics = async () => {
+  const res = await dbQuery.query(
+    `
+    WITH latest_status AS (
+      SELECT DISTINCT ON (bt.booking_id)
+        bt.booking_id,
+        bt.status
+      FROM ${dbSchema}.booking_workers bt
+      ORDER BY bt.booking_id
+    ),
+
+    booking_stats AS (
+      SELECT
+        COUNT(*) AS total_bookings,
+        COUNT(*) FILTER (WHERE ls.status IN ('ACCEPTED','IN_PROGRESS')) AS active_jobs,
+        COUNT(*) FILTER (WHERE ls.status = 'COMPLETED') AS completed_jobs,
+        COUNT(*) FILTER (WHERE ls.status = 'ASSIGNED') AS pending_requests,
+        SUM((b.pricing_breakdown->>'total')::NUMERIC)
+          FILTER (WHERE ls.status = 'PAID') AS revenue
+      FROM ${dbSchema}.bookings b
+      LEFT JOIN latest_status ls
+        ON ls.booking_id = b.id
+    ),
+
+    revenue_stats AS (
+      SELECT 
+        COALESCE(SUM(amount), 0) AS revenue
+      FROM ${dbSchema}.payments
+      WHERE status = 'PAID'
+    ),
+
+    user_stats AS (
+      SELECT
+        COUNT(*) FILTER (WHERE role::int = 3) AS total_customers,
+        COUNT(*) FILTER (WHERE role::integer NOT IN (0,1,3)) AS total_workers
+      FROM ${dbSchema}.user_credentials
+    ),
+
+    status_breakdown AS (
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'ASSIGNED') AS assigned,
+        COUNT(*) FILTER (WHERE status = 'ACCEPTED') AS accepted,
+        COUNT(*) FILTER (WHERE status = 'IN_PROGRESS') AS in_progress,
+        COUNT(*) FILTER (WHERE status = 'COMPLETED') AS completed,
+        COUNT(*) FILTER (WHERE status = 'CANCELED') AS canceled
+      FROM latest_status
+    )
+
+    SELECT
+      bs.total_bookings,
+      bs.active_jobs,
+      bs.completed_jobs,
+      bs.pending_requests,
+      rs.revenue,
+
+      us.total_customers,
+      us.total_workers,
+
+      json_build_object(
+        'ASSIGNED', sb.assigned,
+        'ACCEPTED', sb.accepted,
+        'IN_PROGRESS', sb.in_progress,
+        'COMPLETED', sb.completed,
+        'CANCELED', sb.canceled
+      ) AS job_status_breakdown
+
+    FROM booking_stats bs
+    CROSS JOIN revenue_stats rs
+    CROSS JOIN user_stats us
+    CROSS JOIN status_breakdown sb
+    `,
+    []
+  );
+
+  return res.rows[0];
 };

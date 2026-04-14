@@ -69,7 +69,7 @@ export const getOptionsWithAddons = async (serviceId: number) => {
         addonsByParent[addon.parentOptionId] = addonsByParent[addon.parentOptionId] || [];
         addonsByParent[addon.parentOptionId].push(addon);
     }
-    
+
     return mainRes.rows.map((opt: { id: number }) => {
         const option = toCamel(opt);
 
@@ -97,7 +97,7 @@ export const getBranchesByService = async (serviceId: number) => {
 
 export const getAvailableSlots = async (
     branchId: number,
-    date: string 
+    date: string
 ) => {
     const res = await dbQuery.query(
         `
@@ -216,3 +216,262 @@ export const checkCoverageGeo = async (serviceId: number, lat: number, lon: numb
     };
 };
 
+export const createFullService = async (payload: any) => {
+
+    try {
+        /**
+         * 1. Create Service
+         */
+        const serviceRes = await dbQuery.query(
+            `
+      INSERT INTO ${dbSchema}.services (name, category)
+      VALUES ($1, $2)
+      RETURNING id
+      `,
+            [payload.name, payload.category]
+        );
+
+        const serviceId = serviceRes.rows[0].id;
+
+        /**
+         * 2. Insert MAIN options (Level 2 + Level 3)
+         */
+        for (const lvl2 of payload.options) {
+            for (const item of lvl2.items) {
+                const mainRes = await dbQuery.query(
+                    `
+          INSERT INTO ${dbSchema}.service_options
+          (service_id, option_type, level_2, level_3, base_price, unit)
+          VALUES ($1, 'MAIN', $2, $3, $4, $5)
+          RETURNING id
+          `,
+                    [serviceId, lvl2.level2, item.level3, item.base_price, item.unit]
+                );
+
+                const mainOptionId = mainRes.rows[0].id;
+
+                /**
+                 * 3. Insert meta (inclusions/exclusions)
+                 */
+                await dbQuery.query(
+                    `
+          INSERT INTO ${dbSchema}.service_option_meta
+          (service_option_id, inclusions, exclusions)
+          VALUES ($1, $2, $3)
+          `,
+                    [
+                        mainOptionId,
+                        JSON.stringify(item.inclusions || []),
+                        JSON.stringify(item.exclusions || []),
+                    ]
+                );
+
+                /**
+                 * 4. Insert ADD-ONS
+                 */
+                if (item.addons?.length) {
+                    for (const addon of item.addons) {
+                        await dbQuery.query(
+                            `
+              INSERT INTO ${dbSchema}.service_options
+              (service_id, option_type, level_2, level_3, base_price, unit, parent_option_id)
+              VALUES ($1, 'ADD_ON', $2, $3, $4, $5, $6)
+              `,
+                            [
+                                serviceId,
+                                lvl2.level2,
+                                addon.level3,
+                                addon.base_price,
+                                addon.unit,
+                                mainOptionId,
+                            ]
+                        );
+                    }
+                }
+            }
+        }
+
+        return {
+            success: true,
+            serviceId,
+            message: "Service created successfully",
+        };
+    } catch (error) {
+        throw error;
+    }
+};
+
+export const updateFullService = async (
+    serviceId: number,
+    payload: any
+) => {
+    console.log("Updating service:", { serviceId, payload });
+    try {
+        /**
+         * 1. Validate service exists
+         */
+        const existing = await dbQuery.query(
+            `SELECT id FROM ${dbSchema}.services WHERE id = $1`,
+            [serviceId]
+        );
+
+        if (existing.rowCount === 0) {
+            throw new Error("Service not found");
+        }
+
+        /**
+         * 2. Update main service
+         */
+        await dbQuery.query(
+            `
+      UPDATE ${dbSchema}.services
+      SET name = $1,
+          category = $2
+      WHERE id = $3
+      `,
+            [payload.name, payload.category, serviceId]
+        );
+
+        /**
+         * 3. DELETE OLD DATA (IMPORTANT)
+         * Order matters because of FK constraints
+         */
+
+        // delete meta first
+        await dbQuery.query(
+            `
+      DELETE FROM ${dbSchema}.service_option_meta
+      WHERE service_option_id IN (
+        SELECT id FROM ${dbSchema}.service_options WHERE service_id = $1
+      )
+      `,
+            [serviceId]
+        );
+
+        // delete options (addons + main)
+        await dbQuery.query(
+            `DELETE FROM ${dbSchema}.service_options WHERE service_id = $1`,
+            [serviceId]
+        );
+
+        /**
+         * 4. RE-INSERT (same as create logic)
+         */
+        for (const lvl2 of payload.options) {
+            for (const item of lvl2.items) {
+                console.log(item)
+                const mainRes = await dbQuery.query(
+                    `
+          INSERT INTO ${dbSchema}.service_options
+          (service_id, option_type, level_2, level_3, base_price, unit)
+          VALUES ($1, 'MAIN', $2, $3, $4, $5)
+          RETURNING id
+          `,
+                    [serviceId, lvl2.level2, item.level3, item.base_price, item.unit]
+                );
+
+                const mainOptionId = mainRes.rows[0].id;
+
+                // meta
+                await dbQuery.query(
+                    `
+          INSERT INTO ${dbSchema}.service_option_meta
+          (service_option_id, inclusions, exclusions)
+          VALUES ($1, $2, $3)
+          `,
+                    [
+                        mainOptionId,
+                        JSON.stringify(item.inclusions || []),
+                        JSON.stringify(item.exclusions || []),
+                    ]
+                );
+
+                // addons
+                if (item.addons?.length) {
+                    for (const addon of item.addons) {
+                        await dbQuery.query(
+                            `
+              INSERT INTO ${dbSchema}.service_options
+              (service_id, option_type, level_2, level_3, base_price, unit, parent_option_id)
+              VALUES ($1, 'ADD_ON', $2, $3, $4, $5, $6)
+              `,
+                            [
+                                serviceId,
+                                lvl2.level2,
+                                addon.level3,
+                                addon.base_price,
+                                addon.unit,
+                                mainOptionId,
+                            ]
+                        );
+                    }
+                }
+            }
+        }
+
+        return {
+            success: true,
+            serviceId,
+            message: "Service updated successfully",
+        };
+    } catch (error) {
+        throw error;
+    }
+};
+
+export const hardDeleteService = async (serviceId: number) => {
+    try {
+        // validate
+        const bookingCheck = await dbQuery.query(
+            `SELECT 1 FROM ${dbSchema}.bookings WHERE service_option_id = $1 LIMIT 1`,
+            [serviceId]
+        );
+
+        if (bookingCheck.rowCount > 0) {
+            throw new Error("Service is in use and cannot be deleted");
+        }
+
+        const res = await dbQuery.query(
+            `SELECT id FROM ${dbSchema}.services WHERE id = $1`,
+            [serviceId]
+        );
+
+        if (res.rowCount === 0) {
+            throw new Error("Service not found");
+        }
+
+        /**
+         * DELETE ORDER (VERY IMPORTANT)
+         */
+
+        // 1. delete meta
+        await dbQuery.query(
+            `
+      DELETE FROM ${dbSchema}.service_option_meta
+      WHERE service_option_id IN (
+        SELECT id FROM ${dbSchema}.service_options WHERE service_id = $1
+      )
+      `,
+            [serviceId]
+        );
+
+        // 2. delete options (addons + main)
+        await dbQuery.query(
+            `DELETE FROM ${dbSchema}.service_options WHERE service_id = $1`,
+            [serviceId]
+        );
+
+        // 3. delete service
+        await dbQuery.query(
+            `DELETE FROM ${dbSchema}.services WHERE id = $1`,
+            [serviceId]
+        );
+
+        return {
+            success: true,
+            message: "Service permanently deleted",
+        };
+    } catch (error) {
+        throw error;
+    }
+};

@@ -133,4 +133,44 @@ export const check = async (req: Request, res: Response) => {
   }
 };
 
+export const createService = async (req: Request, res: Response) => {
+  try {
+    const result = await serviceService.createFullService(req.body);
+    res.status(201).json(result);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to create service",
+    });
+  }
+};
 
+export const updateService = async (req: Request, res: Response) => {
+  try {
+    const serviceId = Number(req.params.serviceId);
+
+    const result = await serviceService.updateFullService(serviceId, req.body);
+
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to update service",
+    });
+  }
+};
+
+export const forceDeleteService = async (req: Request, res: Response) => {
+  try {
+    const serviceId = Number(req.params.serviceId);
+
+    const result = await serviceService.hardDeleteService(serviceId);
+
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to delete service",
+    });
+  }
+};
