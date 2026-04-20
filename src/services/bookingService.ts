@@ -5,67 +5,67 @@ import { generateOTP } from "../helpers/otp";
 import { computeQuote } from "./pricingService";
 
 import { checkCoverageGeo } from "../services/serviceService";
-import { getLatLonByLocationId } from "../services/address.service"; 
+import { getLatLonByLocationId } from "../services/address.service";
 
 import { assignNearestWorker } from "../services/technicianService";
 
 export const createBooking = async (
-    userId: string,
-    payload: {
-        userAddressId: string;
-        serviceOptionId: number;
-        schedule: string;
-        paymentMethod: "CASH" | "GCASH";
-        pricing: any;
-    }
+  userId: string,
+  payload: {
+    userAddressId: string;
+    serviceOptionId: number;
+    schedule: string;
+    paymentMethod: "CASH" | "GCASH";
+    pricing: any;
+  }
 ) => {
-    try {
-        
-        const svcRes = await dbQuery.query(
-            `
+  try {
+
+    const svcRes = await dbQuery.query(
+      `
       SELECT s.id AS service_id
       FROM ${dbSchema}.service_options so
       JOIN ${dbSchema}.services s ON s.id = so.service_id
       WHERE so.id = $1
       `,
-            [payload.serviceOptionId]
-        );
+      [payload.serviceOptionId]
+    );
 
-        if (!svcRes.rowCount) throw new Error("Invalid service option.");
+    if (!svcRes.rowCount) throw new Error("Invalid service option.");
 
-        const serviceId = Number(svcRes.rows[0].service_id);
+    const serviceId = Number(svcRes.rows[0].service_id);
 
-        const addressRes = await dbQuery.query(
-            `
+    const addressRes = await dbQuery.query(
+      `
       SELECT *
       FROM ${dbSchema}.user_address
       WHERE address_id = $1
         AND uid = $2
       `,
-            [payload.userAddressId, userId]
-        );
+      [payload.userAddressId, userId]
+    );
 
-        if (!addressRes.rowCount) throw new Error("Invalid address.");
+    if (!addressRes.rowCount) throw new Error("Invalid address.");
 
-        const address = addressRes.rows[0];
-        const locationId = address.location_id || address.locationId;
+    const address = addressRes.rows[0];
+    const locationId = address.location_id || address.locationId;
 
-        if (!locationId) throw new Error("Address missing locationId.");
+    if (!locationId) throw new Error("Address missing locationId.");
 
-        const [lon, lat] = await getLatLonByLocationId(String(locationId));
+    const [lon, lat] = await getLatLonByLocationId(String(locationId));
 
-        const cov = await checkCoverageGeo(serviceId, Number(lat), Number(lon));
-        if (!cov.covered) throw new Error("Service not available in your area.");
+    const cov = await checkCoverageGeo(serviceId, Number(lat), Number(lon));
+    if (!cov.covered) throw new Error("Service not available in your area.");
 
-        payload.pricing = payload.pricing || {};
-        payload.pricing.optionId = payload.serviceOptionId;
+    payload.pricing = payload.pricing || {};
+    payload.pricing.optionId = payload.serviceOptionId;
 
-        const quote = await computeQuote(payload.pricing);
+    const quote = await computeQuote(payload.pricing);
 
-        const otp = generateOTP();
+    const otp = generateOTP();
 
-        const bookingRes = await dbQuery.query(
-            `
+    const bookingRes = await dbQuery.query(
+      `
       INSERT INTO ${dbSchema}.bookings
         (user_id, user_address_id, service_option_id,
          schedule, payment_method,
@@ -74,39 +74,39 @@ export const createBooking = async (
       VALUES ($1,$2,$3,$4,$5,$6,'PENDING_OTP',$7,$8,$9)
       RETURNING *
       `,
-            [
-                userId,
-                payload.userAddressId,
-                payload.serviceOptionId,
-                payload.schedule,
-                payload.paymentMethod,
-                otp,
-                quote.final,
-                quote.final,
-                quote
-            ]
-        );
+      [
+        userId,
+        payload.userAddressId,
+        payload.serviceOptionId,
+        payload.schedule,
+        payload.paymentMethod,
+        otp,
+        quote.final,
+        quote.final,
+        quote
+      ]
+    );
 
-        const booking = bookingRes.rows[0];
+    const booking = bookingRes.rows[0];
 
-        await dbQuery.query(
-            `
+    await dbQuery.query(
+      `
       INSERT INTO ${dbSchema}.payments (booking_id, method, amount, status)
       VALUES ($1,$2,$3,'PENDING')
       `,
-            [booking.id, payload.paymentMethod, quote.final]
-        );
+      [booking.id, payload.paymentMethod, quote.final]
+    );
 
-        return {
-            bookingId: booking.id,
-            status: booking.status,
-            quotedPrice: booking.quoted_price,
-            finalPrice: booking.final_price,
-            otpDevOnly: otp
-        };
-    } catch (error) {
-        throw error;
-    }
+    return {
+      bookingId: booking.id,
+      status: booking.status,
+      quotedPrice: booking.quoted_price,
+      finalPrice: booking.final_price,
+      otpDevOnly: otp
+    };
+  } catch (error) {
+    throw error;
+  }
 };
 
 
@@ -180,10 +180,10 @@ export const confirmOtp = async (
 
 
 export const getBookingById = async (
-    bookingId: number
+  bookingId: number
 ) => {
-    const bookingRes = await dbQuery.query(
-        `
+  const bookingRes = await dbQuery.query(
+    `
     SELECT
       b.*,
       p.status AS payment_status,
@@ -212,13 +212,13 @@ export const getBookingById = async (
       ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED')
     WHERE b.id = $1
     `,
-      [bookingId]
-    );
+    [bookingId]
+  );
 
-    if (!bookingRes.rowCount) return null;
+  if (!bookingRes.rowCount) return null;
 
-    const addonsRes = await dbQuery.query(
-        `
+  const addonsRes = await dbQuery.query(
+    `
     SELECT
       ba.id,
       ba.addon_option_id,
@@ -231,13 +231,13 @@ export const getBookingById = async (
     WHERE ba.booking_id = $1
     ORDER BY ba.id ASC
     `,
-        [bookingId]
-    );
+    [bookingId]
+  );
 
-    return {
-        ...bookingRes.rows[0],
-        addons: addonsRes.rows,
-    };
+  return {
+    ...bookingRes.rows[0],
+    addons: addonsRes.rows,
+  };
 };
 
 export const getAllBookings = async () => {
@@ -245,6 +245,8 @@ export const getAllBookings = async () => {
     `
     SELECT
       b.*,
+      u.first_name || ' ' || u.last_name AS customer_name,
+      w.first_name || ' ' || w.last_name AS worker_name,
       p.status AS payment_status,
       p.method AS payment_method_used,
       p.reference_no,
@@ -261,6 +263,8 @@ export const getAllBookings = async () => {
       bw.started_at,
       bw.completed_at
     FROM ${dbSchema}.bookings b
+    LEFT JOIN ${dbSchema}.user_credentials u
+      ON u.uid = b.user_id
     LEFT JOIN ${dbSchema}.payments p
       ON p.booking_id = b.id
     LEFT JOIN ${dbSchema}.branches br
@@ -268,7 +272,10 @@ export const getAllBookings = async () => {
     LEFT JOIN ${dbSchema}.user_address ua
       ON ua.address_id = b.user_address_id
     LEFT JOIN ${dbSchema}.booking_workers bw
-      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED')
+      ON bw.booking_id = b.id
+      AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED')
+    LEFT JOIN ${dbSchema}.user_credentials w
+      ON w.uid = bw.worker_uid
     ORDER BY b.created_at DESC
     `,
     []
@@ -316,21 +323,21 @@ export const getBookingsByUserId = async (userId: string) => {
 };
 
 export const getTracking = async (
-    bookingId: number
+  bookingId: number
 
 ) => {
-  
-    const r = await dbQuery.query(
-        `
+
+  const r = await dbQuery.query(
+    `
     SELECT status, note, created_at
     FROM ${dbSchema}.booking_tracking
     WHERE booking_id=$1
     ORDER BY created_at ASC
     `,
-        [bookingId]
-    );
+    [bookingId]
+  );
 
-    return r.rows;
+  return r.rows;
 };
 
 export const getDashboardAnalytics = async () => {
