@@ -174,3 +174,16 @@ export const forceDeleteService = async (req: Request, res: Response) => {
     });
   }
 };
+
+
+export const getFullServiceCatalog = async (req: Request, res: Response) => {
+  try {
+    const result = await serviceService.getFullServiceCatalog();
+    res.json({ success: true, services: result });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to list services",
+    });
+  }
+}

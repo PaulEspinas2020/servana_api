@@ -9,6 +9,7 @@ router.get("/:serviceId/options-with-addons", serviceController.listOptionsWithA
 router.post("/services", serviceController.createService);
 router.put("/services/:serviceId", serviceController.updateService);
 router.delete("/services/:serviceId/force", serviceController.forceDeleteService);
+router.get("/services/full", serviceController.getFullServiceCatalog);
 
 router.get("/services/:serviceId/branches", serviceController.listBranches);
 router.get("/branches/:branchId/slots", serviceController.listAvailableSlots);

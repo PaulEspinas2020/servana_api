@@ -475,3 +475,59 @@ export const hardDeleteService = async (serviceId: number) => {
         throw error;
     }
 };
+
+export const getFullServiceCatalog = async () => {
+
+    const mainRes = await dbQuery.query(`
+        SELECT
+            so.*,
+            COALESCE(m.inclusions, '[]'::jsonb) AS inclusions,
+            COALESCE(m.exclusions, '[]'::jsonb) AS exclusions
+        FROM ${dbSchema}.service_options so
+        LEFT JOIN ${dbSchema}.service_option_meta m
+            ON m.service_option_id = so.id
+        WHERE so.option_type = 'MAIN'
+        ORDER BY so.service_id, so.level_2, so.level_3
+    `,[]);
+
+    const addonRes = await dbQuery.query(`
+        SELECT *
+        FROM ${dbSchema}.service_options
+        WHERE option_type = 'ADD_ON'
+        ORDER BY service_id, level_2, level_3
+    `,[]);
+
+    const addonsByParent: Record<number, any[]> = {};
+    for (const a of addonRes.rows) {
+        const addon = toCamel(a);
+        if (!addon.parentOptionId) continue;
+
+        if (!addonsByParent[addon.parentOptionId]) {
+            addonsByParent[addon.parentOptionId] = [];
+        }
+
+        addonsByParent[addon.parentOptionId].push(addon);
+    }
+
+    const servicesMap: Record<number, any> = {};
+
+    for (const opt of mainRes.rows) {
+        const option = toCamel(opt);
+
+        const enrichedOption = {
+            ...option,
+            addons: addonsByParent[option.id] || [],
+        };
+
+        if (!servicesMap[option.serviceId]) {
+            servicesMap[option.serviceId] = {
+                serviceId: option.serviceId,
+                options: [],
+            };
+        }
+
+        servicesMap[option.serviceId].options.push(enrichedOption);
+    }
+
+    return Object.values(servicesMap);
+};
