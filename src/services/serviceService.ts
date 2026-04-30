@@ -476,26 +476,69 @@ export const hardDeleteService = async (serviceId: number) => {
     }
 };
 
+export const transformServiceCatalog = (services: any[]) => {
+
+    return services.map(service => {
+
+        const level2Map: Record<string, any> = {};
+
+        for (const opt of service.options) {
+
+            const level2 = opt.level_2;
+
+            if (!level2Map[level2]) {
+                level2Map[level2] = {
+                    level2,
+                    items: [],
+                };
+            }
+
+            level2Map[level2].items.push({
+                level3: opt.level_3,
+                unit: opt.unit,
+                base_price: Number(opt.basePrice),
+                inclusions: opt.inclusions || [],
+                exclusions: opt.exclusions || [],
+                addons: (opt.addons || []).map((a: any) => ({
+                    level3: a.level_3,
+                    unit: a.unit,
+                    base_price: Number(a.basePrice),
+                })),
+            });
+        }
+
+        return {
+            name: service.options?.[0]?.serviceName || null,
+            category: service.options?.[0]?.serviceCategory || null,
+            options: Object.values(level2Map),
+        };
+    });
+};
+
 export const getFullServiceCatalog = async () => {
 
     const mainRes = await dbQuery.query(`
         SELECT
             so.*,
+            s.name AS service_name,
+            s.category AS service_category,
             COALESCE(m.inclusions, '[]'::jsonb) AS inclusions,
             COALESCE(m.exclusions, '[]'::jsonb) AS exclusions
         FROM ${dbSchema}.service_options so
+        LEFT JOIN ${dbSchema}.services s
+            ON s.id = so.service_id
         LEFT JOIN ${dbSchema}.service_option_meta m
             ON m.service_option_id = so.id
         WHERE so.option_type = 'MAIN'
         ORDER BY so.service_id, so.level_2, so.level_3
-    `,[]);
+    `, []);
 
     const addonRes = await dbQuery.query(`
         SELECT *
         FROM ${dbSchema}.service_options
         WHERE option_type = 'ADD_ON'
         ORDER BY service_id, level_2, level_3
-    `,[]);
+    `, []);
 
     const addonsByParent: Record<number, any[]> = {};
     for (const a of addonRes.rows) {
@@ -514,19 +557,21 @@ export const getFullServiceCatalog = async () => {
     for (const opt of mainRes.rows) {
         const option = toCamel(opt);
 
-        const enrichedOption = {
-            ...option,
-            addons: addonsByParent[option.id] || [],
-        };
+        const serviceId = option.serviceId;
 
-        if (!servicesMap[option.serviceId]) {
-            servicesMap[option.serviceId] = {
-                serviceId: option.serviceId,
+        if (!servicesMap[serviceId]) {
+            servicesMap[serviceId] = {
+                serviceId,
+                name: option.serviceName,         
+                category: option.serviceCategory, 
                 options: [],
             };
         }
 
-        servicesMap[option.serviceId].options.push(enrichedOption);
+        servicesMap[serviceId].options.push({
+            ...option,
+            addons: addonsByParent[option.id] || [],
+        });
     }
 
     return Object.values(servicesMap);

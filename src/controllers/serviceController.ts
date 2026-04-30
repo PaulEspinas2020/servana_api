@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { successMessage, errorMessage, status } from "../helpers/status";
 import * as serviceService from "../services/serviceService";
 import { toCamel } from "../helpers/idGenerator";
+import { transformServiceCatalog } from "../services/serviceService";
 
 export const listServices = async (req: Request, res: Response) => {
   try {
@@ -179,7 +180,7 @@ export const forceDeleteService = async (req: Request, res: Response) => {
 export const getFullServiceCatalog = async (req: Request, res: Response) => {
   try {
     const result = await serviceService.getFullServiceCatalog();
-    res.json({ success: true, services: result });
+    res.json({ success: true, services: transformServiceCatalog(result) });
   } catch (error: any) {
     res.status(500).json({
       success: false,
