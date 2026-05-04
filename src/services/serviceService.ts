@@ -494,12 +494,14 @@ export const transformServiceCatalog = (services: any[]) => {
             }
 
             level2Map[level2].items.push({
+                level3id: opt.id,
                 level3: opt.level_3,
                 unit: opt.unit,
                 base_price: Number(opt.basePrice),
                 inclusions: opt.inclusions || [],
                 exclusions: opt.exclusions || [],
                 addons: (opt.addons || []).map((a: any) => ({
+                    level3id: a.id,
                     level3: a.level_3,
                     unit: a.unit,
                     base_price: Number(a.basePrice),
@@ -508,6 +510,7 @@ export const transformServiceCatalog = (services: any[]) => {
         }
 
         return {
+            serviceId: service.serviceId,
             name: service.options?.[0]?.serviceName || null,
             category: service.options?.[0]?.serviceCategory || null,
             options: Object.values(level2Map),
