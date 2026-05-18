@@ -314,7 +314,7 @@ export const processWebhook = async (req: Request, res: Response) => {
 
     const checkoutSession = payload?.data;
 
-    const checkoutSessionId = checkoutSession?.id;
+    const checkoutSessionId = payload.data.attributes.data.id;
     const attributes = checkoutSession?.attributes;
     console.log({ checkoutSessionId, attributes });
     if (!checkoutSessionId) {
