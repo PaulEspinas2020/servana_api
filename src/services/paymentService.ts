@@ -312,12 +312,11 @@ export const processWebhook = async (req: Request, res: Response) => {
 
   if (eventType === "checkout_session.payment.paid") {
 
-    const eventData = payload?.data?.attributes?.data;
-    console.log({ eventData });
-    const checkoutSessionId =
-      eventData?.attributes?.checkout_session?.id ||
-      eventData?.attributes?.checkout_session_id;
-    console.log({ checkoutSessionId });
+    const checkoutSession = payload?.data;
+
+    const checkoutSessionId = checkoutSession?.id;
+    const attributes = checkoutSession?.attributes;
+
     if (!checkoutSessionId) {
       throw new Error("Missing checkout_session_id");
     }
@@ -338,7 +337,7 @@ export const processWebhook = async (req: Request, res: Response) => {
     if (!r.rowCount) return;
 
     const payment = r.rows[0];
-    console.log({ payment });
+
     // ======================
     // ADDITIONAL REQUEST
     // ======================
