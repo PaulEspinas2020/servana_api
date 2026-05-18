@@ -4,6 +4,7 @@ import dbQuery from "../db/dbQuery";
 import crypto from "crypto";
 import axios from "axios";
 import { additionalService } from "./additional.service";
+import { generateOTP } from "../helpers/otp";
 
 const dbSchema = db.schema;
 export const submitGcash = async (bookingId: number, referenceNo: string, proofUrl?: string) => {
@@ -139,6 +140,18 @@ export const createCheckoutSession = async (bookingId: number) => {
     `,
     [bookingId, providerPaymentId, checkoutUrl, result]
   );
+
+  const otp = generateOTP();
+  
+  await dbQuery.query(
+    `
+    UPDATE ${dbSchema}.bookings
+    SET worker_code = $2
+    WHERE booking_id = $1
+    `,
+    [bookingId, otp]
+  );
+
 
   return {
     booking_id: bookingId,

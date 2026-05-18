@@ -360,19 +360,29 @@ export const acceptJob = async (bookingId: number, workerUid: string) => {
 
   return res.rows[0];
 };
+export const startJob = async (
+  bookingId: number,
+  workerUid: string,
+  workerCode?: string
+) => {
+  if (!workerCode) {
+    throw new Error("worker_code is required to start job");
+  }
 
-export const startJob = async (bookingId: number, workerUid: string) => {
   const res = await dbQuery.query(
     `
-    UPDATE ${dbSchema}.booking_workers
+    UPDATE ${dbSchema}.booking_workers bw
     SET status = 'IN_PROGRESS',
         started_at = NOW()
-    WHERE booking_id = $1
-    AND worker_uid = $2
-    AND status = 'ACCEPTED'
-    RETURNING *
+    FROM ${dbSchema}.bookings b
+    WHERE bw.booking_id = $1
+      AND bw.worker_uid = $2
+      AND bw.status = 'ACCEPTED'
+      AND bw.booking_id = b.id
+      AND b.worker_code = $3
+    RETURNING bw.*
     `,
-    [bookingId, workerUid]
+    [bookingId, workerUid, workerCode]
   );
 
   if (!res.rowCount) {

@@ -299,6 +299,7 @@ export const startJob = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
     const workerUid = req.query.workerUid as string;
+    const workerCode = req.query.workerCode as string; // or from auth token
 
     if (!bookingId || !workerUid) {
       return res.status(400).json({
@@ -307,7 +308,7 @@ export const startJob = async (req: Request, res: Response) => {
       });
     }
 
-    const result = await technician.startJob(bookingId, workerUid);
+    const result = await technician.startJob(bookingId, workerUid, workerCode);
 
     return res.json({
       success: true,
