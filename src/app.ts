@@ -91,6 +91,9 @@ app.use("/api", cors(corsOptionsDelegate), technicianRoutes);
 import paymentRoutes from "./routes/payment.routes";
 app.use("/api", cors(corsOptionsDelegate), paymentRoutes);
 
+import additionalRoutes from "./routes/additional.routes";
+app.use("/api", cors(corsOptionsDelegate), additionalRoutes);
+
 app.listen(port, () => {
     console.log(`Magic is running on port ${port}`);
 });

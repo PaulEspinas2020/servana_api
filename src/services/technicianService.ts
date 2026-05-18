@@ -143,6 +143,17 @@ export const listOnlineWorkersByRole = async (role: number) => {
     .toArray();
 };
 
+export const listOnlineWorkers = async () => {
+  const collection = (await mongoDb).collection("worker_locations");
+
+  return collection
+    .find({
+      is_online: true,
+      loc: { $exists: true }
+    })
+    .toArray();
+};
+
 const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
   const toRad = (v: number) => (v * Math.PI) / 180;
   const R = 6371;
@@ -163,9 +174,12 @@ export const assignNearestWorker = async (
   bookingId: number,
   userLat: number,
   userLon: number,
-  workerRole: number
+  workerRole?: number | null
 ) => {
-  const workers = await listOnlineWorkersByRole(workerRole);
+
+  const workers =workerRole
+  ? await listOnlineWorkersByRole(workerRole)
+  : await listOnlineWorkers();
 
   if (!workers.length) {
     return { assigned: false, reason: "NO_WORKER_ONLINE" };

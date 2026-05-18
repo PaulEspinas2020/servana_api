@@ -165,11 +165,15 @@ export const confirmOtp = async (
 
     const [lon, lat] = await getLatLonByLocationId(String(locationId));
 
+    const workerRole =
+      row.worker_role !== null
+        ? Number(row.worker_role)
+        : null;
     await assignNearestWorker(
       bookingId,
       Number(lat),
       Number(lon),
-      Number(row.worker_role)
+      workerRole
     );
 
     return r.rows[0];

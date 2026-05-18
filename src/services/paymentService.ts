@@ -2,6 +2,8 @@ import { db } from "../config";
 import { Request, Response } from "express";
 import dbQuery from "../db/dbQuery";
 import crypto from "crypto";
+import axios from "axios";
+import { additionalService } from "./additional.service";
 
 const dbSchema = db.schema;
 export const submitGcash = async (bookingId: number, referenceNo: string, proofUrl?: string) => {
@@ -202,6 +204,69 @@ function verifySignature(rawBody: Buffer, signatureHeader: string): boolean {
 //   );
 // };
 
+export const createPayment = async (request: any) => {
+
+  const amount = Math.round(request.total_amount * 100);
+
+  const payload = {
+    data: {
+      attributes: {
+        line_items: [
+          {
+            currency: "PHP",
+            amount,
+            name: `Additional Work #${request.id}`,
+            quantity: 1
+          }
+        ],
+        payment_method_types: ["gcash", "card"],
+        description: `Additional Work #${request.id}`,
+        reference_number: `ADD-${request.id}`
+      }
+    }
+  };
+
+  const response = await fetch(`${PAYMONGO_BASE_URL}/checkout_sessions`, {
+    method: "POST",
+    headers: {
+      Authorization: getAuthHeader(),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  type PaymongoCheckoutResponse = {
+    data: {
+      id: string;
+      attributes: {
+        checkout_url: string;
+      };
+    };
+  };
+
+  const result = (await response.json()) as PaymongoCheckoutResponse;
+
+  const providerPaymentId = result?.data?.id;
+  const checkoutUrl = result?.data?.attributes?.checkout_url;
+
+  await dbQuery.query(
+    `
+    INSERT INTO ${dbSchema}.payments
+      (booking_id, additional_request_id, amount, status, provider_payment_id, checkout_url, provider, raw_response)
+    VALUES ($1,$2,$3,'PENDING',$4,$5,'PAYMONGO',$6)
+    `,
+    [
+      request.booking_id,
+      request.id,
+      request.total_amount,
+      providerPaymentId,
+      checkoutUrl,
+      result
+    ]
+  );
+
+  return checkoutUrl;
+};
+
 export const processWebhook = async (req: Request, res: Response) => {
   const rawBody = (req as any).rawBody as Buffer;
 
@@ -246,43 +311,75 @@ export const processWebhook = async (req: Request, res: Response) => {
   }
 
   if (eventType === "checkout_session.payment.paid") {
+
+    const eventData = payload?.data?.attributes?.data;
+
+    const checkoutSessionId =
+      eventData?.attributes?.checkout_session?.id ||
+      eventData?.attributes?.checkout_session_id;
+
+    if (!checkoutSessionId) {
+      throw new Error("Missing checkout_session_id");
+    }
+
     const r = await dbQuery.query(
       `
-      UPDATE ${dbSchema}.payments
-      SET status = 'PAID',
-          paid_at = NOW(),
-          webhook_event_id = $2,
-          raw_response = $3
-      WHERE provider_payment_id = $1
-      RETURNING booking_id
-      `,
-      [providerPaymentId, eventId, payload]
+    UPDATE ${dbSchema}.payments
+    SET status = 'PAID',
+        paid_at = NOW(),
+        webhook_event_id = $2,
+        raw_response = $3
+    WHERE provider_payment_id = $1
+    RETURNING booking_id, additional_request_id
+    `,
+      [checkoutSessionId, eventId, payload]
     );
 
-    if (r.rowCount) {
-      const bookingId = r.rows[0].booking_id;
+    if (!r.rowCount) return;
+
+    const payment = r.rows[0];
+
+    // ======================
+    // ADDITIONAL REQUEST
+    // ======================
+    if (payment.additional_request_id) {
+
+      await additionalService.markPaid(payment.additional_request_id);
 
       await dbQuery.query(
         `
-        UPDATE ${dbSchema}.bookings
-        SET status = 'PAID'
-        WHERE id = $1
-        `,
-        [bookingId]
+      INSERT INTO ${dbSchema}.booking_tracking
+        (booking_id, status, note)
+      VALUES
+        ($1,'ADDITIONAL_PAID','Additional request paid')
+      `,
+        [payment.booking_id]
       );
 
-      await dbQuery.query(
-        `
-        INSERT INTO ${dbSchema}.booking_tracking
-          (booking_id, status, note)
-        VALUES
-          ($1, 'PAYMENT_PAID', 'PayMongo webhook confirmed payment')
-        `,
-        [bookingId]
-      );
-
-      // await dispatchAfterPayment(bookingId);
+      return;
     }
+
+    // ======================
+    // NORMAL BOOKING
+    // ======================
+    await dbQuery.query(
+      `
+    UPDATE ${dbSchema}.bookings
+    SET status = 'PAID'
+    WHERE id = $1
+    `,
+      [payment.booking_id]
+    );
+
+    await dbQuery.query(
+      `
+    INSERT INTO ${dbSchema}.booking_tracking
+      (booking_id, status, note)
+    VALUES
+      ($1,'PAYMENT_PAID','Booking paid')
+    `,
+      [payment.booking_id]
+    );
   }
 
   if (eventType === "checkout_session.payment.failed") {
