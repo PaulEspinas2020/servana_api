@@ -6,6 +6,7 @@ const router = Router();
 
 router.get("/workers/role/:role", technicianController.listByRole);
 router.get("/workers/all", technicianController.list);
+router.get("/workers/available", technicianController.getAvailableWorkers);
 router.get("/workers/:uid", technicianController.getByUid);
 router.post("/workers/location", technicianController.updateLocation);
 router.get("/workers/location/:uid", technicianController.getLocation);

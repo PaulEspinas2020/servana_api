@@ -6,6 +6,7 @@ import verifyAuth from '../middleware/verifyAuth';
 router.get("/user/registereduser", userController.userList);
 
 router.get("/user/alluseraddresses", verifyAuth, userController.getAllAddressesOfUser);
+router.get("/user/:userId/addresses", userController.getAddressesByUserId);
 router.post("/user/adduseraddress", verifyAuth, userController.addUserAddress);
 router.get("/user/getaddressbyid", verifyAuth, userController.getAddressByAddressId);
 

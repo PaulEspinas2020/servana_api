@@ -238,6 +238,34 @@ export const getJobCards = async (req: Request, res: Response) => {
   }
 };
 
+export const getAvailableWorkers = async (req: Request, res: Response) => {
+  try {
+    const { date, time, role } = req.query as { date?: string; time?: string; role?: string };
+
+    if (!date || !time) {
+      return res.status(400).json({
+        success: false,
+        message: "date and time are required (e.g. date=2024-06-01&time=10:00)",
+      });
+    }
+
+    const schedule = `${date}T${time}:00`;
+    const workers = await technician.getAvailableWorkers(schedule, role ? Number(role) : undefined);
+
+    return res.json({
+      success: true,
+      schedule,
+      count: workers.length,
+      workers,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch available workers",
+    });
+  }
+};
+
 export const assignWorker = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);

@@ -151,18 +151,51 @@ const getUserCredentialsByID = async (uid: string, withPassword = false) => {
 };
 
 const getAllUserByRole = async (roles: number[], isArchived = false) => {
-    const searchQuery = `Select * from ${dbSchema}.user_credentials c where 
-      c.is_archive = $1 and c.role = ANY($2)`;
+    const userQuery = `
+        SELECT c.*
+        FROM ${dbSchema}.user_credentials c
+        WHERE c.is_archive = $1
+          AND c.role = ANY($2)
+    `;
+    const addressQuery = `
+        SELECT uid, address_id, address_one, address_two, zip_code, post_town, country, label, is_primary
+        FROM ${dbSchema}.user_address
+        WHERE uid = ANY($1)
+        ORDER BY is_primary DESC, created_at ASC
+    `;
     try {
-        const { rows } = await dbQuery.query(searchQuery, [isArchived, roles]);
+        const { rows } = await dbQuery.query(userQuery, [isArchived, roles]);
 
-        if (!rows && rows.length == 0) {
+        if (!rows || rows.length === 0) {
             return [];
+        }
+
+        const uids = rows.map((r: any) => r.uid);
+        const { rows: addressRows } = await dbQuery.query(addressQuery, [uids]);
+
+        // Group addresses by uid
+        const addressesByUid: Record<string, any[]> = {};
+        for (const addr of addressRows) {
+            if (!addressesByUid[addr.uid]) addressesByUid[addr.uid] = [];
+            addressesByUid[addr.uid].push({
+                addressId:  addr.address_id,
+                addressOne: addr.address_one,
+                addressTwo: addr.address_two,
+                zipCode:    addr.zip_code,
+                postTown:   addr.post_town,
+                country:    addr.country,
+                label:      addr.label,
+                isPrimary:  addr.is_primary,
+            });
         }
 
         const dbResponse = rows.map((row: any) => {
             delete row.password;
-            return formatUserCredentials(row);
+            const formatted = formatUserCredentials(row);
+            return {
+                ...formatted,
+                addresses: addressesByUid[row.uid] || [],
+            };
         });
 
         return dbResponse;
@@ -400,6 +433,26 @@ const updateEmailVerifiedByUid = async (uid: string, isEmailVerified: boolean) =
     return result.rows[0] || null;
 };
 
+/**
+ * Given a bookingId, returns { email, firstName } for the customer who owns the booking.
+ * Used by services that only have bookingId and need to send an email.
+ */
+const getUserInfoByBookingId = async (bookingId: number): Promise<{ email: string; firstName: string } | null> => {
+    const query = `
+        SELECT uc.email, uc.first_name AS "firstName"
+        FROM ${dbSchema}.bookings b
+        JOIN ${dbSchema}.user_credentials uc ON uc.uid = b.user_id
+        WHERE b.id = $1
+        LIMIT 1
+    `;
+    try {
+        const { rows } = await dbQuery.query(query, [bookingId]);
+        return rows[0] || null;
+    } catch (error) {
+        throw error;
+    }
+};
+
 export {
     registerUserInDB,
     getUserCredentialsByEmail,
@@ -416,5 +469,6 @@ export {
     markEmailOtpAsUsed,
     getUserByEmail,
     updateEmailVerifiedByUid,
-    getEmailById
+    getEmailById,
+    getUserInfoByBookingId
 };

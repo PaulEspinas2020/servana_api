@@ -2,6 +2,8 @@ import { db } from "../config";
 import dbQuery from "../db/dbQuery";
 import mongoDb from "../db/mongodbQuery";
 import { generateOTP } from "../helpers/otp";
+import { send } from "../helpers/mailer";
+import { getUserInfoByBookingId } from "./user.service";
 
 const dbSchema = db.schema;
 
@@ -178,15 +180,51 @@ export const assignNearestWorker = async (
   workerRole?: number | null
 ) => {
 
-  const workers =workerRole
-  ? await listOnlineWorkersByRole(workerRole)
-  : await listOnlineWorkers();
+  // 1. Get the booking's schedule for availability check
+  const bookingRes = await dbQuery.query(
+    `SELECT schedule FROM ${dbSchema}.bookings WHERE id = $1`,
+    [bookingId]
+  );
 
-  if (!workers.length) {
+  if (!bookingRes.rowCount) {
+    throw new Error("Booking not found");
+  }
+
+  const schedule = new Date(bookingRes.rows[0].schedule);
+  const windowStart = new Date(schedule.getTime() - 2 * 60 * 60 * 1000);
+  const windowEnd   = new Date(schedule.getTime() + 2 * 60 * 60 * 1000);
+
+  // 2. Find UIDs that are busy within ±2h of the booking schedule
+  const busyRes = await dbQuery.query(
+    `
+    SELECT DISTINCT worker_uid
+    FROM ${dbSchema}.bookings
+    WHERE worker_uid IS NOT NULL
+      AND schedule BETWEEN $1 AND $2
+      AND status NOT IN ('COMPLETED', 'CANCELED')
+      AND id != $3
+    `,
+    [windowStart, windowEnd, bookingId]
+  );
+  const busyUids = new Set(busyRes.rows.map((r: any) => r.worker_uid));
+
+  // 3. Get online workers and filter out the busy ones
+  const onlineWorkers = workerRole
+    ? await listOnlineWorkersByRole(workerRole)
+    : await listOnlineWorkers();
+
+  if (!onlineWorkers.length) {
     return { assigned: false, reason: "NO_WORKER_ONLINE" };
   }
 
-  const ranked = workers
+  const availableWorkers = onlineWorkers.filter((w: any) => !busyUids.has(w.uid));
+
+  if (!availableWorkers.length) {
+    return { assigned: false, reason: "NO_WORKER_AVAILABLE" };
+  }
+
+  // 4. Rank available workers by distance and pick the nearest
+  const ranked = availableWorkers
     .map((w: any) => {
       const [lon, lat] = w.loc.coordinates;
       return {
@@ -231,6 +269,39 @@ export const assignNearestWorker = async (
     `,
     [bookingId]
   );
+
+  // Notify customer that a technician has been assigned
+  try {
+    const userInfo = await getUserInfoByBookingId(bookingId);
+    if (userInfo) {
+      const bookingRes = await dbQuery.query(
+        `SELECT schedule FROM ${dbSchema}.bookings WHERE id = $1`,
+        [bookingId]
+      );
+      const workerRes = await dbQuery.query(
+        `SELECT first_name, last_name FROM ${dbSchema}.user_credentials WHERE uid = $1`,
+        [best.uid]
+      );
+      const schedule = bookingRes.rows[0]?.schedule;
+      const workerName = workerRes.rows[0]
+        ? `${workerRes.rows[0].first_name} ${workerRes.rows[0].last_name}`
+        : "Your technician";
+      const etaAt = schedule
+        ? new Date(new Date(schedule).getTime() - etaMinutes * 60000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
+        : "";
+      send(userInfo.email, "booking_worker_assigned", {
+        first_name:   userInfo.firstName,
+        booking_id:   bookingId,
+        worker_name:  workerName,
+        eta_minutes:  etaMinutes,
+        eta_at:       etaAt,
+        booking_date: schedule ? new Date(schedule).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "",
+        booking_time: schedule ? new Date(schedule).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : "",
+      });
+    }
+  } catch (emailErr) {
+    console.error("booking_worker_assigned email failed:", emailErr);
+  }
 
   return {
     assigned: true,
@@ -328,19 +399,122 @@ export const getJobCardsByWorker = async (workerId: string) => {
   return res.rows;
 };
 
+/**
+ * Returns workers who have no active booking within a 2-hour window of the requested schedule.
+ * Active statuses: PENDING_OTP, CONFIRMED, PAID, WORKER_ASSIGNED, ACCEPTED, IN_PROGRESS
+ * Optionally filter by role.
+ *
+ * @param schedule  ISO datetime string, e.g. "2024-06-01T10:00:00"
+ * @param role      Optional worker role number to filter by
+ */
+export const getAvailableWorkers = async (schedule: string, role?: number) => {
+  const requestedTime = new Date(schedule);
+
+  if (isNaN(requestedTime.getTime())) {
+    throw new Error("Invalid schedule datetime");
+  }
+
+  // Fetch all workers (exclude customer role 3 and admin roles 0/1)
+  const workerQuery = role
+    ? `SELECT uid, email, first_name, last_name, phone_number, role
+       FROM ${dbSchema}.user_credentials
+       WHERE role = $1 AND is_archive = false`
+    : `SELECT uid, email, first_name, last_name, phone_number, role
+       FROM ${dbSchema}.user_credentials
+       WHERE role::int NOT IN (0, 1, 3) AND is_archive = false`;
+
+  const workerParams = role ? [role] : [];
+  const { rows: allWorkers } = await dbQuery.query(workerQuery, workerParams);
+
+  if (!allWorkers.length) return [];
+
+  // Find workers who are busy within ±2 hours of the requested time
+  const windowStart = new Date(requestedTime.getTime() - 2 * 60 * 60 * 1000); // -2h
+  const windowEnd   = new Date(requestedTime.getTime() + 2 * 60 * 60 * 1000); // +2h
+
+  const busyQuery = `
+    SELECT DISTINCT b.worker_uid
+    FROM ${dbSchema}.bookings b
+    WHERE b.worker_uid IS NOT NULL
+      AND b.schedule BETWEEN $1 AND $2
+      AND b.status NOT IN ('COMPLETED', 'CANCELED')
+  `;
+  const { rows: busyRows } = await dbQuery.query(busyQuery, [windowStart, windowEnd]);
+  const busyUids = new Set(busyRows.map((r: any) => r.worker_uid));
+
+  return allWorkers
+    .filter((w: any) => !busyUids.has(w.uid))
+    .map((w: any) => ({
+      uid:         w.uid,
+      email:       w.email,
+      firstName:   w.first_name,
+      lastName:    w.last_name,
+      phoneNumber: w.phone_number,
+      role:        w.role,
+    }));
+};
+
 export const assignWorker = async (bookingId: number, workerUid: string) => {
+  // 1. Get the booking's schedule
+  const bookingRes = await dbQuery.query(
+    `SELECT id, schedule, status FROM ${dbSchema}.bookings WHERE id = $1`,
+    [bookingId]
+  );
+
+  if (!bookingRes.rowCount) {
+    throw new Error("Booking not found");
+  }
+
+  const booking = bookingRes.rows[0];
+  const schedule = new Date(booking.schedule);
+
+  // 2. Check if the worker already has a conflicting booking within ±2h
+  const windowStart = new Date(schedule.getTime() - 2 * 60 * 60 * 1000);
+  const windowEnd   = new Date(schedule.getTime() + 2 * 60 * 60 * 1000);
+
+  const conflictRes = await dbQuery.query(
+    `
+    SELECT id FROM ${dbSchema}.bookings
+    WHERE worker_uid = $1
+      AND schedule BETWEEN $2 AND $3
+      AND status NOT IN ('COMPLETED', 'CANCELED')
+      AND id != $4
+    LIMIT 1
+    `,
+    [workerUid, windowStart, windowEnd, bookingId]
+  );
+
+  if (conflictRes.rowCount) {
+    throw new Error(
+      `Worker is not available at ${schedule.toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })}. ` +
+      `They have an existing booking within a 2-hour window.`
+    );
+  }
+
+  // 3. Assign the worker
   const res = await dbQuery.query(
     `
     INSERT INTO ${dbSchema}.booking_workers (worker_uid, booking_id, status, assigned_at)
-    VALUES ($1,$2,'ASSIGNED', NOW())
+    VALUES ($1, $2, 'ASSIGNED', NOW())
     RETURNING *
     `,
     [workerUid, bookingId]
   );
 
   if (!res.rowCount) {
-    throw new Error("Booking not found or not paid");
+    throw new Error("Failed to assign worker");
   }
+
+  // 4. Update the booking with the assigned worker
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.bookings SET worker_uid = $1, status = 'WORKER_ASSIGNED' WHERE id = $2`,
+    [workerUid, bookingId]
+  );
+
+  await dbQuery.query(
+    `INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note) VALUES ($1, 'WORKER_ASSIGNED', 'Worker manually assigned')`,
+    [bookingId]
+  );
 
   return res.rows[0];
 };
@@ -360,6 +534,35 @@ export const acceptJob = async (bookingId: number, workerUid: string) => {
 
   if (!res.rowCount) {
     throw new Error("Job not available for acceptance");
+  }
+
+  // Notify customer that the technician has accepted and is on the way
+  try {
+    const userInfo = await getUserInfoByBookingId(bookingId);
+    if (userInfo) {
+      const bookingRes = await dbQuery.query(
+        `SELECT schedule FROM ${dbSchema}.bookings WHERE id = $1`,
+        [bookingId]
+      );
+      const workerRes = await dbQuery.query(
+        `SELECT first_name, last_name FROM ${dbSchema}.user_credentials WHERE uid = $1`,
+        [workerUid]
+      );
+      const schedule = bookingRes.rows[0]?.schedule;
+      const workerName = workerRes.rows[0]
+        ? `${workerRes.rows[0].first_name} ${workerRes.rows[0].last_name}`
+        : "Your technician";
+      send(userInfo.email, "booking_accepted", {
+        first_name:   userInfo.firstName,
+        booking_id:   bookingId,
+        worker_name:  workerName,
+        booking_date: schedule ? new Date(schedule).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "",
+        booking_time: schedule ? new Date(schedule).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : "",
+        address:      "",
+      });
+    }
+  } catch (emailErr) {
+    console.error("booking_accepted email failed:", emailErr);
   }
 
   return res.rows[0];
@@ -393,6 +596,30 @@ export const startJob = async (
     throw new Error("Job cannot be started");
   }
 
+  // Notify customer that the service has begun
+  try {
+    const userInfo = await getUserInfoByBookingId(bookingId);
+    if (userInfo) {
+      const workerRes = await dbQuery.query(
+        `SELECT first_name, last_name FROM ${dbSchema}.user_credentials WHERE uid = $1`,
+        [workerUid]
+      );
+      const bookingRes = await dbQuery.query(
+        `SELECT so.level_2 AS service_name FROM ${dbSchema}.bookings b JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id WHERE b.id = $1`,
+        [bookingId]
+      );
+      send(userInfo.email, "booking_started", {
+        first_name:   userInfo.firstName,
+        booking_id:   bookingId,
+        worker_name:  workerRes.rows[0] ? `${workerRes.rows[0].first_name} ${workerRes.rows[0].last_name}` : "Your technician",
+        service_name: bookingRes.rows[0]?.service_name || "Home Service",
+        started_at:   new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+      });
+    }
+  } catch (emailErr) {
+    console.error("booking_started email failed:", emailErr);
+  }
+
   return res.rows[0];
 };
 
@@ -412,6 +639,40 @@ export const completeJob = async (bookingId: number, workerUid: string) => {
 
   if (!res.rowCount) {
     throw new Error("Job cannot be completed");
+  }
+
+  // Notify customer that the service has been completed
+  try {
+    const userInfo = await getUserInfoByBookingId(bookingId);
+    if (userInfo) {
+      const detailsRes = await dbQuery.query(
+        `
+        SELECT
+          b.final_price,
+          b.schedule,
+          so.level_2 AS service_name,
+          uc.first_name || ' ' || uc.last_name AS worker_name
+        FROM ${dbSchema}.bookings b
+        JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+        JOIN ${dbSchema}.user_credentials uc ON uc.uid = b.worker_uid
+        WHERE b.id = $1
+        `,
+        [bookingId]
+      );
+      const d = detailsRes.rows[0] || {};
+      send(userInfo.email, "booking_completed", {
+        first_name:   userInfo.firstName,
+        booking_id:   bookingId,
+        worker_name:  d.worker_name || "Your technician",
+        service_name: d.service_name || "Home Service",
+        final_price:  d.final_price || "0.00",
+        booking_date: d.schedule ? new Date(d.schedule).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "",
+        completed_at: new Date().toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+        // review_url:   `${process.env.APP_URL}/review?bookingId=${bookingId}`,
+      });
+    }
+  } catch (emailErr) {
+    console.error("booking_completed email failed:", emailErr);
   }
 
   return res.rows[0];

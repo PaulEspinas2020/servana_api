@@ -253,11 +253,27 @@ const formattedAddress = async (raw: any) => {
     };
 };
 
+const getAddressesByUserId = async (userId: string) => {
+    const searchQuery = `
+        SELECT * FROM ${dbSchema}.user_address
+        WHERE uid = $1
+        ORDER BY is_primary DESC, created_at ASC
+    `;
+    try {
+        const { rows } = await dbQuery.query(searchQuery, [userId]);
+        if (!rows || rows.length === 0) return [];
+        return Promise.all(rows.map(formattedAddress));
+    } catch (error) {
+        throw error;
+    }
+};
+
 export {
     addUserAddress,
     updateUserAddress,
     getAllAddressesOfUser,
     getAddressByAddressId,
+    getAddressesByUserId,
     makeAddressPrimary,
     deleteAddress,
     makeOtherAddressNotPrimary,

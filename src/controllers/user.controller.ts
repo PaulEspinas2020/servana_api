@@ -153,11 +153,26 @@ const archiveUser = async (req: Request, res: Response) => {
     }
 };
 
+const getAddressesByUserId = async (req: Request, res: Response) => {
+    const { userId } = req.params as { userId: string };
+
+    try {
+        const dbResponse = await addressService.getAddressesByUserId(userId);
+
+        successMessage.data = dbResponse;
+        res.status(status.success).send(successMessage);
+    } catch (error) {
+        errorMessage.error = "ERROR: " + error;
+        res.status(status.error).send(errorMessage);
+    }
+};
+
 export {
     userList,
     addUserAddress,
     getAllAddressesOfUser,
     getAddressByAddressId,
+    getAddressesByUserId,
     getUserProfile,
     updateUserProfile,
     makeAddressPrimary,

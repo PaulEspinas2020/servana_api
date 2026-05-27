@@ -5,6 +5,8 @@ import crypto from "crypto";
 import axios from "axios";
 import { additionalService } from "./additional.service";
 import { generateOTP } from "../helpers/otp";
+import { send } from "../helpers/mailer";
+import { getUserInfoByBookingId } from "./user.service";
 
 const dbSchema = db.schema;
 export const submitGcash = async (bookingId: number, referenceNo: string, proofUrl?: string) => {
@@ -392,6 +394,28 @@ export const processWebhook = async (req: Request, res: Response) => {
     `,
       [payment.booking_id]
     );
+
+    // Send payment confirmation email to customer
+    try {
+      const userInfo = await getUserInfoByBookingId(payment.booking_id);
+      if (userInfo) {
+        const paymentRes = await dbQuery.query(
+          `SELECT amount, method, paid_at, reference_no FROM ${dbSchema}.payments WHERE booking_id = $1 AND status = 'PAID' LIMIT 1`,
+          [payment.booking_id]
+        );
+        const p = paymentRes.rows[0] || {};
+        send(userInfo.email, "payment_confirmed", {
+          first_name:     userInfo.firstName,
+          booking_id:     payment.booking_id,
+          amount:         p.amount || "0.00",
+          payment_method: p.method || "ONLINE",
+          paid_at:        p.paid_at ? new Date(p.paid_at).toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "",
+          reference_no:   p.reference_no || eventId,
+        });
+      }
+    } catch (emailErr) {
+      console.error("payment_confirmed email failed:", emailErr);
+    }
   }
 
   if (eventType === "checkout_session.payment.failed") {
@@ -405,5 +429,33 @@ export const processWebhook = async (req: Request, res: Response) => {
       `,
       [providerPaymentId, eventId, payload]
     );
+
+    // Send payment failed email to customer
+    try {
+      const failedPayment = await dbQuery.query(
+        `SELECT booking_id, amount FROM ${dbSchema}.payments WHERE provider_payment_id = $1 LIMIT 1`,
+        [providerPaymentId]
+      );
+      if (failedPayment.rowCount && failedPayment.rows[0].booking_id) {
+        const bookingId = failedPayment.rows[0].booking_id;
+        const userInfo = await getUserInfoByBookingId(bookingId);
+        if (userInfo) {
+          const bookingRes = await dbQuery.query(
+            `SELECT schedule FROM ${dbSchema}.bookings WHERE id = $1`,
+            [bookingId]
+          );
+          const schedule = bookingRes.rows[0]?.schedule;
+          send(userInfo.email, "payment_failed", {
+            first_name:   userInfo.firstName,
+            booking_id:   bookingId,
+            amount:       failedPayment.rows[0].amount || "0.00",
+            booking_date: schedule ? new Date(schedule).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "",
+            // retry_url:    `${process.env.APP_URL}/bookings/${bookingId}/pay`,
+          });
+        }
+      }
+    } catch (emailErr) {
+      console.error("payment_failed email failed:", emailErr);
+    }
   }
 };

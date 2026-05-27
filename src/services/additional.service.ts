@@ -3,6 +3,8 @@ import dbQuery from "../db/dbQuery";
 const dbSchema = db.schema;
 import { createPayment } from "./paymentService";
 import { refundService } from "./refund.service";
+import { send } from "../helpers/mailer";
+import { getUserInfoByBookingId } from "./user.service";
 
 class AdditionalService {
 
@@ -73,7 +75,28 @@ class AdditionalService {
       [id]
     );
 
-    return createPayment(res.rows[0]);
+    const checkoutUrl = await createPayment(res.rows[0]);
+
+    // Notify customer that additional work was approved and payment is needed
+    try {
+      const request = res.rows[0];
+      if (request?.booking_id) {
+        const userInfo = await getUserInfoByBookingId(request.booking_id);
+        if (userInfo) {
+          send(userInfo.email, "additional_work_approved", {
+            first_name:   userInfo.firstName,
+            booking_id:   request.booking_id,
+            request_id:   id,
+            total_amount: request.total_amount,
+            checkout_url: checkoutUrl,
+          });
+        }
+      }
+    } catch (emailErr) {
+      console.error("additional_work_approved email failed:", emailErr);
+    }
+
+    return checkoutUrl;
   }
 
   async markPaid(requestId: number) {
@@ -91,6 +114,11 @@ class AdditionalService {
 
     if (decision === "REJECT") {
 
+      const reqRes = await dbQuery.query(
+        `SELECT booking_id, total_amount FROM ${dbSchema}.booking_additional_requests WHERE id = $1`,
+        [id]
+      );
+
       await dbQuery.query(
         `UPDATE ${dbSchema}.booking_additional_requests
          SET status = 'REJECTED',
@@ -101,6 +129,25 @@ class AdditionalService {
       );
 
       await refundService.refundAdditionalRequest(id);
+
+      // Notify customer of rejection and that a refund has been issued
+      try {
+        const req = reqRes.rows[0];
+        if (req?.booking_id) {
+          const userInfo = await getUserInfoByBookingId(req.booking_id);
+          if (userInfo) {
+            send(userInfo.email, "additional_work_rejected", {
+              first_name:   userInfo.firstName,
+              booking_id:   req.booking_id,
+              request_id:   id,
+              total_amount: req.total_amount,
+            });
+          }
+        }
+      } catch (emailErr) {
+        console.error("additional_work_rejected email failed:", emailErr);
+      }
+
       return;
     }
 

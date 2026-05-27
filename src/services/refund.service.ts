@@ -1,6 +1,8 @@
 import axios from "axios";
 import { db } from "../config";
 import dbQuery from "../db/dbQuery";
+import { send } from "../helpers/mailer";
+import { getUserInfoByBookingId } from "./user.service";
 
 const dbSchema = db.schema;
 
@@ -82,6 +84,24 @@ class RefundService {
         `,
         [additionalRequestId]
       );
+
+      // 6. Send refund confirmation email to customer
+      try {
+        if (payment.booking_id) {
+          const userInfo = await getUserInfoByBookingId(payment.booking_id);
+          if (userInfo) {
+            send(userInfo.email, "refund_processed", {
+              first_name:  userInfo.firstName,
+              booking_id:  payment.booking_id,
+              amount:      payment.amount,
+              refund_id:   refundData.id,
+              refunded_at: new Date().toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+            });
+          }
+        }
+      } catch (emailErr) {
+        console.error("refund_processed email failed:", emailErr);
+      }
 
       return {
         success: true,
