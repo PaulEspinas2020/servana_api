@@ -43,8 +43,11 @@ const addUserAddress = async (req: Request, res: Response) => {
 
 const getAllAddressesOfUser = async (req: Request, res: Response) => {
     const { uid } = req.user;
+    
     try {
-        const dbResponse = await addressService.getAllAddressesOfUser(uid);
+        const role = await userService.getRoleById(uid);
+        console.log("Getting all addresses of user", uid, "with role", role);
+        const dbResponse = await addressService.getAllAddressesOfUser(uid, role);
 
         successMessage.data = dbResponse;
         res.status(status.success).send(successMessage);
