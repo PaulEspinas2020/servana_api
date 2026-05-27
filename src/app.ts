@@ -1,4 +1,5 @@
 import express, { NextFunction, Request, Response } from "express";
+import http from "http";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import formidable from "formidable";
@@ -94,6 +95,14 @@ app.use("/api", cors(corsOptionsDelegate), paymentRoutes);
 import additionalRoutes from "./routes/additional.routes";
 app.use("/api", cors(corsOptionsDelegate), additionalRoutes);
 
-app.listen(port, () => {
+import chatRoutes from "./chat/chat.routes";
+app.use("/api", cors(corsOptionsDelegate), chatRoutes);
+
+// Use an http.Server so Socket.IO can share the same port as Express.
+import { initChatSocket } from "./chat/chat.gateway";
+const httpServer = http.createServer(app);
+initChatSocket(httpServer);
+
+httpServer.listen(port, () => {
     console.log(`Magic is running on port ${port}`);
 });
