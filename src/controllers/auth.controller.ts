@@ -9,6 +9,9 @@ const signin = async (req: Request, res: Response) => {
         const dbResponse = await authService.loggedInUser(email, password);
 
         // TODO save fcm
+        if (fcmToken) {
+            await authService.updateFcmToken(dbResponse.id, fcmToken);
+        }
 
         successMessage.data = dbResponse;
         res.status(status.success).send(successMessage);

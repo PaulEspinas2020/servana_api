@@ -99,7 +99,7 @@ export const upsertFirebaseUser = async (payload: {
 const getUserCredentialsByEmail = async (email: string, withPassword = false) => {
     const searchQuery = `
       Select 
-        c.uid, c.email, c.password, c.first_name, c.last_name, c.role, c.created_date
+        c.uid, c.email, c.password, c.first_name, c.last_name, c.role, c.created_date, c.fcm_token
       from ${dbSchema}.user_credentials c
       where c.email = $1`;
 
@@ -283,6 +283,7 @@ const formatUserCredentials = (raw: any): UserCredentials => {
         createdDate: raw.created_date,
         isArchived: raw.is_archive,
         phoneNumber: parseInt(raw.phone_number),
+        fcmToken: raw.fcm_token,
     };
 };
 

@@ -270,5 +270,17 @@ const changeArchiveStatus = async (userId: string, archiveStatus: boolean) => {
     }
 };
 
+const updateFcmToken = async (userId: string, fcmToken: string) => {
+    const updateQuery = `UPDATE ${dbSchema}.user_credentials SET fcm_token = $1 WHERE uid = $2 returning *`;
+
+    try {
+        const { rows } = await dbQuery.query(updateQuery, [fcmToken, userId]);
+        const dbResponse = rows;
+        return dbResponse;
+    } catch (error) {
+        throw error;
+    }
+}
+
 export { registerUser, loginUserInDBAndFirebase, loggedInUser, getAndSendEmailVerificationLink, changeArchiveStatus, 
-    verifyEmailOtp, resendEmailOtp };
+    verifyEmailOtp, resendEmailOtp, updateFcmToken };

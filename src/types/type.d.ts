@@ -18,6 +18,7 @@ declare global {
         isArchived: boolean;
         createdDate: Date;
         phoneNumber?: number;
+        fcmToken?: string;
     }
 
     interface UserCredentialsReq {
