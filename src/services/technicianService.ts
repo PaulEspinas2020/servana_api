@@ -1,6 +1,7 @@
 import { db } from "../config";
 import dbQuery from "../db/dbQuery";
 import mongoDb from "../db/mongodbQuery";
+import { generateOTP } from "../helpers/otp";
 
 const dbSchema = db.schema;
 
@@ -201,16 +202,18 @@ export const assignNearestWorker = async (
   const etaMinutes = Math.floor(
   Math.max(5, Math.ceil((best.distanceKm / avgSpeedKph) * 60))
 );
+  const otpCode = generateOTP();
   await dbQuery.query(
   `
   UPDATE ${dbSchema}.bookings
   SET worker_uid=$1,
       status='WORKER_ASSIGNED',
       eta_minutes=$2::int,
-      eta_at = NOW() + ($2::int * interval '1 minute')
+      eta_at = NOW() + ($2::int * interval '1 minute'),
+      worker_code = $4
   WHERE id=$3
   `,
-  [best.uid, etaMinutes, bookingId]
+  [best.uid, etaMinutes, bookingId, otpCode]
 );
 
   await dbQuery.query(
