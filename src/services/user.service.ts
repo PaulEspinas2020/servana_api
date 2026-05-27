@@ -185,6 +185,19 @@ const getNameByEmail = async (email: string) => {
     }
 };
 
+const getEmailById = async (userId: string) => {
+    const searchQuery = `Select email
+      from ${dbSchema}.user_credentials where uid = $1`;
+
+    try {
+        const { rows } = await dbQuery.query(searchQuery, [userId]);
+        const dbResponse = rows[0].email;
+        return dbResponse;
+    } catch (error: any) {
+        throw Error(error);
+    }
+};
+
 const getRoleById = async (id: string) => {
     const searchQuery = `Select role
       from ${dbSchema}.user_credentials where uid = $1`;
@@ -403,4 +416,5 @@ export {
     markEmailOtpAsUsed,
     getUserByEmail,
     updateEmailVerifiedByUid,
+    getEmailById
 };

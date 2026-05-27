@@ -235,7 +235,8 @@ export const assignNearestWorker = async (
   return {
     assigned: true,
     worker_uid: best.uid,
-    etaMinutes
+    etaMinutes,
+    otpCode
   };
 };
 

@@ -8,6 +8,8 @@ import { checkCoverageGeo } from "../services/serviceService";
 import { getLatLonByLocationId } from "../services/address.service";
 
 import { assignNearestWorker } from "../services/technicianService";
+import { send } from "../helpers/mailer";
+import { getEmailById, getNameByEmail } from "./user.service";
 
 export const createBooking = async (
   userId: string,
@@ -96,6 +98,22 @@ export const createBooking = async (
       `,
       [booking.id, payload.paymentMethod, quote.final]
     );
+    const email = await getEmailById(userId);
+    const firstName = await getNameByEmail(email);
+     send(email, "verify_booking_otp", {
+                first_name: firstName,
+                otp_code: booking.otp_code,
+                booking_id: booking.id,
+                booking_date: booking.schedule.toLocaleDateString("en-US", {
+                    year: "numeric",
+                    month: "long",
+                    day: "numeric",
+                }),
+                booking_time: booking.schedule.toLocaleTimeString("en-US", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                })
+    });
 
     return {
       bookingId: booking.id,
