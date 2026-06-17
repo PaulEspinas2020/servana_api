@@ -240,21 +240,55 @@ export const getJobCards = async (req: Request, res: Response) => {
 
 export const getAvailableWorkers = async (req: Request, res: Response) => {
   try {
-    const { date, time, role } = req.query as { date?: string; time?: string; role?: string };
+    const { date, time, serviceId, bookingId } = req.query as {
+      date?: string;
+      time?: string;
+      serviceId?: string;
+      bookingId?: string;
+    };
 
-    if (!date || !time) {
-      return res.status(400).json({
-        success: false,
-        message: "date and time are required (e.g. date=2024-06-01&time=10:00)",
-      });
+    let resolvedServiceId: number | undefined = serviceId ? Number(serviceId) : undefined;
+    let resolvedSchedule: string | undefined;
+
+    // If bookingId is provided, derive schedule + serviceId directly from the booking
+    if (bookingId) {
+      const { default: dbQuery } = await import("../db/dbQuery");
+      const { db } = await import("../config");
+      const dbSchema = db.schema;
+
+      const res2 = await dbQuery.query(
+        `
+        SELECT b.schedule, so.service_id
+        FROM ${dbSchema}.bookings b
+        JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+        WHERE b.id = $1
+        `,
+        [Number(bookingId)]
+      );
+
+      if (!res2.rowCount) {
+        return res.status(404).json({ success: false, message: "Booking not found" });
+      }
+
+      const row = res2.rows[0];
+      resolvedSchedule = new Date(row.schedule).toISOString().slice(0, 16).replace("T", "T");
+      if (!resolvedServiceId) resolvedServiceId = Number(row.service_id);
+    } else {
+      if (!date || !time) {
+        return res.status(400).json({
+          success: false,
+          message: "Provide either bookingId, or both date (YYYY-MM-DD) and time (HH:MM)",
+        });
+      }
+      resolvedSchedule = `${date}T${time}:00`;
     }
 
-    const schedule = `${date}T${time}:00`;
-    const workers = await technician.getAvailableWorkers(schedule, role ? Number(role) : undefined);
+    const workers = await technician.getAvailableWorkers(resolvedSchedule!, resolvedServiceId);
 
     return res.json({
       success: true,
-      schedule,
+      schedule: resolvedSchedule,
+      serviceId: resolvedServiceId ?? null,
       count: workers.length,
       workers,
     });
@@ -265,6 +299,132 @@ export const getAvailableWorkers = async (req: Request, res: Response) => {
     });
   }
 };
+
+export const assignEmployeeServices = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    const { serviceIds } = req.body as { serviceIds: number[] };
+
+    if (!uid || !Array.isArray(serviceIds) || !serviceIds.length) {
+      return res.status(400).json({ success: false, message: "uid and serviceIds[] are required" });
+    }
+
+    const result = await technician.assignServicesToEmployee(uid, serviceIds);
+    return res.json({ success: true, assigned: result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to assign services" });
+  }
+};
+
+export const removeEmployeeService = async (req: Request, res: Response) => {
+  try {
+    const { uid, serviceId } = req.params as { uid: string; serviceId: string };
+
+    if (!uid || !serviceId) {
+      return res.status(400).json({ success: false, message: "uid and serviceId are required" });
+    }
+
+    const result = await technician.removeServiceFromEmployee(uid, Number(serviceId));
+    return res.json({ success: true, removed: toCamel(result) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to remove service" });
+  }
+};
+
+export const getEmployeeServices = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+
+    if (!uid) {
+      return res.status(400).json({ success: false, message: "uid is required" });
+    }
+
+    const services = await technician.getServicesByEmployee(uid);
+    return res.json({ success: true, services });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to fetch services" });
+  }
+};
+
+export const getWorkersByService = async (req: Request, res: Response) => {
+  try {
+    const serviceId = Number(req.params.serviceId);
+
+    if (Number.isNaN(serviceId)) {
+      return res.status(400).json({ success: false, message: "Invalid serviceId" });
+    }
+
+    const workers = await technician.getWorkersByService(serviceId);
+    const toCamelRows = (rows: any[]) => rows.map(toCamel);
+    return res.json({ success: true, workers: toCamelRows(workers) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to fetch workers" });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Worker Bank Account
+// ---------------------------------------------------------------------------
+
+/**
+ * PUT /workers/:uid/bank-account
+ * Register or update a worker's bank account for PayMongo payouts.
+ * Body: { bankCode, accountNumber, accountName }
+ */
+// export const upsertBankAccount = async (req: Request, res: Response) => {
+//   try {
+//     const { uid } = req.params  as { uid: string };
+//     const { bankCode, accountNumber, accountName } = req.body;
+
+//     if (!bankCode || !accountNumber || !accountName) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "bankCode, accountNumber, and accountName are required",
+//       });
+//     }
+
+//     const account = await technician.upsertWorkerBankAccount(uid, {
+//       bankCode,
+//       accountNumber,
+//       accountName,
+//     });
+
+//     return res.json({ success: true, bankAccount: toCamel(account) });
+//   } catch (error: any) {
+//     return res.status(500).json({ success: false, message: error.message });
+//   }
+// };
+
+// /**
+//  * GET /workers/:uid/bank-account
+//  */
+// export const getBankAccount = async (req: Request, res: Response) => {
+//   try {
+//     const { uid } = req.params as { uid: string };
+//     const account = await technician.getWorkerBankAccount(uid);
+
+//     if (!account) {
+//       return res.status(404).json({ success: false, message: "No bank account registered" });
+//     }
+
+//     return res.json({ success: true, bankAccount: toCamel(account) });
+//   } catch (error: any) {
+//     return res.status(500).json({ success: false, message: error.message });
+//   }
+// };
+
+// /**
+//  * DELETE /workers/:uid/bank-account
+//  */
+// export const deleteBankAccount = async (req: Request, res: Response) => {
+//   try {
+//     const { uid } = req.params as { uid: string };
+//     const account = await technician.deleteWorkerBankAccount(uid);
+//     return res.json({ success: true, deleted: toCamel(account) });
+//   } catch (error: any) {
+//     return res.status(400).json({ success: false, message: error.message });
+//   }
+// };
 
 export const assignWorker = async (req: Request, res: Response) => {
   try {
@@ -292,6 +452,35 @@ export const assignWorker = async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to assign worker",
+    });
+  }
+};
+
+export const declineJob = async (req: Request, res: Response) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    const workerUid = req.query.workerUid as string;
+
+    if (!bookingId || !workerUid) {
+      return res.status(400).json({
+        success: false,
+        message: "bookingId and workerUid are required",
+      });
+    }
+
+    const result = await technician.declineJob(bookingId, workerUid);
+
+    return res.json({
+      success: true,
+      message: result.reassignment?.assigned
+        ? "Job declined — a new worker has been assigned"
+        : "Job declined — no available worker found, booking returned to queue",
+      data: result,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to decline job",
     });
   }
 };

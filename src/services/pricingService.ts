@@ -2,6 +2,26 @@ import { db } from "../config";
 import dbQuery from "../db/dbQuery";
 const dbSchema = db.schema;
 
+/**
+ * Servana Transportation Fee Matrix
+ * Based on distance between worker and customer location.
+ *
+ *  0–5 km   → FREE
+ *  6–10 km  → ₱110
+ *  11–15 km → ₱160
+ *  16–20 km → ₱250
+ *  21–25 km → ₱400
+ *  >25 km   → ₱500
+ */
+export const computeTranspoFee = (distanceKm: number): number => {
+  if (distanceKm <= 5)  return 0;
+  if (distanceKm <= 10) return 110;
+  if (distanceKm <= 15) return 160;
+  if (distanceKm <= 20) return 250;
+  if (distanceKm <= 25) return 400;
+  return 500;
+};
+
 export const computeQuote = async (req: QuoteRequest) => {
   const baseRes = await dbQuery.query(
     `SELECT id, base_price FROM ${dbSchema}.service_options WHERE id=$1 AND option_type='MAIN'`,

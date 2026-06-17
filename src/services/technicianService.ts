@@ -4,6 +4,7 @@ import mongoDb from "../db/mongodbQuery";
 import { generateOTP } from "../helpers/otp";
 import { send } from "../helpers/mailer";
 import { getUserInfoByBookingId } from "./user.service";
+import { computeTranspoFee } from "./pricingService";
 
 const dbSchema = db.schema;
 
@@ -36,7 +37,7 @@ export const allWorkers = async () => {
     FROM ${dbSchema}.user_credentials u
     LEFT JOIN ${dbSchema}.roles r
       ON u.role::int = r.role_id
-    WHERE u.role::int NOT IN (0, 1, 3)
+    WHERE u.role::int = 2
     ORDER BY u.first_name, u.last_name
     `,
     []
@@ -157,6 +158,31 @@ export const listOnlineWorkers = async () => {
     .toArray();
 };
 
+export const listOnlineWorkersByService = async (serviceId: number) => {
+  const workersRes = await dbQuery.query(
+    `
+    SELECT employee_uid
+    FROM ${dbSchema}.employee_services
+    WHERE service_id = $1
+    `,
+    [serviceId]
+  );
+
+  const uids = workersRes.rows.map((r: any) => r.employee_uid);
+
+  if (!uids.length) return [];
+
+  const collection = (await mongoDb).collection("worker_locations");
+
+  return collection
+    .find({
+      uid: { $in: uids },
+      is_online: true,
+      loc: { $exists: true }
+    })
+    .toArray();
+};
+
 const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
   const toRad = (v: number) => (v * Math.PI) / 180;
   const R = 6371;
@@ -177,7 +203,7 @@ export const assignNearestWorker = async (
   bookingId: number,
   userLat: number,
   userLon: number,
-  workerRole?: number | null
+  serviceId?: number | null
 ) => {
 
   // 1. Get the booking's schedule for availability check
@@ -185,6 +211,8 @@ export const assignNearestWorker = async (
     `SELECT schedule FROM ${dbSchema}.bookings WHERE id = $1`,
     [bookingId]
   );
+
+  console.log("Booking schedule:", bookingRes.rows[0]?.schedule);
 
   if (!bookingRes.rowCount) {
     throw new Error("Booking not found");
@@ -208,17 +236,17 @@ export const assignNearestWorker = async (
   );
   const busyUids = new Set(busyRes.rows.map((r: any) => r.worker_uid));
 
-  // 3. Get online workers and filter out the busy ones
-  const onlineWorkers = workerRole
-    ? await listOnlineWorkersByRole(workerRole)
+  // 3. Get online workers qualified for this service, filter out busy ones
+  const onlineWorkers = serviceId
+    ? await listOnlineWorkersByService(serviceId)
     : await listOnlineWorkers();
 
   if (!onlineWorkers.length) {
     return { assigned: false, reason: "NO_WORKER_ONLINE" };
   }
-
+  console.log(`Found ${onlineWorkers.length} online workers${serviceId ? ` for service ${serviceId}` : ""}`);
   const availableWorkers = onlineWorkers.filter((w: any) => !busyUids.has(w.uid));
-
+  console.log(`After filtering busy workers, ${availableWorkers.length} available workers remain`);
   if (!availableWorkers.length) {
     return { assigned: false, reason: "NO_WORKER_AVAILABLE" };
   }
@@ -235,24 +263,33 @@ export const assignNearestWorker = async (
     .sort((a, b) => a.distanceKm - b.distanceKm);
 
   const best = ranked[0];
-
+    console.log(`Nearest worker: ${best.uid} at ${best.distanceKm.toFixed(2)} km`);
   const avgSpeedKph = 30;
   const etaMinutes = Math.floor(
-  Math.max(5, Math.ceil((best.distanceKm / avgSpeedKph) * 60))
-);
+    Math.max(5, Math.ceil((best.distanceKm / avgSpeedKph) * 60))
+  );
   const otpCode = generateOTP();
+  const transpoFee = computeTranspoFee(best.distanceKm);
+  console.log(`Computed ETA: ${etaMinutes} minutes, OTP: ${otpCode}, Transpo Fee: ${transpoFee}`);
+  // Apply transpo fee: add to final_price and persist into pricing_breakdown
   await dbQuery.query(
-  `
-  UPDATE ${dbSchema}.bookings
-  SET worker_uid=$1,
-      status='WORKER_ASSIGNED',
-      eta_minutes=$2::int,
-      eta_at = NOW() + ($2::int * interval '1 minute'),
-      worker_code = $4
-  WHERE id=$3
-  `,
-  [best.uid, etaMinutes, bookingId, otpCode]
-);
+    `
+    UPDATE ${dbSchema}.bookings
+    SET worker_uid    = $1,
+        status        = 'WORKER_ASSIGNED',
+        eta_minutes   = $2::int,
+        eta_at        = NOW() + ($2::int * interval '1 minute'),
+        worker_code   = $4,
+        transpo_fee   = $5,
+        final_price   = quoted_price + $5,
+        pricing_breakdown = pricing_breakdown || jsonb_build_object(
+          'transpo_fee',     $5::numeric,
+          'worker_distance', $6::numeric
+        )
+    WHERE id = $3
+    `,
+    [best.uid, etaMinutes, bookingId, otpCode, transpoFee, Math.round(best.distanceKm * 100) / 100]
+  );
 
   await dbQuery.query(
     `
@@ -307,6 +344,8 @@ export const assignNearestWorker = async (
     assigned: true,
     worker_uid: best.uid,
     etaMinutes,
+    transpoFee,
+    workerDistanceKm: Math.round(best.distanceKm * 100) / 100,
     otpCode
   };
 };
@@ -390,7 +429,7 @@ export const getJobCardsByWorker = async (workerId: string) => {
       ON bw.booking_id = b.id AND bw.worker_uid = $1
 
     WHERE b.worker_uid = $1
-    AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED')
+    AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','DECLINED')
     ORDER BY b.schedule ASC
     `,
     [workerId]
@@ -402,28 +441,29 @@ export const getJobCardsByWorker = async (workerId: string) => {
 /**
  * Returns workers who have no active booking within a 2-hour window of the requested schedule.
  * Active statuses: PENDING_OTP, CONFIRMED, PAID, WORKER_ASSIGNED, ACCEPTED, IN_PROGRESS
- * Optionally filter by role.
+ * Optionally filter by serviceId — returns only workers who offer that service.
  *
- * @param schedule  ISO datetime string, e.g. "2024-06-01T10:00:00"
- * @param role      Optional worker role number to filter by
+ * @param schedule   ISO datetime string, e.g. "2024-06-01T10:00:00"
+ * @param serviceId  Optional service ID to filter by employee_services
  */
-export const getAvailableWorkers = async (schedule: string, role?: number) => {
+export const getAvailableWorkers = async (schedule: string, serviceId?: number) => {
   const requestedTime = new Date(schedule);
 
   if (isNaN(requestedTime.getTime())) {
     throw new Error("Invalid schedule datetime");
   }
 
-  // Fetch all workers (exclude customer role 3 and admin roles 0/1)
-  const workerQuery = role
-    ? `SELECT uid, email, first_name, last_name, phone_number, role
-       FROM ${dbSchema}.user_credentials
-       WHERE role = $1 AND is_archive = false`
+  // Fetch workers: if serviceId provided, only those assigned to that service
+  const workerQuery = serviceId
+    ? `SELECT uc.uid, uc.email, uc.first_name, uc.last_name, uc.phone_number, uc.role
+       FROM ${dbSchema}.user_credentials uc
+       JOIN ${dbSchema}.employee_services es ON es.employee_uid = uc.uid
+       WHERE es.service_id = $1 AND uc.is_archive = false`
     : `SELECT uid, email, first_name, last_name, phone_number, role
        FROM ${dbSchema}.user_credentials
-       WHERE role::int NOT IN (0, 1, 3) AND is_archive = false`;
+       WHERE role::int = 2 AND is_archive = false`;
 
-  const workerParams = role ? [role] : [];
+  const workerParams = serviceId ? [serviceId] : [];
   const { rows: allWorkers } = await dbQuery.query(workerQuery, workerParams);
 
   if (!allWorkers.length) return [];
@@ -455,9 +495,14 @@ export const getAvailableWorkers = async (schedule: string, role?: number) => {
 };
 
 export const assignWorker = async (bookingId: number, workerUid: string) => {
-  // 1. Get the booking's schedule
+  // 1. Get the booking's schedule and service
   const bookingRes = await dbQuery.query(
-    `SELECT id, schedule, status FROM ${dbSchema}.bookings WHERE id = $1`,
+    `
+    SELECT b.id, b.schedule, b.status, so.service_id
+    FROM ${dbSchema}.bookings b
+    JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+    WHERE b.id = $1
+    `,
     [bookingId]
   );
 
@@ -467,8 +512,33 @@ export const assignWorker = async (bookingId: number, workerUid: string) => {
 
   const booking = bookingRes.rows[0];
   const schedule = new Date(booking.schedule);
+  const serviceId = Number(booking.service_id);
 
-  // 2. Check if the worker already has a conflicting booking within ±2h
+  // 2. Validate the worker is qualified for this service
+  const eligibilityRes = await dbQuery.query(
+    `
+    SELECT 1
+    FROM ${dbSchema}.employee_services
+    WHERE employee_uid = $1 AND service_id = $2
+    LIMIT 1
+    `,
+    [workerUid, serviceId]
+  );
+
+  if (!eligibilityRes.rowCount) {
+    // Fetch service name for a helpful error message
+    const svcRes = await dbQuery.query(
+      `SELECT name FROM ${dbSchema}.services WHERE id = $1`,
+      [serviceId]
+    );
+    const serviceName = svcRes.rows[0]?.name || `service #${serviceId}`;
+    throw new Error(
+      `Worker is not qualified for "${serviceName}". ` +
+      `Assign the service to this worker first via POST /workers/:uid/services.`
+    );
+  }
+
+  // 3. Check if the worker already has a conflicting booking within ±2h
   const windowStart = new Date(schedule.getTime() - 2 * 60 * 60 * 1000);
   const windowEnd   = new Date(schedule.getTime() + 2 * 60 * 60 * 1000);
 
@@ -567,6 +637,90 @@ export const acceptJob = async (bookingId: number, workerUid: string) => {
 
   return res.rows[0];
 };
+
+export const declineJob = async (bookingId: number, workerUid: string) => {
+  // 1. Mark the booking_workers row as DECLINED (only if currently ASSIGNED)
+  const declineRes = await dbQuery.query(
+    `
+    UPDATE ${dbSchema}.booking_workers
+    SET status = 'DECLINED'
+    WHERE booking_id = $1
+      AND worker_uid = $2
+      AND status = 'ASSIGNED'
+    RETURNING *
+    `,
+    [bookingId, workerUid]
+  );
+
+  if (!declineRes.rowCount) {
+    throw new Error("No ASSIGNED job found for this worker on this booking");
+  }
+
+  // 2. Get booking details needed for re-assignment
+  const bookingRes = await dbQuery.query(
+    `
+    SELECT
+      b.schedule,
+      b.user_address_id,
+      ua.location_id,
+      so.service_id
+    FROM ${dbSchema}.bookings b
+    JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+    LEFT JOIN ${dbSchema}.user_address ua ON ua.address_id = b.user_address_id
+    WHERE b.id = $1
+    `,
+    [bookingId]
+  );
+
+  if (!bookingRes.rowCount) throw new Error("Booking not found");
+
+  const row = bookingRes.rows[0];
+
+  // 3. Reset booking to CONFIRMED and clear the worker
+  await dbQuery.query(
+    `
+    UPDATE ${dbSchema}.bookings
+    SET worker_uid  = NULL,
+        status      = 'CONFIRMED',
+        eta_minutes = NULL,
+        eta_at      = NULL,
+        worker_code = NULL
+    WHERE id = $1
+    `,
+    [bookingId]
+  );
+
+  await dbQuery.query(
+    `
+    INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note)
+    VALUES ($1, 'CONFIRMED', 'Worker declined — seeking reassignment')
+    `,
+    [bookingId]
+  );
+
+  // 4. Attempt to find the next nearest qualified worker
+  let reassignment: any = { assigned: false, reason: "NO_LOCATION" };
+
+  if (row.location_id) {
+    const { getLatLonByLocationId } = await import("./address.service");
+    const [lon, lat] = await getLatLonByLocationId(String(row.location_id));
+
+    reassignment = await assignNearestWorker(
+      bookingId,
+      Number(lat),
+      Number(lon),
+      row.service_id ? Number(row.service_id) : null
+    );
+  }
+
+  return {
+    declined: true,
+    bookingId,
+    workerUid,
+    reassignment,
+  };
+};
+
 export const startJob = async (
   bookingId: number,
   workerUid: string,
@@ -674,6 +828,128 @@ export const completeJob = async (bookingId: number, workerUid: string) => {
   } catch (emailErr) {
     console.error("booking_completed email failed:", emailErr);
   }
+
+  return res.rows[0];
+};
+
+// ---------------------------------------------------------------------------
+// Employee ↔ Services
+// ---------------------------------------------------------------------------
+
+export const assignServicesToEmployee = async (employeeUid: string, serviceIds: number[]) => {
+  if (!serviceIds.length) throw new Error("serviceIds must not be empty");
+
+  const values = serviceIds
+    .map((_, i) => `($1, $${i + 2})`)
+    .join(", ");
+
+  const res = await dbQuery.query(
+    `
+    INSERT INTO ${dbSchema}.employee_services (employee_uid, service_id)
+    VALUES ${values}
+    ON CONFLICT (employee_uid, service_id) DO NOTHING
+    RETURNING *
+    `,
+    [employeeUid, ...serviceIds]
+  );
+
+  return res.rows;
+};
+
+export const removeServiceFromEmployee = async (employeeUid: string, serviceId: number) => {
+  const res = await dbQuery.query(
+    `
+    DELETE FROM ${dbSchema}.employee_services
+    WHERE employee_uid = $1 AND service_id = $2
+    RETURNING *
+    `,
+    [employeeUid, serviceId]
+  );
+
+  if (!res.rowCount) throw new Error("Service not found for this employee");
+
+  return res.rows[0];
+};
+
+export const getServicesByEmployee = async (employeeUid: string) => {
+  const res = await dbQuery.query(
+    `
+    SELECT s.id, s.name, s.category, es.created_at AS assigned_at
+    FROM ${dbSchema}.employee_services es
+    JOIN ${dbSchema}.services s ON s.id = es.service_id
+    WHERE es.employee_uid = $1
+    ORDER BY s.name
+    `,
+    [employeeUid]
+  );
+
+  return res.rows;
+};
+
+export const getWorkersByService = async (serviceId: number) => {
+  const res = await dbQuery.query(
+    `
+    SELECT
+      uc.uid,
+      uc.email,
+      uc.first_name,
+      uc.last_name,
+      uc.phone_number,
+      uc.role,
+      es.created_at AS assigned_at
+    FROM ${dbSchema}.employee_services es
+    JOIN ${dbSchema}.user_credentials uc ON uc.uid = es.employee_uid
+    WHERE es.service_id = $1 AND uc.role::int = 2 AND uc.is_archive = false
+    ORDER BY uc.first_name, uc.last_name
+    `,
+    [serviceId]
+  );
+
+  return res.rows;
+};
+
+// ---------------------------------------------------------------------------
+// Worker Bank Account CRUD
+// ---------------------------------------------------------------------------
+
+export const upsertWorkerBankAccount = async (
+  workerUid: string,
+  payload: { bankCode: string; accountNumber: string; accountName: string }
+) => {
+  const res = await dbQuery.query(
+    `
+    INSERT INTO ${dbSchema}.worker_bank_accounts
+      (worker_uid, bank_code, account_number, account_name)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (worker_uid) DO UPDATE
+      SET bank_code      = EXCLUDED.bank_code,
+          account_number = EXCLUDED.account_number,
+          account_name   = EXCLUDED.account_name,
+          updated_at     = NOW()
+    RETURNING *
+    `,
+    [workerUid, payload.bankCode, payload.accountNumber, payload.accountName]
+  );
+
+  return res.rows[0];
+};
+
+export const getWorkerBankAccount = async (workerUid: string) => {
+  const res = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.worker_bank_accounts WHERE worker_uid = $1`,
+    [workerUid]
+  );
+
+  return res.rows[0] || null;
+};
+
+export const deleteWorkerBankAccount = async (workerUid: string) => {
+  const res = await dbQuery.query(
+    `DELETE FROM ${dbSchema}.worker_bank_accounts WHERE worker_uid = $1 RETURNING *`,
+    [workerUid]
+  );
+
+  if (!res.rowCount) throw new Error("No bank account found for this worker");
 
   return res.rows[0];
 };

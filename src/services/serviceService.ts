@@ -320,7 +320,28 @@ export const updateFullService = async (
         }
 
         /**
-         * 2. Update main service
+         * 2. Block update if any existing booking references an option from this service
+         */
+        const bookingCheck = await dbQuery.query(
+            `
+            SELECT 1 FROM ${dbSchema}.bookings
+            WHERE service_option_id IN (
+              SELECT id FROM ${dbSchema}.service_options WHERE service_id = $1
+            )
+            LIMIT 1
+            `,
+            [serviceId]
+        );
+
+        if (bookingCheck.rowCount > 0) {
+            throw new Error(
+                "Cannot replace service options — existing bookings reference them. " +
+                "Add new options instead of modifying existing ones."
+            );
+        }
+
+        /**
+         * 3. Update main service name/category
          */
         await dbQuery.query(
             `
@@ -333,7 +354,7 @@ export const updateFullService = async (
         );
 
         /**
-         * 3. DELETE OLD DATA (IMPORTANT)
+         * 4. DELETE OLD OPTIONS (safe — no bookings reference them)
          * Order matters because of FK constraints
          */
 
@@ -355,7 +376,7 @@ export const updateFullService = async (
         );
 
         /**
-         * 4. RE-INSERT (same as create logic)
+         * 5. RE-INSERT (same as create logic)
          */
         for (const lvl2 of payload.options) {
             for (const item of lvl2.items) {
@@ -421,14 +442,20 @@ export const updateFullService = async (
 
 export const hardDeleteService = async (serviceId: number) => {
     try {
-        // validate
+        // Validate no bookings reference any option belonging to this service
         const bookingCheck = await dbQuery.query(
-            `SELECT 1 FROM ${dbSchema}.bookings WHERE service_option_id = $1 LIMIT 1`,
+            `
+            SELECT 1 FROM ${dbSchema}.bookings
+            WHERE service_option_id IN (
+              SELECT id FROM ${dbSchema}.service_options WHERE service_id = $1
+            )
+            LIMIT 1
+            `,
             [serviceId]
         );
 
         if (bookingCheck.rowCount > 0) {
-            throw new Error("Service is in use and cannot be deleted");
+            throw new Error("Service is in use by existing bookings and cannot be deleted");
         }
 
         const res = await dbQuery.query(

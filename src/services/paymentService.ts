@@ -9,6 +9,51 @@ import { send } from "../helpers/mailer";
 import { getUserInfoByBookingId } from "./user.service";
 
 const dbSchema = db.schema;
+
+// const SERVANA_COMMISSION = 0.20; // 20%
+// const WORKER_SHARE_RATE  = 0.80; // 80%
+
+// export const computeDisbursement = (totalAmount: number) => {
+//   const servanaShare = Math.round(totalAmount * SERVANA_COMMISSION * 100) / 100;
+//   const workerShare  = Math.round(totalAmount * WORKER_SHARE_RATE * 100) / 100;
+//   return { totalAmount, servanaShare, workerShare };
+// };
+
+// /**
+//  * Creates a disbursement record when a booking payment is confirmed.
+//  * Safe to call multiple times — uses ON CONFLICT DO NOTHING.
+//  */
+// export const createDisbursement = async (bookingId: number) => {
+//   const bookingRes = await dbQuery.query(
+//     `SELECT final_price, worker_uid FROM ${dbSchema}.bookings WHERE id = $1`,
+//     [bookingId]
+//   );
+
+//   if (!bookingRes.rowCount) throw new Error("Booking not found");
+
+//   const { final_price, worker_uid } = bookingRes.rows[0];
+
+//   if (!worker_uid) {
+//     console.warn(`createDisbursement: booking ${bookingId} has no assigned worker — skipping`);
+//     return null;
+//   }
+
+//   const { totalAmount, servanaShare, workerShare } = computeDisbursement(Number(final_price));
+
+//   const res = await dbQuery.query(
+//     `
+//     INSERT INTO ${dbSchema}.disbursements
+//       (booking_id, worker_uid, total_amount, servana_share, worker_share, status)
+//     VALUES ($1, $2, $3, $4, $5, 'PENDING')
+//     ON CONFLICT (booking_id) DO NOTHING
+//     RETURNING *
+//     `,
+//     [bookingId, worker_uid, totalAmount, servanaShare, workerShare]
+//   );
+
+//   return res.rows[0] || null;
+// };
+
 export const submitGcash = async (bookingId: number, referenceNo: string, proofUrl?: string) => {
   const r = await dbQuery.query(
     `
@@ -37,6 +82,10 @@ export const approvePayment = async (bookingId: number) => {
     [bookingId]
   );
   if (!r.rowCount) throw new Error("Payment record not found.");
+
+  // try { await createDisbursement(bookingId); }
+  // catch (e) { console.error("createDisbursement failed (approvePayment):", e); }
+
   return r.rows[0];
 };
 
@@ -51,6 +100,10 @@ export const markCashPaid = async (bookingId: number) => {
     [bookingId]
   );
   if (!r.rowCount) throw new Error("Payment record not found.");
+
+  // try { await createDisbursement(bookingId); }
+  // catch (e) { console.error("createDisbursement failed (markCashPaid):", e); }
+
   return r.rows[0];
 };
 
@@ -143,16 +196,16 @@ export const createCheckoutSession = async (bookingId: number) => {
     [bookingId, providerPaymentId, checkoutUrl, result]
   );
 
-  const otp = generateOTP();
+  // const otp = generateOTP();
   
-  await dbQuery.query(
-    `
-    UPDATE ${dbSchema}.bookings
-    SET worker_code = $2
-    WHERE booking_id = $1
-    `,
-    [bookingId, otp]
-  );
+  // await dbQuery.query(
+  //   `
+  //   UPDATE ${dbSchema}.bookings
+  //   SET worker_code = $2
+  //   WHERE booking_id = $1
+  //   `,
+  //   [bookingId, otp]
+  // );
 
 
   return {
@@ -395,6 +448,9 @@ export const processWebhook = async (req: Request, res: Response) => {
       [payment.booking_id]
     );
 
+    // try { await createDisbursement(payment.booking_id); }
+    // catch (e) { console.error("createDisbursement failed (webhook):", e); }
+
     // Send payment confirmation email to customer
     try {
       const userInfo = await getUserInfoByBookingId(payment.booking_id);
@@ -459,3 +515,185 @@ export const processWebhook = async (req: Request, res: Response) => {
     }
   }
 };
+
+// ---------------------------------------------------------------------------
+// Disbursement dashboard
+// ---------------------------------------------------------------------------
+
+/**
+ * Daily disbursement view per worker.
+ * Pulls from payments WHERE status='PAID', groups by date + worker,
+ * and joins worker_daily_payouts for the current payout status.
+ */
+// export const getDailyDisbursements = async () => {
+//   const res = await dbQuery.query(
+//     `
+//     SELECT
+//       DATE(p.paid_at)                                       AS date,
+//       b.worker_uid,
+//       uc.first_name || ' ' || uc.last_name                 AS worker_name,
+//       COUNT(p.id)                                           AS total_transactions,
+//       COALESCE(SUM(p.amount), 0)                            AS total_collected,
+//       ROUND(COALESCE(SUM(p.amount), 0) * 0.20, 2)          AS servana_share,
+//       ROUND(COALESCE(SUM(p.amount), 0) * 0.80, 2)          AS worker_share,
+//       COALESCE(wdp.status, 'PENDING')                       AS payout_status,
+//       wdp.paymongo_payout_id,
+//       wdp.payout_error,
+//       wdp.released_at
+//     FROM ${dbSchema}.payments p
+//     JOIN ${dbSchema}.bookings b
+//       ON b.id = p.booking_id
+//     JOIN ${dbSchema}.user_credentials uc
+//       ON uc.uid = b.worker_uid
+//     LEFT JOIN ${dbSchema}.worker_daily_payouts wdp
+//       ON wdp.worker_uid = b.worker_uid
+//       AND wdp.payout_date = DATE(p.paid_at)
+//     WHERE p.status = 'PAID'
+//       AND p.paid_at IS NOT NULL
+//       AND b.worker_uid IS NOT NULL
+//     GROUP BY
+//       DATE(p.paid_at),
+//       b.worker_uid,
+//       uc.first_name,
+//       uc.last_name,
+//       wdp.status,
+//       wdp.paymongo_payout_id,
+//       wdp.payout_error,
+//       wdp.released_at
+//     ORDER BY DATE(p.paid_at) DESC, uc.first_name
+//     `,
+//     []
+//   );
+
+//   return res.rows;
+// };
+
+// /**
+//  * Trigger the actual PayMongo payout for a worker's accumulated share on a given date.
+//  * Aggregates all PAID payments for that worker+date, upserts a worker_daily_payouts record,
+//  * then calls the PayMongo Disbursements API.
+//  */
+// export const triggerDailyPayout = async (workerUid: string, payoutDate: string) => {
+//   // 1. Aggregate PAID payments for this worker on this date
+//   const aggRes = await dbQuery.query(
+//     `
+//     SELECT
+//       COALESCE(SUM(p.amount), 0)                   AS total_collected,
+//       ROUND(COALESCE(SUM(p.amount), 0) * 0.20, 2)  AS servana_share,
+//       ROUND(COALESCE(SUM(p.amount), 0) * 0.80, 2)  AS worker_share,
+//       COUNT(p.id)                                   AS transaction_count
+//     FROM ${dbSchema}.payments p
+//     JOIN ${dbSchema}.bookings b ON b.id = p.booking_id
+//     WHERE p.status = 'PAID'
+//       AND b.worker_uid = $1
+//       AND DATE(p.paid_at) = $2::date
+//     `,
+//     [workerUid, payoutDate]
+//   );
+
+//   const agg = aggRes.rows[0];
+//   const workerShare = Number(agg.worker_share);
+//   const totalCollected = Number(agg.total_collected);
+
+//   if (totalCollected === 0) {
+//     throw new Error(`No PAID payments found for worker ${workerUid} on ${payoutDate}`);
+//   }
+
+//   // 2. Upsert the daily payout record (idempotent)
+//   const upsertRes = await dbQuery.query(
+//     `
+//     INSERT INTO ${dbSchema}.worker_daily_payouts
+//       (worker_uid, payout_date, total_collected, servana_share, worker_share, status)
+//     VALUES ($1, $2::date, $3, $4, $5, 'PENDING')
+//     ON CONFLICT (worker_uid, payout_date) DO UPDATE
+//       SET total_collected = EXCLUDED.total_collected,
+//           servana_share   = EXCLUDED.servana_share,
+//           worker_share    = EXCLUDED.worker_share,
+//           updated_at      = NOW()
+//     RETURNING *
+//     `,
+//     [workerUid, payoutDate, totalCollected, agg.servana_share, workerShare]
+//   );
+
+//   const record = upsertRes.rows[0];
+
+//   if (record.status === 'RELEASED') {
+//     throw new Error(`Payout for worker ${workerUid} on ${payoutDate} is already released`);
+//   }
+
+//   // 3. Load worker's bank account
+//   const bankRes = await dbQuery.query(
+//     `SELECT * FROM ${dbSchema}.worker_bank_accounts WHERE worker_uid = $1`,
+//     [workerUid]
+//   );
+//   if (!bankRes.rowCount) throw new Error("Worker has no registered bank account");
+//   const bank = bankRes.rows[0];
+
+//   // 4. Call PayMongo Disbursements API (amount in centavos)
+//   const amountCentavos = Math.round(workerShare * 100);
+
+//   try {
+//     const response = await axios.post(
+//       `${PAYMONGO_BASE_URL}/disbursements`,
+//       {
+//         data: {
+//           attributes: {
+//             amount: amountCentavos,
+//             currency: "PHP",
+//             bank_code: bank.bank_code,
+//             account_number: bank.account_number,
+//             account_name: bank.account_name,
+//             narration: `Servana daily payout ${payoutDate}`,
+//             reference_id: `WDP-${workerUid}-${payoutDate}`
+//           }
+//         }
+//       },
+//       {
+//         headers: {
+//           Authorization: getAuthHeader(),
+//           "Content-Type": "application/json"
+//         }
+//       }
+//     );
+
+//     const payoutId = response.data?.data?.id;
+
+//     const updated = await dbQuery.query(
+//       `
+//       UPDATE ${dbSchema}.worker_daily_payouts
+//       SET status             = 'RELEASED',
+//           paymongo_payout_id = $3,
+//           payout_error       = NULL,
+//           released_at        = NOW(),
+//           updated_at         = NOW()
+//       WHERE worker_uid = $1 AND payout_date = $2::date
+//       RETURNING *
+//       `,
+//       [workerUid, payoutDate, payoutId]
+//     );
+
+//     return {
+//       success: true,
+//       payoutId,
+//       workerShare,
+//       totalCollected,
+//       payout: updated.rows[0]
+//     };
+
+//   } catch (err: any) {
+//     const errMsg = err?.response?.data?.errors?.[0]?.detail || err.message || "PayMongo payout failed";
+
+//     await dbQuery.query(
+//       `
+//       UPDATE ${dbSchema}.worker_daily_payouts
+//       SET status       = 'FAILED',
+//           payout_error = $3,
+//           updated_at   = NOW()
+//       WHERE worker_uid = $1 AND payout_date = $2::date
+//       `,
+//       [workerUid, payoutDate, errMsg]
+//     );
+
+//     throw new Error(`Payout failed: ${errMsg}`);
+//   }
+// };

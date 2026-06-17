@@ -64,6 +64,9 @@ export const createBooking = async (
 
     const quote = await computeQuote(payload.pricing);
 
+    // transpo_fee starts at 0 — updated with actual amount when a worker is assigned
+    const initialBreakdown = { ...quote, transpo_fee: 0, worker_distance: null };
+
     const otp = generateOTP();
 
     const bookingRes = await dbQuery.query(
@@ -85,7 +88,7 @@ export const createBooking = async (
         otp,
         quote.final,
         quote.final,
-        quote
+        initialBreakdown
       ]
     );
 
@@ -160,14 +163,13 @@ export const confirmOtp = async (
     const bookingRes = await dbQuery.query(
       `
       SELECT
-        s.worker_role,
+        so.service_id,
         b.user_address_id,
         ua.location_id
       FROM ${dbSchema}.bookings b
-      JOIN ${dbSchema}.service_options so ON so.id=b.service_option_id
-      JOIN ${dbSchema}.services s ON s.id=so.service_id
-      LEFT JOIN ${dbSchema}.user_address ua ON ua.address_id=b.user_address_id
-      WHERE b.id=$1
+      JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+      LEFT JOIN ${dbSchema}.user_address ua ON ua.address_id = b.user_address_id
+      WHERE b.id = $1
       `,
       [bookingId]
     );
@@ -183,15 +185,12 @@ export const confirmOtp = async (
 
     const [lon, lat] = await getLatLonByLocationId(String(locationId));
 
-    const workerRole =
-      row.worker_role !== null
-        ? Number(row.worker_role)
-        : null;
+    const serviceId = row.service_id ? Number(row.service_id) : null;
     await assignNearestWorker(
       bookingId,
       Number(lat),
       Number(lon),
-      workerRole
+      serviceId
     );
 
     return r.rows[0];
@@ -231,7 +230,7 @@ export const getBookingById = async (
     LEFT JOIN ${dbSchema}.user_address ua
       ON ua.address_id = b.user_address_id
     LEFT JOIN ${dbSchema}.booking_workers bw
-      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED')
+      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','DECLINED')
     WHERE b.id = $1
     `,
     [bookingId]
@@ -295,7 +294,7 @@ export const getAllBookings = async () => {
       ON ua.address_id = b.user_address_id
     LEFT JOIN ${dbSchema}.booking_workers bw
       ON bw.booking_id = b.id
-      AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED')
+      AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','DECLINED')
     LEFT JOIN ${dbSchema}.user_credentials w
       ON w.uid = bw.worker_uid
     ORDER BY b.created_at DESC
@@ -334,7 +333,7 @@ export const getBookingsByUserId = async (userId: string) => {
     LEFT JOIN ${dbSchema}.user_address ua
       ON ua.address_id = b.user_address_id
     LEFT JOIN ${dbSchema}.booking_workers bw
-      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED')
+      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','DECLINED')
     WHERE b.user_id = $1
     ORDER BY b.created_at DESC
     `,
@@ -396,7 +395,7 @@ export const getDashboardAnalytics = async () => {
     user_stats AS (
       SELECT
         COUNT(*) FILTER (WHERE role::int = 3) AS total_customers,
-        COUNT(*) FILTER (WHERE role::integer NOT IN (0,1,3)) AS total_workers
+        COUNT(*) FILTER (WHERE role::int = 2) AS total_workers
       FROM ${dbSchema}.user_credentials
     ),
 
