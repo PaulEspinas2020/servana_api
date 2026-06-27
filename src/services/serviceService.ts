@@ -16,6 +16,14 @@ export const getAllServices = async () => {
     }
 };
 
+export const getServicesSimpleList = async () => {
+    const res = await dbQuery.query(
+        `SELECT id, name FROM ${dbSchema}.services ORDER BY name`,
+        []
+    );
+    return res.rows as { id: number; name: string }[];
+};
+
 export const getLevel2List = async (serviceId: number) => {
     const r = await dbQuery.query(
         `

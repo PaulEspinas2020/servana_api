@@ -177,6 +177,17 @@ export const forceDeleteService = async (req: Request, res: Response) => {
 };
 
 
+export const listServicesSimple = async (_req: Request, res: Response) => {
+  try {
+    const services = await serviceService.getServicesSimpleList();
+    successMessage.data = services;
+    res.status(status.success).send(successMessage);
+  } catch (error) {
+    errorMessage.error = "" + error;
+    res.status(status.error).send(errorMessage);
+  }
+};
+
 export const getFullServiceCatalog = async (req: Request, res: Response) => {
   try {
     const result = await serviceService.getFullServiceCatalog();

@@ -11,9 +11,9 @@ const dbSchema = db.schema;
 export const listWorkersByRole = async (role: number) => {
   const r = await dbQuery.query(
     `
-    SELECT uid, email, first_name, last_name, phone_number, role
+    SELECT uid, email, first_name, last_name, phone_number, role, is_archive
     FROM ${dbSchema}.user_credentials
-    WHERE role = $1
+    WHERE role = $1 AND is_archive = false
     ORDER BY first_name, last_name
     `,
     [role]
@@ -25,19 +25,20 @@ export const listWorkersByRole = async (role: number) => {
 export const allWorkers = async () => {
   const r = await dbQuery.query(
     `
-    SELECT 
+    SELECT
       u.uid,
       u.email,
       u.first_name,
       u.last_name,
       u.phone_number,
       u.role,
+      u.is_archive,
       r.role_name,
       r.description
     FROM ${dbSchema}.user_credentials u
     LEFT JOIN ${dbSchema}.roles r
       ON u.role::int = r.role_id
-    WHERE u.role::int = 2
+    WHERE u.role::int = 2 AND u.is_archive = false
     ORDER BY u.first_name, u.last_name
     `,
     []
@@ -46,28 +47,166 @@ export const allWorkers = async () => {
   return r.rows;
 };
 
+export const setWorkerArchiveStatus = async (uid: string, isArchive: boolean) => {
+  const res = await dbQuery.query(
+    `
+    UPDATE ${dbSchema}.user_credentials
+    SET is_archive = $1
+    WHERE uid = $2
+    RETURNING uid, email, first_name, last_name, is_archive
+    `,
+    [isArchive, uid]
+  );
+
+  if (!res.rowCount) throw new Error("Worker not found");
+  return res.rows[0];
+};
+
 export const getWorkerByUid = async (uid: string) => {
   const r = await dbQuery.query(
     `
-    SELECT 
+    SELECT
       u.uid,
       u.email,
       u.first_name,
       u.last_name,
       u.phone_number,
       u.role,
+      u.created_date,
+      u.is_email_verified,
+      u.is_archive,
       r.role_name,
-      r.description
+      r.description,
+      up.birthdate,
+      up.gender,
+      up.photo_url
     FROM ${dbSchema}.user_credentials u
     LEFT JOIN ${dbSchema}.roles r
       ON u.role::int = r.role_id
+    LEFT JOIN ${dbSchema}.user_profile up
+      ON up.uid = u.uid
     WHERE u.uid = $1
     LIMIT 1;
-        `,
+    `,
     [uid]
   );
 
-  return r.rowCount ? r.rows[0] : null;
+  if (!r.rowCount) return null;
+
+  const worker = r.rows[0];
+
+  const [addrRes, servicesRes, reqRes] = await Promise.all([
+    dbQuery.query(
+      `
+      SELECT address_id, address_one, address_two, zip_code, post_town, country, label, is_primary
+      FROM ${dbSchema}.user_address
+      WHERE uid = $1
+      ORDER BY is_primary DESC, created_at ASC
+      `,
+      [uid]
+    ),
+    dbQuery.query(
+      `
+      SELECT s.id, s.name, s.category, es.created_at AS assigned_at
+      FROM ${dbSchema}.employee_services es
+      JOIN ${dbSchema}.services s ON s.id = es.service_id
+      WHERE es.employee_uid = $1
+      ORDER BY s.name
+      `,
+      [uid]
+    ),
+    dbQuery.query(
+      `
+      SELECT id, file_url, file_name, uploaded_at
+      FROM ${dbSchema}.worker_requirements
+      WHERE worker_uid = $1
+      ORDER BY uploaded_at ASC
+      `,
+      [uid]
+    ),
+  ]);
+
+  return {
+    ...worker,
+    addresses: addrRes.rows.map((a: any) => ({
+      addressId: a.address_id,
+      addressOne: a.address_one,
+      addressTwo: a.address_two,
+      zipCode: a.zip_code,
+      postTown: a.post_town,
+      country: a.country,
+      label: a.label,
+      isPrimary: a.is_primary,
+    })),
+    services: servicesRes.rows.map((s: any) => ({
+      id: s.id,
+      name: s.name,
+      category: s.category,
+      assignedAt: s.assigned_at,
+    })),
+    requirements: reqRes.rows.map((f: any) => ({
+      id: f.id,
+      fileUrl: f.file_url,
+      fileName: f.file_name,
+      uploadedAt: f.uploaded_at,
+    })),
+  };
+};
+
+export const addWorkerRequirements = async (
+  workerUid: string,
+  files: Array<{ fileUrl: string; fileName: string }>
+) => {
+  const inserted: any[] = [];
+  for (const { fileUrl, fileName } of files) {
+    const res = await dbQuery.query(
+      `
+      INSERT INTO ${dbSchema}.worker_requirements (worker_uid, file_url, file_name)
+      VALUES ($1, $2, $3)
+      RETURNING id, file_url, file_name, uploaded_at
+      `,
+      [workerUid, fileUrl, fileName]
+    );
+    const row = res.rows[0];
+    inserted.push({
+      id: row.id,
+      fileUrl: row.file_url,
+      fileName: row.file_name,
+      uploadedAt: row.uploaded_at,
+    });
+  }
+  return inserted;
+};
+
+export const getWorkerRequirements = async (workerUid: string) => {
+  const res = await dbQuery.query(
+    `
+    SELECT id, file_url, file_name, uploaded_at
+    FROM ${dbSchema}.worker_requirements
+    WHERE worker_uid = $1
+    ORDER BY uploaded_at ASC
+    `,
+    [workerUid]
+  );
+  return res.rows.map((f: any) => ({
+    id: f.id,
+    fileUrl: f.file_url,
+    fileName: f.file_name,
+    uploadedAt: f.uploaded_at,
+  }));
+};
+
+export const deleteWorkerRequirement = async (workerUid: string, id: number) => {
+  const res = await dbQuery.query(
+    `
+    DELETE FROM ${dbSchema}.worker_requirements
+    WHERE id = $1 AND worker_uid = $2
+    RETURNING id, file_name
+    `,
+    [id, workerUid]
+  );
+  if (!res.rowCount) throw new Error("Requirement not found for this worker");
+  return res.rows[0];
 };
 
 export const upsertWorkerLocation = async (payload: {
@@ -183,6 +322,60 @@ export const listOnlineWorkersByService = async (serviceId: number) => {
     .toArray();
 };
 
+const applyNearestWorkerTranspoFee = async (
+  bookingId: number,
+  userLat: number,
+  userLon: number,
+  serviceId?: number | null
+) => {
+  try {
+    const collection = (await mongoDb).collection("worker_locations");
+
+    let filter: any = { loc: { $exists: true } };
+
+    if (serviceId) {
+      const workersRes = await dbQuery.query(
+        `SELECT employee_uid FROM ${dbSchema}.employee_services WHERE service_id = $1`,
+        [serviceId]
+      );
+      const uids = workersRes.rows.map((r: any) => r.employee_uid);
+      if (!uids.length) return;
+      filter.uid = { $in: uids };
+    }
+
+    const allWorkers = await collection.find(filter).toArray();
+    if (!allWorkers.length) return;
+
+    const nearest = allWorkers
+      .map((w: any) => {
+        const [lon, lat] = w.loc.coordinates;
+        return { distanceKm: haversineKm(userLat, userLon, lat, lon) };
+      })
+      .sort((a, b) => a.distanceKm - b.distanceKm)[0];
+
+    const transpoFee = computeTranspoFee(nearest.distanceKm);
+    const roundedDist = Math.round(nearest.distanceKm * 100) / 100;
+
+    console.log(`No worker assigned — using nearest DB worker distance ${roundedDist} km → transpo_fee ${transpoFee}`);
+
+    await dbQuery.query(
+      `
+      UPDATE ${dbSchema}.bookings
+      SET transpo_fee = $1,
+          final_price = quoted_price + $1,
+          pricing_breakdown = pricing_breakdown || jsonb_build_object(
+            'transpo_fee',     $1::numeric,
+            'worker_distance', $2::numeric
+          )
+      WHERE id = $3
+      `,
+      [transpoFee, roundedDist, bookingId]
+    );
+  } catch (err) {
+    console.error("applyNearestWorkerTranspoFee failed:", err);
+  }
+};
+
 const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
   const toRad = (v: number) => (v * Math.PI) / 180;
   const R = 6371;
@@ -242,12 +435,14 @@ export const assignNearestWorker = async (
     : await listOnlineWorkers();
 
   if (!onlineWorkers.length) {
+    await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);
     return { assigned: false, reason: "NO_WORKER_ONLINE" };
   }
   console.log(`Found ${onlineWorkers.length} online workers${serviceId ? ` for service ${serviceId}` : ""}`);
   const availableWorkers = onlineWorkers.filter((w: any) => !busyUids.has(w.uid));
   console.log(`After filtering busy workers, ${availableWorkers.length} available workers remain`);
   if (!availableWorkers.length) {
+    await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);
     return { assigned: false, reason: "NO_WORKER_AVAILABLE" };
   }
 

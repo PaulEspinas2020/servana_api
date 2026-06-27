@@ -14,6 +14,7 @@ router.get("/workers/:workerId/schedule", technicianController.workerSchedule);
 ``
 router.get("/workers/:workerId/job-cards", technicianController.getJobCards);
 router.put("/admin/bookings/:bookingId/assign", technicianController.assignWorker);
+router.patch("/admin/workers/:uid/archive", technicianController.setArchiveStatus);
 router.put("/workers/bookings/:bookingId/decline", technicianController.declineJob);
 router.put("/workers/bookings/:bookingId/accept", technicianController.acceptJob);
 router.put("/workers/bookings/:bookingId/start", technicianController.startJob);
@@ -25,6 +26,11 @@ router.post("/workers/:uid/services", technicianController.assignEmployeeService
 router.delete("/workers/:uid/services/:serviceId", technicianController.removeEmployeeService);
 router.get("/workers/:uid/services", technicianController.getEmployeeServices);
 router.get("/services/:serviceId/workers", technicianController.getWorkersByService);
+
+// Worker Requirements
+router.post("/workers/:uid/requirements", technicianController.uploadRequirements);
+router.get("/workers/:uid/requirements", technicianController.getRequirements);
+router.delete("/workers/:uid/requirements/:id", technicianController.deleteRequirement);
 
 // // Worker Bank Account
 // router.put("/workers/:uid/bank-account", technicianController.upsertBankAccount);

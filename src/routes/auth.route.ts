@@ -8,5 +8,8 @@ router.post("/auth/resend-email-otp", authController.resendEmailOtpController);
 router.post("/auth/signin", authController.signin);
 router.get("/auth/resendverification", authController.resendVerification);
 router.post("/auth/firebase-login", authController.firebaseAuthLoginController);
+router.post("/auth/add-employees", authController.addEmployeesController);
+router.post("/auth/forgot-password", authController.forgotPasswordController);
+router.post("/auth/reset-password", authController.resetPasswordController);
 
 export default router;

@@ -3,6 +3,7 @@ const router = express.Router()
 import * as serviceController from "../controllers/serviceController";
 
 router.get("/services", serviceController.listServices);
+router.get("/services/list", serviceController.listServicesSimple);
 router.get("/services/:serviceId/level2", serviceController.listLevel2);
 router.get("/:serviceId/options-with-addons", serviceController.listOptionsWithAddons);
 

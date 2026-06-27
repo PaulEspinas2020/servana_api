@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import * as technician from "../services/technicianService";
 import { toCamel } from "../helpers/idGenerator";
+import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 
 export const listByRole = async (req: Request, res: Response) => {
   try {
@@ -63,9 +64,14 @@ export const getByUid = async (req: Request, res: Response) => {
       });
     }
 
+    const { addresses, services, ...rest } = worker;
     return res.json({
       success: true,
-      worker: toCamel(worker) ,
+      worker: {
+        ...toCamel(rest),
+        addresses,
+        services,
+      },
     });
   } catch (error: any) {
     return res.status(500).json({
@@ -564,5 +570,120 @@ export const completeJob = async (req: Request, res: Response) => {
       success: false,
       message: error.message || "Failed to complete job",
     });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Worker Archive / Deactivate
+// ---------------------------------------------------------------------------
+
+/**
+ * PATCH /admin/workers/:uid/archive
+ * Body: { isArchive: boolean }
+ */
+export const setArchiveStatus = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    const { isArchive } = req.body as { isArchive: boolean };
+
+    if (!uid) {
+      return res.status(400).json({ success: false, message: "uid is required" });
+    }
+
+    if (typeof isArchive !== "boolean") {
+      return res.status(400).json({ success: false, message: "isArchive must be a boolean" });
+    }
+
+    const worker = await technician.setWorkerArchiveStatus(uid, isArchive);
+    return res.json({
+      success: true,
+      message: isArchive ? "Worker deactivated" : "Worker reactivated",
+      worker: toCamel(worker),
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to update worker status" });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Worker Requirements
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /workers/:uid/requirements
+ * Body: { files: [{ data: "<base64 data URI>", name: "<filename>" }] }
+ */
+export const uploadRequirements = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    const files: Array<{ data: string; name: string }> = req.body.files;
+
+    if (!uid) {
+      return res.status(400).json({ success: false, message: "uid is required" });
+    }
+
+    if (!Array.isArray(files) || !files.length) {
+      return res.status(400).json({ success: false, message: "files must be a non-empty array" });
+    }
+
+    const worker = await technician.getWorkerByUid(uid);
+    if (!worker) {
+      return res.status(404).json({ success: false, message: "Worker not found" });
+    }
+
+    const uploaded: Array<{ fileUrl: string; fileName: string }> = [];
+    for (const file of files) {
+      if (!file.data || !file.name) {
+        return res.status(400).json({ success: false, message: "Each file must have data and name" });
+      }
+      const fileUrl = await uploadFileToStorage(
+        "employee-requirements",
+        `${uid}_${Date.now()}`,
+        file.data
+      );
+      uploaded.push({ fileUrl, fileName: file.name });
+    }
+
+    const requirements = await technician.addWorkerRequirements(uid, uploaded);
+
+    return res.json({ success: true, requirements });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to upload requirements" });
+  }
+};
+
+/**
+ * GET /workers/:uid/requirements
+ */
+export const getRequirements = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+
+    if (!uid) {
+      return res.status(400).json({ success: false, message: "uid is required" });
+    }
+
+    const requirements = await technician.getWorkerRequirements(uid);
+    return res.json({ success: true, requirements });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to fetch requirements" });
+  }
+};
+
+/**
+ * DELETE /workers/:uid/requirements/:id
+ */
+export const deleteRequirement = async (req: Request, res: Response) => {
+  try {
+    const { uid, id } = req.params as { uid: string; id: string };
+
+    if (!uid || !id) {
+      return res.status(400).json({ success: false, message: "uid and id are required" });
+    }
+
+    const deleted = await technician.deleteWorkerRequirement(uid, Number(id));
+    return res.json({ success: true, deleted });
+  } catch (error: any) {
+    return res.status(400).json({ success: false, message: error.message || "Failed to delete requirement" });
   }
 };

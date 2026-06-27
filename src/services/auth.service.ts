@@ -4,9 +4,14 @@ import dayjs from "dayjs";
 import { comparePassword, hashPassword, isValidEmail, validatePassword } from "../helpers/validation";
 import * as firebaseFunction from "../services/firebaseFunctions.service";
 import * as userService from "../services/user.service";
+import * as serviceService from "../services/serviceService";
+import * as technicianService from "../services/technicianService";
 import { send } from "../helpers/mailer";
 import bcrypt from "bcryptjs";
 import { generateOTP } from "../helpers/otp";
+import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
+import * as addressService from "../services/address.service";
+import { idGenerator } from "../helpers/idGenerator";
 
 const now = dayjs();
 const dbSchema = db.schema;
@@ -45,7 +50,7 @@ const loggedInUser = async (email: string, password: string) => {
 };
 
 const registerUser = async (user: UserCredentialsReq) => {
-    const { email, password, firstName, lastName, role, platform = "web" } = user;
+    const { email, password, firstName, lastName, role, platform = "web", serviceIds } = user;
     let userData;
     let dbData;
     let dbRegister;
@@ -98,6 +103,10 @@ const registerUser = async (user: UserCredentialsReq) => {
                 first_name: dbRegister.firstName,
                 email: dbRegister.email,
             });
+
+            if (role == 2 && serviceIds?.length) {
+                await technicianService.assignServicesToEmployee(userData.uid, [Number(serviceIds[0])]);
+            }
 
             return {
                 dbRegister,
@@ -282,5 +291,182 @@ const updateFcmToken = async (userId: string, fcmToken: string) => {
     }
 }
 
-export { registerUser, loginUserInDBAndFirebase, loggedInUser, getAndSendEmailVerificationLink, changeArchiveStatus, 
-    verifyEmailOtp, resendEmailOtp, updateFcmToken };
+export interface EmployeeAddress {
+    addressOne: string;
+    addressTwo?: string;
+    zipCode: string;
+    postTown: string;
+    country: string;
+    label?: string;
+    lat: number;
+    lon: number;
+}
+
+export interface EmployeeInput {
+    email: string;
+    password?: string;
+    firstName: string;
+    lastName: string;
+    role?: number;
+    requirementFiles?: Array<{ data: string; name: string }>;  // base64 data URIs
+    address?: EmployeeAddress;
+}
+
+const generateTempPassword = (): string => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$";
+    return Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+};
+
+const addEmployees = async (employees: EmployeeInput[]) => {
+   
+    const allServiceIds = (await serviceService.getServicesSimpleList()).map((s) => s.id);
+
+    const processOne = async (emp: EmployeeInput) => {
+        const { email, firstName, lastName, role = 2 } = emp;
+        const password = emp.password || generateTempPassword();
+
+        if (!isValidEmail(email)) {
+            return { email, success: false, error: "Invalid email address" };
+        }
+
+        const existing = await firebaseFunction.checkUserIfExistInFirebase(email);
+        if (existing) {
+            return { email, success: false, error: "User already exists" };
+        }
+
+        const firebaseUser = await firebaseFunction.registerNewUserInFirebase({
+            email, password, firstName, lastName, role,
+        });
+
+        if (!firebaseUser) {
+            return { email, success: false, error: "Failed to create user in Firebase" };
+        }
+
+        const dbUser = await userService.registerUserInDB({
+            uid: firebaseUser.uid,
+            email: firebaseUser.email || email,
+            password: hashPassword(password),
+            firstName,
+            lastName,
+            role,
+            phoneNumber: null,
+            isEmailVerified: false,
+            isPhoneVerified: false,
+        });
+
+        if (!dbUser) {
+            await firebaseFunction.deleteFirebaseUser(firebaseUser.uid);
+            return { email, success: false, error: "Failed to create user in DB" };
+        }
+
+        const otpCode = generateOTP();
+
+        const [uploadedRequirements] = await Promise.all([
+            emp.requirementFiles?.length
+                ? Promise.all(
+                    emp.requirementFiles.map((file, i) =>
+                        uploadFileToStorage("employee-requirements", `${firebaseUser.uid}_${i}`, file.data)
+                            .then((fileUrl) => ({ fileUrl, fileName: file.name }))
+                    )
+                ).then(async (uploaded) => {
+                    await technicianService.addWorkerRequirements(firebaseUser.uid, uploaded);
+                    return uploaded;
+                })
+                : Promise.resolve([] as Array<{ fileUrl: string; fileName: string }>),
+
+            emp.address
+                ? addressService.addUserAddress(
+                    {
+                        userId: firebaseUser.uid,
+                        locationId: idGenerator(6, "LOC"),
+                        addressOne: emp.address.addressOne,
+                        addressTwo: emp.address.addressTwo || "",
+                        zipCode: emp.address.zipCode,
+                        postTown: emp.address.postTown,
+                        country: emp.address.country,
+                        label: emp.address.label || "Home",
+                        isPrimary: true,
+                        lat: emp.address.lat,
+                        lon: emp.address.lon,
+                    },
+                    firebaseUser.uid
+                )
+                : Promise.resolve(),
+
+            userService.storeEmailOtp(email, otpCode),
+
+            role === 2 && allServiceIds.length
+                ? technicianService.assignServicesToEmployee(firebaseUser.uid, allServiceIds)
+                : Promise.resolve(),
+        ]);
+
+        send(email, "employee_invite", { email, password, otp_code: otpCode, first_name: firstName });
+
+        return { email, success: true, requirements: uploadedRequirements };
+    };
+
+    return Promise.all(
+        employees.map(async (emp) => {
+            try {
+                return await processOne(emp);
+            } catch (error: any) {
+                return { email: emp.email, success: false, error: error?.message || String(error) };
+            }
+        })
+    );
+};
+
+const forgotPassword = async (email: string) => {
+    if (!isValidEmail(email)) {
+        throw "Please enter a valid email address";
+    }
+
+    const firebaseUser = await firebaseFunction.checkUserIfExistInFirebase(email);
+    if (!firebaseUser) {
+        return { message: "If an account with that email exists, a password reset link has been sent." };
+    }
+
+    const resetLink = await firebaseFunction.generatePasswordResetLink(email);
+
+    const dbUser = await userService.getUserByEmail(email);
+    const firstName = dbUser?.firstName || "";
+
+    send(email, "forgot_password", {
+        reset_url: resetLink,
+        first_name: firstName,
+        email,
+    });
+
+    return { message: "If an account with that email exists, a password reset link has been sent." };
+};
+
+const resetPassword = async (payload: { email: string; newPassword: string }) => {
+    const { email, newPassword } = payload;
+
+    if (!email || !newPassword) {
+        throw "Missing required parameters";
+    }
+
+    if (!validatePassword(newPassword)) {
+        throw "Password does not meet requirements";
+    }
+
+    const firebaseUser = await firebaseFunction.getFirebaseUserByEmail(email);
+    if (!firebaseUser) {
+        throw "User not found";
+    }
+
+    await firebaseFunction.updateFirebasePassword(firebaseUser.uid, newPassword);
+
+    const updateQuery = `UPDATE ${dbSchema}.user_credentials SET password = $1 WHERE uid = $2 RETURNING *`;
+    const { rows } = await dbQuery.query(updateQuery, [hashPassword(newPassword), firebaseUser.uid]);
+
+    if (!rows.length) {
+        throw "User not found in database";
+    }
+
+    return { message: "Password reset successfully." };
+};
+
+export { registerUser, loginUserInDBAndFirebase, loggedInUser, getAndSendEmailVerificationLink, changeArchiveStatus,
+    verifyEmailOtp, resendEmailOtp, updateFcmToken, addEmployees, forgotPassword, resetPassword };

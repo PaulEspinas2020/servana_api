@@ -32,6 +32,7 @@ declare global {
         isEmailVerified: boolean;
         isPhoneVerified: boolean;
         platform?: "web" | "mobile";
+        serviceIds?: string[];
     }
 
     interface UserAddressReq {

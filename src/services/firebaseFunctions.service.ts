@@ -129,4 +129,16 @@ const deleteFirebaseUser = async (uid: string) => {
     return await defaultAuthAdmin.deleteUser(uid);
 };
 
-export { checkUserIfExistInFirebase, registerNewUserInFirebase, sendEmailVerificationFirebase, signInUserAndGetTokeninFirebase, firebaseAuthLogin, getFirebaseUserByEmail, updateFirebaseEmailVerified, deleteFirebaseUser };
+const generatePasswordResetLink = async (email: string): Promise<string> => {
+    try {
+        return await defaultAuthAdmin.generatePasswordResetLink(email);
+    } catch (error) {
+        throw error;
+    }
+};
+
+const updateFirebasePassword = async (uid: string, newPassword: string): Promise<void> => {
+    await defaultAuthAdmin.updateUser(uid, { password: newPassword });
+};
+
+export { checkUserIfExistInFirebase, registerNewUserInFirebase, sendEmailVerificationFirebase, signInUserAndGetTokeninFirebase, firebaseAuthLogin, getFirebaseUserByEmail, updateFirebaseEmailVerified, deleteFirebaseUser, generatePasswordResetLink, updateFirebasePassword };

@@ -19,7 +19,8 @@ const templates: any = {
   additional_work_approved: "d-3a919e2ab9ba4e329eca33c00283d64d",  // TODO: replace after creating in SendGrid
   additional_work_rejected: "d-89698e254f164d0c8f0506cf0898dea5",  // TODO: replace after creating in SendGrid
   refund_processed: "d-faaf990253e64b5e974c922e696bb1a8",          // TODO: replace after creating in SendGrid
-  //pw_reset: "d-7bfcedb6768a4f43a8b1655599d4faf6"
+  employee_invite: "d-48f357229164403a9a6ce115ca5f426c",   // TODO: create template in SendGrid
+  forgot_password: "d-4abeb2443f88422f91eb2873a2f26751",
   //confirm_email: "d-b325fec0028c419c9ec48c9b5866f10c"
 };
 
@@ -38,7 +39,7 @@ const send = (recipient:string, templateToUse:string, data: any) => {
       return 'Email sent!';
   }, error => {
       console.log(error);
-      console.log(error.response.body.error)
+      if (error.response?.body) console.log(error.response.body);
   });
 }
 

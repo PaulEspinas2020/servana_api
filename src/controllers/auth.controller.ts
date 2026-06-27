@@ -92,4 +92,62 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
   }
 };
 
+export const addEmployeesController = async (req: Request, res: Response) => {
+    try {
+        const { employees } = req.body;
+
+        if (!Array.isArray(employees) || employees.length === 0) {
+            return res.status(400).json({ status: "failed", message: "employees must be a non-empty array" });
+        }
+
+        const results = await authService.addEmployees(employees);
+        const failed = results.filter((r) => !r.success);
+
+        return res.status(200).json({
+            status: "success",
+            total: results.length,
+            created: results.length - failed.length,
+            failed: failed.length,
+            results,
+        });
+    } catch (error: any) {
+        return res.status(500).json({
+            status: "failed",
+            message: error?.message || "Failed to add employees",
+        });
+    }
+};
+
+export const forgotPasswordController = async (req: Request, res: Response) => {
+    try {
+        const { email } = req.body;
+
+        if (!email) {
+            return res.status(400).json({ status: "failed", message: "Email is required" });
+        }
+
+        const result = await authService.forgotPassword(email);
+        return res.status(200).json({ status: "success", ...result });
+    } catch (error: any) {
+        return res.status(400).json({
+            status: "failed",
+            message: error?.message || error || "Failed to send password reset email",
+        });
+    }
+};
+
+export const resetPasswordController = async (req: Request, res: Response) => {
+    try {
+        const { email, newPassword } = req.body;
+
+        const result = await authService.resetPassword({ email, newPassword });
+        return res.status(200).json({ status: "success", ...result });
+    } catch (error: any) {
+        return res.status(400).json({
+            status: "failed",
+            message: error?.message || error || "Failed to reset password",
+        });
+    }
+};
+
 export { signup, signin, resendVerification, verifyEmailOtpController, resendEmailOtpController };
