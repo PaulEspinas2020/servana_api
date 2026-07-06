@@ -2,6 +2,7 @@ import express from 'express'
 const router = express.Router()
 import * as authController from '../controllers/auth.controller';
 import verifyAuth from '../middleware/verifyAuth';
+import verifyRoles from '../middleware/verifyRoles';
 import * as provider from '../controllers/providerController';
 import * as phoneOtp from '../controllers/phoneOtpController';
 
@@ -14,7 +15,7 @@ router.post("/auth/resend-email-otp", authController.resendEmailOtpController);
 router.post("/auth/signin", authController.signin);
 router.get("/auth/resendverification", authController.resendVerification);
 router.post("/auth/firebase-login", authController.firebaseAuthLoginController);
-router.post("/auth/add-employees", authController.addEmployeesController);
+router.post("/auth/add-employees", verifyAuth, verifyRoles([1]), authController.addEmployeesController);
 router.post("/auth/forgot-password", authController.forgotPasswordController);
 router.post("/auth/reset-password", authController.resetPasswordController);
 router.post("/auth/logout", verifyAuth, authController.logoutController);
