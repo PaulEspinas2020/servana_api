@@ -107,7 +107,7 @@ export const markCashPaid = async (bookingId: number) => {
   return r.rows[0];
 };
 
-const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SK_DEV || "";
+const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SECRET_KEY || process.env.PAYMONGO_SK_DEV || "";
 const PAYMONGO_BASE_URL = "https://api.paymongo.com/v1";
 
 const getAuthHeader = () => {

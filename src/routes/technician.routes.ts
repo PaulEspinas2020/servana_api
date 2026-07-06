@@ -34,9 +34,9 @@ router.post("/workers/:uid/requirements", technicianController.uploadRequirement
 router.get("/workers/:uid/requirements", technicianController.getRequirements);
 router.delete("/workers/:uid/requirements/:id", technicianController.deleteRequirement);
 
-// // Worker Bank Account
-// router.put("/workers/:uid/bank-account", technicianController.upsertBankAccount);
-// router.get("/workers/:uid/bank-account", technicianController.getBankAccount);
-// router.delete("/workers/:uid/bank-account", technicianController.deleteBankAccount);
+// Worker Bank Account
+router.put("/workers/:uid/bank-account", technicianController.upsertBankAccount);
+router.get("/workers/:uid/bank-account", technicianController.getBankAccount);
+router.delete("/workers/:uid/bank-account", technicianController.deleteBankAccount);
 
 export default router;

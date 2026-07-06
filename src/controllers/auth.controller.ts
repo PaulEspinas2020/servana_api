@@ -128,7 +128,7 @@ export const addEmployeesController = async (req: Request, res: Response) => {
 // Client app and admin portal omit `platform`, so they continue to use Firebase's
 // default hosted reset page — no change to their existing behavior.
 const PLATFORM_RESET_URLS: Record<string, string> = {
-    provider: "https://servana.com.ph/provider/reset-password",
+    provider: process.env.PROVIDER_RESET_URL || "https://servana.com.ph/provider/reset-password",
 };
 
 export const forgotPasswordController = async (req: Request, res: Response) => {
