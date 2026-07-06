@@ -8,6 +8,7 @@ import {
     signOut,
     sendEmailVerification,
     confirmPasswordReset,
+    verifyPasswordResetCode,
 } from "firebase/auth";
 import * as userService from "../services/user.service";
 
@@ -21,25 +22,98 @@ const firebaseAuthLogin = async (idToken: string) => {
   const decoded = await defaultAuthAdmin.verifyIdToken(idToken);
   const firebaseUser = await defaultAuthAdmin.getUser(decoded.uid);
 
+  // Derive name from Firebase displayName when available (set during registration).
+  // upsertFirebaseUser only overwrites DB name when the provided value is non-empty,
+  // so an existing name is preserved if displayName is not set on the Firebase user.
+  let firstName = "";
+  let lastName = "";
+  if (firebaseUser.displayName) {
+    const parts = firebaseUser.displayName.trim().split(/\s+/);
+    firstName = parts[0] || "";
+    lastName = parts.slice(1).join(" ") || "";
+  }
+
   const dbUser = await userService.upsertFirebaseUser({
     uid: firebaseUser.uid,
     email: firebaseUser.email || null,
     phoneNumber: firebaseUser.phoneNumber || null,
-    firstName: "",
-    lastName: "",
-    role: "2"
+    firstName,
+    lastName,
+    role: "2",
   });
 
+  // Deny login for archived / disabled provider accounts.
+  if (dbUser.isArchived) {
+    throw new Error("Your account has been disabled. Please contact Servana support.");
+  }
+
   return {
-    message: "Authenticated successfully",
-    dbRegister: dbUser,
-    firebase: {
+    data: {
+      success: true,
       uid: firebaseUser.uid,
+      role: dbUser.role,
+      firstName: dbUser.firstName || "",
+      lastName: dbUser.lastName || "",
+      email: dbUser.email || null,
       phoneNumber: firebaseUser.phoneNumber || null,
-      email: firebaseUser.email || null,
+      message: "Authenticated successfully",
     },
   };
 };
+/**
+ * Registers a provider who just completed Firebase phone auth.
+ * Sets the Firebase displayName so future firebase-login calls preserve the name,
+ * then upserts the DB record with the explicit first/last name from the signup form.
+ * Returns the same response shape as firebaseAuthLogin.
+ *
+ * Only used by /auth/provider/register — existing mobile and web login routes are unchanged.
+ */
+const firebaseProviderRegister = async (
+  idToken: string,
+  firstName: string,
+  lastName: string,
+) => {
+  if (!idToken) { throw new Error("Missing Firebase ID token"); }
+  if (!firstName || !lastName) { throw new Error("firstName and lastName are required"); }
+
+  const decoded = await defaultAuthAdmin.verifyIdToken(idToken);
+  const firebaseUser = await defaultAuthAdmin.getUser(decoded.uid);
+
+  // Persist the name on the Firebase user record so firebase-login picks it up on next sign-in.
+  const displayName = `${firstName.trim()} ${lastName.trim()}`.trim();
+  if (displayName) {
+    await defaultAuthAdmin.updateUser(firebaseUser.uid, { displayName }).catch(() => {
+      // Non-fatal — DB name is the source of truth for the web portal.
+    });
+  }
+
+  const dbUser = await userService.upsertFirebaseUser({
+    uid: firebaseUser.uid,
+    email: firebaseUser.email || null,
+    phoneNumber: firebaseUser.phoneNumber || null,
+    firstName,
+    lastName,
+    role: "2",
+  });
+
+  if (dbUser.isArchived) {
+    throw new Error("Your account has been disabled. Please contact Servana support.");
+  }
+
+  return {
+    data: {
+      success: true,
+      uid: firebaseUser.uid,
+      role: dbUser.role,
+      firstName: dbUser.firstName || "",
+      lastName: dbUser.lastName || "",
+      email: dbUser.email || null,
+      phoneNumber: firebaseUser.phoneNumber || null,
+      message: "Registration successful",
+    },
+  };
+};
+
 const checkUserIfExistInFirebase = async (email: string) => {
     return defaultAuthAdmin
         .getUserByEmail(email)
@@ -141,4 +215,30 @@ const updateFirebasePassword = async (uid: string, newPassword: string): Promise
     await defaultAuthAdmin.updateUser(uid, { password: newPassword });
 };
 
-export { checkUserIfExistInFirebase, registerNewUserInFirebase, sendEmailVerificationFirebase, signInUserAndGetTokeninFirebase, firebaseAuthLogin, getFirebaseUserByEmail, updateFirebaseEmailVerified, deleteFirebaseUser, generatePasswordResetLink, updateFirebasePassword };
+/**
+ * Verifies a Firebase password reset oobCode and applies the new password in one step.
+ * Returns the email address the code was issued for (needed to sync DB).
+ * The oobCode is single-use — it is consumed by confirmPasswordReset.
+ */
+const resetPasswordWithCode = async (oobCode: string, newPassword: string): Promise<string> => {
+    const auth = getAuth();
+    const email = await verifyPasswordResetCode(auth, oobCode);
+    await confirmPasswordReset(auth, oobCode, newPassword);
+    return email;
+};
+
+export {
+    checkUserIfExistInFirebase,
+    registerNewUserInFirebase,
+    sendEmailVerificationFirebase,
+    signInUserAndGetTokeninFirebase,
+    firebaseAuthLogin,
+    firebaseProviderRegister,
+    getFirebaseUserByEmail,
+    updateFirebaseEmailVerified,
+    deleteFirebaseUser,
+    generatePasswordResetLink,
+    updateFirebasePassword,
+    revokeTokenInFirebase,
+    resetPasswordWithCode,
+};

@@ -82,12 +82,45 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
   try {
     const { idToken } = req.body;
 
+    if (!idToken) {
+      return res.status(400).json({ status: "failed", message: "idToken is required" });
+    }
+
     const result = await firebaseFunction.firebaseAuthLogin(idToken);
 
     return res.status(200).json(result);
   } catch (error: any) {
-    return res.status(401).json({
-      message: error.message || "Authentication failed",
+    const isDisabled = error?.message?.includes("disabled");
+    return res.status(isDisabled ? 403 : 401).json({
+      status: "failed",
+      message: error?.message || "Authentication failed",
+    });
+  }
+};
+
+export const providerRegisterController = async (req: Request, res: Response) => {
+  try {
+    const { idToken, firstName, lastName } = req.body;
+
+    if (!idToken) {
+      return res.status(400).json({ status: "failed", message: "idToken is required" });
+    }
+    if (!firstName || !lastName) {
+      return res.status(400).json({ status: "failed", message: "firstName and lastName are required" });
+    }
+
+    const result = await firebaseFunction.firebaseProviderRegister(
+      idToken,
+      String(firstName).trim(),
+      String(lastName).trim(),
+    );
+
+    return res.status(200).json(result);
+  } catch (error: any) {
+    const isDisabled = error?.message?.includes("disabled");
+    return res.status(isDisabled ? 403 : 400).json({
+      status: "failed",
+      message: error?.message || "Registration failed",
     });
   }
 };
@@ -118,20 +151,11 @@ export const addEmployeesController = async (req: Request, res: Response) => {
     }
 };
 
-export const updateEmployeeController = async (req: Request, res: Response) => {
-    try {
-        const uid = req.params.uid as string;
-        if (!uid) {
-            return res.status(400).json({ status: "failed", message: "uid is required" });
-        }
-        const result = await authService.updateEmployee(uid, req.body);
-        return res.status(200).json({ status: "success", ...result });
-    } catch (error: any) {
-        return res.status(500).json({
-            status: "failed",
-            message: error?.message || error || "Failed to update employee",
-        });
-    }
+// Platform-specific reset redirect URLs.
+// Client app and admin portal omit `platform`, so they continue to use Firebase's
+// default hosted reset page — no change to their existing behavior.
+const PLATFORM_RESET_URLS: Record<string, string> = {
+    provider: process.env.PROVIDER_RESET_URL || "https://servana.com.ph/provider/reset-password",
 };
 
 export const forgotPasswordController = async (req: Request, res: Response) => {
@@ -165,5 +189,39 @@ export const resetPasswordController = async (req: Request, res: Response) => {
         });
     }
 };
+
+export const updateEmployeeController = async (req: Request, res: Response) => {
+    try {
+        const uid = req.params.uid as string;
+        if (!uid) {
+            return res.status(400).json({ status: "failed", message: "uid is required" });
+        }
+        const result = await authService.updateEmployee(uid, req.body);
+        return res.status(200).json({ status: "success", ...result });
+    } catch (error: any) {
+        return res.status(500).json({
+            status: "failed",
+            message: error?.message || error || "Failed to update employee",
+        });
+    }
+};
+
+export const logoutController = async (req: Request, res: Response) => {
+    try {
+        const uid = req.user && req.user.uid;
+        if (!uid) {
+            return res.status(401).json({ status: "failed", message: "Unauthorized" });
+        }
+        try {
+            await firebaseFunction.revokeTokenInFirebase(uid);
+        } catch (_revokeErr) {
+            // Non-fatal
+        }
+        return res.status(200).json({ status: "success", data: { message: "Logged out." } });
+    } catch (error: any) {
+        return res.status(500).json({ status: "failed", message: error?.message || "Logout failed" });
+    }
+};
+
 
 export { signup, signin, resendVerification, verifyEmailOtpController, resendEmailOtpController };
