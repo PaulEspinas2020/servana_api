@@ -22,22 +22,41 @@ const firebaseAuthLogin = async (idToken: string) => {
   const decoded = await defaultAuthAdmin.verifyIdToken(idToken);
   const firebaseUser = await defaultAuthAdmin.getUser(decoded.uid);
 
+  // Derive name from Firebase displayName when available (set during registration).
+  // upsertFirebaseUser only overwrites DB name when the provided value is non-empty,
+  // so an existing name is preserved if displayName is not set on the Firebase user.
+  let firstName = "";
+  let lastName = "";
+  if (firebaseUser.displayName) {
+    const parts = firebaseUser.displayName.trim().split(/\s+/);
+    firstName = parts[0] || "";
+    lastName = parts.slice(1).join(" ") || "";
+  }
+
   const dbUser = await userService.upsertFirebaseUser({
     uid: firebaseUser.uid,
     email: firebaseUser.email || null,
     phoneNumber: firebaseUser.phoneNumber || null,
-    firstName: "",
-    lastName: "",
-    role: "2"
+    firstName,
+    lastName,
+    role: "2",
   });
 
+  // Deny login for archived / disabled provider accounts.
+  if (dbUser.isArchived) {
+    throw new Error("Your account has been disabled. Please contact Servana support.");
+  }
+
   return {
-    message: "Authenticated successfully",
-    dbRegister: dbUser,
-    firebase: {
+    data: {
+      success: true,
       uid: firebaseUser.uid,
+      role: dbUser.role,
+      firstName: dbUser.firstName || "",
+      lastName: dbUser.lastName || "",
+      email: dbUser.email || null,
       phoneNumber: firebaseUser.phoneNumber || null,
-      email: firebaseUser.email || null,
+      message: "Authenticated successfully",
     },
   };
 };

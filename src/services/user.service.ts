@@ -79,7 +79,8 @@ export const upsertFirebaseUser = async (payload: {
     DO UPDATE SET
       email = COALESCE(EXCLUDED.email, user_credentials.email),
       phone_number = COALESCE(EXCLUDED.phone_number, user_credentials.phone_number),
-      created_date = NOW()
+      first_name = CASE WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name ELSE user_credentials.first_name END,
+      last_name  = CASE WHEN EXCLUDED.last_name  <> '' THEN EXCLUDED.last_name  ELSE user_credentials.last_name  END
     RETURNING *;
     `,
     [
