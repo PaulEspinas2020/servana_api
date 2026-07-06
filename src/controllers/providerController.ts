@@ -5,6 +5,7 @@ import * as technicianService from "../services/technicianService";
 import * as userService from "../services/user.service";
 import mongoDb from "../db/mongodbQuery";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
+import * as notificationService from "../services/notification.service";
 
 const dbSchema = db.schema;
 
@@ -793,83 +794,134 @@ export const getProviderProfile = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Notifications (scaffold — inbox to be populated by event pipeline) ───────
+// ─── Notifications ────────────────────────────────────────────────────────────
 
 export const getProviderNotifications = async (req: Request, res: Response) => {
-  return res.status(200).json({ status: "success", data: [] });
+  try {
+    const uid: string = (req as any).user?.uid;
+    const filter = req.query['filter'] as string | undefined;
+    const data = await notificationService.listNotifications(uid, filter);
+    return res.status(200).json({ status: "success", data });
+  } catch (e: any) {
+    return res.status(500).json({ status: "failed", message: e.message });
+  }
 };
 
-export const getNotificationsUnreadCount = async (_req: Request, res: Response) => {
-  return res.status(200).json({ status: "success", data: { count: 0 } });
+export const getNotificationsUnreadCount = async (req: Request, res: Response) => {
+  try {
+    const uid: string = (req as any).user?.uid;
+    const count = await notificationService.countUnreadNotifications(uid);
+    return res.status(200).json({ status: "success", data: { count } });
+  } catch (e: any) {
+    return res.status(500).json({ status: "failed", message: e.message });
+  }
 };
 
-export const getProviderAlerts = async (_req: Request, res: Response) => {
-  return res.status(200).json({ status: "success", data: [] });
+export const getProviderAlerts = async (req: Request, res: Response) => {
+  try {
+    const uid: string = (req as any).user?.uid;
+    const data = await notificationService.listAlerts(uid);
+    return res.status(200).json({ status: "success", data });
+  } catch (e: any) {
+    return res.status(500).json({ status: "failed", message: e.message });
+  }
 };
 
 export const markNotificationRead = async (req: Request, res: Response) => {
-  const { key } = req.params;
-  if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
-  return res.status(200).json({ status: "success", data: { success: true } });
+  try {
+    const { key } = req.params;
+    if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
+    const uid: string = (req as any).user?.uid;
+    await notificationService.markNotificationReadByKey(uid, key);
+    return res.status(200).json({ status: "success", data: { success: true } });
+  } catch (e: any) {
+    return res.status(500).json({ status: "failed", message: e.message });
+  }
 };
 
-export const markAllNotificationsRead = async (_req: Request, res: Response) => {
-  return res.status(200).json({ status: "success", data: { success: true } });
+export const markAllNotificationsRead = async (req: Request, res: Response) => {
+  try {
+    const uid: string = (req as any).user?.uid;
+    await notificationService.markAllNotificationsReadForWorker(uid);
+    return res.status(200).json({ status: "success", data: { success: true } });
+  } catch (e: any) {
+    return res.status(500).json({ status: "failed", message: e.message });
+  }
 };
 
 export const dismissNotification = async (req: Request, res: Response) => {
-  const { key } = req.params;
-  if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
-  return res.status(200).json({ status: "success", data: { success: true } });
+  try {
+    const { key } = req.params;
+    if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
+    const uid: string = (req as any).user?.uid;
+    await notificationService.deleteNotificationByKey(uid, key);
+    return res.status(200).json({ status: "success", data: { success: true } });
+  } catch (e: any) {
+    return res.status(500).json({ status: "failed", message: e.message });
+  }
 };
 
 export const dismissAlert = async (req: Request, res: Response) => {
-  const { key } = req.params;
-  if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
-  return res.status(200).json({ status: "success", data: { success: true } });
+  try {
+    const { key } = req.params;
+    if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
+    const uid: string = (req as any).user?.uid;
+    await notificationService.deleteAlertByKey(uid, key);
+    return res.status(200).json({ status: "success", data: { success: true } });
+  } catch (e: any) {
+    return res.status(500).json({ status: "failed", message: e.message });
+  }
 };
 
-// ─── Support Tickets (scaffold — no DB table yet) ─────────────────────────────
+// ─── Support Tickets ──────────────────────────────────────────────────────────
 
 export const getSupportTickets = async (req: Request, res: Response) => {
-  return res.status(200).json({ status: "success", data: [] });
+  try {
+    const uid: string = (req as any).user?.uid;
+    const data = await notificationService.listSupportTickets(uid);
+    return res.status(200).json({ status: "success", data });
+  } catch (e: any) {
+    return res.status(500).json({ status: "failed", message: e.message });
+  }
 };
 
 export const createSupportTicket = async (req: Request, res: Response) => {
-  const { subject, message, category } = req.body;
-
-  if (!subject || !message) {
-    return res.status(400).json({ status: "failed", message: "subject and message are required" });
+  try {
+    const { subject, message, category } = req.body;
+    if (!subject || !message) {
+      return res.status(400).json({ status: "failed", message: "subject and message are required" });
+    }
+    const uid: string = (req as any).user?.uid;
+    const ticket = await notificationService.createSupportTicketRecord(
+      uid,
+      String(subject).substring(0, 100),
+      String(message).substring(0, 1000),
+      category || 'other',
+    );
+    return res.status(201).json({ status: "success", data: ticket });
+  } catch (e: any) {
+    return res.status(500).json({ status: "failed", message: e.message });
   }
-
-  return res.status(201).json({
-    status: "success",
-    data: {
-      ticketKey: `SVN-TKT-${Date.now()}`,
-      subject,
-      category: category || "general",
-      message,
-      status: "open",
-      createdAt: new Date().toISOString(),
-    },
-  });
 };
 
-// ─── Notification Preferences (scaffold — no DB table yet) ───────────────────
-
-const DEFAULT_PREFS = {
-  jobAssigned: true,
-  jobReminder: true,
-  paymentReceived: true,
-  newMessage: true,
-  promotions: false,
-};
+// ─── Notification Preferences ─────────────────────────────────────────────────
 
 export const getNotificationPreferences = async (req: Request, res: Response) => {
-  return res.status(200).json({ status: "success", data: DEFAULT_PREFS });
+  try {
+    const uid: string = (req as any).user?.uid;
+    const data = await notificationService.getNotificationPrefs(uid);
+    return res.status(200).json({ status: "success", data });
+  } catch (e: any) {
+    return res.status(500).json({ status: "failed", message: e.message });
+  }
 };
 
 export const updateNotificationPreferences = async (req: Request, res: Response) => {
-  const prefs = { ...DEFAULT_PREFS, ...req.body };
-  return res.status(200).json({ status: "success", data: prefs });
+  try {
+    const uid: string = (req as any).user?.uid;
+    const data = await notificationService.saveNotificationPrefs(uid, req.body);
+    return res.status(200).json({ status: "success", data });
+  } catch (e: any) {
+    return res.status(500).json({ status: "failed", message: e.message });
+  }
 };
