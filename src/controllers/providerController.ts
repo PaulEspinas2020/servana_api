@@ -716,9 +716,40 @@ export const withdrawAdditionalWork = async (req: Request, res: Response) => {
   }
 };
 
-export const confirmProceedAdditionalWork = async (_req: Request, res: Response) => {
-  // Scaffold — provider acknowledges they will proceed with approved additional work.
-  return res.status(200).json({ status: "success", data: { success: true } });
+export const confirmProceedAdditionalWork = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ status: "failed", message: "Invalid id" });
+
+    // Ownership check: request must belong to a booking assigned to this worker
+    const ownership = await dbQuery.query(
+      `SELECT bar.id, bar.status FROM ${dbSchema}.booking_additional_requests bar
+       JOIN ${dbSchema}.bookings b ON b.id = bar.booking_id
+       WHERE bar.id = $1 AND b.worker_uid = $2`,
+      [id, uid]
+    );
+    if (!ownership.rowCount) {
+      return res.status(404).json({ status: "failed", message: "Request not found or not assigned to you" });
+    }
+    if (ownership.rows[0].status !== "ACCEPTED") {
+      return res.status(409).json({ status: "failed", message: "Request must be in ACCEPTED state before confirming proceed" });
+    }
+
+    // Mark as proceeding — worker has acknowledged and will perform the additional work
+    const result = await dbQuery.query(
+      `UPDATE ${dbSchema}.booking_additional_requests
+       SET status = 'PROCEEDING'
+       WHERE id = $1
+       RETURNING id, status`,
+      [id]
+    );
+
+    return res.status(200).json({ status: "success", data: { success: true, status: result.rows[0].status } });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
 };
 
 // ─── Provider Profile (provider-portal specific) ─────────────────────────────
