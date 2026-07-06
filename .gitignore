@@ -1,3 +1,5 @@
+
+=======
 # Logs
 logs
 *.log
@@ -137,3 +139,4 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+>>>>>>> 9e7ec25bac9e3e6870e104284a4f35069743c1c9

@@ -416,7 +416,7 @@ const addEmployees = async (employees: EmployeeInput[]) => {
     );
 };
 
-const forgotPassword = async (email: string, redirectUrl?: string) => {
+const forgotPassword = async (email: string) => {
     if (!isValidEmail(email)) {
         throw "Please enter a valid email address";
     }
@@ -426,18 +426,10 @@ const forgotPassword = async (email: string, redirectUrl?: string) => {
         return { message: "If an account with that email exists, a password reset link has been sent." };
     }
 
-    // When a redirectUrl is provided (e.g. from the provider app), the reset link
-    // routes the user directly back to that platform's reset-password page with the
-    // oobCode as a query param. Without it, Firebase's default hosted page is used —
-    // preserving existing behavior for the client app and admin portal.
-    const actionCodeSettings = redirectUrl
-        ? { url: redirectUrl, handleCodeInApp: true }
-        : undefined;
-
-    const resetLink = await firebaseFunction.generatePasswordResetLink(email, actionCodeSettings);
+    const resetLink = await firebaseFunction.generatePasswordResetLink(email);
 
     const dbUser = await userService.getUserByEmail(email);
-    const firstName = dbUser ? dbUser.firstName : "";
+    const firstName = dbUser?.firstName || "";
 
     send(email, "forgot_password", {
         reset_url: resetLink,
@@ -448,10 +440,10 @@ const forgotPassword = async (email: string, redirectUrl?: string) => {
     return { message: "If an account with that email exists, a password reset link has been sent." };
 };
 
-const resetPassword = async (payload: { oobCode: string; newPassword: string }) => {
-    const { oobCode, newPassword } = payload;
+const resetPassword = async (payload: { email: string; newPassword: string }) => {
+    const { email, newPassword } = payload;
 
-    if (!oobCode || !newPassword) {
+    if (!email || !newPassword) {
         throw "Missing required parameters";
     }
 
@@ -459,16 +451,18 @@ const resetPassword = async (payload: { oobCode: string; newPassword: string }) 
         throw "Password does not meet requirements";
     }
 
-    // verifyPasswordResetCode confirms the oobCode is valid then consumeS it via confirmPasswordReset.
-    // Returns the email the code was issued for so we can sync the DB hash.
-    const email = await firebaseFunction.resetPasswordWithCode(oobCode, newPassword);
-
     const firebaseUser = await firebaseFunction.getFirebaseUserByEmail(email);
-    if (firebaseUser) {
-        await dbQuery.query(
-            `UPDATE ${dbSchema}.user_credentials SET password = $1 WHERE uid = $2`,
-            [hashPassword(newPassword), firebaseUser.uid]
-        );
+    if (!firebaseUser) {
+        throw "User not found";
+    }
+
+    await firebaseFunction.updateFirebasePassword(firebaseUser.uid, newPassword);
+
+    const updateQuery = `UPDATE ${dbSchema}.user_credentials SET password = $1 WHERE uid = $2 RETURNING *`;
+    const { rows } = await dbQuery.query(updateQuery, [hashPassword(newPassword), firebaseUser.uid]);
+
+    if (!rows.length) {
+        throw "User not found in database";
     }
 
     return { message: "Password reset successfully." };

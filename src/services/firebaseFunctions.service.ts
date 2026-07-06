@@ -8,7 +8,6 @@ import {
     signOut,
     sendEmailVerification,
     confirmPasswordReset,
-    verifyPasswordResetCode,
 } from "firebase/auth";
 import * as userService from "../services/user.service";
 
@@ -130,12 +129,9 @@ const deleteFirebaseUser = async (uid: string) => {
     return await defaultAuthAdmin.deleteUser(uid);
 };
 
-const generatePasswordResetLink = async (
-    email: string,
-    actionCodeSettings?: { url: string; handleCodeInApp: boolean }
-): Promise<string> => {
+const generatePasswordResetLink = async (email: string): Promise<string> => {
     try {
-        return await defaultAuthAdmin.generatePasswordResetLink(email, actionCodeSettings);
+        return await defaultAuthAdmin.generatePasswordResetLink(email);
     } catch (error) {
         throw error;
     }
@@ -145,29 +141,4 @@ const updateFirebasePassword = async (uid: string, newPassword: string): Promise
     await defaultAuthAdmin.updateUser(uid, { password: newPassword });
 };
 
-/**
- * Verifies a Firebase password reset oobCode and applies the new password in one step.
- * Returns the email address the code was issued for (needed to sync DB).
- * The oobCode is single-use — it is consumed by confirmPasswordReset.
- */
-const resetPasswordWithCode = async (oobCode: string, newPassword: string): Promise<string> => {
-    const auth = getAuth();
-    const email = await verifyPasswordResetCode(auth, oobCode);
-    await confirmPasswordReset(auth, oobCode, newPassword);
-    return email;
-};
-
-export {
-    checkUserIfExistInFirebase,
-    registerNewUserInFirebase,
-    sendEmailVerificationFirebase,
-    signInUserAndGetTokeninFirebase,
-    firebaseAuthLogin,
-    getFirebaseUserByEmail,
-    updateFirebaseEmailVerified,
-    deleteFirebaseUser,
-    generatePasswordResetLink,
-    updateFirebasePassword,
-    revokeTokenInFirebase,
-    resetPasswordWithCode,
-};
+export { checkUserIfExistInFirebase, registerNewUserInFirebase, sendEmailVerificationFirebase, signInUserAndGetTokeninFirebase, firebaseAuthLogin, getFirebaseUserByEmail, updateFirebaseEmailVerified, deleteFirebaseUser, generatePasswordResetLink, updateFirebasePassword };

@@ -118,26 +118,15 @@ export const addEmployeesController = async (req: Request, res: Response) => {
     }
 };
 
-// Platform-specific reset redirect URLs.
-// Client app and admin portal omit `platform`, so they continue to use Firebase's
-// default hosted reset page — no change to their existing behavior.
-const PLATFORM_RESET_URLS: Record<string, string> = {
-    provider: "https://servana.com.ph/provider/reset-password",
-};
-
 export const forgotPasswordController = async (req: Request, res: Response) => {
     try {
-        const { email, platform } = req.body;
+        const { email } = req.body;
 
         if (!email) {
             return res.status(400).json({ status: "failed", message: "Email is required" });
         }
 
-        // Resolve redirect URL only for known platforms. Unknown or absent platform
-        // falls through to undefined, preserving Firebase's default hosted page.
-        const redirectUrl = (platform && PLATFORM_RESET_URLS[platform]) || undefined;
-
-        const result = await authService.forgotPassword(email, redirectUrl);
+        const result = await authService.forgotPassword(email);
         return res.status(200).json({ status: "success", ...result });
     } catch (error: any) {
         return res.status(400).json({
@@ -149,37 +138,15 @@ export const forgotPasswordController = async (req: Request, res: Response) => {
 
 export const resetPasswordController = async (req: Request, res: Response) => {
     try {
-        const { oobCode, newPassword } = req.body;
+        const { email, newPassword } = req.body;
 
-        if (!oobCode || !newPassword) {
-            return res.status(400).json({ status: "failed", message: "Missing required parameters" });
-        }
-
-        const result = await authService.resetPassword({ oobCode, newPassword });
+        const result = await authService.resetPassword({ email, newPassword });
         return res.status(200).json({ status: "success", ...result });
     } catch (error: any) {
         return res.status(400).json({
             status: "failed",
             message: error?.message || error || "Failed to reset password",
         });
-    }
-};
-
-export const logoutController = async (req: Request, res: Response) => {
-    try {
-        const uid = req.user && req.user.uid;
-        if (!uid) {
-            return res.status(401).json({ status: "failed", message: "Unauthorized" });
-        }
-        // Best-effort server-side token revocation. Non-fatal if it fails (token expires naturally).
-        try {
-            await firebaseFunction.revokeTokenInFirebase(uid);
-        } catch (_revokeErr) {
-            // Non-fatal
-        }
-        return res.status(200).json({ status: "success", data: { message: "Logged out." } });
-    } catch (error: any) {
-        return res.status(500).json({ status: "failed", message: error?.message || "Logout failed" });
     }
 };
 
