@@ -13,6 +13,7 @@ const router = express.Router();
 const whitelist = [
   "http://localhost:4200",
   "https://provider.servana.com.ph",
+  "https://admin.servana.com.ph",
   "https://www.servana.com.ph",
   "https://servana.com.ph",
 ];
@@ -29,7 +30,7 @@ const corsOptionsDelegate = function (req: any, callback: any) {
 const port = process.env.PORT;
 app.disable("x-powered-by");
 app.set("trust proxy", true);
-app.use(cors())
+app.use(cors(corsOptionsDelegate))
 app.use(cookieParser());
 app.use(
   "/api/paymongo/webhook",

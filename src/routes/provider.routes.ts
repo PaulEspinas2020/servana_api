@@ -70,4 +70,23 @@ router.post("/worker/additional-work/:id/decision", verifyAuth, provider.workerA
 router.post("/worker/additional-work/:id/withdraw", verifyAuth, provider.withdrawAdditionalWork);
 router.post("/worker/additional-work/:id/confirm-proceed", verifyAuth, provider.confirmProceedAdditionalWork);
 
+// Service area (P0-06)
+router.get("/worker/service-area", verifyAuth, provider.getWorkerServiceArea);
+router.put("/worker/service-area", verifyAuth, provider.saveWorkerServiceArea);
+
+// Profile photo (P0-07)
+router.post("/worker/profile/photo", verifyAuth, provider.uploadWorkerProfilePhoto);
+
+// Safety incidents (P0-01 / P0-02 / P0-03)
+// unread-count pattern: non-param routes registered before param routes
+router.get("/provider/safety/emergency-config", verifyAuth, provider.getEmergencyConfig);
+router.get("/provider/safety/incidents", verifyAuth, provider.getSafetyIncidents);
+router.post("/provider/safety/incidents", verifyAuth, provider.submitSafetyIncident);
+
+// Account security — password + session revocation (P0-04 / P0-05)
+router.post("/provider/security/password", verifyAuth, provider.changeProviderPassword);
+// revoke-all must be registered before /:id to avoid route shadowing
+router.post("/provider/security/sessions/revoke-all", verifyAuth, provider.revokeAllProviderSessions);
+router.delete("/provider/security/sessions/:id", verifyAuth, provider.revokeProviderSession);
+
 export default router;

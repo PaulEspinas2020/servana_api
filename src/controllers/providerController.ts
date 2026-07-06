@@ -6,6 +6,7 @@ import * as userService from "../services/user.service";
 import mongoDb from "../db/mongodbQuery";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import * as notificationService from "../services/notification.service";
+import { updateFirebasePassword, revokeTokenInFirebase } from "../services/firebaseFunctions.service";
 
 const dbSchema = db.schema;
 
@@ -923,5 +924,320 @@ export const updateNotificationPreferences = async (req: Request, res: Response)
     return res.status(200).json({ status: "success", data });
   } catch (e: any) {
     return res.status(500).json({ status: "failed", message: e.message });
+  }
+};
+
+// ─── Safety Incidents (MongoDB — provider_safety_incidents) ───────────────────
+
+const SAFETY_STATE_LABELS: Record<string, string> = {
+  draft: 'Draft', submitting: 'Submitting…', submitted: 'Submitted',
+  received: 'Received', triage_pending: 'Triage Pending',
+  provider_action_req: 'Action Required', under_review: 'Under Review',
+  escalated: 'Escalated', booking_action_pending: 'Booking Action Pending',
+  resolved: 'Resolved', closed: 'Closed', reopened: 'Reopened',
+};
+
+const SAFETY_STATE_TONES: Record<string, string> = {
+  draft: 'muted', submitting: 'info', submitted: 'info', received: 'info',
+  triage_pending: 'warning', provider_action_req: 'warning', under_review: 'info',
+  escalated: 'danger', booking_action_pending: 'warning',
+  resolved: 'success', closed: 'muted', reopened: 'warning',
+};
+
+const SAFETY_CATEGORY_LABELS: Record<string, string> = {
+  harassment: 'Harassment or Abusive Behavior',
+  physical_threat: 'Physical Threat or Assault',
+  sexual_harassment: 'Sexual Harassment',
+  unsafe_environment: 'Unsafe Environment or Hazard',
+  animal_hazard: 'Animal Hazard',
+  unsafe_request: 'Unsafe or Illegal Service Request',
+  access_problem: 'Access Problem',
+  customer_no_show: 'Customer No-Show',
+  injury: 'Injury',
+  property_damage: 'Property Damage',
+  medical_event: 'Medical Emergency',
+  near_miss: 'Near Miss or Close Call',
+  weather_hazard: 'Weather or Natural Disaster',
+  transport_incident: 'Transport or Travel Incident',
+  other: 'Other Safety Concern',
+};
+
+const SAFETY_SEVERITY_LABELS: Record<string, string> = {
+  level_0: 'General Safety Information',
+  level_1: 'Low-Risk Concern',
+  level_2: 'Operational Safety Issue',
+  level_3: 'Serious Incident',
+  level_4: 'Immediate Danger / Emergency',
+};
+
+const SAFETY_SEVERITY_ICONS: Record<string, string> = {
+  level_0: 'bi-info-circle',
+  level_1: 'bi-exclamation-circle',
+  level_2: 'bi-exclamation-triangle-fill',
+  level_3: 'bi-shield-exclamation',
+  level_4: 'bi-shield-fill-exclamation',
+};
+
+const PHILIPPINES_EMERGENCY_CONFIG = {
+  locale: 'en-PH',
+  country: 'Philippines',
+  lines: [
+    { label: 'National Emergency Hotline', number: 'tel:911', dialLabel: '911', description: 'Fire, medical emergency, police' },
+    { label: 'Philippine National Police', number: 'tel:117', dialLabel: '117', description: 'Police assistance' },
+    { label: 'Bureau of Fire Protection', number: 'tel:160', dialLabel: '160', description: 'Fire and rescue' },
+  ],
+  disclaimer: 'Tapping a number opens your device dialer. Servana cannot dispatch emergency services on your behalf.',
+};
+
+function toSafetyCaseSummary(doc: any) {
+  const state: string = doc.state || 'submitted';
+  const category: string = doc.category || 'other';
+  const severity: string = doc.severity || 'level_0';
+  const isOpen = !['resolved', 'closed'].includes(state);
+  const requiresAction = state === 'provider_action_req';
+  return {
+    caseKey:               doc.incidentId,
+    providerSafeReference: doc.providerSafeReference,
+    category,
+    categoryLabel:         SAFETY_CATEGORY_LABELS[category] || category,
+    severity,
+    severityLabel:         SAFETY_SEVERITY_LABELS[severity] || severity,
+    severityIcon:          SAFETY_SEVERITY_ICONS[severity] || 'bi-info-circle',
+    state,
+    stateLabel:            SAFETY_STATE_LABELS[state] || state,
+    stateTone:             SAFETY_STATE_TONES[state] || 'muted',
+    isOpen,
+    requiresAction,
+    bookingId:             doc.bookingId || null,
+    reportedAt:            doc.reportedAt || null,
+    updatedAt:             doc.updatedAt || null,
+    hasUnreadUpdate:       doc.hasUnreadUpdate || false,
+  };
+}
+
+export const submitSafetyIncident = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+
+    const {
+      clientIncidentId, bookingId, category, severity,
+      immediateDanger, providerSafe, workStopped,
+      emergencyServicesContacted, description,
+    } = req.body;
+
+    if (!clientIncidentId || !category || !severity || !description) {
+      return res.status(400).json({ status: "failed", message: "clientIncidentId, category, severity, and description are required" });
+    }
+    if (String(description).trim().length < 10) {
+      return res.status(400).json({ status: "failed", message: "description must be at least 10 characters" });
+    }
+
+    const col = (await mongoDb).collection("provider_safety_incidents");
+
+    const existing = await col.findOne({ uid, clientIncidentId }, { projection: { incidentId: 1 } });
+    if (existing) {
+      return res.status(409).json({ status: "failed", message: "This incident has already been submitted" });
+    }
+
+    const year = new Date().getFullYear();
+    const ref = `SAF-${year}-${Date.now().toString(36).slice(-5).toUpperCase()}`;
+    const incidentId = `inc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    const now = new Date().toISOString();
+
+    const doc = {
+      uid,
+      incidentId,
+      clientIncidentId: String(clientIncidentId).slice(0, 128),
+      providerSafeReference: ref,
+      bookingId:                    bookingId || null,
+      category:                     String(category).slice(0, 64),
+      severity:                     String(severity).slice(0, 32),
+      state:                        'submitted',
+      immediateDanger:              !!immediateDanger,
+      providerSafe:                 providerSafe !== undefined ? providerSafe : null,
+      workStopped:                  !!workStopped,
+      emergencyServicesContacted:   emergencyServicesContacted !== undefined ? emergencyServicesContacted : null,
+      description:                  String(description).trim().slice(0, 2000),
+      reportedAt:                   now,
+      updatedAt:                    now,
+      hasUnreadUpdate:              false,
+    };
+
+    await col.insertOne(doc);
+
+    return res.status(201).json({
+      status: "success",
+      data: { caseKey: incidentId, providerSafeReference: ref, state: 'submitted' },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const getSafetyIncidents = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const col = (await mongoDb).collection("provider_safety_incidents");
+    const docs = await col
+      .find({ uid }, { projection: { _id: 0, uid: 0, clientIncidentId: 0 } })
+      .sort({ reportedAt: -1 })
+      .limit(50)
+      .toArray();
+    return res.status(200).json({ status: "success", data: docs.map(toSafetyCaseSummary) });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const getEmergencyConfig = async (_req: Request, res: Response) => {
+  return res.status(200).json({ status: "success", data: PHILIPPINES_EMERGENCY_CONFIG });
+};
+
+// ─── Security — password + session revocation (Firebase Admin) ────────────────
+
+export const changeProviderPassword = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const { newPassword } = req.body;
+    if (!newPassword || String(newPassword).length < 6) {
+      return res.status(400).json({ status: "failed", message: "newPassword must be at least 6 characters" });
+    }
+    await updateFirebasePassword(uid, String(newPassword));
+    await revokeTokenInFirebase(uid);
+    return res.status(200).json({ status: "success", data: null, message: "Password updated. Please sign in again." });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const revokeProviderSession = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    // Firebase revokeRefreshTokens revokes all tokens — per-session revocation is not supported
+    await revokeTokenInFirebase(uid);
+    return res.status(200).json({ status: "success", data: null, message: "Session revoked." });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const revokeAllProviderSessions = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    await revokeTokenInFirebase(uid);
+    return res.status(200).json({ status: "success", data: null, message: "All other sessions revoked." });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+// ─── Service Area (MongoDB — worker_service_areas) ────────────────────────────
+
+const CITY_NAMES: Record<string, string> = {
+  manila: 'City of Manila', quezon: 'Quezon City', makati: 'Makati City',
+  taguig: 'Taguig City', pasig: 'Pasig City', mandaluyong: 'Mandaluyong City',
+  marikina: 'Marikina City', caloocan: 'Caloocan City', malabon: 'Malabon City',
+  navotas: 'Navotas City', valenzuela: 'Valenzuela City', 'las-pinas': 'Las Piñas City',
+  muntinlupa: 'Muntinlupa City', paranaque: 'Parañaque City', pasay: 'Pasay City',
+  pateros: 'Pateros', 'san-juan': 'San Juan City',
+  bacoor: 'Bacoor City', imus: 'Imus City', antipolo: 'Antipolo City',
+  'san-jose-del-monte': 'San Jose del Monte',
+};
+
+const VALID_CITY_IDS = new Set(Object.keys(CITY_NAMES));
+
+function buildAreaLabel(cityIds: string[]): string {
+  if (cityIds.length === 0) return '';
+  const names = cityIds.slice(0, 3).map(id => CITY_NAMES[id] || id);
+  const suffix = cityIds.length > 3 ? ` + ${cityIds.length - 3} more` : '';
+  return names.join(', ') + suffix;
+}
+
+export const getWorkerServiceArea = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const col = (await mongoDb).collection("worker_service_areas");
+    const doc = await col.findOne({ uid }, { projection: { _id: 0, uid: 0 } });
+    return res.status(200).json({
+      status: "success",
+      data: { cityIds: doc?.cityIds || [], label: doc?.label || '', updatedAt: doc?.updatedAt || null },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const saveWorkerServiceArea = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const { cityIds } = req.body;
+    if (!Array.isArray(cityIds)) {
+      return res.status(400).json({ status: "failed", message: "cityIds must be an array" });
+    }
+    const clean: string[] = cityIds
+      .filter((id: any) => typeof id === 'string' && VALID_CITY_IDS.has(id))
+      .slice(0, 21);
+    const now = new Date().toISOString();
+    const label = buildAreaLabel(clean);
+    const col = (await mongoDb).collection("worker_service_areas");
+    await col.updateOne({ uid }, { $set: { uid, cityIds: clean, label, updatedAt: now } }, { upsert: true });
+    return res.status(200).json({ status: "success", data: { success: true, updatedAt: now, label } });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+// ─── Profile Photo (Firebase Storage + user_profile table) ───────────────────
+
+let _profileTableReady: Promise<void> | null = null;
+function ensureProfileTable(): Promise<void> {
+  if (!_profileTableReady) {
+    _profileTableReady = dbQuery.query(`
+      CREATE TABLE IF NOT EXISTS ${dbSchema}.user_profile (
+        uid        VARCHAR(128) PRIMARY KEY,
+        photo_url  TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `).then(() => undefined);
+  }
+  return _profileTableReady;
+}
+
+const ALLOWED_PHOTO_MIMES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+
+export const uploadWorkerProfilePhoto = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const { file } = req.body;
+    if (!file) {
+      return res.status(400).json({ status: "failed", message: "file (data URI) is required" });
+    }
+    if (!String(file).startsWith("data:")) {
+      return res.status(422).json({ status: "failed", message: "file must be a data URI" });
+    }
+    const mimeType = String(file).slice(file.indexOf(":") + 1, file.indexOf(";"));
+    if (!ALLOWED_PHOTO_MIMES.includes(mimeType)) {
+      return res.status(422).json({ status: "failed", message: "File type not allowed. Use JPG, PNG, or WebP." });
+    }
+    await ensureProfileTable();
+    const safeUrl = await uploadFileToStorage("provider-profile-photos", `${uid}_photo`, file);
+    const uploadedAt = new Date().toISOString();
+    await dbQuery.query(
+      `INSERT INTO ${dbSchema}.user_profile (uid, photo_url, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (uid) DO UPDATE SET photo_url = EXCLUDED.photo_url, updated_at = NOW()`,
+      [uid, safeUrl]
+    );
+    return res.status(200).json({ status: "success", data: { safeUrl, uploadedAt } });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
   }
 };
