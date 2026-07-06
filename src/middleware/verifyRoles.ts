@@ -3,14 +3,16 @@ import dbQuery from "../db/dbQuery";
 const dbSchema = db.schema;
 import { errorMessage, status } from "../helpers/status";
 
+// Looks up role by UID (always present on decoded Firebase tokens — works for both
+// email-auth and phone-auth providers; the old email-based lookup failed for phone-only users).
 const verifyRoles = (allowedRoles: number[]) => async (req: any, res: any, next: any) => {
     try {
-        const searchQuery = `SELECT email, "role"
-      FROM ${dbSchema}.user_credentials where email = '${req["user"].email}';`;
+        const { rows } = await dbQuery.query(
+            `SELECT "role" FROM ${dbSchema}.user_credentials WHERE uid = $1`,
+            [req.user.uid]
+        );
 
-        const { rows } = await dbQuery.query(searchQuery, []);
-
-        if (allowedRoles.includes(rows[0].role)) {
+        if (rows.length > 0 && allowedRoles.includes(rows[0].role)) {
             next();
         } else {
             throw Error();

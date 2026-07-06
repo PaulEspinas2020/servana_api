@@ -5,6 +5,7 @@ import { generateOTP } from "../helpers/otp";
 import { send } from "../helpers/mailer";
 import { getUserInfoByBookingId } from "./user.service";
 import { computeTranspoFee } from "./pricingService";
+import { createNotification } from "./notification.service";
 import { createDisbursement } from "./disbursement.service";
 
 const dbSchema = db.schema;
@@ -862,6 +863,17 @@ export const assignWorker = async (bookingId: number, workerUid: string) => {
     `INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note) VALUES ($1, 'WORKER_ASSIGNED', 'Worker manually assigned')`,
     [bookingId]
   );
+
+  const code = `SVN-${String(bookingId).padStart(6, "0")}`;
+  createNotification(workerUid, {
+    type: "assigned_job",
+    severity: "info",
+    title: "New Job Assigned",
+    safeBody: `You have been assigned to booking ${code}. Please check your upcoming jobs.`,
+    safeContextLabel: code,
+    route: { page: "jobs", bookingId: String(bookingId) },
+    canOpenDetail: true,
+  }).catch((e) => console.error("createNotification (assignWorker):", e));
 
   return res.rows[0];
 };
