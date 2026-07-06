@@ -282,3 +282,35 @@ export const listAllConversations = async () => {
   );
   return r.rows;
 };
+
+// ---- Message reports -------------------------------------------------------
+
+export const insertMessageReport = async (input: {
+  reporterUid: string;
+  messageId: number;
+  conversationId: number;
+  category: string;
+  description: string;
+}): Promise<{ id: number }> => {
+  // Lazy table creation — no separate migration required.
+  await dbQuery.query(
+    `CREATE TABLE IF NOT EXISTS ${dbSchema}.chat_message_reports (
+       id             SERIAL PRIMARY KEY,
+       reporter_uid   TEXT NOT NULL,
+       message_id     INT  NOT NULL,
+       conversation_id INT NOT NULL,
+       category       TEXT NOT NULL,
+       description    TEXT,
+       created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+     )`,
+    []
+  );
+  const r = await dbQuery.query(
+    `INSERT INTO ${dbSchema}.chat_message_reports
+       (reporter_uid, message_id, conversation_id, category, description)
+     VALUES ($1,$2,$3,$4,$5)
+     RETURNING id`,
+    [input.reporterUid, input.messageId, input.conversationId, input.category, input.description]
+  );
+  return r.rows[0];
+};
