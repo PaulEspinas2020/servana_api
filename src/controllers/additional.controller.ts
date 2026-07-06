@@ -40,6 +40,24 @@ export const workerDecision = async (req: Request, res: Response) => {
   }
 };
 
+export const workerWithdraw = async (req: Request, res: Response) => {
+  try {
+    await additionalService.workerWithdraw(Number(req.params.id));
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+export const workerConfirmProceed = async (req: Request, res: Response) => {
+  try {
+    await additionalService.workerConfirmProceed(Number(req.params.id));
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
 export const getByBooking = async (req: Request, res: Response) => {
   try {
     const data = await additionalService.getByBooking(Number(req.params.bookingId));

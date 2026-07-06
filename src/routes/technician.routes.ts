@@ -44,4 +44,39 @@ router.get("/workers/:uid/booking-history", technicianController.getBookingHisto
 router.get("/workers/:uid/disbursement-history", technicianController.getDisbursementHistory);
 router.get("/workers/:uid/earnings-history", technicianController.getEarningsHistory);
 
+// Online Status
+router.get("/workers/:uid/online-status", technicianController.getOnlineStatus);
+router.post("/workers/:uid/go-online", technicianController.goOnline);
+router.post("/workers/:uid/go-offline", technicianController.goOffline);
+
+// Availability & Time Off
+router.get("/workers/:uid/availability", technicianController.getAvailability);
+router.put("/workers/:uid/availability", technicianController.saveAvailability);
+router.get("/workers/:uid/time-off", technicianController.getTimeOff);
+router.post("/workers/:uid/time-off", technicianController.createTimeOff);
+router.delete("/workers/:uid/time-off/:id", technicianController.deleteTimeOff);
+
+// Service Area
+router.get("/workers/:uid/service-area", technicianController.getServiceArea);
+router.put("/workers/:uid/service-area", technicianController.saveServiceArea);
+
+// Profile Photo
+router.post("/workers/:uid/profile/photo", technicianController.uploadProfilePhoto);
+
+// Dashboard
+router.get("/workers/:uid/dashboard", technicianController.getDashboard);
+
+// Onboarding
+router.get("/workers/:uid/onboarding", technicianController.getOnboarding);
+router.post("/workers/:uid/onboarding/step", technicianController.saveOnboardingStep);
+router.post("/workers/:uid/onboarding/submit", technicianController.submitOnboarding);
+
+// Review
+router.get("/workers/:uid/review-status", technicianController.getReviewStatus);
+router.post("/workers/:uid/submit-for-review", technicianController.submitForReview);
+
+// Notification Preferences
+router.get("/workers/:uid/notification-preferences", technicianController.getNotificationPreferences);
+router.put("/workers/:uid/notification-preferences", technicianController.saveNotificationPreferences);
+
 export default router;

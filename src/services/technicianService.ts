@@ -1284,3 +1284,369 @@ export const getWorkerEarningsHistory = async (workerUid: string) => {
     monthly: monthlyRes.rows,
   };
 };
+
+// ---------------------------------------------------------------------------
+// Worker Online Status (MongoDB)
+// ---------------------------------------------------------------------------
+
+export const getWorkerOnlineStatus = async (uid: string) => {
+  const collection = (await mongoDb).collection("worker_locations");
+  const doc = await collection.findOne(
+    { uid },
+    { projection: { uid: 1, is_online: 1, updatedAt: 1 } }
+  );
+  return {
+    status: doc?.is_online ? "online" : "offline",
+    updatedAt: (doc?.updatedAt as Date | undefined)?.toISOString() ?? null,
+  };
+};
+
+export const setWorkerOnlineStatus = async (uid: string, isOnline: boolean) => {
+  const collection = (await mongoDb).collection("worker_locations");
+  await collection.updateOne(
+    { uid },
+    { $set: { is_online: isOnline, updatedAt: new Date() } },
+    { upsert: true }
+  );
+  return { status: isOnline ? "online" : "offline" };
+};
+
+// ---------------------------------------------------------------------------
+// Worker Availability (PostgreSQL)
+// ---------------------------------------------------------------------------
+
+const ensureAvailabilityTable = async () => {
+  await dbQuery.query(
+    `CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_availability (
+       worker_uid TEXT PRIMARY KEY,
+       schedule   JSONB NOT NULL DEFAULT '{}',
+       timezone   TEXT NOT NULL DEFAULT 'Asia/Manila',
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    []
+  );
+};
+
+export const getWorkerAvailability = async (uid: string) => {
+  await ensureAvailabilityTable();
+  const res = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.worker_availability WHERE worker_uid = $1`,
+    [uid]
+  );
+  return res.rows[0] ?? { worker_uid: uid, schedule: {}, timezone: "Asia/Manila" };
+};
+
+export const saveWorkerAvailability = async (
+  uid: string,
+  payload: { schedule: object; timezone?: string }
+) => {
+  await ensureAvailabilityTable();
+  const { schedule, timezone = "Asia/Manila" } = payload;
+  await dbQuery.query(
+    `INSERT INTO ${dbSchema}.worker_availability (worker_uid, schedule, timezone, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (worker_uid) DO UPDATE
+       SET schedule = EXCLUDED.schedule, timezone = EXCLUDED.timezone, updated_at = NOW()`,
+    [uid, JSON.stringify(schedule), timezone]
+  );
+  return { success: true };
+};
+
+// ---------------------------------------------------------------------------
+// Worker Time-Off (PostgreSQL)
+// ---------------------------------------------------------------------------
+
+const ensureTimeOffTable = async () => {
+  await dbQuery.query(
+    `CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_time_off (
+       id         SERIAL PRIMARY KEY,
+       worker_uid TEXT NOT NULL,
+       start_date DATE NOT NULL,
+       end_date   DATE NOT NULL,
+       reason     TEXT,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    []
+  );
+};
+
+export const getWorkerTimeOff = async (uid: string) => {
+  await ensureTimeOffTable();
+  const res = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.worker_time_off WHERE worker_uid = $1 ORDER BY start_date ASC`,
+    [uid]
+  );
+  return res.rows;
+};
+
+export const createWorkerTimeOff = async (
+  uid: string,
+  payload: { startDate: string; endDate: string; reason?: string }
+) => {
+  await ensureTimeOffTable();
+  const res = await dbQuery.query(
+    `INSERT INTO ${dbSchema}.worker_time_off (worker_uid, start_date, end_date, reason)
+     VALUES ($1, $2, $3, $4) RETURNING *`,
+    [uid, payload.startDate, payload.endDate, payload.reason ?? null]
+  );
+  return res.rows[0];
+};
+
+export const deleteWorkerTimeOff = async (uid: string, id: string) => {
+  const res = await dbQuery.query(
+    `DELETE FROM ${dbSchema}.worker_time_off WHERE id = $1 AND worker_uid = $2 RETURNING *`,
+    [id, uid]
+  );
+  if (!res.rowCount) throw new Error("Time-off entry not found");
+  return res.rows[0];
+};
+
+// ---------------------------------------------------------------------------
+// Worker Service Area (PostgreSQL)
+// ---------------------------------------------------------------------------
+
+const ensureServiceAreaTable = async () => {
+  await dbQuery.query(
+    `CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_service_areas (
+       worker_uid TEXT PRIMARY KEY,
+       city_ids   JSONB NOT NULL DEFAULT '[]',
+       label      TEXT,
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    []
+  );
+};
+
+export const getWorkerServiceArea = async (uid: string) => {
+  await ensureServiceAreaTable();
+  const res = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.worker_service_areas WHERE worker_uid = $1`,
+    [uid]
+  );
+  return res.rows[0] ?? { worker_uid: uid, city_ids: [], label: null };
+};
+
+export const saveWorkerServiceArea = async (
+  uid: string,
+  payload: { cityIds: string[]; label?: string }
+) => {
+  await ensureServiceAreaTable();
+  const label = payload.label ?? payload.cityIds.slice(0, 3).join(", ") ?? null;
+  await dbQuery.query(
+    `INSERT INTO ${dbSchema}.worker_service_areas (worker_uid, city_ids, label, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (worker_uid) DO UPDATE
+       SET city_ids = EXCLUDED.city_ids, label = EXCLUDED.label, updated_at = NOW()`,
+    [uid, JSON.stringify(payload.cityIds), label]
+  );
+  return { success: true, updatedAt: new Date().toISOString() };
+};
+
+// ---------------------------------------------------------------------------
+// Worker Profile Photo (PostgreSQL)
+// ---------------------------------------------------------------------------
+
+export const updateWorkerPhotoUrl = async (uid: string, photoUrl: string) => {
+  await dbQuery.query(
+    `CREATE TABLE IF NOT EXISTS ${dbSchema}.user_profile (
+       uid        TEXT PRIMARY KEY,
+       photo_url  TEXT,
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    []
+  );
+  await dbQuery.query(
+    `INSERT INTO ${dbSchema}.user_profile (uid, photo_url, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (uid) DO UPDATE SET photo_url = EXCLUDED.photo_url, updated_at = NOW()`,
+    [uid, photoUrl]
+  );
+  return { photoUrl };
+};
+
+// ---------------------------------------------------------------------------
+// Worker Dashboard
+// ---------------------------------------------------------------------------
+
+export const getWorkerDashboard = async (uid: string) => {
+  const [historyRes, pendingRes, onlineDoc] = await Promise.all([
+    dbQuery.query(
+      `SELECT COUNT(*) AS total_jobs,
+              COALESCE(SUM(CASE WHEN bw.status = 'COMPLETED' THEN 1 ELSE 0 END), 0) AS completed,
+              COALESCE(SUM(CASE WHEN bw.status = 'CANCELLED' THEN 1 ELSE 0 END), 0) AS cancelled
+       FROM ${dbSchema}.booking_workers bw WHERE bw.worker_uid = $1`,
+      [uid]
+    ),
+    dbQuery.query(
+      `SELECT COUNT(*) AS pending_jobs
+       FROM ${dbSchema}.booking_workers bw
+       WHERE bw.worker_uid = $1 AND bw.status IN ('ASSIGNED', 'ACCEPTED')`,
+      [uid]
+    ),
+    (await mongoDb).collection("worker_locations").findOne({ uid }, { projection: { is_online: 1 } }),
+  ]);
+  return {
+    totalJobs: Number(historyRes.rows[0]?.total_jobs ?? 0),
+    completedJobs: Number(historyRes.rows[0]?.completed ?? 0),
+    cancelledJobs: Number(historyRes.rows[0]?.cancelled ?? 0),
+    pendingJobs: Number(pendingRes.rows[0]?.pending_jobs ?? 0),
+    isOnline: onlineDoc?.is_online ?? false,
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Worker Onboarding (PostgreSQL)
+// ---------------------------------------------------------------------------
+
+const ensureOnboardingTable = async () => {
+  await dbQuery.query(
+    `CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_onboarding (
+       worker_uid      TEXT PRIMARY KEY,
+       status          TEXT NOT NULL DEFAULT 'pending',
+       current_step    TEXT NOT NULL DEFAULT 'personal_info',
+       completed_steps JSONB NOT NULL DEFAULT '[]',
+       step_data       JSONB NOT NULL DEFAULT '{}',
+       submitted_at    TIMESTAMPTZ,
+       updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    []
+  );
+};
+
+export const getWorkerOnboarding = async (uid: string) => {
+  await ensureOnboardingTable();
+  const res = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.worker_onboarding WHERE worker_uid = $1`,
+    [uid]
+  );
+  return res.rows[0] ?? {
+    worker_uid: uid, status: "pending", current_step: "personal_info",
+    completed_steps: [], step_data: {}, submitted_at: null,
+  };
+};
+
+export const saveWorkerOnboardingStep = async (
+  uid: string,
+  stepKey: string,
+  data: object
+) => {
+  await ensureOnboardingTable();
+  await dbQuery.query(
+    `INSERT INTO ${dbSchema}.worker_onboarding (worker_uid, current_step, step_data, updated_at)
+     VALUES ($1, $2, $3::jsonb, NOW())
+     ON CONFLICT (worker_uid) DO UPDATE
+       SET current_step    = EXCLUDED.current_step,
+           step_data       = worker_onboarding.step_data || EXCLUDED.step_data,
+           completed_steps = (
+             SELECT jsonb_agg(DISTINCT val)
+             FROM jsonb_array_elements_text(
+               worker_onboarding.completed_steps || jsonb_build_array($2)
+             ) val
+           ),
+           updated_at = NOW()`,
+    [uid, stepKey, JSON.stringify({ [stepKey]: data })]
+  );
+  return { success: true, stepKey };
+};
+
+export const submitWorkerOnboarding = async (uid: string, payload: object) => {
+  await ensureOnboardingTable();
+  await dbQuery.query(
+    `INSERT INTO ${dbSchema}.worker_onboarding (worker_uid, status, current_step, submitted_at, step_data, updated_at)
+     VALUES ($1, 'pending_review', 'submitted', NOW(), $2::jsonb, NOW())
+     ON CONFLICT (worker_uid) DO UPDATE
+       SET status = 'pending_review', current_step = 'submitted',
+           submitted_at = NOW(), step_data = EXCLUDED.step_data, updated_at = NOW()`,
+    [uid, JSON.stringify(payload)]
+  );
+  return { status: "pending_review", submittedAt: new Date().toISOString() };
+};
+
+// ---------------------------------------------------------------------------
+// Worker Review Status
+// ---------------------------------------------------------------------------
+
+export const getWorkerReviewStatus = async (uid: string) => {
+  const res = await dbQuery.query(
+    `SELECT account_status, is_email_verified FROM ${dbSchema}.user_credentials WHERE uid = $1`,
+    [uid]
+  );
+  const row = res.rows[0];
+  return {
+    reviewStatus: row?.account_status ?? "pending",
+    isEmailVerified: row?.is_email_verified ?? false,
+  };
+};
+
+export const submitWorkerForReview = async (uid: string) => {
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.user_credentials SET account_status = 'under_review' WHERE uid = $1`,
+    [uid]
+  );
+  return { reviewStatus: "under_review" };
+};
+
+// ---------------------------------------------------------------------------
+// Worker Notification Preferences (PostgreSQL)
+// ---------------------------------------------------------------------------
+
+const ensureNotificationPrefsTable = async () => {
+  await dbQuery.query(
+    `CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_notification_prefs (
+       worker_uid        TEXT PRIMARY KEY,
+       job_assigned      BOOLEAN NOT NULL DEFAULT TRUE,
+       job_reminder      BOOLEAN NOT NULL DEFAULT TRUE,
+       payment_received  BOOLEAN NOT NULL DEFAULT TRUE,
+       new_message       BOOLEAN NOT NULL DEFAULT TRUE,
+       promotions        BOOLEAN NOT NULL DEFAULT FALSE,
+       quiet_hours       JSONB NOT NULL DEFAULT '{}',
+       updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    []
+  );
+};
+
+export const getWorkerNotificationPrefs = async (uid: string) => {
+  await ensureNotificationPrefsTable();
+  const res = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.worker_notification_prefs WHERE worker_uid = $1`,
+    [uid]
+  );
+  return res.rows[0] ?? {
+    worker_uid: uid, job_assigned: true, job_reminder: true,
+    payment_received: true, new_message: true, promotions: false, quiet_hours: {},
+  };
+};
+
+export const saveWorkerNotificationPrefs = async (
+  uid: string,
+  payload: {
+    jobAssigned?: boolean; jobReminder?: boolean; paymentReceived?: boolean;
+    newMessage?: boolean; promotions?: boolean; quietHours?: object;
+  }
+) => {
+  await ensureNotificationPrefsTable();
+  await dbQuery.query(
+    `INSERT INTO ${dbSchema}.worker_notification_prefs
+       (worker_uid, job_assigned, job_reminder, payment_received, new_message, promotions, quiet_hours, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW())
+     ON CONFLICT (worker_uid) DO UPDATE
+       SET job_assigned     = EXCLUDED.job_assigned,
+           job_reminder     = EXCLUDED.job_reminder,
+           payment_received = EXCLUDED.payment_received,
+           new_message      = EXCLUDED.new_message,
+           promotions       = EXCLUDED.promotions,
+           quiet_hours      = EXCLUDED.quiet_hours,
+           updated_at       = NOW()`,
+    [
+      uid,
+      payload.jobAssigned ?? true,
+      payload.jobReminder ?? true,
+      payload.paymentReceived ?? true,
+      payload.newMessage ?? true,
+      payload.promotions ?? false,
+      JSON.stringify(payload.quietHours ?? {}),
+    ]
+  );
+  return { success: true };
+};
