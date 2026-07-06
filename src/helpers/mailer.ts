@@ -19,6 +19,8 @@ const templates: any = {
   additional_work_approved: "d-3a919e2ab9ba4e329eca33c00283d64d",  // TODO: replace after creating in SendGrid
   additional_work_rejected: "d-89698e254f164d0c8f0506cf0898dea5",  // TODO: replace after creating in SendGrid
   refund_processed: "d-faaf990253e64b5e974c922e696bb1a8",          // TODO: replace after creating in SendGrid
+  booking_otp_reminder: "d-53a0b8df087d43b7b19e6769d05bf0d3 ",                  // TODO: create template in SendGrid
+  payment_retry: "d-b2f8183438c440c9bf9016c3257e2426",                           // TODO: create template in SendGrid
   employee_invite: "d-48f357229164403a9a6ce115ca5f426c",   // TODO: create template in SendGrid
   forgot_password: "d-4abeb2443f88422f91eb2873a2f26751",
   //confirm_email: "d-b325fec0028c419c9ec48c9b5866f10c"

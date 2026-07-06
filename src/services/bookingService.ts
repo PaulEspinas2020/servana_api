@@ -266,6 +266,7 @@ export const getAllBookings = async () => {
     `
     SELECT
       b.*,
+      so.service_id,
       u.first_name || ' ' || u.last_name AS customer_name,
       w.first_name || ' ' || w.last_name AS worker_name,
       p.status AS payment_status,
@@ -284,6 +285,8 @@ export const getAllBookings = async () => {
       bw.started_at,
       bw.completed_at
     FROM ${dbSchema}.bookings b
+    LEFT JOIN ${dbSchema}.service_options so
+      ON so.id = b.service_option_id
     LEFT JOIN ${dbSchema}.user_credentials u
       ON u.uid = b.user_id
     LEFT JOIN ${dbSchema}.payments p

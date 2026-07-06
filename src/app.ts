@@ -98,10 +98,16 @@ app.use("/api", cors(corsOptionsDelegate), additionalRoutes);
 import chatRoutes from "./chat/chat.routes";
 app.use("/api", cors(corsOptionsDelegate), chatRoutes);
 
+import disbursementRoutes from "./routes/disbursement.routes";
+app.use("/api", cors(corsOptionsDelegate), disbursementRoutes);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 const httpServer = http.createServer(app);
 initChatSocket(httpServer);
+
+import { startScheduler } from "./scheduler";
+startScheduler();
 
 httpServer.listen(port, () => {
     console.log(`Magic is running on port ${port}`);

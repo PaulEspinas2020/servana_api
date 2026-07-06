@@ -118,6 +118,22 @@ export const addEmployeesController = async (req: Request, res: Response) => {
     }
 };
 
+export const updateEmployeeController = async (req: Request, res: Response) => {
+    try {
+        const uid = req.params.uid as string;
+        if (!uid) {
+            return res.status(400).json({ status: "failed", message: "uid is required" });
+        }
+        const result = await authService.updateEmployee(uid, req.body);
+        return res.status(200).json({ status: "success", ...result });
+    } catch (error: any) {
+        return res.status(500).json({
+            status: "failed",
+            message: error?.message || error || "Failed to update employee",
+        });
+    }
+};
+
 export const forgotPasswordController = async (req: Request, res: Response) => {
     try {
         const { email } = req.body;

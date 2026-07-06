@@ -377,60 +377,54 @@ export const getWorkersByService = async (req: Request, res: Response) => {
  * Register or update a worker's bank account for PayMongo payouts.
  * Body: { bankCode, accountNumber, accountName }
  */
-// export const upsertBankAccount = async (req: Request, res: Response) => {
-//   try {
-//     const { uid } = req.params  as { uid: string };
-//     const { bankCode, accountNumber, accountName } = req.body;
+export const upsertBankAccount = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    const { bankCode, accountNumber, accountName } = req.body;
 
-//     if (!bankCode || !accountNumber || !accountName) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "bankCode, accountNumber, and accountName are required",
-//       });
-//     }
+    if (!bankCode || !accountNumber || !accountName) {
+      return res.status(400).json({
+        success: false,
+        message: "bankCode, accountNumber, and accountName are required",
+      });
+    }
 
-//     const account = await technician.upsertWorkerBankAccount(uid, {
-//       bankCode,
-//       accountNumber,
-//       accountName,
-//     });
+    const account = await technician.upsertWorkerBankAccount(uid, {
+      bankCode,
+      accountNumber,
+      accountName,
+    });
 
-//     return res.json({ success: true, bankAccount: toCamel(account) });
-//   } catch (error: any) {
-//     return res.status(500).json({ success: false, message: error.message });
-//   }
-// };
+    return res.json({ success: true, bankAccount: toCamel(account) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
 
-// /**
-//  * GET /workers/:uid/bank-account
-//  */
-// export const getBankAccount = async (req: Request, res: Response) => {
-//   try {
-//     const { uid } = req.params as { uid: string };
-//     const account = await technician.getWorkerBankAccount(uid);
+export const getBankAccount = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    const account = await technician.getWorkerBankAccount(uid);
 
-//     if (!account) {
-//       return res.status(404).json({ success: false, message: "No bank account registered" });
-//     }
+    if (!account) {
+      return res.status(404).json({ success: false, message: "No bank account registered" });
+    }
 
-//     return res.json({ success: true, bankAccount: toCamel(account) });
-//   } catch (error: any) {
-//     return res.status(500).json({ success: false, message: error.message });
-//   }
-// };
+    return res.json({ success: true, bankAccount: toCamel(account) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
 
-// /**
-//  * DELETE /workers/:uid/bank-account
-//  */
-// export const deleteBankAccount = async (req: Request, res: Response) => {
-//   try {
-//     const { uid } = req.params as { uid: string };
-//     const account = await technician.deleteWorkerBankAccount(uid);
-//     return res.json({ success: true, deleted: toCamel(account) });
-//   } catch (error: any) {
-//     return res.status(400).json({ success: false, message: error.message });
-//   }
-// };
+export const deleteBankAccount = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    const account = await technician.deleteWorkerBankAccount(uid);
+    return res.json({ success: true, deleted: toCamel(account) });
+  } catch (error: any) {
+    return res.status(400).json({ success: false, message: error.message });
+  }
+};
 
 export const assignWorker = async (req: Request, res: Response) => {
   try {
@@ -685,5 +679,43 @@ export const deleteRequirement = async (req: Request, res: Response) => {
     return res.json({ success: true, deleted });
   } catch (error: any) {
     return res.status(400).json({ success: false, message: error.message || "Failed to delete requirement" });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Worker History & Earnings
+// ---------------------------------------------------------------------------
+
+export const getBookingHistory = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    const rows = await technician.getWorkerBookingHistory(uid);
+    return res.json({ success: true, bookings: rows.map(toCamel) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const getDisbursementHistory = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    const rows = await technician.getWorkerDisbursementHistory(uid);
+    return res.json({ success: true, disbursements: rows.map(toCamel) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const getEarningsHistory = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    const { summary, monthly } = await technician.getWorkerEarningsHistory(uid);
+    return res.json({
+      success: true,
+      summary: toCamel(summary),
+      monthly: monthly.map(toCamel),
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
