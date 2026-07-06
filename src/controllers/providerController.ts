@@ -1241,3 +1241,266 @@ export const uploadWorkerProfilePhoto = async (req: Request, res: Response) => {
     return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
   }
 };
+
+// ─── Payout Settings (MongoDB — worker_payout_methods) ───────────────────────
+
+const PAYOUT_TYPE_LABELS: Record<string, string> = {
+  gcash: 'GCash', maya: 'Maya', bdo: 'BDO Unibank',
+  bpi: 'Bank of the Philippine Islands', unionbank: 'UnionBank',
+  landbank: 'Landbank of the Philippines', other: 'Other',
+};
+const PAYOUT_STATUS_LABELS: Record<string, string> = {
+  verified: 'Verified', unverified: 'Unverified', pending: 'Pending review',
+  failed: 'Verification failed', missing: 'Not set up',
+};
+
+export const getProviderPayoutSummary = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const col = (await mongoDb).collection("worker_payout_methods");
+    const doc = await col.findOne({ uid }, { projection: { _id: 0, uid: 0 } });
+    if (!doc) {
+      return res.status(200).json({
+        status: "success",
+        data: {
+          hasPayoutMethod: false, type: null, typeLabel: 'Not set up',
+          maskedIdentifier: null, status: 'missing', statusLabel: 'Not set up', lastUpdated: null,
+        },
+      });
+    }
+    return res.status(200).json({
+      status: "success",
+      data: {
+        hasPayoutMethod: true,
+        type: doc.type,
+        typeLabel: PAYOUT_TYPE_LABELS[doc.type] || doc.type,
+        maskedIdentifier: doc.maskedIdentifier || null,
+        status: doc.status || 'pending',
+        statusLabel: PAYOUT_STATUS_LABELS[doc.status] || 'Pending review',
+        lastUpdated: doc.updatedAt || null,
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const requestProviderPayoutUpdate = async (_req: Request, res: Response) => {
+  // No external payment processor redirect — returns the in-app payout update route.
+  return res.status(200).json({
+    status: "success",
+    data: { sessionUrl: '/settings/payout/update' },
+  });
+};
+
+// ─── Privacy / Account Actions (MongoDB — worker_account_requests) ────────────
+
+export const getProviderPrivacy = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+
+    const [requestDoc, bookingsRes] = await Promise.all([
+      (await mongoDb).collection("worker_account_requests").findOne({ uid }, { projection: { _id: 0, uid: 0 } }),
+      dbQuery.query(
+        `SELECT COUNT(*) AS cnt FROM ${dbSchema}.bookings
+         WHERE worker_uid = $1 AND status NOT IN ('COMPLETED', 'CANCELLED', 'REJECTED')`,
+        [uid]
+      ),
+    ]);
+
+    const r: any = requestDoc || {};
+    return res.status(200).json({
+      status: "success",
+      data: {
+        dataExportStatus:      r.exportStatus       || 'none',
+        dataExportRequestedAt: r.exportRequestedAt  || null,
+        deactivationStatus:    r.deactivationStatus || 'none',
+        deletionStatus:        r.deletionStatus     || 'none',
+        hasActiveBookings:     Number(bookingsRes.rows[0]?.cnt ?? 0) > 0,
+        hasUnsettledPayouts:   false, // TODO: query payout pipeline when available
+        hasOpenDisputes:       false, // TODO: query disputes table when available
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const requestProviderDataExport = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const now = new Date().toISOString();
+    const col = (await mongoDb).collection("worker_account_requests");
+    await col.updateOne(
+      { uid },
+      { $set: { uid, exportStatus: 'pending', exportRequestedAt: now, updatedAt: now } },
+      { upsert: true }
+    );
+    return res.status(200).json({
+      status: "success",
+      data: { status: 'pending' },
+      message: "Export request submitted. You will be notified when your data is ready.",
+    });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const requestProviderDeactivation = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const { reason } = req.body;
+    const now = new Date().toISOString();
+    const col = (await mongoDb).collection("worker_account_requests");
+    await col.updateOne(
+      { uid },
+      { $set: { uid, deactivationStatus: 'requested', deactivationReason: reason || null, deactivationRequestedAt: now, updatedAt: now } },
+      { upsert: true }
+    );
+    return res.status(200).json({
+      status: "success",
+      data: null,
+      message: "Deactivation request submitted. Our team will review and contact you.",
+    });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const requestProviderDeletion = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const { reason } = req.body;
+
+    const bookingsRes = await dbQuery.query(
+      `SELECT COUNT(*) AS cnt FROM ${dbSchema}.bookings
+       WHERE worker_uid = $1 AND status NOT IN ('COMPLETED', 'CANCELLED', 'REJECTED')`,
+      [uid]
+    );
+    if (Number(bookingsRes.rows[0]?.cnt ?? 0) > 0) {
+      return res.status(409).json({
+        status: "failed",
+        message: "You have active bookings. Please complete or cancel them before requesting account deletion.",
+      });
+    }
+
+    const now = new Date().toISOString();
+    const col = (await mongoDb).collection("worker_account_requests");
+    await col.updateOne(
+      { uid },
+      { $set: { uid, deletionStatus: 'requested', deletionReason: reason || null, deletionRequestedAt: now, updatedAt: now } },
+      { upsert: true }
+    );
+    return res.status(200).json({
+      status: "success",
+      data: null,
+      message: "Deletion request submitted. Your account will be permanently deleted within 30 days.",
+    });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+// ─── Support Ticket Follow-ons ────────────────────────────────────────────────
+
+export const getSupportTicketDetail = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const ticketKey = String(req.params.ticketKey);
+    const ticket = await notificationService.getSupportTicketDetail(uid, ticketKey);
+    if (!ticket) return res.status(404).json({ status: "failed", message: "Ticket not found" });
+    return res.status(200).json({ status: "success", data: ticket });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const addSupportTicketReply = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const ticketKey = String(req.params.ticketKey);
+    const { message } = req.body;
+    if (!message || String(message).trim().length < 2) {
+      return res.status(400).json({ status: "failed", message: "message is required" });
+    }
+    const result = await notificationService.addSupportTicketReply(uid, ticketKey, String(message).trim());
+    if (!result) return res.status(404).json({ status: "failed", message: "Ticket not found" });
+    if ((result as any).error) {
+      return res.status(409).json({ status: "failed", message: (result as any).error });
+    }
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const closeSupportTicket = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const ticketKey = String(req.params.ticketKey);
+    const result = await notificationService.closeSupportTicket(uid, ticketKey);
+    if (!result) return res.status(404).json({ status: "failed", message: "Ticket not found or cannot be closed in its current state" });
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const reopenSupportTicket = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const ticketKey = String(req.params.ticketKey);
+    const result = await notificationService.reopenSupportTicket(uid, ticketKey);
+    if (!result) return res.status(404).json({ status: "failed", message: "Ticket not found or not eligible for reopen" });
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const getSupportUnreadCount = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const count = await notificationService.countUnreadSupportReplies(uid);
+    return res.status(200).json({ status: "success", data: { count } });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+// ─── Safety Check-In Timestamps (MongoDB — worker_safety_checkins) ────────────
+
+const VALID_CHECKIN_STAGES = new Set(['en_route', 'arrived', 'started', 'completed']);
+
+export const recordSafetyCheckIn = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const { bookingId, stage } = req.body;
+    if (!bookingId || !stage) {
+      return res.status(400).json({ status: "failed", message: "bookingId and stage are required" });
+    }
+    if (!VALID_CHECKIN_STAGES.has(String(stage))) {
+      return res.status(400).json({
+        status: "failed",
+        message: "stage must be one of: en_route, arrived, started, completed",
+      });
+    }
+    const checkedInAt = new Date().toISOString();
+    const col = (await mongoDb).collection("worker_safety_checkins");
+    await col.insertOne({ uid, bookingId: String(bookingId), stage: String(stage), checkedInAt });
+    return res.status(201).json({ status: "success", data: { success: true, stage, checkedInAt } });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};

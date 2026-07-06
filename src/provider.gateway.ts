@@ -2,9 +2,10 @@ import { Server, Socket } from "socket.io";
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
 
 import { firebaseAdmin } from "./middleware/firebaseApp";
-import { tempId } from "./config";
+import { tempId, db } from "./config";
 import { setProviderIo, providerRoomKey } from "./provider.realtime";
 import * as repo from "./chat/chat.repository";
+import dbQuery from "./db/dbQuery";
 
 const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
 
@@ -61,12 +62,38 @@ export const initProviderSocket = (io: Server): void => {
     socket.join(providerRoomKey(actor.uid));
 
     // join_room — provider can subscribe to booking/support/active_job/additional_work rooms.
-    // Security: personal room (type === 'provider') is only joinable by the owner.
-    // Other room types are joined without DB verification here; access control is
-    // enforced by the REST endpoints that control what events are emitted to those rooms.
-    socket.on("join_room", (data: { roomKey: string; type: string }) => {
+    // Security: personal room ('provider' type) is ownership-checked by room key.
+    // Booking rooms are ownership-checked via DB — booking IDs are sequential integers
+    // and therefore guessable, so we must verify before granting subscription.
+    // Support/other rooms use UUID-based keys (gen_random_uuid) and are not guessable;
+    // access control for those is enforced by the REST endpoints that emit to those rooms.
+    socket.on("join_room", async (data: { roomKey: string; type: string }) => {
       if (!data || !data.roomKey) return;
-      if (data.type === "provider" && data.roomKey !== providerRoomKey(actor.uid)) { return; }
+
+      if (data.type === "provider") {
+        if (data.roomKey !== providerRoomKey(actor.uid)) return;
+        socket.join(data.roomKey);
+        return;
+      }
+
+      if (data.type === "booking") {
+        // Room key format: booking:{bookingId} — verify ownership before joining
+        const bookingId = data.roomKey.replace(/^booking:/, "");
+        if (!bookingId || bookingId === data.roomKey) return;
+        try {
+          const { rows } = await dbQuery.query(
+            `SELECT id FROM ${db.schema}.bookings WHERE id = $1 AND worker_uid = $2 LIMIT 1`,
+            [bookingId, actor.uid]
+          );
+          if (!rows.length) return;
+        } catch {
+          return;
+        }
+        socket.join(data.roomKey);
+        return;
+      }
+
+      // Other types (support, active_job, additional_work): UUID-keyed rooms — join without DB check.
       socket.join(data.roomKey);
     });
 

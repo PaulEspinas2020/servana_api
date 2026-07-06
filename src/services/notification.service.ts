@@ -69,6 +69,17 @@ async function initTables(): Promise<void> {
       promotions       BOOLEAN NOT NULL DEFAULT false,
       updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_support_ticket_replies (
+      id          BIGSERIAL PRIMARY KEY,
+      ticket_key  VARCHAR(64)  NOT NULL,
+      sender_type VARCHAR(32)  NOT NULL DEFAULT 'provider',
+      safe_body   TEXT         NOT NULL,
+      is_read     BOOLEAN      NOT NULL DEFAULT false,
+      created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_pstr_ticket_key
+      ON ${dbSchema}.provider_support_ticket_replies (ticket_key, created_at ASC);
   `);
 }
 
@@ -368,4 +379,99 @@ export async function saveNotificationPrefs(workerUid: string, prefs: Partial<ty
     ],
   );
   return merged;
+}
+
+// ─── Support ticket follow-ons ────────────────────────────────────────────────
+
+function mapReplyRow(row: any) {
+  return {
+    id:         String(row.id),
+    senderType: row.sender_type,
+    safeBody:   row.safe_body,
+    isRead:     row.is_read,
+    createdAt:  row.created_at ?? null,
+  };
+}
+
+export async function getSupportTicketDetail(workerUid: string, ticketKey: string) {
+  await ensureTables();
+  const { rows } = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.provider_support_tickets
+     WHERE ticket_key = $1 AND worker_uid = $2 LIMIT 1`,
+    [ticketKey, workerUid],
+  );
+  if (!rows.length) return null;
+  const { rows: replyRows } = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.provider_support_ticket_replies
+     WHERE ticket_key = $1 ORDER BY created_at ASC`,
+    [ticketKey],
+  );
+  return { ...mapSupportTicketRow(rows[0]), replies: replyRows.map(mapReplyRow) };
+}
+
+export async function addSupportTicketReply(workerUid: string, ticketKey: string, message: string) {
+  await ensureTables();
+  const { rows: ownerRows, rowCount } = await dbQuery.query(
+    `SELECT status FROM ${dbSchema}.provider_support_tickets
+     WHERE ticket_key = $1 AND worker_uid = $2`,
+    [ticketKey, workerUid],
+  );
+  if (!rowCount) return null;
+  const currentStatus: string = ownerRows[0].status;
+  const activeStatuses = ['open', 'waiting_for_support', 'waiting_for_provider', 'escalated'];
+  if (!activeStatuses.includes(currentStatus)) {
+    return { error: 'Ticket is not open for replies', currentStatus };
+  }
+  await dbQuery.query(
+    `INSERT INTO ${dbSchema}.provider_support_ticket_replies (ticket_key, sender_type, safe_body)
+     VALUES ($1, 'provider', $2)`,
+    [ticketKey, String(message).substring(0, 2000)],
+  );
+  const { rows } = await dbQuery.query(
+    `UPDATE ${dbSchema}.provider_support_tickets
+     SET status = 'waiting_for_support', updated_at = NOW()
+     WHERE ticket_key = $1 RETURNING *`,
+    [ticketKey],
+  );
+  return mapSupportTicketRow(rows[0]);
+}
+
+export async function closeSupportTicket(workerUid: string, ticketKey: string) {
+  await ensureTables();
+  const { rows, rowCount } = await dbQuery.query(
+    `UPDATE ${dbSchema}.provider_support_tickets
+     SET status = 'closed', updated_at = NOW()
+     WHERE ticket_key = $1 AND worker_uid = $2
+       AND status IN ('open', 'waiting_for_support', 'escalated')
+     RETURNING *`,
+    [ticketKey, workerUid],
+  );
+  if (!rowCount) return null;
+  return mapSupportTicketRow(rows[0]);
+}
+
+export async function reopenSupportTicket(workerUid: string, ticketKey: string) {
+  await ensureTables();
+  const { rows, rowCount } = await dbQuery.query(
+    `UPDATE ${dbSchema}.provider_support_tickets
+     SET status = 'open', updated_at = NOW()
+     WHERE ticket_key = $1 AND worker_uid = $2
+       AND status IN ('resolved', 'closed')
+     RETURNING *`,
+    [ticketKey, workerUid],
+  );
+  if (!rowCount) return null;
+  return mapSupportTicketRow(rows[0]);
+}
+
+export async function countUnreadSupportReplies(workerUid: string): Promise<number> {
+  await ensureTables();
+  const { rows } = await dbQuery.query(
+    `SELECT COUNT(*) AS cnt
+     FROM ${dbSchema}.provider_support_ticket_replies r
+     JOIN ${dbSchema}.provider_support_tickets t ON t.ticket_key = r.ticket_key
+     WHERE t.worker_uid = $1 AND r.is_read = false AND r.sender_type = 'support'`,
+    [workerUid],
+  );
+  return parseInt(rows[0]?.cnt ?? '0', 10);
 }

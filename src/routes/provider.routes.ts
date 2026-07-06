@@ -89,4 +89,24 @@ router.post("/provider/security/password", verifyAuth, provider.changeProviderPa
 router.post("/provider/security/sessions/revoke-all", verifyAuth, provider.revokeAllProviderSessions);
 router.delete("/provider/security/sessions/:id", verifyAuth, provider.revokeProviderSession);
 
+// Payout settings (P1)
+router.get("/provider/payout/summary", verifyAuth, provider.getProviderPayoutSummary);
+router.post("/provider/payout/update-session", verifyAuth, provider.requestProviderPayoutUpdate);
+
+// Privacy / account actions (P1)
+router.get("/provider/privacy", verifyAuth, provider.getProviderPrivacy);
+router.post("/provider/privacy/export", verifyAuth, provider.requestProviderDataExport);
+router.post("/provider/account/deactivate", verifyAuth, provider.requestProviderDeactivation);
+router.post("/provider/account/delete", verifyAuth, provider.requestProviderDeletion);
+
+// Support ticket follow-ons (P1) — unread-count before /:ticketKey to avoid route shadowing
+router.get("/provider/support/unread-count", verifyAuth, provider.getSupportUnreadCount);
+router.get("/provider/support/tickets/:ticketKey", verifyAuth, provider.getSupportTicketDetail);
+router.post("/provider/support/tickets/:ticketKey/replies", verifyAuth, provider.addSupportTicketReply);
+router.post("/provider/support/tickets/:ticketKey/close", verifyAuth, provider.closeSupportTicket);
+router.post("/provider/support/tickets/:ticketKey/reopen", verifyAuth, provider.reopenSupportTicket);
+
+// Safety check-in timestamps (P1)
+router.post("/provider/safety/check-in", verifyAuth, provider.recordSafetyCheckIn);
+
 export default router;
