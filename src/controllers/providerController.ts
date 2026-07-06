@@ -158,7 +158,7 @@ export const getDashboard = async (req: Request, res: Response) => {
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
 
-    const schema = dbSchema;
+    const schema = dbSchema || "";
     const jobSql = (filter: string, limit?: number) =>
       JOB_SELECT(filter).replace(/\{SCHEMA\}/g, schema) + (limit ? ` LIMIT ${limit}` : "");
 
@@ -832,7 +832,7 @@ export const markNotificationRead = async (req: Request, res: Response) => {
     const { key } = req.params;
     if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
     const uid: string = (req as any).user?.uid;
-    await notificationService.markNotificationReadByKey(uid, key);
+    await notificationService.markNotificationReadByKey(uid, key as string);
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (e: any) {
     return res.status(500).json({ status: "failed", message: e.message });
@@ -854,7 +854,7 @@ export const dismissNotification = async (req: Request, res: Response) => {
     const { key } = req.params;
     if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
     const uid: string = (req as any).user?.uid;
-    await notificationService.deleteNotificationByKey(uid, key);
+    await notificationService.deleteNotificationByKey(uid, key as string);
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (e: any) {
     return res.status(500).json({ status: "failed", message: e.message });
@@ -866,7 +866,7 @@ export const dismissAlert = async (req: Request, res: Response) => {
     const { key } = req.params;
     if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
     const uid: string = (req as any).user?.uid;
-    await notificationService.deleteAlertByKey(uid, key);
+    await notificationService.deleteAlertByKey(uid, key as string);
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (e: any) {
     return res.status(500).json({ status: "failed", message: e.message });
