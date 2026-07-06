@@ -681,3 +681,41 @@ export const deleteRequirement = async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, message: error.message || "Failed to delete requirement" });
   }
 };
+
+// ---------------------------------------------------------------------------
+// Worker History & Earnings
+// ---------------------------------------------------------------------------
+
+export const getBookingHistory = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    const rows = await technician.getWorkerBookingHistory(uid);
+    return res.json({ success: true, bookings: rows.map(toCamel) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const getDisbursementHistory = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    const rows = await technician.getWorkerDisbursementHistory(uid);
+    return res.json({ success: true, disbursements: rows.map(toCamel) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const getEarningsHistory = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    const { summary, monthly } = await technician.getWorkerEarningsHistory(uid);
+    return res.json({
+      success: true,
+      summary: toCamel(summary),
+      monthly: monthly.map(toCamel),
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};

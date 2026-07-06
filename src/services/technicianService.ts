@@ -1160,3 +1160,127 @@ export const deleteWorkerBankAccount = async (workerUid: string) => {
 
   return res.rows[0];
 };
+
+// ---------------------------------------------------------------------------
+// Worker History & Earnings
+// ---------------------------------------------------------------------------
+
+export const getWorkerBookingHistory = async (workerUid: string) => {
+  const res = await dbQuery.query(
+    `
+    SELECT
+      b.id,
+      b.schedule,
+      b.status            AS booking_status,
+      b.final_price,
+      b.payment_method,
+      so.level_2          AS service_name,
+      so.level_3          AS service_variant,
+      bw.status           AS worker_status,
+      bw.assigned_at,
+      bw.started_at,
+      bw.completed_at,
+      uc.first_name || ' ' || uc.last_name AS customer_name,
+      p.status            AS payment_status,
+      p.method            AS payment_provider,
+      p.paid_at
+    FROM ${dbSchema}.booking_workers bw
+    JOIN ${dbSchema}.bookings b
+      ON b.id = bw.booking_id
+    JOIN ${dbSchema}.service_options so
+      ON so.id = b.service_option_id
+    JOIN ${dbSchema}.user_credentials uc
+      ON uc.uid = b.user_id
+    LEFT JOIN ${dbSchema}.payments p
+      ON p.booking_id = b.id AND p.additional_request_id IS NULL
+    WHERE bw.worker_uid = $1
+    ORDER BY b.schedule DESC
+    `,
+    [workerUid]
+  );
+
+  return res.rows;
+};
+
+export const getWorkerDisbursementHistory = async (workerUid: string) => {
+  const res = await dbQuery.query(
+    `
+    SELECT
+      d.id,
+      d.booking_id,
+      d.total_amount,
+      d.servana_share,
+      d.worker_share,
+      d.status,
+      d.paymongo_payout_id,
+      d.payout_error,
+      d.released_at,
+      d.created_at,
+      so.level_2          AS service_name,
+      b.schedule,
+      bw.completed_at,
+      bw.completed_at + INTERVAL '72 hours' AS release_after
+    FROM ${dbSchema}.disbursements d
+    JOIN ${dbSchema}.bookings b
+      ON b.id = d.booking_id
+    JOIN ${dbSchema}.service_options so
+      ON so.id = b.service_option_id
+    LEFT JOIN ${dbSchema}.booking_workers bw
+      ON bw.booking_id = d.booking_id
+     AND bw.worker_uid  = d.worker_uid
+     AND bw.status      = 'COMPLETED'
+    WHERE d.worker_uid = $1
+    ORDER BY d.created_at DESC
+    `,
+    [workerUid]
+  );
+
+  return res.rows;
+};
+
+export const getWorkerEarningsHistory = async (workerUid: string) => {
+  const [summaryRes, monthlyRes] = await Promise.all([
+    dbQuery.query(
+      `
+      SELECT
+        COUNT(*)                                                                      AS total_jobs,
+        COALESCE(SUM(worker_share), 0)                                                AS total_gross,
+        COALESCE(SUM(CASE WHEN status = 'RELEASED' THEN worker_share ELSE 0 END), 0) AS total_released,
+        COALESCE(SUM(CASE WHEN status = 'PENDING'  THEN worker_share ELSE 0 END), 0) AS total_pending,
+        COALESCE(SUM(CASE WHEN status = 'FAILED'   THEN worker_share ELSE 0 END), 0) AS total_failed,
+        COALESCE(SUM(total_amount), 0)                                                AS total_collected,
+        COALESCE(SUM(servana_share), 0)                                               AS total_servana_cut
+      FROM ${dbSchema}.disbursements
+      WHERE worker_uid = $1
+      `,
+      [workerUid]
+    ),
+    dbQuery.query(
+      `
+      SELECT
+        TO_CHAR(DATE_TRUNC('month', bw.completed_at), 'YYYY-MM')   AS month,
+        COUNT(d.id)                                                  AS jobs,
+        COALESCE(SUM(d.total_amount), 0)                             AS total_collected,
+        COALESCE(SUM(d.servana_share), 0)                            AS servana_deduction,
+        COALESCE(SUM(d.worker_share), 0)                             AS gross_earnings,
+        COALESCE(SUM(CASE WHEN d.status = 'RELEASED' THEN d.worker_share ELSE 0 END), 0) AS released,
+        COALESCE(SUM(CASE WHEN d.status = 'PENDING'  THEN d.worker_share ELSE 0 END), 0) AS pending,
+        COALESCE(SUM(CASE WHEN d.status = 'FAILED'   THEN d.worker_share ELSE 0 END), 0) AS failed
+      FROM ${dbSchema}.disbursements d
+      JOIN ${dbSchema}.booking_workers bw
+        ON bw.booking_id = d.booking_id
+       AND bw.worker_uid = d.worker_uid
+       AND bw.status     = 'COMPLETED'
+      WHERE d.worker_uid = $1
+      GROUP BY DATE_TRUNC('month', bw.completed_at)
+      ORDER BY DATE_TRUNC('month', bw.completed_at) DESC
+      `,
+      [workerUid]
+    ),
+  ]);
+
+  return {
+    summary: summaryRes.rows[0],
+    monthly: monthlyRes.rows,
+  };
+};

@@ -10,6 +10,7 @@ import { send } from "../helpers/mailer";
 import bcrypt from "bcryptjs";
 import { generateOTP } from "../helpers/otp";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
+import uploadInStorage from "../helpers/firebaseStorageUploader";
 import * as addressService from "../services/address.service";
 import { idGenerator } from "../helpers/idGenerator";
 
@@ -474,5 +475,126 @@ const resetPassword = async (payload: { oobCode: string; newPassword: string }) 
     return { message: "Password reset successfully." };
 };
 
+interface EmployeeUpdateInput {
+    firstName?: string;
+    lastName?: string;
+    password?: string;
+    photoFile?: string;
+    requirementFiles?: Array<{ data: string; name: string }>;
+    address?: {
+        addressOne: string;
+        addressTwo?: string;
+        zipCode: string;
+        postTown: string;
+        country: string;
+        label?: string;
+        isPrimary?: boolean;
+        lat?: number;
+        lon?: number;
+    };
+}
+
+const updateEmployee = async (uid: string, updates: EmployeeUpdateInput) => {
+    const { firstName, lastName, password, photoFile, requirementFiles, address } = updates;
+
+    const firebaseUser = await firebaseFunction.getFirebaseUserByEmail(
+        (await userService.getUserCredentialsByID(uid))?.email || ""
+    );
+    if (!firebaseUser) throw "Employee not found";
+
+    const tasks: Promise<any>[] = [];
+
+    if (firstName || lastName) {
+        const setClause: string[] = [];
+        const values: any[] = [];
+        let idx = 1;
+        if (firstName) { setClause.push(`first_name = $${idx++}`); values.push(firstName); }
+        if (lastName)  { setClause.push(`last_name = $${idx++}`);  values.push(lastName);  }
+        values.push(uid);
+        tasks.push(dbQuery.query(
+            `UPDATE ${dbSchema}.user_credentials SET ${setClause.join(", ")} WHERE uid = $${idx} RETURNING *`,
+            values
+        ));
+    }
+
+    if (photoFile) {
+        tasks.push(
+            uploadInStorage("Employee Profile Photo", uid, photoFile).then((photoUrl) =>
+                dbQuery.query(
+                    `INSERT INTO ${dbSchema}.user_profile (uid, photo_url)
+                     VALUES ($1, $2)
+                     ON CONFLICT (uid) DO UPDATE SET photo_url = $2`,
+                    [uid, photoUrl]
+                )
+            )
+        );
+    }
+
+    if (password) {
+        if (!validatePassword(password)) throw "Password does not meet requirements";
+        tasks.push(firebaseFunction.updateFirebasePassword(firebaseUser.uid, password));
+        tasks.push(dbQuery.query(
+            `UPDATE ${dbSchema}.user_credentials SET password = $1 WHERE uid = $2`,
+            [hashPassword(password), uid]
+        ));
+    }
+
+    if (requirementFiles?.length) {
+        tasks.push(
+            Promise.all(
+                requirementFiles.map((file, i) =>
+                    uploadFileToStorage("employee-requirements", `${uid}_${i}`, file.data)
+                        .then((fileUrl) => ({ fileUrl, fileName: file.name }))
+                )
+            ).then((uploaded) => technicianService.addWorkerRequirements(uid, uploaded))
+        );
+    }
+
+    if (address) {
+        const existing = await addressService.getAddressesByUserId(uid);
+        const primary = existing.find((a: any) => a.isPrimary) || existing[0];
+
+        if (primary) {
+            tasks.push(addressService.updateUserAddress(
+                {
+                    userId: uid,
+                    locationId: primary.locationId || idGenerator(6, "LOC"),
+                    addressOne: address.addressOne,
+                    addressTwo: address.addressTwo || "",
+                    zipCode: address.zipCode,
+                    postTown: address.postTown,
+                    country: address.country,
+                    label: address.label || primary.label || "Home",
+                    isPrimary: true,
+                    lat: address.lat ?? 0,
+                    lon: address.lon ?? 0,
+                },
+                uid,
+                primary.addressId
+            ));
+        } else {
+            tasks.push(addressService.addUserAddress(
+                {
+                    userId: uid,
+                    locationId: idGenerator(6, "LOC"),
+                    addressOne: address.addressOne,
+                    addressTwo: address.addressTwo || "",
+                    zipCode: address.zipCode,
+                    postTown: address.postTown,
+                    country: address.country,
+                    label: address.label || "Home",
+                    isPrimary: true,
+                    lat: address.lat ?? 0,
+                    lon: address.lon ?? 0,
+                },
+                uid
+            ));
+        }
+    }
+
+    await Promise.all(tasks);
+    return { uid, message: "Employee updated successfully." };
+};
+
 export { registerUser, loginUserInDBAndFirebase, loggedInUser, getAndSendEmailVerificationLink, changeArchiveStatus,
-    verifyEmailOtp, resendEmailOtp, updateFcmToken, addEmployees, forgotPassword, resetPassword };
+    verifyEmailOtp, resendEmailOtp, updateFcmToken, addEmployees, updateEmployee, forgotPassword, resetPassword };

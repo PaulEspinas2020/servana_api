@@ -39,4 +39,9 @@ router.put("/workers/:uid/bank-account", technicianController.upsertBankAccount)
 router.get("/workers/:uid/bank-account", technicianController.getBankAccount);
 router.delete("/workers/:uid/bank-account", technicianController.deleteBankAccount);
 
+// Worker History & Earnings
+router.get("/workers/:uid/booking-history", technicianController.getBookingHistory);
+router.get("/workers/:uid/disbursement-history", technicianController.getDisbursementHistory);
+router.get("/workers/:uid/earnings-history", technicianController.getEarningsHistory);
+
 export default router;

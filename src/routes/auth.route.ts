@@ -17,6 +17,7 @@ router.get("/auth/resendverification", authController.resendVerification);
 router.post("/auth/firebase-login", authController.firebaseAuthLoginController);
 router.post("/auth/provider/register", authController.providerRegisterController);
 router.post("/auth/add-employees", verifyAuth, verifyRoles([1]), authController.addEmployeesController);
+router.patch("/auth/employees/:uid", verifyAuth, verifyRoles([1]), authController.updateEmployeeController);
 router.post("/auth/forgot-password", authController.forgotPasswordController);
 router.post("/auth/reset-password", authController.resetPasswordController);
 router.post("/auth/logout", verifyAuth, authController.logoutController);

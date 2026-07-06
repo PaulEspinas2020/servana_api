@@ -14,6 +14,7 @@
   "license": "ISC",
   "dependencies": {
     "@sendgrid/mail": "^8.1.6",
+    "axios": "^1.18.1",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
@@ -25,6 +26,7 @@
     "formidable": "^3.5.4",
     "jsonwebtoken": "^9.0.3",
     "mongodb": "^7.1.0",
+    "node-cron": "^3.0.3",
     "pg": "^8.17.2",
     "socket.io": "^4.8.3",
     "twilio": "^6.0.2"
@@ -35,6 +37,7 @@
     "@types/express": "^5.0.6",
     "@types/formidable": "^3.4.6",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/node-cron": "^3.0.11",
     "@types/pg": "^8.16.0",
     "@types/socket.io": "^3.0.2",
     "@types/twilio": "^3.19.3",
