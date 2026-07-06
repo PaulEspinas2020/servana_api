@@ -11,7 +11,6 @@ router.get("/workers/:uid", technicianController.getByUid);
 router.post("/workers/location", technicianController.updateLocation);
 router.get("/workers/location/:uid", technicianController.getLocation);
 router.get("/workers/:workerId/schedule", technicianController.workerSchedule);
-``
 router.get("/workers/:workerId/job-cards", technicianController.getJobCards);
 router.put("/admin/bookings/:bookingId/assign", technicianController.assignWorker);
 router.patch("/admin/workers/:uid/archive", technicianController.setArchiveStatus);
