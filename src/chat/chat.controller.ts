@@ -1,8 +1,5 @@
 import { Request, Response } from "express";
 import * as chatService from "./chat.service";
-import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
-
-const ALLOWED_CHAT_MIMES = ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"];
 
 /**
  * Pull the authenticated actor (uid + numeric role) off the request.
@@ -128,62 +125,6 @@ export const markRead = async (req: any, res: Response) => {
     const actor = await getActor(req);
     await chatService.markRead(actor, conversationId, Number(req.body.lastReadMessageId));
     return res.json({ success: true });
-  } catch (e: any) {
-    return handle(res, e);
-  }
-};
-
-/**
- * POST /api/chat/attachments/upload
- * Uploads a chat attachment to Firebase Storage.
- * Body: { file: dataUri, name: string }
- * Returns: { attachmentId, previewUrl, fileName, mimeType }
- */
-export const uploadAttachment = async (req: any, res: Response) => {
-  try {
-    const uid = req.user?.uid;
-    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
-    const { file, name } = req.body;
-    if (!file || !name) {
-      return res.status(400).json({ success: false, message: "file (data URI) and name are required" });
-    }
-    if (!file.startsWith("data:")) {
-      return res.status(422).json({ success: false, message: "file must be a data URI" });
-    }
-    const mimeType = file.slice(file.indexOf(":") + 1, file.indexOf(";"));
-    if (!ALLOWED_CHAT_MIMES.includes(mimeType)) {
-      return res.status(422).json({ success: false, message: "File type not allowed. Use JPG, PNG, WebP, GIF, or PDF." });
-    }
-    const sanitizedName = String(name).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
-    const storageKey = `${uid}_${Date.now()}`;
-    const previewUrl = await uploadFileToStorage("chat-attachments", storageKey, file);
-    return res.status(201).json({
-      success: true,
-      attachmentId: storageKey,
-      previewUrl,
-      fileName: sanitizedName,
-      mimeType,
-    });
-  } catch (e: any) {
-    return handle(res, e);
-  }
-};
-
-/**
- * POST /api/chat/conversations/:id/messages/:msgId/report
- * Body: { category: string, description?: string }
- */
-export const reportMessage = async (req: any, res: Response) => {
-  try {
-    const conversationId = Number(req.params.id);
-    const messageId = Number(req.params.msgId);
-    const { category, description } = req.body;
-    if (!category) {
-      return res.status(400).json({ success: false, message: "category is required" });
-    }
-    const actor = await getActor(req);
-    const result = await chatService.reportMessage(actor, conversationId, messageId, category, description ?? "");
-    return res.json({ success: true, ...result });
   } catch (e: any) {
     return handle(res, e);
   }

@@ -270,27 +270,6 @@ export const markRead = async (
 
 // ---- Small error helper (carries an HTTP status) ---------------------------
 
-// ---- Message reports -------------------------------------------------------
-
-export const reportMessage = async (
-  actor: ChatActor,
-  conversationId: number,
-  messageId: number,
-  category: string,
-  description: string,
-): Promise<{ reportId: string }> => {
-  const { access } = await resolveAccessForConversation(actor, conversationId);
-  if (!access.allowed) throw httpError(403, "Not a participant of this conversation");
-  const report = await repo.insertMessageReport({
-    reporterUid: actor.uid,
-    messageId,
-    conversationId,
-    category,
-    description,
-  });
-  return { reportId: String(report.id) };
-};
-
 export interface HttpError extends Error {
   status: number;
 }

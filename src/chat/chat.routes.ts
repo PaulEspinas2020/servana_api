@@ -24,10 +24,4 @@ router.delete("/chat/conversations/:id/messages/:msgId", chat.deleteMessage);
 router.post("/chat/conversations/:id/read", chat.markRead);
 router.post("/chat/conversations/:id/close", chat.closeConversation);
 
-// Moderation
-router.post("/chat/conversations/:id/messages/:msgId/report", chat.reportMessage);
-
-// Attachments
-router.post("/chat/attachments/upload", chat.uploadAttachment);
-
 export default router;

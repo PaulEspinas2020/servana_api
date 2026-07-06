@@ -21,9 +21,9 @@ export const approve = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
     const payment = await paymentService.approvePayment(bookingId);
-    res.json({ status: "success", data: toCamel(payment) });
+    res.json({ success: true, payment: toCamel(payment) });
   } catch (e: any) {
-    res.status(400).json({ status: "failed", message: e.message });
+    res.status(400).json({ success: false, message: e.message });
   }
 };
 
@@ -31,9 +31,9 @@ export const markCashPaid = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
     const payment = await paymentService.markCashPaid(bookingId);
-    res.json({ status: "success", data: toCamel(payment) });
+    res.json({ success: true, payment: toCamel(payment) });
   } catch (e: any) {
-    res.status(400).json({ status: "failed", message: e.message });
+    res.status(400).json({ success: false, message: e.message });
   }
 };
 

@@ -10,13 +10,7 @@ dotenv.config();
 
 const app = express();
 const router = express.Router();
-const whitelist = [
-  "http://localhost:4200",
-  "https://provider.servana.com.ph",
-  "https://admin.servana.com.ph",
-  "https://www.servana.com.ph",
-  "https://servana.com.ph",
-];
+const whitelist = ["http://localhost:4200"];
 const corsOptionsDelegate = function (req: any, callback: any) {
     var corsOptions;
     if (whitelist.indexOf(req.header("Origin")) !== -1) {
@@ -30,7 +24,7 @@ const corsOptionsDelegate = function (req: any, callback: any) {
 const port = process.env.PORT;
 app.disable("x-powered-by");
 app.set("trust proxy", true);
-app.use(cors(corsOptionsDelegate))
+app.use(cors())
 app.use(cookieParser());
 app.use(
   "/api/paymongo/webhook",
@@ -109,10 +103,8 @@ app.use("/api", cors(corsOptionsDelegate), disbursementRoutes);
 
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
-import { initProviderSocket } from "./provider.gateway";
 const httpServer = http.createServer(app);
-const io = initChatSocket(httpServer);
-initProviderSocket(io);
+initChatSocket(httpServer);
 
 import { startScheduler } from "./scheduler";
 startScheduler();

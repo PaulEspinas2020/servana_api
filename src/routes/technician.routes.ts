@@ -1,11 +1,9 @@
 import { Router } from "express";
 import * as technicianController from "../controllers/technicianController";
-import verifyAuth from "../middleware/verifyAuth";
-import verifyRoles from "../middleware/verifyRoles";
 
 const router = Router();
 
-// Public mobile routes — do NOT add auth (mobile app sends workerUid/workerCode as query params, not JWT)
+
 router.get("/workers/role/:role", technicianController.listByRole);
 router.get("/workers/all", technicianController.list);
 router.get("/workers/available", technicianController.getAvailableWorkers);
@@ -13,15 +11,15 @@ router.get("/workers/:uid", technicianController.getByUid);
 router.post("/workers/location", technicianController.updateLocation);
 router.get("/workers/location/:uid", technicianController.getLocation);
 router.get("/workers/:workerId/schedule", technicianController.workerSchedule);
+``
 router.get("/workers/:workerId/job-cards", technicianController.getJobCards);
+router.put("/admin/bookings/:bookingId/assign", technicianController.assignWorker);
+router.patch("/admin/workers/:uid/archive", technicianController.setArchiveStatus);
 router.put("/workers/bookings/:bookingId/decline", technicianController.declineJob);
 router.put("/workers/bookings/:bookingId/accept", technicianController.acceptJob);
 router.put("/workers/bookings/:bookingId/start", technicianController.startJob);
 router.put("/workers/bookings/:bookingId/complete", technicianController.completeJob);
-
-// Admin-only routes — require authenticated admin (role 1)
-router.put("/admin/bookings/:bookingId/assign", verifyAuth, verifyRoles([1]), technicianController.assignWorker);
-router.patch("/admin/workers/:uid/archive", verifyAuth, verifyRoles([1]), technicianController.setArchiveStatus);
+// router.get("/bookings/:bookingId/job-card", technicianController.getActiveJobCards);
 
 // Employee ↔ Services
 router.post("/workers/:uid/services", technicianController.assignEmployeeServices);

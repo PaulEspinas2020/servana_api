@@ -384,7 +384,7 @@ export const upsertBankAccount = async (req: Request, res: Response) => {
 
     if (!bankCode || !accountNumber || !accountName) {
       return res.status(400).json({
-        status: "failed",
+        success: false,
         message: "bankCode, accountNumber, and accountName are required",
       });
     }
@@ -395,9 +395,9 @@ export const upsertBankAccount = async (req: Request, res: Response) => {
       accountName,
     });
 
-    return res.json({ status: "success", data: toCamel(account) });
+    return res.json({ success: true, bankAccount: toCamel(account) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -407,12 +407,12 @@ export const getBankAccount = async (req: Request, res: Response) => {
     const account = await technician.getWorkerBankAccount(uid);
 
     if (!account) {
-      return res.status(404).json({ status: "failed", message: "No bank account registered" });
+      return res.status(404).json({ success: false, message: "No bank account registered" });
     }
 
-    return res.json({ status: "success", data: toCamel(account) });
+    return res.json({ success: true, bankAccount: toCamel(account) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -420,9 +420,9 @@ export const deleteBankAccount = async (req: Request, res: Response) => {
   try {
     const { uid } = req.params as { uid: string };
     const account = await technician.deleteWorkerBankAccount(uid);
-    return res.json({ status: "success", data: toCamel(account) });
+    return res.json({ success: true, deleted: toCamel(account) });
   } catch (error: any) {
-    return res.status(400).json({ status: "failed", message: error.message });
+    return res.status(400).json({ success: false, message: error.message });
   }
 };
 

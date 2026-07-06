@@ -7,7 +7,6 @@ import { additionalService } from "./additional.service";
 import { generateOTP } from "../helpers/otp";
 import { send } from "../helpers/mailer";
 import { getUserInfoByBookingId } from "./user.service";
-import { createNotification } from "./notification.service";
 
 const dbSchema = db.schema;
 
@@ -87,24 +86,6 @@ export const approvePayment = async (bookingId: number) => {
   // try { await createDisbursement(bookingId); }
   // catch (e) { console.error("createDisbursement failed (approvePayment):", e); }
 
-  const bRes = await dbQuery.query(
-    `SELECT worker_uid, final_price FROM ${dbSchema}.bookings WHERE id = $1`,
-    [bookingId]
-  );
-  const worker = bRes.rows[0];
-  if (worker?.worker_uid) {
-    const code = `SVN-${String(bookingId).padStart(6, "0")}`;
-    createNotification(worker.worker_uid, {
-      type: "earnings_payout",
-      severity: "info",
-      title: "Payment Received",
-      safeBody: `Payment for booking ${code} has been confirmed. Your earnings will be reflected in your ledger.`,
-      safeContextLabel: code,
-      route: { page: "earnings", bookingId: String(bookingId) },
-      canOpenDetail: true,
-    }).catch((e) => console.error("createNotification (approvePayment):", e));
-  }
-
   return r.rows[0];
 };
 
@@ -123,28 +104,10 @@ export const markCashPaid = async (bookingId: number) => {
   // try { await createDisbursement(bookingId); }
   // catch (e) { console.error("createDisbursement failed (markCashPaid):", e); }
 
-  const bRes = await dbQuery.query(
-    `SELECT worker_uid, final_price FROM ${dbSchema}.bookings WHERE id = $1`,
-    [bookingId]
-  );
-  const worker = bRes.rows[0];
-  if (worker?.worker_uid) {
-    const code = `SVN-${String(bookingId).padStart(6, "0")}`;
-    createNotification(worker.worker_uid, {
-      type: "earnings_payout",
-      severity: "info",
-      title: "Payment Received",
-      safeBody: `Cash payment for booking ${code} has been recorded. Your earnings will be reflected in your ledger.`,
-      safeContextLabel: code,
-      route: { page: "earnings", bookingId: String(bookingId) },
-      canOpenDetail: true,
-    }).catch((e) => console.error("createNotification (markCashPaid):", e));
-  }
-
   return r.rows[0];
 };
 
-const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SECRET_KEY || process.env.PAYMONGO_SK_DEV || "";
+const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SK_DEV || "";
 const PAYMONGO_BASE_URL = "https://api.paymongo.com/v1";
 
 const getAuthHeader = () => {
