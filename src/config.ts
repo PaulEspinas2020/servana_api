@@ -30,6 +30,11 @@ export const firebaseConfig = {
 export const mailerKey = process.env.MAILER_KEY
 export const mailerSender = process.env.MAILER_SENDER
 
+// Twilio
+export const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID
+export const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN
+export const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER
+
 // MongoDB
 export const mongoConfig = {
     mongoHost: process.env.MONGO_HOST, 

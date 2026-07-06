@@ -10,7 +10,12 @@ dotenv.config();
 
 const app = express();
 const router = express.Router();
-const whitelist = ["http://localhost:4200"];
+const whitelist = [
+  "http://localhost:4200",
+  "https://provider.servana.com.ph",
+  "https://www.servana.com.ph",
+  "https://servana.com.ph",
+];
 const corsOptionsDelegate = function (req: any, callback: any) {
     var corsOptions;
     if (whitelist.indexOf(req.header("Origin")) !== -1) {
@@ -97,6 +102,9 @@ app.use("/api", cors(corsOptionsDelegate), additionalRoutes);
 
 import chatRoutes from "./chat/chat.routes";
 app.use("/api", cors(corsOptionsDelegate), chatRoutes);
+
+import providerRoutes from "./routes/provider.routes";
+app.use("/api", cors(corsOptionsDelegate), providerRoutes);
 
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
