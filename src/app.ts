@@ -107,6 +107,9 @@ app.use("/api", cors(corsOptionsDelegate), chatRoutes);
 import disbursementRoutes from "./routes/disbursement.routes";
 app.use("/api", cors(corsOptionsDelegate), disbursementRoutes);
 
+import providerRoutes from "./routes/provider.routes";
+app.use("/api", cors(corsOptionsDelegate), providerRoutes);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
