@@ -60,6 +60,60 @@ const firebaseAuthLogin = async (idToken: string) => {
     },
   };
 };
+/**
+ * Registers a provider who just completed Firebase phone auth.
+ * Sets the Firebase displayName so future firebase-login calls preserve the name,
+ * then upserts the DB record with the explicit first/last name from the signup form.
+ * Returns the same response shape as firebaseAuthLogin.
+ *
+ * Only used by /auth/provider/register — existing mobile and web login routes are unchanged.
+ */
+const firebaseProviderRegister = async (
+  idToken: string,
+  firstName: string,
+  lastName: string,
+) => {
+  if (!idToken) { throw new Error("Missing Firebase ID token"); }
+  if (!firstName || !lastName) { throw new Error("firstName and lastName are required"); }
+
+  const decoded = await defaultAuthAdmin.verifyIdToken(idToken);
+  const firebaseUser = await defaultAuthAdmin.getUser(decoded.uid);
+
+  // Persist the name on the Firebase user record so firebase-login picks it up on next sign-in.
+  const displayName = `${firstName.trim()} ${lastName.trim()}`.trim();
+  if (displayName) {
+    await defaultAuthAdmin.updateUser(firebaseUser.uid, { displayName }).catch(() => {
+      // Non-fatal — DB name is the source of truth for the web portal.
+    });
+  }
+
+  const dbUser = await userService.upsertFirebaseUser({
+    uid: firebaseUser.uid,
+    email: firebaseUser.email || null,
+    phoneNumber: firebaseUser.phoneNumber || null,
+    firstName,
+    lastName,
+    role: "2",
+  });
+
+  if (dbUser.isArchived) {
+    throw new Error("Your account has been disabled. Please contact Servana support.");
+  }
+
+  return {
+    data: {
+      success: true,
+      uid: firebaseUser.uid,
+      role: dbUser.role,
+      firstName: dbUser.firstName || "",
+      lastName: dbUser.lastName || "",
+      email: dbUser.email || null,
+      phoneNumber: firebaseUser.phoneNumber || null,
+      message: "Registration successful",
+    },
+  };
+};
+
 const checkUserIfExistInFirebase = async (email: string) => {
     return defaultAuthAdmin
         .getUserByEmail(email)
@@ -182,6 +236,7 @@ export {
     sendEmailVerificationFirebase,
     signInUserAndGetTokeninFirebase,
     firebaseAuthLogin,
+    firebaseProviderRegister,
     getFirebaseUserByEmail,
     updateFirebaseEmailVerified,
     deleteFirebaseUser,

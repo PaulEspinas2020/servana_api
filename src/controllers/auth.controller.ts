@@ -98,6 +98,33 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
   }
 };
 
+export const providerRegisterController = async (req: Request, res: Response) => {
+  try {
+    const { idToken, firstName, lastName } = req.body;
+
+    if (!idToken) {
+      return res.status(400).json({ status: "failed", message: "idToken is required" });
+    }
+    if (!firstName || !lastName) {
+      return res.status(400).json({ status: "failed", message: "firstName and lastName are required" });
+    }
+
+    const result = await firebaseFunction.firebaseProviderRegister(
+      idToken,
+      String(firstName).trim(),
+      String(lastName).trim(),
+    );
+
+    return res.status(200).json(result);
+  } catch (error: any) {
+    const isDisabled = error?.message?.includes("disabled");
+    return res.status(isDisabled ? 403 : 400).json({
+      status: "failed",
+      message: error?.message || "Registration failed",
+    });
+  }
+};
+
 export const addEmployeesController = async (req: Request, res: Response) => {
     try {
         const { employees } = req.body;
