@@ -329,7 +329,7 @@ const formatUserCredentials = (raw: any): UserCredentials => {
         role: raw.role,
         createdDate: raw.created_date,
         isArchived: raw.is_archive,
-        phoneNumber: parseInt(raw.phone_number),
+        phoneNumber: raw.phone_number ?? null,
         fcmToken: raw.fcm_token,
     };
 };

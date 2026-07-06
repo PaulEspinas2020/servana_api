@@ -17,7 +17,7 @@ declare global {
         role: number;
         isArchived: boolean;
         createdDate: Date;
-        phoneNumber?: number;
+        phoneNumber?: string | null;
         fcmToken?: string;
     }
 
