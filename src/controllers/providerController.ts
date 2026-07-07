@@ -1234,7 +1234,7 @@ function ensureProfileTable(): Promise<void> {
           photo_url TEXT
         )
       `);
-      // Add updated_at if the table pre-existed without it (e.g. created during registration)
+      // Add updated_at if the table pre-existed without it
       await dbQuery.query(`
         ALTER TABLE ${dbSchema}.user_profile
         ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -1244,7 +1244,11 @@ function ensureProfileTable(): Promise<void> {
         ALTER TABLE ${dbSchema}.user_profile
         ADD COLUMN IF NOT EXISTS service_preference VARCHAR(100)
       `);
-    })();
+    })().catch(err => {
+      // Reset so the next request retries instead of using the cached rejection.
+      _profileTableReady = null;
+      throw err;
+    });
   }
   return _profileTableReady;
 }
@@ -1277,6 +1281,7 @@ export const uploadWorkerProfilePhoto = async (req: Request, res: Response) => {
     );
     return res.status(200).json({ status: "success", data: { safeUrl, uploadedAt } });
   } catch (error: any) {
+    console.error("[uploadWorkerProfilePhoto] 500:", error?.message ?? error);
     return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
   }
 };

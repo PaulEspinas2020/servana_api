@@ -11,13 +11,16 @@ export const uploadFileToStorage = (folder: string, fileName: string, dataUri: s
         const bucket = firebaseAdmin.storage().bucket(firebaseConfig.storageBucket);
         const file = bucket.file(`${folder}/${fileName}.${extension}`);
 
-        file.save(buffer, { metadata: { contentType: mimeType }, public: true }, (error) => {
+        // Do NOT pass { public: true } — buckets with "Uniform bucket-level access" reject
+        // per-object ACL operations and the save call fails with a 403.
+        // Public read access is controlled at the bucket level via IAM (allUsers → Storage Object Viewer).
+        file.save(buffer, { metadata: { contentType: mimeType } }, (error) => {
             if (error) {
+                console.error(`[Storage] upload failed folder=${folder} file=${fileName}:`, error.message ?? error);
                 reject(error);
                 return;
             }
-            // Use the public URL directly — no IAM signing permission needed.
-            // Files saved with { public: true } are accessible via the GCS public URL.
+            // Public URL accessible when the bucket IAM grants allUsers Storage Object Viewer.
             const publicUrl = `https://storage.googleapis.com/${bucket.name}/${file.name}`;
             resolve(publicUrl);
         });
