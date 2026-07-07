@@ -1294,6 +1294,47 @@ export const requestProviderPayoutUpdate = async (_req: Request, res: Response) 
   });
 };
 
+export const registerProviderPayout = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+
+    const { type, identifier } = req.body;
+    const VALID_TYPES = ['gcash', 'maya', 'bdo', 'bpi', 'unionbank', 'landbank', 'other'];
+    if (!type || !VALID_TYPES.includes(type)) {
+      return res.status(400).json({ status: "failed", message: "Invalid payout type" });
+    }
+    if (!identifier || String(identifier).trim().length < 4) {
+      return res.status(400).json({ status: "failed", message: "Account number must be at least 4 characters" });
+    }
+
+    const trimmed = String(identifier).trim();
+    const maskedIdentifier = '•••• ' + trimmed.slice(-4);
+
+    const col = (await mongoDb).collection("worker_payout_methods");
+    await col.updateOne(
+      { uid },
+      { $set: { uid, type, maskedIdentifier, status: 'pending', updatedAt: new Date() } },
+      { upsert: true }
+    );
+
+    return res.status(200).json({
+      status: "success",
+      data: {
+        hasPayoutMethod: true,
+        type,
+        typeLabel: PAYOUT_TYPE_LABELS[type] || type,
+        maskedIdentifier,
+        status: 'pending',
+        statusLabel: 'Pending review',
+        lastUpdated: new Date().toISOString(),
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
 // ─── Privacy / Account Actions (MongoDB — worker_account_requests) ────────────
 
 export const getProviderPrivacy = async (req: Request, res: Response) => {

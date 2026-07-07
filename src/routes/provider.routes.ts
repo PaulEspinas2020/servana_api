@@ -92,6 +92,7 @@ router.delete("/provider/security/sessions/:id", verifyAuth, provider.revokeProv
 // Payout settings (P1)
 router.get("/provider/payout/summary", verifyAuth, provider.getProviderPayoutSummary);
 router.post("/provider/payout/update-session", verifyAuth, provider.requestProviderPayoutUpdate);
+router.post("/provider/payout", verifyAuth, provider.registerProviderPayout);
 
 // Privacy / account actions (P1)
 router.get("/provider/privacy", verifyAuth, provider.getProviderPrivacy);

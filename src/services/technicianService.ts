@@ -1424,7 +1424,15 @@ export const getWorkerAvailability = async (uid: string) => {
     `SELECT * FROM ${dbSchema}.worker_availability WHERE worker_uid = $1`,
     [uid]
   );
-  return res.rows[0] ?? { worker_uid: uid, schedule: {}, timezone: "Asia/Manila" };
+  if (!res.rows[0]) {
+    return { worker_uid: uid, schedule: [], timezone: "Asia/Manila", updated_at: null };
+  }
+  const row = res.rows[0];
+  // Normalize: JSONB default '{}' is not iterable as an array
+  if (!Array.isArray(row.schedule)) {
+    row.schedule = [];
+  }
+  return row;
 };
 
 export const saveWorkerAvailability = async (
