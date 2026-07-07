@@ -14,14 +14,16 @@ const addUserAddress = async (userAddressReq: UserAddressReq, uid: string) => {
     const { userId, locationId, addressOne, addressTwo, zipCode, postTown, country, label, isPrimary, lat, lon } =
         userAddressReq;
 
+    // Use the authenticated uid from JWT, not body.userId, to prevent spoofing
+    const ownerUid = uid || userId;
     const addressId = idGenerator(6, "CAD");
     const now = dayjs().unix();
 
     try {
         const { rows } = await dbQuery.query(insertQuery, [
             addressId,
-            userId,
-            locationId,
+            ownerUid,
+            locationId ?? null,
             addressOne,
             addressTwo,
             zipCode,
@@ -30,13 +32,15 @@ const addUserAddress = async (userAddressReq: UserAddressReq, uid: string) => {
             uid,
             uid,
             label,
-            isPrimary,
+            isPrimary ?? false,
         ]);
 
         if (!rows || rows.length == 0) throw "Failed to insert address";
 
-        // Add to mongoDB
-        await addLocationInDB(locationId, addressId, lat, lon);
+        // Only sync to MongoDB when coordinates are available
+        if (locationId && lat != null && lon != null) {
+            await addLocationInDB(locationId, addressId, lat, lon);
+        }
 
         const dbResponse = await formattedAddress(rows[0]);
         return dbResponse;
@@ -47,7 +51,7 @@ const addUserAddress = async (userAddressReq: UserAddressReq, uid: string) => {
 
 const updateUserAddress = async (userAddressReq: UserAddressReq, uid: string, addressId: string) => {
     const updateQuery = `UPDATE ${dbSchema}.user_address
-        SET location_id = $1, address_one = $2, address_two = $3, zip_code = $4, post_town = $5, 
+        SET location_id = $1, address_one = $2, address_two = $3, zip_code = $4, post_town = $5,
             country = $6, updated_at = $7, updated_by = $8, label = $9, is_primary = $10
         WHERE address_id = $11 returning *`;
 
@@ -58,7 +62,7 @@ const updateUserAddress = async (userAddressReq: UserAddressReq, uid: string, ad
 
     try {
         const { rows } = await dbQuery.query(updateQuery, [
-            locationId,
+            locationId ?? null,
             addressOne,
             addressTwo,
             zipCode,
@@ -73,8 +77,10 @@ const updateUserAddress = async (userAddressReq: UserAddressReq, uid: string, ad
 
         if (!rows || rows.length == 0) throw "Failed to update address";
 
-        // update in mongoDB
-        await updateLocationInDB(locationId, addressId, lat, lon);
+        // Only sync to MongoDB when coordinates are available
+        if (locationId && lat != null && lon != null) {
+            await updateLocationInDB(locationId, addressId, lat, lon);
+        }
 
         const dbResponse = await formattedAddress(rows[0]);
         return dbResponse;
@@ -137,7 +143,7 @@ const getAllAddressesOfUser = async (userId: string, role: string) => {
     let searchQuery: string;
     let params: any[];
     console.log("with role", role);
-    if (role === '1') {
+    if (role === '1' || role === '0') {
         // Admin: fetch addresses of all users with role 3
         console.log("Admin fetching all addresses of users with role 3");
         searchQuery = `
@@ -146,9 +152,9 @@ const getAllAddressesOfUser = async (userId: string, role: string) => {
             WHERE u.role = '3';
         `;
         params = [];
-    } else if (role === '3') {
-        // Regular user: fetch only their own address
-        searchQuery = `SELECT * FROM ${dbSchema}.user_address WHERE uid = $1;`;
+    } else if (role === '2' || role === '3') {
+        // Provider (role 2) or client (role 3): fetch only their own addresses
+        searchQuery = `SELECT * FROM ${dbSchema}.user_address WHERE uid = $1 ORDER BY is_primary DESC, created_at ASC;`;
         params = [userId];
     } else {
         return [];
@@ -231,11 +237,18 @@ const getLatLonByLocationId = async (locationId: string) => {
 }
 
 const formattedAddress = async (raw: any) => {
-    const coordinates = await getLatLonByLocationId(raw.location_id);
+    let coordinates: any[] | null = null;
+    if (raw.location_id) {
+        try {
+            coordinates = await getLatLonByLocationId(raw.location_id);
+        } catch {
+            coordinates = null;
+        }
+    }
 
     return {
         addressId: raw.address_id,
-        userId: raw.user_id,
+        userId: raw.uid,
         locationId: raw.location_id,
         addressOne: raw.address_one,
         addressTwo: raw.address_two,
