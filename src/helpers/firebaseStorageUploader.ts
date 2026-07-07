@@ -16,9 +16,10 @@ export const uploadFileToStorage = (folder: string, fileName: string, dataUri: s
                 reject(error);
                 return;
             }
-            file.getSignedUrl({ action: "read", expires: "01-17-2027" })
-                .then((urls) => resolve(urls[0]))
-                .catch(reject);
+            // Use the public URL directly — no IAM signing permission needed.
+            // Files saved with { public: true } are accessible via the GCS public URL.
+            const publicUrl = `https://storage.googleapis.com/${bucket.name}/${file.name}`;
+            resolve(publicUrl);
         });
     });
 
