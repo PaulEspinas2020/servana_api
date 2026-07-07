@@ -313,6 +313,15 @@ export interface EmployeeInput {
     address?: EmployeeAddress;
 }
 
+export interface EmployeeUpdateInput {
+    firstName?: string;
+    lastName?: string;
+    password?: string;
+    photoFile?: string;
+    requirementFiles?: Array<{ data: string; name: string }>;
+    address?: EmployeeAddress;
+}
+
 const generateTempPassword = (): string => {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$";
     return Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
@@ -417,83 +426,6 @@ const addEmployees = async (employees: EmployeeInput[]) => {
     );
 };
 
-const forgotPassword = async (email: string, redirectUrl?: string) => {
-    if (!isValidEmail(email)) {
-        throw "Please enter a valid email address";
-    }
-
-    const firebaseUser = await firebaseFunction.checkUserIfExistInFirebase(email);
-    if (!firebaseUser) {
-        return { message: "If an account with that email exists, a password reset link has been sent." };
-    }
-
-    // When a redirectUrl is provided (e.g. from the provider app), the reset link
-    // routes the user directly back to that platform's reset-password page with the
-    // oobCode as a query param. Without it, Firebase's default hosted page is used —
-    // preserving existing behavior for the client app and admin portal.
-    const actionCodeSettings = redirectUrl
-        ? { url: redirectUrl, handleCodeInApp: true }
-        : undefined;
-
-    const resetLink = await firebaseFunction.generatePasswordResetLink(email, actionCodeSettings);
-
-    const dbUser = await userService.getUserByEmail(email);
-    const firstName = dbUser ? dbUser.firstName : "";
-
-    send(email, "forgot_password", {
-        reset_url: resetLink,
-        first_name: firstName,
-        email,
-    });
-
-    return { message: "If an account with that email exists, a password reset link has been sent." };
-};
-
-const resetPassword = async (payload: { oobCode: string; newPassword: string }) => {
-    const { oobCode, newPassword } = payload;
-
-    if (!oobCode || !newPassword) {
-        throw "Missing required parameters";
-    }
-
-    if (!validatePassword(newPassword)) {
-        throw "Password does not meet requirements";
-    }
-
-    // verifyPasswordResetCode confirms the oobCode is valid then consumeS it via confirmPasswordReset.
-    // Returns the email the code was issued for so we can sync the DB hash.
-    const email = await firebaseFunction.resetPasswordWithCode(oobCode, newPassword);
-
-    const firebaseUser = await firebaseFunction.getFirebaseUserByEmail(email);
-    if (firebaseUser) {
-        await dbQuery.query(
-            `UPDATE ${dbSchema}.user_credentials SET password = $1 WHERE uid = $2`,
-            [hashPassword(newPassword), firebaseUser.uid]
-        );
-    }
-
-    return { message: "Password reset successfully." };
-};
-
-interface EmployeeUpdateInput {
-    firstName?: string;
-    lastName?: string;
-    password?: string;
-    photoFile?: string;
-    requirementFiles?: Array<{ data: string; name: string }>;
-    address?: {
-        addressOne: string;
-        addressTwo?: string;
-        zipCode: string;
-        postTown: string;
-        country: string;
-        label?: string;
-        isPrimary?: boolean;
-        lat?: number;
-        lon?: number;
-    };
-}
-
 const updateEmployee = async (uid: string, updates: EmployeeUpdateInput) => {
     const { firstName, lastName, password, photoFile, requirementFiles, address } = updates;
 
@@ -566,8 +498,8 @@ const updateEmployee = async (uid: string, updates: EmployeeUpdateInput) => {
                     country: address.country,
                     label: address.label || primary.label || "Home",
                     isPrimary: true,
-                    lat: address.lat ?? 0,
-                    lon: address.lon ?? 0,
+                    lat: address.lat,
+                    lon: address.lon,
                 },
                 uid,
                 primary.addressId
@@ -584,8 +516,8 @@ const updateEmployee = async (uid: string, updates: EmployeeUpdateInput) => {
                     country: address.country,
                     label: address.label || "Home",
                     isPrimary: true,
-                    lat: address.lat ?? 0,
-                    lon: address.lon ?? 0,
+                    lat: address.lat,
+                    lon: address.lon,
                 },
                 uid
             ));
@@ -594,6 +526,58 @@ const updateEmployee = async (uid: string, updates: EmployeeUpdateInput) => {
 
     await Promise.all(tasks);
     return { uid, message: "Employee updated successfully." };
+};
+
+const forgotPassword = async (email: string) => {
+    if (!isValidEmail(email)) {
+        throw "Please enter a valid email address";
+    }
+
+    const firebaseUser = await firebaseFunction.checkUserIfExistInFirebase(email);
+    if (!firebaseUser) {
+        return { message: "If an account with that email exists, a password reset link has been sent." };
+    }
+
+    const resetLink = await firebaseFunction.generatePasswordResetLink(email);
+
+    const dbUser = await userService.getUserByEmail(email);
+    const firstName = dbUser?.firstName || "";
+
+    send(email, "forgot_password", {
+        reset_url: resetLink,
+        first_name: firstName,
+        email,
+    });
+
+    return { message: "If an account with that email exists, a password reset link has been sent." };
+};
+
+const resetPassword = async (payload: { email: string; newPassword: string }) => {
+    const { email, newPassword } = payload;
+
+    if (!email || !newPassword) {
+        throw "Missing required parameters";
+    }
+
+    if (!validatePassword(newPassword)) {
+        throw "Password does not meet requirements";
+    }
+
+    const firebaseUser = await firebaseFunction.getFirebaseUserByEmail(email);
+    if (!firebaseUser) {
+        throw "User not found";
+    }
+
+    await firebaseFunction.updateFirebasePassword(firebaseUser.uid, newPassword);
+
+    const updateQuery = `UPDATE ${dbSchema}.user_credentials SET password = $1 WHERE uid = $2 RETURNING *`;
+    const { rows } = await dbQuery.query(updateQuery, [hashPassword(newPassword), firebaseUser.uid]);
+
+    if (!rows.length) {
+        throw "User not found in database";
+    }
+
+    return { message: "Password reset successfully." };
 };
 
 export { registerUser, loginUserInDBAndFirebase, loggedInUser, getAndSendEmailVerificationLink, changeArchiveStatus,

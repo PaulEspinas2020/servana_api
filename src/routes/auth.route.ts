@@ -4,11 +4,8 @@ import * as authController from '../controllers/auth.controller';
 import verifyAuth from '../middleware/verifyAuth';
 import verifyRoles from '../middleware/verifyRoles';
 import * as provider from '../controllers/providerController';
-import * as phoneOtp from '../controllers/phoneOtpController';
 
 router.get("/auth/me", verifyAuth, provider.getMe);
-router.post("/auth/provider/request-otp", phoneOtp.requestOtp);
-router.post("/auth/provider/verify-otp", phoneOtp.verifyOtp);
 router.post("/auth/signup", authController.signup);
 router.post("/auth/verify-email-otp", authController.verifyEmailOtpController);
 router.post("/auth/resend-email-otp", authController.resendEmailOtpController);

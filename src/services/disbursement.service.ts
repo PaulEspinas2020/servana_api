@@ -191,6 +191,7 @@ export const retryFailedDisbursements = async () => {
   console.log(`[disbursement] Retrying ${res.rowCount} failed disbursement(s)…`);
 
   for (const row of res.rows) {
+    // Reset to PENDING so releaseDisbursement can proceed
     await dbQuery.query(
       `UPDATE ${dbSchema}.disbursements SET status = 'PENDING', payout_error = NULL, updated_at = NOW() WHERE id = $1`,
       [row.id]

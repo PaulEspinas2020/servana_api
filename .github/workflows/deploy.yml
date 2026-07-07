@@ -15,7 +15,7 @@ jobs:
         with:
           clean: true
 
-      - name: Copy .env from server
+      - name: Copy secrets
         run: |
           cp /home/github-runner/env/servana_api.env .env
           chmod 600 .env
@@ -36,7 +36,7 @@ jobs:
         run: |
           pm2 describe servana-prod >/dev/null 2>&1 \
             && pm2 restart servana-prod \
-            || pm2 start dist/app.js --name servana-prod
+            || pm2 start "$(pwd)/dist/app.js" --name servana-prod
           pm2 save
 
       - name: Reload NGINX

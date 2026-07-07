@@ -113,6 +113,7 @@ const runPaymentRetries = async () => {
 
     for (const row of res.rows) {
       try {
+        // Reset payment to PENDING then create a fresh checkout session
         await dbQuery.query(
           `UPDATE ${dbSchema}.payments SET status = 'PENDING', updated_at = NOW() WHERE id = $1`,
           [row.payment_id]
@@ -145,9 +146,16 @@ const runPaymentRetries = async () => {
 // ---------------------------------------------------------------------------
 
 export const startScheduler = () => {
+  // Every hour — release worker payouts due after 72 h
   cron.schedule("0 * * * *", runDisbursements);
+
+  // Every 6 hours — retry failed disbursements
   cron.schedule("0 */6 * * *", retryFailedDisbursements);
+
+  // Every 4 hours — remind customers with unconfirmed OTP
   cron.schedule("0 */4 * * *", runOtpReminders);
+
+  // Every 6 hours — retry failed PayMongo checkout sessions
   cron.schedule("0 */6 * * *", runPaymentRetries);
 
   console.log("[scheduler] All cron jobs started.");

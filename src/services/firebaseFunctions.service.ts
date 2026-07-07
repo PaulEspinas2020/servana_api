@@ -203,12 +203,9 @@ const deleteFirebaseUser = async (uid: string) => {
     return await defaultAuthAdmin.deleteUser(uid);
 };
 
-const generatePasswordResetLink = async (
-    email: string,
-    actionCodeSettings?: { url: string; handleCodeInApp: boolean }
-): Promise<string> => {
+const generatePasswordResetLink = async (email: string): Promise<string> => {
     try {
-        return await defaultAuthAdmin.generatePasswordResetLink(email, actionCodeSettings);
+        return await defaultAuthAdmin.generatePasswordResetLink(email);
     } catch (error) {
         throw error;
     }
