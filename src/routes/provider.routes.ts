@@ -4,8 +4,9 @@ import * as provider from "../controllers/providerController";
 
 const router = express.Router();
 
-// Provider profile (provider-portal specific — includes worker_code)
+// Provider profile (provider-portal specific — includes worker_code + service_preference)
 router.get("/provider/profile", verifyAuth, provider.getProviderProfile);
+router.post("/provider/service-preference", verifyAuth, provider.saveServicePreference);
 
 // Location / online status
 router.get("/provider/location/status", verifyAuth, provider.getLocationStatus);

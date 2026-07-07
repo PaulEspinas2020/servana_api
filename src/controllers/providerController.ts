@@ -761,10 +761,12 @@ export const getProviderProfile = async (req: Request, res: Response) => {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
 
+    await ensureProfileTable();
+
     const result = await dbQuery.query(
       `SELECT uc.uid, uc.email, uc.first_name, uc.last_name,
               uc.phone_number AS phone, uc.worker_code, uc.role, uc.is_email_verified,
-              up.photo_url
+              up.photo_url, up.service_preference
        FROM ${dbSchema}.user_credentials uc
        LEFT JOIN ${dbSchema}.user_profile up ON uc.uid = up.uid
        WHERE uc.uid = $1 LIMIT 1`,
@@ -788,8 +790,34 @@ export const getProviderProfile = async (req: Request, res: Response) => {
         role: r.role,
         is_email_verified: r.is_email_verified,
         photo_url: r.photo_url || null,
+        service_category: r.service_preference || null,
       },
     });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const saveServicePreference = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+
+    const { category } = req.body;
+    if (!category || typeof category !== 'string' || !category.trim()) {
+      return res.status(422).json({ status: "failed", message: "category is required" });
+    }
+
+    await ensureProfileTable();
+    const safeCategory = category.trim().slice(0, 100);
+    await dbQuery.query(
+      `INSERT INTO ${dbSchema}.user_profile (uid, service_preference)
+       VALUES ($1, $2)
+       ON CONFLICT (uid) DO UPDATE SET service_preference = EXCLUDED.service_preference`,
+      [uid, safeCategory]
+    );
+
+    return res.status(200).json({ status: "success", data: { service_category: safeCategory } });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
   }
@@ -1210,6 +1238,11 @@ function ensureProfileTable(): Promise<void> {
       await dbQuery.query(`
         ALTER TABLE ${dbSchema}.user_profile
         ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()
+      `);
+      // Add service_preference for popup category selection persistence
+      await dbQuery.query(`
+        ALTER TABLE ${dbSchema}.user_profile
+        ADD COLUMN IF NOT EXISTS service_preference VARCHAR(100)
       `);
     })();
   }
