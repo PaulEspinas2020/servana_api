@@ -236,19 +236,30 @@ export const getWorkerByUid = async (uid: string) => {
   };
 };
 
+let _reqTypeColReady: Promise<void> | null = null;
+const ensureRequirementTypeColumn = (): Promise<void> => {
+  if (!_reqTypeColReady) {
+    _reqTypeColReady = dbQuery.query(
+      `ALTER TABLE ${dbSchema}.worker_requirements ADD COLUMN IF NOT EXISTS requirement_type VARCHAR(100)`
+    ).then(() => undefined);
+  }
+  return _reqTypeColReady;
+};
+
 export const addWorkerRequirements = async (
   workerUid: string,
-  files: Array<{ fileUrl: string; fileName: string }>
+  files: Array<{ fileUrl: string; fileName: string; requirementType?: string }>
 ) => {
+  await ensureRequirementTypeColumn();
   const inserted: any[] = [];
-  for (const { fileUrl, fileName } of files) {
+  for (const { fileUrl, fileName, requirementType } of files) {
     const res = await dbQuery.query(
       `
-      INSERT INTO ${dbSchema}.worker_requirements (worker_uid, file_url, file_name)
-      VALUES ($1, $2, $3)
-      RETURNING id, file_url, file_name, uploaded_at
+      INSERT INTO ${dbSchema}.worker_requirements (worker_uid, file_url, file_name, requirement_type)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id, file_url, file_name, uploaded_at, requirement_type
       `,
-      [workerUid, fileUrl, fileName]
+      [workerUid, fileUrl, fileName, requirementType ?? null]
     );
     const row = res.rows[0];
     inserted.push({
@@ -256,15 +267,17 @@ export const addWorkerRequirements = async (
       fileUrl: row.file_url,
       fileName: row.file_name,
       uploadedAt: row.uploaded_at,
+      requirementType: row.requirement_type,
     });
   }
   return inserted;
 };
 
 export const getWorkerRequirements = async (workerUid: string) => {
+  await ensureRequirementTypeColumn();
   const res = await dbQuery.query(
     `
-    SELECT id, file_url, file_name, uploaded_at
+    SELECT id, file_url, file_name, uploaded_at, requirement_type
     FROM ${dbSchema}.worker_requirements
     WHERE worker_uid = $1
     ORDER BY uploaded_at ASC
@@ -276,6 +289,7 @@ export const getWorkerRequirements = async (workerUid: string) => {
     fileUrl: f.file_url,
     fileName: f.file_name,
     uploadedAt: f.uploaded_at,
+    requirementType: f.requirement_type ?? null,
   }));
 };
 

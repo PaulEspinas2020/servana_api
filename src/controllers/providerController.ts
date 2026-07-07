@@ -1199,13 +1199,19 @@ export const saveWorkerServiceArea = async (req: Request, res: Response) => {
 let _profileTableReady: Promise<void> | null = null;
 function ensureProfileTable(): Promise<void> {
   if (!_profileTableReady) {
-    _profileTableReady = dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${dbSchema}.user_profile (
-        uid        VARCHAR(128) PRIMARY KEY,
-        photo_url  TEXT,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `).then(() => undefined);
+    _profileTableReady = (async () => {
+      await dbQuery.query(`
+        CREATE TABLE IF NOT EXISTS ${dbSchema}.user_profile (
+          uid       VARCHAR(128) PRIMARY KEY,
+          photo_url TEXT
+        )
+      `);
+      // Add updated_at if the table pre-existed without it (e.g. created during registration)
+      await dbQuery.query(`
+        ALTER TABLE ${dbSchema}.user_profile
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()
+      `);
+    })();
   }
   return _profileTableReady;
 }

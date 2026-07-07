@@ -610,7 +610,7 @@ export const setArchiveStatus = async (req: Request, res: Response) => {
 export const uploadRequirements = async (req: Request, res: Response) => {
   try {
     const { uid } = req.params as { uid: string };
-    const files: Array<{ data: string; name: string }> = req.body.files;
+    const files: Array<{ data: string; name: string; requirementType?: string }> = req.body.files;
 
     if (!uid) {
       return res.status(400).json({ success: false, message: "uid is required" });
@@ -625,7 +625,7 @@ export const uploadRequirements = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: "Worker not found" });
     }
 
-    const uploaded: Array<{ fileUrl: string; fileName: string }> = [];
+    const uploaded: Array<{ fileUrl: string; fileName: string; requirementType?: string }> = [];
     for (const file of files) {
       if (!file.data || !file.name) {
         return res.status(400).json({ success: false, message: "Each file must have data and name" });
@@ -635,7 +635,7 @@ export const uploadRequirements = async (req: Request, res: Response) => {
         `${uid}_${Date.now()}`,
         file.data
       );
-      uploaded.push({ fileUrl, fileName: file.name });
+      uploaded.push({ fileUrl, fileName: file.name, requirementType: file.requirementType });
     }
 
     const requirements = await technician.addWorkerRequirements(uid, uploaded);
@@ -777,7 +777,7 @@ export const saveAvailability = async (req: Request, res: Response) => {
     const { uid } = req.params as { uid: string };
     if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
     const result = await technician.saveWorkerAvailability(uid, req.body);
-    return res.json({ success: true, ...result });
+    return res.json({ ...result, success: true });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to save availability" });
   }
@@ -837,7 +837,7 @@ export const saveServiceArea = async (req: Request, res: Response) => {
     const { uid } = req.params as { uid: string };
     if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
     const result = await technician.saveWorkerServiceArea(uid, req.body);
-    return res.json({ success: true, ...result });
+    return res.json({ ...result, success: true });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to save service area" });
   }
@@ -900,7 +900,7 @@ export const saveOnboardingStep = async (req: Request, res: Response) => {
     const { stepKey, ...data } = req.body;
     if (!stepKey) return res.status(400).json({ success: false, message: "stepKey is required" });
     const result = await technician.saveWorkerOnboardingStep(uid, stepKey, data);
-    return res.json({ success: true, ...result });
+    return res.json({ ...result, success: true });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to save onboarding step" });
   }
@@ -963,7 +963,7 @@ export const saveNotificationPreferences = async (req: Request, res: Response) =
     const { uid } = req.params as { uid: string };
     if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
     const result = await technician.saveWorkerNotificationPrefs(uid, req.body);
-    return res.json({ success: true, ...result });
+    return res.json({ ...result, success: true });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to save notification preferences" });
   }
