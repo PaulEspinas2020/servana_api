@@ -284,6 +284,9 @@ const updateUserProfile = async (profileUpdateReq: ProfileUpdateReq) => {
             DO UPDATE SET birthdate=$1, gender=$2, photo_url=$3 returning *`;
 
     const { birthdate, photoUrl, photoFile, gender, id, phoneNumber } = profileUpdateReq;
+    // first_name / last_name come from the provider portal PUT /user/updateprofile body
+    const firstName: string | undefined = (profileUpdateReq as any).first_name;
+    const lastName: string | undefined = (profileUpdateReq as any).last_name;
 
     try {
         if (photoFile && photoFile != "") {
@@ -295,6 +298,17 @@ const updateUserProfile = async (profileUpdateReq: ProfileUpdateReq) => {
         const { rows } = await dbQuery.query(upsertQuery, [birthdate, gender, rawUrl, id]);
 
         await updateUserPhoneNumber(phoneNumber, id);
+
+        // Update name fields in user_credentials when provided
+        if (id && (firstName || lastName)) {
+            await dbQuery.query(
+                `UPDATE ${dbSchema}.user_credentials
+                 SET first_name = COALESCE(NULLIF($1, ''), first_name),
+                     last_name  = COALESCE(NULLIF($2, ''), last_name)
+                 WHERE uid = $3`,
+                [firstName ?? '', lastName ?? '', id],
+            );
+        }
 
         if (!rows && rows.length == 0) throw Error("User profile update failed");
 
