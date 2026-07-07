@@ -719,3 +719,252 @@ export const getEarningsHistory = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// ---------------------------------------------------------------------------
+// Online Status
+// ---------------------------------------------------------------------------
+
+export const getOnlineStatus = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const data = await technician.getWorkerOnlineStatus(uid);
+    return res.json({ success: true, ...data });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to get online status" });
+  }
+};
+
+export const goOnline = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const data = await technician.setWorkerOnlineStatus(uid, true);
+    return res.json({ success: true, ...data });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to go online" });
+  }
+};
+
+export const goOffline = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const data = await technician.setWorkerOnlineStatus(uid, false);
+    return res.json({ success: true, ...data });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to go offline" });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Availability & Time-Off
+// ---------------------------------------------------------------------------
+
+export const getAvailability = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const data = await technician.getWorkerAvailability(uid);
+    return res.json({ success: true, data: toCamel(data) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to get availability" });
+  }
+};
+
+export const saveAvailability = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const result = await technician.saveWorkerAvailability(uid, req.body);
+    return res.json({ success: true, ...result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to save availability" });
+  }
+};
+
+export const getTimeOff = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const rows = await technician.getWorkerTimeOff(uid);
+    return res.json({ success: true, data: rows.map(toCamel) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to get time-off" });
+  }
+};
+
+export const createTimeOff = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const row = await technician.createWorkerTimeOff(uid, req.body);
+    return res.json({ success: true, data: toCamel(row) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to create time-off" });
+  }
+};
+
+export const deleteTimeOff = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    const { id } = req.params as { id: string };
+    if (!uid || !id) return res.status(400).json({ success: false, message: "uid and id are required" });
+    await technician.deleteWorkerTimeOff(uid, id);
+    return res.json({ success: true });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to delete time-off" });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Service Area
+// ---------------------------------------------------------------------------
+
+export const getServiceArea = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const data = await technician.getWorkerServiceArea(uid);
+    return res.json({ success: true, data: toCamel(data) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to get service area" });
+  }
+};
+
+export const saveServiceArea = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const result = await technician.saveWorkerServiceArea(uid, req.body);
+    return res.json({ success: true, ...result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to save service area" });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Profile Photo
+// ---------------------------------------------------------------------------
+
+export const uploadProfilePhoto = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const { data: dataUri, name } = req.body as { data: string; name: string };
+    if (!dataUri) return res.status(400).json({ success: false, message: "data is required" });
+    const match = dataUri.match(/^data:(image\/(jpeg|png|webp));base64,/);
+    if (!match) return res.status(400).json({ success: false, message: "Invalid image format (jpeg/png/webp only)" });
+    const photoUrl = await uploadFileToStorage(dataUri, name || `profile_${uid}.jpg`, "profile-photos");
+    const result = await technician.updateWorkerPhotoUrl(uid, photoUrl);
+    return res.json({ success: true, ...result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to upload photo" });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
+
+export const getDashboard = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const data = await technician.getWorkerDashboard(uid);
+    return res.json({ success: true, data });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to get dashboard" });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Onboarding
+// ---------------------------------------------------------------------------
+
+export const getOnboarding = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const data = await technician.getWorkerOnboarding(uid);
+    return res.json({ success: true, data: toCamel(data) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to get onboarding" });
+  }
+};
+
+export const saveOnboardingStep = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const { stepKey, ...data } = req.body;
+    if (!stepKey) return res.status(400).json({ success: false, message: "stepKey is required" });
+    const result = await technician.saveWorkerOnboardingStep(uid, stepKey, data);
+    return res.json({ success: true, ...result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to save onboarding step" });
+  }
+};
+
+export const submitOnboarding = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const result = await technician.submitWorkerOnboarding(uid, req.body);
+    return res.json({ success: true, ...result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to submit onboarding" });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Review Status
+// ---------------------------------------------------------------------------
+
+export const getReviewStatus = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const data = await technician.getWorkerReviewStatus(uid);
+    return res.json({ success: true, data });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to get review status" });
+  }
+};
+
+export const submitForReview = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const result = await technician.submitWorkerForReview(uid);
+    return res.json({ success: true, ...result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to submit for review" });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Notification Preferences
+// ---------------------------------------------------------------------------
+
+export const getNotificationPreferences = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const data = await technician.getWorkerNotificationPrefs(uid);
+    return res.json({ success: true, data: toCamel(data) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to get notification preferences" });
+  }
+};
+
+export const saveNotificationPreferences = async (req: Request, res: Response) => {
+  try {
+    const { uid } = req.params as { uid: string };
+    if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
+    const result = await technician.saveWorkerNotificationPrefs(uid, req.body);
+    return res.json({ success: true, ...result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to save notification preferences" });
+  }
+};

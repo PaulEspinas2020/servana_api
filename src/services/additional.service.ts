@@ -161,6 +161,36 @@ class AdditionalService {
     );
   }
 
+  async workerWithdraw(id: number) {
+    const check = await dbQuery.query(
+      `SELECT status FROM ${dbSchema}.booking_additional_requests WHERE id = $1`,
+      [id]
+    );
+    const current = check.rows[0]?.status;
+    if (!current || !['PENDING_ADMIN_APPROVAL', 'WAITING_WORKER_APPROVAL'].includes(current)) {
+      throw new Error(`Cannot withdraw from status: ${current}`);
+    }
+    await dbQuery.query(
+      `UPDATE ${dbSchema}.booking_additional_requests SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1`,
+      [id]
+    );
+  }
+
+  async workerConfirmProceed(id: number) {
+    const check = await dbQuery.query(
+      `SELECT status FROM ${dbSchema}.booking_additional_requests WHERE id = $1`,
+      [id]
+    );
+    const current = check.rows[0]?.status;
+    if (current !== 'ACCEPTED') {
+      throw new Error(`Cannot confirm proceed from status: ${current}`);
+    }
+    await dbQuery.query(
+      `UPDATE ${dbSchema}.booking_additional_requests SET status = 'IN_PROGRESS', updated_at = NOW() WHERE id = $1`,
+      [id]
+    );
+  }
+
   async getByBooking(bookingId: number) {
     const res = await dbQuery.query(
       `SELECT * FROM ${dbSchema}.booking_additional_requests
