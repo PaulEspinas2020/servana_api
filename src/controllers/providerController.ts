@@ -7,6 +7,7 @@ import mongoDb from "../db/mongodbQuery";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import * as notificationService from "../services/notification.service";
 import { updateFirebasePassword, revokeTokenInFirebase } from "../services/firebaseFunctions.service";
+import * as serviceApplicationService from "../services/serviceApplicationService";
 
 const dbSchema = db.schema;
 
@@ -1587,5 +1588,75 @@ export const recordSafetyCheckIn = async (req: Request, res: Response) => {
     return res.status(201).json({ status: "success", data: { success: true, stage, checkedInAt } });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+
+// ─── Service Applications ─────────────────────────────────────────────────────
+
+const toApplicationDto = (app: any) => ({
+  id: app.id,
+  serviceId: Number(app.service_id),
+  status: app.status,
+  submittedAt: app.submitted_at,
+  updatedAt: app.updated_at,
+  cancelledAt: app.cancelled_at ?? null,
+  approvedAt: app.approved_at ?? null,
+  reviewReason: app.review_reason ?? null,
+  version: Number(app.version),
+});
+
+export const getServiceApplications = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const applications = await serviceApplicationService.getApplicationsByWorker(uid);
+    return res.json({ success: true, applications: applications.map(toApplicationDto) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to fetch applications" });
+  }
+};
+
+export const submitServiceApplication = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const serviceId = Number(req.body?.serviceId);
+    if (!Number.isInteger(serviceId) || serviceId <= 0) {
+      return res.status(400).json({ success: false, message: "serviceId (positive integer) is required" });
+    }
+
+    const app = await serviceApplicationService.submitApplication(uid, serviceId);
+    return res.status(201).json({ success: true, application: toApplicationDto(app) });
+  } catch (error: any) {
+    const status = error.statusCode ?? 500;
+    return res.status(status).json({
+      success: false,
+      code: error.code ?? "INTERNAL_ERROR",
+      message: error.message || "Failed to submit application",
+      ...(error.application ? { application: toApplicationDto(error.application) } : {}),
+    });
+  }
+};
+
+export const cancelServiceApplication = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const { applicationId } = req.params as { applicationId: string };
+    if (!applicationId) return res.status(400).json({ success: false, message: "applicationId is required" });
+
+    const app = await serviceApplicationService.cancelApplication(applicationId, uid);
+    return res.json({ success: true, application: toApplicationDto(app) });
+  } catch (error: any) {
+    const status = error.statusCode ?? 500;
+    return res.status(status).json({
+      success: false,
+      code: error.code ?? "INTERNAL_ERROR",
+      message: error.message || "Failed to cancel application",
+    });
   }
 };
