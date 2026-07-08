@@ -15,21 +15,18 @@ const signin = async (req: Request, res: Response) => {
 
         successMessage.data = dbResponse;
         res.status(status.success).send(successMessage);
-    } catch (error) {
-        errorMessage.error = "" + error;
-        res.status(status.error).send(errorMessage);
+    } catch (error: any) {
+        return res.status(500).json({ status: "failed", message: error?.message || String(error) });
     }
 };
 
 const signup = async (req: Request, res: Response) => {
     try {
-        console.log("hello");
         const dbResponse = await authService.registerUser(req.body);
         successMessage.data = dbResponse;
         res.status(status.success).send(successMessage);
-    } catch (error) {
-        errorMessage.error = "" + error;
-        res.status(status.error).send(errorMessage);
+    } catch (error: any) {
+        return res.status(500).json({ status: "failed", message: error?.message || String(error) });
     }
 };
 
@@ -66,15 +63,14 @@ const resendEmailOtpController = async (req: Request, res: Response) => {
 };
 
 const resendVerification = async (req: Request, res: Response) => {
-    const email= req.query.email as string;
+    const email = req.query.email as string;
 
     try {
-        const dbResponse = await authService.getAndSendEmailVerificationLink(email)
+        const dbResponse = await authService.getAndSendEmailVerificationLink(email);
         successMessage.data = dbResponse;
         res.status(status.success).send(successMessage);
-    } catch (error) {
-        errorMessage.error = "" + error;
-        res.status(status.error).send(errorMessage);
+    } catch (error: any) {
+        return res.status(500).json({ status: "failed", message: error?.message || String(error) });
     }
 };
 

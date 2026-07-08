@@ -4,8 +4,9 @@ import * as provider from "../controllers/providerController";
 
 const router = express.Router();
 
-// Provider profile (provider-portal specific — includes worker_code)
+// Provider profile (provider-portal specific — includes worker_code + service_preference)
 router.get("/provider/profile", verifyAuth, provider.getProviderProfile);
+router.post("/provider/service-preference", verifyAuth, provider.saveServicePreference);
 
 // Location / online status
 router.get("/provider/location/status", verifyAuth, provider.getLocationStatus);
@@ -84,6 +85,7 @@ router.get("/provider/safety/incidents", verifyAuth, provider.getSafetyIncidents
 router.post("/provider/safety/incidents", verifyAuth, provider.submitSafetyIncident);
 
 // Account security — password + session revocation (P0-04 / P0-05)
+router.get("/provider/security", verifyAuth, provider.getProviderSecurity);
 router.post("/provider/security/password", verifyAuth, provider.changeProviderPassword);
 // revoke-all must be registered before /:id to avoid route shadowing
 router.post("/provider/security/sessions/revoke-all", verifyAuth, provider.revokeAllProviderSessions);
@@ -92,6 +94,7 @@ router.delete("/provider/security/sessions/:id", verifyAuth, provider.revokeProv
 // Payout settings (P1)
 router.get("/provider/payout/summary", verifyAuth, provider.getProviderPayoutSummary);
 router.post("/provider/payout/update-session", verifyAuth, provider.requestProviderPayoutUpdate);
+router.post("/provider/payout", verifyAuth, provider.registerProviderPayout);
 
 // Privacy / account actions (P1)
 router.get("/provider/privacy", verifyAuth, provider.getProviderPrivacy);
@@ -108,5 +111,13 @@ router.post("/provider/support/tickets/:ticketKey/reopen", verifyAuth, provider.
 
 // Safety check-in timestamps (P1)
 router.post("/provider/safety/check-in", verifyAuth, provider.recordSafetyCheckIn);
+
+// ─── Service application lifecycle (provider web portal — separate from employee_services) ──
+router.get("/worker/service-applications", verifyAuth, provider.getServiceApplications);
+router.post("/worker/service-applications", verifyAuth, provider.submitServiceApplication);
+router.delete("/worker/service-applications/:applicationId", verifyAuth, provider.cancelServiceApplication);
+
+// FCM token — saved after login so push notifications reach this device
+router.post("/provider/fcm-token", verifyAuth, provider.saveProviderFcmToken);
 
 export default router;

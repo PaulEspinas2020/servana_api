@@ -89,7 +89,8 @@ const updateUserProfile = async (req: Request, res: Response) => {
     const { uid } = req.user;
 
     try {
-        const dbResponse = await userService.updateUserProfile(req.body);
+        // Always use the JWT uid as the profile owner (body.id may be absent or spoofed)
+        const dbResponse = await userService.updateUserProfile({ ...req.body, id: uid });
 
         await createLogEntry("Update", uid, dbResponse.id, "Profile");
 

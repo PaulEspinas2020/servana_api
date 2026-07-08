@@ -1,5 +1,6 @@
 import { firebaseAdmin } from "../middleware/firebaseApp";
 import { firebaseConfig } from "../config";
+import { randomUUID } from "crypto";
 
 export const uploadFileToStorage = (folder: string, fileName: string, dataUri: string): Promise<string> =>
     new Promise((resolve, reject) => {
@@ -9,16 +10,29 @@ export const uploadFileToStorage = (folder: string, fileName: string, dataUri: s
         const buffer = Buffer.from(base64String, "base64");
 
         const bucket = firebaseAdmin.storage().bucket(firebaseConfig.storageBucket);
-        const file = bucket.file(`${folder}/${fileName}.${extension}`);
+        const filePath = `${folder}/${fileName}.${extension}`;
+        const file = bucket.file(filePath);
 
-        file.save(buffer, { metadata: { contentType: mimeType }, public: true }, (error) => {
+        // Embed a download token in the file metadata. Firebase Storage CDN honours
+        // firebaseStorageDownloadTokens — the resulting URL works without requiring
+        // bucket-level allUsers IAM or per-object ACLs, so it is safe under Uniform
+        // bucket-level access policies.
+        const downloadToken = randomUUID();
+        file.save(buffer, {
+            metadata: {
+                contentType: mimeType,
+                metadata: { firebaseStorageDownloadTokens: downloadToken },
+            },
+        }, (error) => {
             if (error) {
+                console.error(`[Storage] upload failed folder=${folder} file=${fileName}:`, error.message ?? error);
                 reject(error);
                 return;
             }
-            file.getSignedUrl({ action: "read", expires: "01-17-2027" })
-                .then((urls) => resolve(urls[0]))
-                .catch(reject);
+            // Firebase Storage download URL — token-authenticated, no IAM dependency.
+            const encodedPath = encodeURIComponent(filePath);
+            const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`;
+            resolve(downloadUrl);
         });
     });
 

@@ -312,7 +312,9 @@ const updateUserProfile = async (profileUpdateReq: ProfileUpdateReq) => {
 
         if (!rows && rows.length == 0) throw Error("User profile update failed");
 
-        const dbResponse = formatUserProfile(rows[0]);
+        // Re-query with JOIN so response includes updated first_name/last_name from user_credentials
+        const fullProfile = await getUserProfile(id!);
+        const dbResponse = fullProfile ?? formatUserProfile(rows[0]);
         return dbResponse;
     } catch (error) {
         throw error;

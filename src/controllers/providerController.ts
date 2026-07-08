@@ -6,7 +6,8 @@ import * as userService from "../services/user.service";
 import mongoDb from "../db/mongodbQuery";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import * as notificationService from "../services/notification.service";
-import { updateFirebasePassword, revokeTokenInFirebase } from "../services/firebaseFunctions.service";
+import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
+import * as serviceApplicationService from "../services/serviceApplicationService";
 
 const dbSchema = db.schema;
 
@@ -761,10 +762,13 @@ export const getProviderProfile = async (req: Request, res: Response) => {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
 
+    await ensureProfileTable();
+
     const result = await dbQuery.query(
       `SELECT uc.uid, uc.email, uc.first_name, uc.last_name,
               uc.phone_number AS phone, uc.worker_code, uc.role, uc.is_email_verified,
-              up.photo_url
+              uc.account_status,
+              up.photo_url, up.service_preference
        FROM ${dbSchema}.user_credentials uc
        LEFT JOIN ${dbSchema}.user_profile up ON uc.uid = up.uid
        WHERE uc.uid = $1 LIMIT 1`,
@@ -787,7 +791,62 @@ export const getProviderProfile = async (req: Request, res: Response) => {
         worker_code: r.worker_code || null,
         role: r.role,
         is_email_verified: r.is_email_verified,
+        account_status: r.account_status || 'pending',
         photo_url: r.photo_url || null,
+        service_category: r.service_preference || null,
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const saveServicePreference = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+
+    const { category } = req.body;
+    if (!category || typeof category !== 'string' || !category.trim()) {
+      return res.status(422).json({ status: "failed", message: "category is required" });
+    }
+
+    await ensureProfileTable();
+    const safeCategory = category.trim().slice(0, 100);
+    await dbQuery.query(
+      `INSERT INTO ${dbSchema}.user_profile (uid, service_preference)
+       VALUES ($1, $2)
+       ON CONFLICT (uid) DO UPDATE SET service_preference = EXCLUDED.service_preference`,
+      [uid, safeCategory]
+    );
+
+    return res.status(200).json({ status: "success", data: { service_category: safeCategory } });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+// ─── Security ────────────────────────────────────────────────────────────────
+
+export const getProviderSecurity = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+
+    const firebaseUser = await getFirebaseUserByUid(uid);
+    const hasPassword = firebaseUser.providerData.some((p: any) => p.providerId === 'password');
+
+    return res.status(200).json({
+      status: 'success',
+      data: {
+        emailVerified: firebaseUser.emailVerified,
+        email: firebaseUser.email || '',
+        phoneVerified: !!firebaseUser.phoneNumber,
+        phone: firebaseUser.phoneNumber || '',
+        hasPassword,
+        sessionCount: 1,
+        lastPasswordChange: null,
+        sessions: [],
       },
     });
   } catch (error: any) {
@@ -1199,13 +1258,28 @@ export const saveWorkerServiceArea = async (req: Request, res: Response) => {
 let _profileTableReady: Promise<void> | null = null;
 function ensureProfileTable(): Promise<void> {
   if (!_profileTableReady) {
-    _profileTableReady = dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${dbSchema}.user_profile (
-        uid        VARCHAR(128) PRIMARY KEY,
-        photo_url  TEXT,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `).then(() => undefined);
+    _profileTableReady = (async () => {
+      await dbQuery.query(`
+        CREATE TABLE IF NOT EXISTS ${dbSchema}.user_profile (
+          uid       VARCHAR(128) PRIMARY KEY,
+          photo_url TEXT
+        )
+      `);
+      // Add updated_at if the table pre-existed without it
+      await dbQuery.query(`
+        ALTER TABLE ${dbSchema}.user_profile
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()
+      `);
+      // Add service_preference for popup category selection persistence
+      await dbQuery.query(`
+        ALTER TABLE ${dbSchema}.user_profile
+        ADD COLUMN IF NOT EXISTS service_preference VARCHAR(100)
+      `);
+    })().catch(err => {
+      // Reset so the next request retries instead of using the cached rejection.
+      _profileTableReady = null;
+      throw err;
+    });
   }
   return _profileTableReady;
 }
@@ -1238,6 +1312,7 @@ export const uploadWorkerProfilePhoto = async (req: Request, res: Response) => {
     );
     return res.status(200).json({ status: "success", data: { safeUrl, uploadedAt } });
   } catch (error: any) {
+    console.error("[uploadWorkerProfilePhoto] 500:", error?.message ?? error);
     return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
   }
 };
@@ -1292,6 +1367,47 @@ export const requestProviderPayoutUpdate = async (_req: Request, res: Response) 
     status: "success",
     data: { sessionUrl: '/settings/payout/update' },
   });
+};
+
+export const registerProviderPayout = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+
+    const { type, identifier } = req.body;
+    const VALID_TYPES = ['gcash', 'maya', 'bdo', 'bpi', 'unionbank', 'landbank', 'other'];
+    if (!type || !VALID_TYPES.includes(type)) {
+      return res.status(400).json({ status: "failed", message: "Invalid payout type" });
+    }
+    if (!identifier || String(identifier).trim().length < 4) {
+      return res.status(400).json({ status: "failed", message: "Account number must be at least 4 characters" });
+    }
+
+    const trimmed = String(identifier).trim();
+    const maskedIdentifier = '•••• ' + trimmed.slice(-4);
+
+    const col = (await mongoDb).collection("worker_payout_methods");
+    await col.updateOne(
+      { uid },
+      { $set: { uid, type, maskedIdentifier, status: 'pending', updatedAt: new Date() } },
+      { upsert: true }
+    );
+
+    return res.status(200).json({
+      status: "success",
+      data: {
+        hasPayoutMethod: true,
+        type,
+        typeLabel: PAYOUT_TYPE_LABELS[type] || type,
+        maskedIdentifier,
+        status: 'pending',
+        statusLabel: 'Pending review',
+        lastUpdated: new Date().toISOString(),
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
 };
 
 // ─── Privacy / Account Actions (MongoDB — worker_account_requests) ────────────
@@ -1500,6 +1616,96 @@ export const recordSafetyCheckIn = async (req: Request, res: Response) => {
     const col = (await mongoDb).collection("worker_safety_checkins");
     await col.insertOne({ uid, bookingId: String(bookingId), stage: String(stage), checkedInAt });
     return res.status(201).json({ status: "success", data: { success: true, stage, checkedInAt } });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+
+// ─── Service Applications ─────────────────────────────────────────────────────
+
+const toApplicationDto = (app: any) => ({
+  id: app.id,
+  serviceId: Number(app.service_id),
+  status: app.status,
+  submittedAt: app.submitted_at,
+  updatedAt: app.updated_at,
+  cancelledAt: app.cancelled_at ?? null,
+  approvedAt: app.approved_at ?? null,
+  reviewReason: app.review_reason ?? null,
+  version: Number(app.version),
+});
+
+export const getServiceApplications = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const applications = await serviceApplicationService.getApplicationsByWorker(uid);
+    return res.json({ success: true, applications: applications.map(toApplicationDto) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to fetch applications" });
+  }
+};
+
+export const submitServiceApplication = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const serviceId = Number(req.body?.serviceId);
+    if (!Number.isInteger(serviceId) || serviceId <= 0) {
+      return res.status(400).json({ success: false, message: "serviceId (positive integer) is required" });
+    }
+
+    const app = await serviceApplicationService.submitApplication(uid, serviceId);
+    return res.status(201).json({ success: true, application: toApplicationDto(app) });
+  } catch (error: any) {
+    const status = error.statusCode ?? 500;
+    return res.status(status).json({
+      success: false,
+      code: error.code ?? "INTERNAL_ERROR",
+      message: error.message || "Failed to submit application",
+      ...(error.application ? { application: toApplicationDto(error.application) } : {}),
+    });
+  }
+};
+
+export const cancelServiceApplication = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const { applicationId } = req.params as { applicationId: string };
+    if (!applicationId) return res.status(400).json({ success: false, message: "applicationId is required" });
+
+    const app = await serviceApplicationService.cancelApplication(applicationId, uid);
+    return res.json({ success: true, application: toApplicationDto(app) });
+  } catch (error: any) {
+    const status = error.statusCode ?? 500;
+    return res.status(status).json({
+      success: false,
+      code: error.code ?? "INTERNAL_ERROR",
+      message: error.message || "Failed to cancel application",
+    });
+  }
+};
+
+// ─── FCM Token ────────────────────────────────────────────────────────────────
+
+export const saveProviderFcmToken = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const { token } = req.body;
+    if (!token || typeof token !== 'string' || token.trim().length < 10) {
+      return res.status(400).json({ status: "failed", message: "token is required" });
+    }
+    await dbQuery.query(
+      `UPDATE ${dbSchema}.user_credentials SET fcm_token = $1 WHERE uid = $2`,
+      [token.trim(), uid]
+    );
+    return res.status(200).json({ status: "success", data: { saved: true } });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
   }
