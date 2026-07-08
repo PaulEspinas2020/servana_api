@@ -82,6 +82,12 @@ export const initProviderCatalogSchema = async (): Promise<void> => {
       UNIQUE (employee_uid, offering_id)
     )
   `, []);
+
+  // 6. account_status on user_credentials — added in code but not yet migrated in prod
+  await dbQuery.query(`
+    ALTER TABLE ${dbSchema}.user_credentials
+    ADD COLUMN IF NOT EXISTS account_status TEXT NOT NULL DEFAULT 'pending'
+  `, []);
 };
 
 // ─── Seed ────────────────────────────────────────────────────────────────────
