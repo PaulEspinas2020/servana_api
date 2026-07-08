@@ -34,10 +34,11 @@ jobs:
 
       - name: Restart PM2
         run: |
-          pm2 describe servana-prod >/dev/null 2>&1 \
-            && pm2 restart servana-prod \
-            || pm2 start "$(pwd)/dist/app.js" --name servana-prod
-          pm2 save
+          PM2_BIN=$(which pm2 2>/dev/null || echo /usr/local/bin/pm2)
+          sudo "$PM2_BIN" describe servana-prod >/dev/null 2>&1 \
+            && sudo "$PM2_BIN" restart servana-prod \
+            || sudo "$PM2_BIN" start "$(pwd)/dist/app.js" --name servana-prod
+          sudo "$PM2_BIN" save
 
       - name: Reload NGINX
         run: sudo systemctl reload nginx
