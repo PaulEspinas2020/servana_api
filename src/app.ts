@@ -114,6 +114,9 @@ app.use("/api", cors(corsOptionsDelegate), providerRoutes);
 import locationRoutes from "./routes/location.routes";
 app.use("/api", cors(corsOptionsDelegate), locationRoutes);
 
+import providerCatalogRoutes from "./routes/providerCatalog.routes";
+app.use("/api", cors(corsOptionsDelegate), providerCatalogRoutes);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
@@ -123,6 +126,16 @@ initProviderSocket(io);
 
 import { startScheduler } from "./scheduler";
 startScheduler();
+
+import { initProviderCatalogSchema, seedBuiltInOfferings } from "./services/providerCatalogService";
+(async () => {
+  try {
+    await initProviderCatalogSchema();
+    await seedBuiltInOfferings();
+  } catch (err) {
+    console.error("[provider-catalog] schema/seed error:", err);
+  }
+})();
 
 httpServer.listen(port, () => {
     console.log(`Magic is running on port ${port}`);
