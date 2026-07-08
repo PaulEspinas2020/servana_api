@@ -1690,3 +1690,23 @@ export const cancelServiceApplication = async (req: Request, res: Response) => {
     });
   }
 };
+
+// ─── FCM Token ────────────────────────────────────────────────────────────────
+
+export const saveProviderFcmToken = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const { token } = req.body;
+    if (!token || typeof token !== 'string' || token.trim().length < 10) {
+      return res.status(400).json({ status: "failed", message: "token is required" });
+    }
+    await dbQuery.query(
+      `UPDATE ${dbSchema}.user_credentials SET fcm_token = $1 WHERE uid = $2`,
+      [token.trim(), uid]
+    );
+    return res.status(200).json({ status: "success", data: { saved: true } });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};

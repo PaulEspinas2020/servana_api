@@ -117,4 +117,7 @@ router.get("/worker/service-applications", verifyAuth, provider.getServiceApplic
 router.post("/worker/service-applications", verifyAuth, provider.submitServiceApplication);
 router.delete("/worker/service-applications/:applicationId", verifyAuth, provider.cancelServiceApplication);
 
+// FCM token — saved after login so push notifications reach this device
+router.post("/provider/fcm-token", verifyAuth, provider.saveProviderFcmToken);
+
 export default router;
