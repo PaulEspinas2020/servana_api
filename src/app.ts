@@ -117,6 +117,9 @@ app.use("/api", cors(corsOptionsDelegate), locationRoutes);
 import providerCatalogRoutes from "./routes/providerCatalog.routes";
 app.use("/api", cors(corsOptionsDelegate), providerCatalogRoutes);
 
+import adminProviderRoutes from "./routes/adminProvider.routes";
+app.use("/api", cors(corsOptionsDelegate), adminProviderRoutes);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
