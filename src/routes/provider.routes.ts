@@ -111,4 +111,9 @@ router.post("/provider/support/tickets/:ticketKey/reopen", verifyAuth, provider.
 // Safety check-in timestamps (P1)
 router.post("/provider/safety/check-in", verifyAuth, provider.recordSafetyCheckIn);
 
+// ─── Service application lifecycle (provider web portal — separate from employee_services) ──
+router.get("/worker/service-applications", verifyAuth, provider.getServiceApplications);
+router.post("/worker/service-applications", verifyAuth, provider.submitServiceApplication);
+router.delete("/worker/service-applications/:applicationId", verifyAuth, provider.cancelServiceApplication);
+
 export default router;
