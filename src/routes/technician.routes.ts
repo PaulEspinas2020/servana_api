@@ -2,6 +2,7 @@ import { Router } from "express";
 import * as technicianController from "../controllers/technicianController";
 import verifyAuth from "../middleware/verifyAuth";
 import verifyRoles from "../middleware/verifyRoles";
+import verifyOwnership from "../middleware/verifyOwnership";
 
 const router = Router();
 
@@ -34,15 +35,15 @@ router.post("/workers/:uid/requirements", technicianController.uploadRequirement
 router.get("/workers/:uid/requirements", technicianController.getRequirements);
 router.delete("/workers/:uid/requirements/:id", technicianController.deleteRequirement);
 
-// Worker Bank Account
-router.put("/workers/:uid/bank-account", technicianController.upsertBankAccount);
-router.get("/workers/:uid/bank-account", technicianController.getBankAccount);
-router.delete("/workers/:uid/bank-account", technicianController.deleteBankAccount);
+// Worker Bank Account — financial data; requires auth + ownership (not used by mobile app)
+router.put("/workers/:uid/bank-account", verifyAuth, verifyOwnership, technicianController.upsertBankAccount);
+router.get("/workers/:uid/bank-account", verifyAuth, verifyOwnership, technicianController.getBankAccount);
+router.delete("/workers/:uid/bank-account", verifyAuth, verifyOwnership, technicianController.deleteBankAccount);
 
-// Worker History & Earnings
-router.get("/workers/:uid/booking-history", technicianController.getBookingHistory);
-router.get("/workers/:uid/disbursement-history", technicianController.getDisbursementHistory);
-router.get("/workers/:uid/earnings-history", technicianController.getEarningsHistory);
+// Worker History & Earnings — financial data; requires auth + ownership (not used by mobile app)
+router.get("/workers/:uid/booking-history", verifyAuth, verifyOwnership, technicianController.getBookingHistory);
+router.get("/workers/:uid/disbursement-history", verifyAuth, verifyOwnership, technicianController.getDisbursementHistory);
+router.get("/workers/:uid/earnings-history", verifyAuth, verifyOwnership, technicianController.getEarningsHistory);
 
 // Online Status
 router.get("/workers/:uid/online-status", technicianController.getOnlineStatus);
@@ -75,8 +76,8 @@ router.post("/workers/:uid/onboarding/submit", technicianController.submitOnboar
 router.get("/workers/:uid/review-status", technicianController.getReviewStatus);
 router.post("/workers/:uid/submit-for-review", technicianController.submitForReview);
 
-// Notification Preferences
-router.get("/workers/:uid/notification-preferences", technicianController.getNotificationPreferences);
-router.put("/workers/:uid/notification-preferences", technicianController.saveNotificationPreferences);
+// Notification Preferences — personal data; requires auth + ownership (not used by mobile app)
+router.get("/workers/:uid/notification-preferences", verifyAuth, verifyOwnership, technicianController.getNotificationPreferences);
+router.put("/workers/:uid/notification-preferences", verifyAuth, verifyOwnership, technicianController.saveNotificationPreferences);
 
 export default router;
