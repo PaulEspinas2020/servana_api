@@ -227,6 +227,10 @@ const resetPasswordWithCode = async (oobCode: string, newPassword: string): Prom
     return email;
 };
 
+const getFirebaseUserByUid = async (uid: string) => {
+    return await defaultAuthAdmin.getUser(uid);
+};
+
 export {
     checkUserIfExistInFirebase,
     registerNewUserInFirebase,
@@ -235,6 +239,7 @@ export {
     firebaseAuthLogin,
     firebaseProviderRegister,
     getFirebaseUserByEmail,
+    getFirebaseUserByUid,
     updateFirebaseEmailVerified,
     deleteFirebaseUser,
     generatePasswordResetLink,

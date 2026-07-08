@@ -85,6 +85,7 @@ router.get("/provider/safety/incidents", verifyAuth, provider.getSafetyIncidents
 router.post("/provider/safety/incidents", verifyAuth, provider.submitSafetyIncident);
 
 // Account security — password + session revocation (P0-04 / P0-05)
+router.get("/provider/security", verifyAuth, provider.getProviderSecurity);
 router.post("/provider/security/password", verifyAuth, provider.changeProviderPassword);
 // revoke-all must be registered before /:id to avoid route shadowing
 router.post("/provider/security/sessions/revoke-all", verifyAuth, provider.revokeAllProviderSessions);

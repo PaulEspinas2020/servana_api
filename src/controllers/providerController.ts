@@ -6,7 +6,7 @@ import * as userService from "../services/user.service";
 import mongoDb from "../db/mongodbQuery";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import * as notificationService from "../services/notification.service";
-import { updateFirebasePassword, revokeTokenInFirebase } from "../services/firebaseFunctions.service";
+import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
 import * as serviceApplicationService from "../services/serviceApplicationService";
 
 const dbSchema = db.schema;
@@ -767,6 +767,7 @@ export const getProviderProfile = async (req: Request, res: Response) => {
     const result = await dbQuery.query(
       `SELECT uc.uid, uc.email, uc.first_name, uc.last_name,
               uc.phone_number AS phone, uc.worker_code, uc.role, uc.is_email_verified,
+              uc.account_status,
               up.photo_url, up.service_preference
        FROM ${dbSchema}.user_credentials uc
        LEFT JOIN ${dbSchema}.user_profile up ON uc.uid = up.uid
@@ -790,6 +791,7 @@ export const getProviderProfile = async (req: Request, res: Response) => {
         worker_code: r.worker_code || null,
         role: r.role,
         is_email_verified: r.is_email_verified,
+        account_status: r.account_status || 'pending',
         photo_url: r.photo_url || null,
         service_category: r.service_preference || null,
       },
@@ -819,6 +821,34 @@ export const saveServicePreference = async (req: Request, res: Response) => {
     );
 
     return res.status(200).json({ status: "success", data: { service_category: safeCategory } });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+// ─── Security ────────────────────────────────────────────────────────────────
+
+export const getProviderSecurity = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+
+    const firebaseUser = await getFirebaseUserByUid(uid);
+    const hasPassword = firebaseUser.providerData.some((p: any) => p.providerId === 'password');
+
+    return res.status(200).json({
+      status: 'success',
+      data: {
+        emailVerified: firebaseUser.emailVerified,
+        email: firebaseUser.email || '',
+        phoneVerified: !!firebaseUser.phoneNumber,
+        phone: firebaseUser.phoneNumber || '',
+        hasPassword,
+        sessionCount: 1,
+        lastPasswordChange: null,
+        sessions: [],
+      },
+    });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
   }
