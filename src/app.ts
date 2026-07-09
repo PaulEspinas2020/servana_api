@@ -137,6 +137,15 @@ import { initProviderCatalogSchema, seedBuiltInOfferings } from "./services/prov
   }
 })();
 
+import { ensureProviderWebSchema } from "./services/providerOnboardingService";
+(async () => {
+  try {
+    await ensureProviderWebSchema();
+  } catch (err) {
+    console.error("[provider-web-onboarding] schema error:", err);
+  }
+})();
+
 httpServer.listen(port, () => {
     console.log(`Magic is running on port ${port}`);
 });
