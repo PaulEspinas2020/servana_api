@@ -11,6 +11,8 @@ const adminOnly = [verifyAuth, verifyRoles([1])];
 // GET  /api/admin/providers               — list with search/filter/sort/pagination
 // GET  /api/admin/providers/metrics       — summary metric cards
 router.get('/admin/providers/metrics', ...adminOnly, ctrl.getProviderMetrics);
+// GET /api/admin/providers/duplicates — duplicate detection + orphan report (read-only diagnostic)
+router.get('/admin/providers/duplicates', ...adminOnly, ctrl.getProviderDuplicates);
 router.get('/admin/providers', ...adminOnly, ctrl.listProviders);
 
 // ── Service Applications (global view) ───────────────────────────────────────
