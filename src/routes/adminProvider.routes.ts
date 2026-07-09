@@ -2,6 +2,7 @@ import { Router } from 'express';
 import verifyAuth from '../middleware/verifyAuth';
 import verifyRoles from '../middleware/verifyRoles';
 import * as ctrl from '../controllers/adminProviderController';
+import * as attrCtrl from '../controllers/adminMobileAttributionController';
 
 const router = Router();
 const adminOnly = [verifyAuth, verifyRoles([1])];
@@ -47,5 +48,15 @@ router.get('/admin/providers/:uid/availability', ...adminOnly, ctrl.getProviderA
 router.get('/admin/providers/:uid/service-area', ...adminOnly, ctrl.getProviderServiceArea);
 router.patch('/admin/providers/:uid/account-status', ...adminOnly, ctrl.updateProviderAccountStatus);
 router.patch('/admin/providers/:uid/archive', ...adminOnly, ctrl.setProviderArchive);
+
+// ── Mobile Attribution & Catalog Association ──────────────────────────────────
+// GET  /api/admin/providers/mobile-metrics           — aggregate mobile metrics
+// POST /api/admin/providers/attribution/backfill     — historical attribution scan
+// GET  /api/admin/providers/:uid/attribution         — per-provider source attribution
+// GET  /api/admin/providers/:uid/catalog-association — legacy service → catalog mapping status
+router.get('/admin/providers/mobile-metrics', ...adminOnly, attrCtrl.getMobileMetrics);
+router.post('/admin/providers/attribution/backfill', ...adminOnly, attrCtrl.triggerBackfill);
+router.get('/admin/providers/:uid/attribution', ...adminOnly, attrCtrl.getProviderAttribution);
+router.get('/admin/providers/:uid/catalog-association', ...adminOnly, attrCtrl.getProviderCatalogAssociation);
 
 export default router;

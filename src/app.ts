@@ -154,6 +154,15 @@ import { ensureOnboardingSchema, seedReasonCodes, seedRequirementDefinitions } f
   }
 })();
 
+import { ensureAttributionSchema } from "./services/adminMobileAttributionService";
+(async () => {
+  try {
+    await ensureAttributionSchema();
+  } catch (err) {
+    console.error("[mobile-attribution] schema error:", err);
+  }
+})();
+
 httpServer.listen(port, () => {
     console.log(`Magic is running on port ${port}`);
 });

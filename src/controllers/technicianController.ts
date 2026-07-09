@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import * as technician from "../services/technicianService";
 import { toCamel } from "../helpers/idGenerator";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
+import { logProviderClientActivity } from "../services/adminMobileAttributionService";
 
 export const listByRole = async (req: Request, res: Response) => {
   try {
@@ -122,6 +123,7 @@ export const updateLocation = async (req: Request, res: Response) => {
       is_online: Boolean(isOnline),
     });
 
+    logProviderClientActivity(uid, 'location_update', 'mobile');
     return res.json({
       success: true,
       message: "Worker location updated successfully",
@@ -640,6 +642,7 @@ export const uploadRequirements = async (req: Request, res: Response) => {
 
     const requirements = await technician.addWorkerRequirements(uid, uploaded);
 
+    logProviderClientActivity(uid, 'requirement_upload', 'mobile', { count: uploaded.length });
     return res.json({ success: true, requirements });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to upload requirements" });
@@ -740,6 +743,7 @@ export const goOnline = async (req: Request, res: Response) => {
     const { uid } = req.params as { uid: string };
     if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
     const data = await technician.setWorkerOnlineStatus(uid, true);
+    logProviderClientActivity(uid, 'go_online', 'mobile');
     return res.json({ success: true, ...data });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to go online" });
@@ -751,6 +755,7 @@ export const goOffline = async (req: Request, res: Response) => {
     const { uid } = req.params as { uid: string };
     if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
     const data = await technician.setWorkerOnlineStatus(uid, false);
+    logProviderClientActivity(uid, 'go_offline', 'mobile');
     return res.json({ success: true, ...data });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to go offline" });

@@ -911,6 +911,33 @@ export const calculateReadiness = async (providerUid: string) => {
     blockers.push({ code: 'no_active_service', severity: 'blocking', label: 'No approved active services' });
   }
 
+  // Catalog association — warn on unmapped/ambiguous (additive check, non-blocking)
+  try {
+    const catalogRes = await dbQuery.query(
+      `
+      SELECT
+        COUNT(DISTINCT es.service_id)   AS service_count,
+        COUNT(DISTINCT m.offering_id)   AS offering_count
+      FROM ${dbSchema}.employee_services es
+      LEFT JOIN ${dbSchema}.provider_catalog_offering_mappings m ON m.service_id = es.service_id
+      WHERE es.employee_uid = $1
+      `,
+      [providerUid],
+    );
+    const catRow = catalogRes.rows[0];
+    if (catRow) {
+      const svcCount = Number(catRow.service_count ?? 0);
+      const offCount = Number(catRow.offering_count ?? 0);
+      if (svcCount > 0 && offCount === 0) {
+        blockers.push({ code: 'catalog_unmapped', severity: 'warning', label: 'Services have no catalog mapping — review required' });
+      } else if (svcCount > 0 && offCount < svcCount) {
+        blockers.push({ code: 'catalog_partially_mapped', severity: 'warning', label: 'Some services cannot be matched to a catalog offering' });
+      }
+    }
+  } catch {
+    // Non-fatal: catalog table may not exist yet on older environments
+  }
+
   const blockingCount = blockers.filter(b => b.severity === 'blocking').length;
   const isReady = blockingCount === 0;
 
