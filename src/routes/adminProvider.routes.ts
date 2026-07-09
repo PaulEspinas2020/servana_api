@@ -11,6 +11,8 @@ const adminOnly = [verifyAuth, verifyRoles([1])];
 // GET  /api/admin/providers               — list with search/filter/sort/pagination
 // GET  /api/admin/providers/metrics       — summary metric cards
 router.get('/admin/providers/metrics', ...adminOnly, ctrl.getProviderMetrics);
+// GET /api/admin/providers/duplicates — duplicate detection + orphan report (read-only diagnostic)
+router.get('/admin/providers/duplicates', ...adminOnly, ctrl.getProviderDuplicates);
 router.get('/admin/providers', ...adminOnly, ctrl.listProviders);
 
 // ── Service Applications (global view) ───────────────────────────────────────
@@ -20,6 +22,11 @@ router.get('/admin/providers', ...adminOnly, ctrl.listProviders);
 router.get('/admin/providers/service-applications', ...adminOnly, ctrl.listAllServiceApplications);
 router.patch('/admin/providers/service-applications/:id/approve', ...adminOnly, ctrl.approveServiceApplication);
 router.patch('/admin/providers/service-applications/:id/reject', ...adminOnly, ctrl.rejectServiceApplication);
+
+// ── Mobile Attribution & Catalog Association ──────────────────────────────────
+// NOTE: must stay ABOVE /:uid routes or Express matches mobile-metrics as uid
+router.get('/admin/providers/mobile-metrics', ...adminOnly, attrCtrl.getMobileMetrics);
+router.post('/admin/providers/attribution/backfill', ...adminOnly, attrCtrl.triggerBackfill);
 
 // ── Provider 360 Workspace ────────────────────────────────────────────────────
 // GET /api/admin/providers/:uid           — identity + status
@@ -51,13 +58,9 @@ router.patch('/admin/providers/:uid/archive', ...adminOnly, ctrl.setProviderArch
 // GET /api/admin/providers/:uid/overlap-map — diagnostic: tables, counts, inconsistencies
 router.get('/admin/providers/:uid/overlap-map', ...adminOnly, ctrl.getProviderOverlapMap);
 
-// ── Mobile Attribution & Catalog Association ──────────────────────────────────
-// GET  /api/admin/providers/mobile-metrics           — aggregate mobile metrics
-// POST /api/admin/providers/attribution/backfill     — historical attribution scan
+// ── Mobile Attribution (per-provider) ─────────────────────────────────────────
 // GET  /api/admin/providers/:uid/attribution         — per-provider source attribution
 // GET  /api/admin/providers/:uid/catalog-association — legacy service → catalog mapping status
-router.get('/admin/providers/mobile-metrics', ...adminOnly, attrCtrl.getMobileMetrics);
-router.post('/admin/providers/attribution/backfill', ...adminOnly, attrCtrl.triggerBackfill);
 router.get('/admin/providers/:uid/attribution', ...adminOnly, attrCtrl.getProviderAttribution);
 router.get('/admin/providers/:uid/catalog-association', ...adminOnly, attrCtrl.getProviderCatalogAssociation);
 

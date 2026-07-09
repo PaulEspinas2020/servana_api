@@ -434,3 +434,14 @@ export const getProviderOverlapMap = async (req: Request, res: Response) => {
     return fail(res, code, err?.message ?? 'Failed to fetch overlap map');
   }
 };
+
+// ── Duplicate Detection Report ────────────────────────────────────────────────
+
+export const getProviderDuplicates = async (_req: Request, res: Response) => {
+  try {
+    const report = await svc.getProviderDuplicates();
+    return ok(res, report);
+  } catch (err: any) {
+    return fail(res, 500, err?.message ?? 'Failed to fetch duplicate report');
+  }
+};
