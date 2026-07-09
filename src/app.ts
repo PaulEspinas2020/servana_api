@@ -120,6 +120,9 @@ app.use("/api", cors(corsOptionsDelegate), providerCatalogRoutes);
 import adminProviderRoutes from "./routes/adminProvider.routes";
 app.use("/api", cors(corsOptionsDelegate), adminProviderRoutes);
 
+import adminOnboardingRoutes from "./routes/adminOnboarding.routes";
+app.use("/api", cors(corsOptionsDelegate), adminOnboardingRoutes);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
@@ -137,6 +140,17 @@ import { initProviderCatalogSchema, seedBuiltInOfferings } from "./services/prov
     await seedBuiltInOfferings();
   } catch (err) {
     console.error("[provider-catalog] schema/seed error:", err);
+  }
+})();
+
+import { ensureOnboardingSchema, seedReasonCodes, seedRequirementDefinitions } from "./services/adminOnboardingService";
+(async () => {
+  try {
+    await ensureOnboardingSchema();
+    await seedReasonCodes();
+    await seedRequirementDefinitions();
+  } catch (err) {
+    console.error("[admin-onboarding] schema/seed error:", err);
   }
 })();
 
