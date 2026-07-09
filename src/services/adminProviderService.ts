@@ -547,6 +547,92 @@ export const setProviderArchive = async (uid: string, isArchive: boolean) => {
   return res.rows[0];
 };
 
+// ── Provider Overlap Map — diagnostic (admin only) ────────────────────────────
+
+export interface ProviderOverlapEntry {
+  table: string;
+  presentAs: string;
+  rowCount: number;
+}
+
+export interface ProviderOverlapMap {
+  uid: string;
+  role: number;
+  accountStatus: string;
+  isArchive: boolean;
+  tables: ProviderOverlapEntry[];
+  activeServiceCount: number;
+  pendingApplicationCount: number;
+  approvedApplicationCount: number;
+  orphanedActiveServices: number; // active services with no approved application
+  inconsistencies: string[];
+}
+
+export const getProviderOverlapMap = async (uid: string): Promise<ProviderOverlapMap> => {
+  const [credRes, svcRes, appRes] = await Promise.all([
+    dbQuery.query(
+      `SELECT uid, role, account_status, is_archive FROM ${dbSchema}.user_credentials WHERE uid = $1`,
+      [uid]
+    ),
+    dbQuery.query(
+      `SELECT COUNT(*)::int AS cnt FROM ${dbSchema}.employee_services WHERE uid = $1`,
+      [uid]
+    ),
+    dbQuery.query(
+      `SELECT status, COUNT(*)::int AS cnt FROM ${dbSchema}.worker_service_applications
+       WHERE worker_uid = $1 GROUP BY status`,
+      [uid]
+    ),
+  ]);
+
+  if (!credRes.rowCount) {
+    const err: any = new Error('Provider not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const cred = credRes.rows[0];
+  const activeServiceCount = Number(svcRes.rows[0]?.cnt ?? 0);
+
+  const appCounts: Record<string, number> = {};
+  for (const row of appRes.rows) {
+    appCounts[row.status] = Number(row.cnt);
+  }
+
+  const pendingApplicationCount = appCounts['pending_review'] ?? 0;
+  const approvedApplicationCount = appCounts['approved'] ?? 0;
+
+  const tables: ProviderOverlapEntry[] = [
+    { table: 'user_credentials', presentAs: `role ${cred.role}`, rowCount: 1 },
+    { table: 'employee_services', presentAs: 'active service assignments', rowCount: activeServiceCount },
+    { table: 'worker_service_applications', presentAs: 'all applications', rowCount: Object.values(appCounts).reduce((s, n) => s + n, 0) },
+  ];
+
+  const inconsistencies: string[] = [];
+  if (activeServiceCount > 0 && approvedApplicationCount === 0) {
+    inconsistencies.push('Provider has active services but no approved service application (legacy direct insert).');
+  }
+  if (cred.role !== 2 && cred.role !== 4) {
+    inconsistencies.push(`user_credentials.role = ${cred.role} — not a provider role (expected 2 or 4).`);
+  }
+  if (cred.account_status === 'active' && activeServiceCount === 0) {
+    inconsistencies.push('Account status is active but provider has no assigned services.');
+  }
+
+  return {
+    uid,
+    role: Number(cred.role),
+    accountStatus: cred.account_status ?? 'unknown',
+    isArchive: Boolean(cred.is_archive),
+    tables,
+    activeServiceCount,
+    pendingApplicationCount,
+    approvedApplicationCount,
+    orphanedActiveServices: approvedApplicationCount === 0 ? activeServiceCount : 0,
+    inconsistencies,
+  };
+};
+
 // ── Service Application Approve / Reject (reuses existing service) ────────────
 
 export { serviceApplicationService };

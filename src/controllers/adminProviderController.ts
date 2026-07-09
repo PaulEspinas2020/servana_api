@@ -421,3 +421,16 @@ export const setProviderArchive = async (req: Request, res: Response) => {
     return fail(res, code, err?.message ?? 'Failed to update archive status');
   }
 };
+
+// ── Overlap Map (diagnostic) ──────────────────────────────────────────────────
+
+export const getProviderOverlapMap = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    const report = await svc.getProviderOverlapMap(uid);
+    return ok(res, report);
+  } catch (err: any) {
+    const code = err?.statusCode ?? 500;
+    return fail(res, code, err?.message ?? 'Failed to fetch overlap map');
+  }
+};

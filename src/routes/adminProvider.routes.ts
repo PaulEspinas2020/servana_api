@@ -48,6 +48,8 @@ router.get('/admin/providers/:uid/availability', ...adminOnly, ctrl.getProviderA
 router.get('/admin/providers/:uid/service-area', ...adminOnly, ctrl.getProviderServiceArea);
 router.patch('/admin/providers/:uid/account-status', ...adminOnly, ctrl.updateProviderAccountStatus);
 router.patch('/admin/providers/:uid/archive', ...adminOnly, ctrl.setProviderArchive);
+// GET /api/admin/providers/:uid/overlap-map — diagnostic: tables, counts, inconsistencies
+router.get('/admin/providers/:uid/overlap-map', ...adminOnly, ctrl.getProviderOverlapMap);
 
 // ── Mobile Attribution & Catalog Association ──────────────────────────────────
 // GET  /api/admin/providers/mobile-metrics           — aggregate mobile metrics
