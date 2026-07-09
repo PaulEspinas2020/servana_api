@@ -8,6 +8,7 @@ import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import * as notificationService from "../services/notification.service";
 import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
 import * as serviceApplicationService from "../services/serviceApplicationService";
+import * as onboardingService from "../services/providerOnboardingService";
 
 const dbSchema = db.schema;
 
@@ -531,7 +532,7 @@ export const uploadWorkerRequirement = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const { file, name } = req.body;
+    const { file, name, requirementType } = req.body;
     if (!file || !name) {
       return res.status(400).json({ status: "failed", message: "file (data URI) and name are required" });
     }
@@ -543,12 +544,18 @@ export const uploadWorkerRequirement = async (req: Request, res: Response) => {
       return res.status(422).json({ status: "failed", message: "File type not allowed. Use JPG, PNG, WebP, or PDF." });
     }
     const sanitizedName = String(name).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
+    const sanitizedType = requirementType ? String(requirementType).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 50) : undefined;
     const fileUrl = await uploadFileToStorage("provider-requirements", `${uid}_${Date.now()}`, file);
-    const inserted = await technicianService.addWorkerRequirements(uid, [{ fileUrl, fileName: sanitizedName }]);
+    const inserted = await technicianService.addWorkerRequirements(uid, [{ fileUrl, fileName: sanitizedName, requirementType: sanitizedType }]);
     const row = inserted[0];
     return res.status(201).json({
       status: "success",
-      data: { requirementId: String(row.id), status: "pending_review", uploadedAt: row.uploadedAt },
+      data: {
+        requirementId: String(row.id),
+        status: "pending_review",
+        uploadedAt: row.uploadedAt,
+        requirementType: sanitizedType ?? null,
+      },
     });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
@@ -579,45 +586,17 @@ export const deleteWorkerRequirementOwn = async (req: Request, res: Response) =>
   }
 };
 
-// ─── Onboarding (maps review-status + requirements to onboarding state) ───────
+// ─── Onboarding ───────────────────────────────────────────────────────────────
 
 export const getOnboardingState = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-
-    const [workerRes, reqRes] = await Promise.all([
-      dbQuery.query(
-        `SELECT is_email_verified, is_archive FROM ${dbSchema}.user_credentials WHERE uid = $1`,
-        [uid]
-      ),
-      dbQuery.query(
-        `SELECT COUNT(*) AS count FROM ${dbSchema}.worker_requirements WHERE worker_uid = $1`,
-        [uid]
-      ),
-    ]);
-
-    if (!workerRes.rowCount) return res.status(404).json({ status: "failed", message: "Provider not found" });
-
-    const worker = workerRes.rows[0];
-    const reqCount = Number(reqRes.rows[0].count);
-    const emailVerified: boolean = worker.is_email_verified;
-    const hasRequirements = reqCount > 0;
-
-    const completedSteps: string[] = [];
-    if (emailVerified) completedSteps.push("personal_info");
-    if (hasRequirements) completedSteps.push("requirements");
-
-    let status = "in_progress";
-    let currentStep = emailVerified ? "requirements" : "personal_info";
-    if (emailVerified && hasRequirements) { status = "pending_review"; currentStep = "submitted"; }
-
-    return res.status(200).json({
-      status: "success",
-      data: { status, currentStep, completedSteps },
-    });
+    const data = await onboardingService.getOnboardingAggregate(uid);
+    return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    const code = (error as any).statusCode;
+    return res.status(code ?? 500).json({ status: "failed", message: error?.message || "Server error" });
   }
 };
 
@@ -625,35 +604,35 @@ export const submitOnboarding = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-
-    const reqRes = await dbQuery.query(
-      `SELECT COUNT(*) AS count FROM ${dbSchema}.worker_requirements WHERE worker_uid = $1`,
-      [uid]
-    );
-    if (Number(reqRes.rows[0].count) === 0) {
-      return res.status(400).json({
-        status: "failed",
-        message: "Please upload at least one requirement document before submitting.",
-      });
-    }
-
-    return res.status(200).json({
-      status: "success",
-      data: {
-        status: "pending_review",
-        currentStep: "submitted",
-        completedSteps: ["personal_info", "requirements"],
-        submittedAt: new Date().toISOString(),
-      },
-    });
+    const data = await onboardingService.submitOnboarding(uid);
+    return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    const code = (error as any).statusCode;
+    return res.status(code ?? 500).json({ status: "failed", message: error?.message || "Server error" });
   }
 };
 
 export const saveOnboardingStep = async (req: Request, res: Response) => {
-  // Scaffold — step data persisted via their respective dedicated endpoints.
-  return res.status(200).json({ status: "success", data: { success: true } });
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const { step, ...payload } = req.body;
+    if (!step) return res.status(400).json({ status: "failed", message: "step is required" });
+    const data = await onboardingService.saveDraftStep(uid, step, payload);
+    return res.status(200).json({ status: "success", data: { success: true, ...data } });
+  } catch (error: any) {
+    const code = (error as any).statusCode;
+    return res.status(code ?? 500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+export const getProviderReconciliationReport = async (req: Request, res: Response) => {
+  try {
+    const data = await onboardingService.getReconciliationReport();
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
 };
 
 // ─── Additional work — provider-specific actions ───────────────────────────────

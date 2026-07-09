@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import { successMessage, errorMessage, status } from "../helpers/status";
 import * as authService from "../services/auth.service";
 import * as firebaseFunction from "../services/firebaseFunctions.service";
+import { upsertSourceAttribution } from "../services/providerOnboardingService";
 
 const signin = async (req: Request, res: Response) => {
     const { email, password, fcmToken } = req.body;
@@ -76,13 +77,18 @@ const resendVerification = async (req: Request, res: Response) => {
 
 export const firebaseAuthLoginController = async (req: Request, res: Response) => {
   try {
-    const { idToken } = req.body;
+    const { idToken, sourceClient } = req.body;
 
     if (!idToken) {
       return res.status(400).json({ status: "failed", message: "idToken is required" });
     }
 
     const result = await firebaseFunction.firebaseAuthLogin(idToken);
+
+    // Non-blocking attribution: only record when sourceClient is explicitly sent
+    if (sourceClient && result?.data?.uid) {
+      upsertSourceAttribution(result.data.uid, sourceClient, false).catch(() => {});
+    }
 
     return res.status(200).json(result);
   } catch (error: any) {
@@ -96,7 +102,7 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
 
 export const providerRegisterController = async (req: Request, res: Response) => {
   try {
-    const { idToken, firstName, lastName } = req.body;
+    const { idToken, firstName, lastName, sourceClient } = req.body;
 
     if (!idToken) {
       return res.status(400).json({ status: "failed", message: "idToken is required" });
@@ -110,6 +116,12 @@ export const providerRegisterController = async (req: Request, res: Response) =>
       String(firstName).trim(),
       String(lastName).trim(),
     );
+
+    // Non-blocking attribution: record registration source for the newly created provider
+    if (result?.data?.uid) {
+      const src = (sourceClient as string) || 'provider_web';
+      upsertSourceAttribution(result.data.uid, src as any, true, 'registration').catch(() => {});
+    }
 
     return res.status(200).json(result);
   } catch (error: any) {

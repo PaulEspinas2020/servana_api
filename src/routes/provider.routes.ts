@@ -1,5 +1,6 @@
 import express from "express";
 import verifyAuth from "../middleware/verifyAuth";
+import verifyRoles from "../middleware/verifyRoles";
 import * as provider from "../controllers/providerController";
 
 const router = express.Router();
@@ -119,5 +120,8 @@ router.delete("/worker/service-applications/:applicationId", verifyAuth, provide
 
 // FCM token — saved after login so push notifications reach this device
 router.post("/provider/fcm-token", verifyAuth, provider.saveProviderFcmToken);
+
+// ─── Admin diagnostics (role=1 only) ─────────────────────────────────────────
+router.get("/admin/provider/reconciliation", verifyAuth, verifyRoles([1]), provider.getProviderReconciliationReport);
 
 export default router;
