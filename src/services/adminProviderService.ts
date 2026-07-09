@@ -168,9 +168,9 @@ export const getProviderMetrics = async () => {
     ),
     // Active services — count DISTINCT provider UIDs via employee_services
     dbQuery.query(
-      `SELECT COUNT(DISTINCT es.uid) AS with_active_svc
+      `SELECT COUNT(DISTINCT es.employee_uid) AS with_active_svc
        FROM ${s}.employee_services es
-       JOIN ${s}.user_credentials uc ON uc.uid = es.uid
+       JOIN ${s}.user_credentials uc ON uc.uid = es.employee_uid
        WHERE uc.role IN (2,4)`, []
     ),
     // Both active service AND pending application on same UID
@@ -178,7 +178,7 @@ export const getProviderMetrics = async () => {
       `SELECT COUNT(DISTINCT uc.uid) AS both
        FROM ${s}.user_credentials uc
        WHERE uc.role IN (2,4)
-         AND EXISTS (SELECT 1 FROM ${s}.employee_services es   WHERE es.uid = uc.uid)
+         AND EXISTS (SELECT 1 FROM ${s}.employee_services es   WHERE es.employee_uid = uc.uid)
          AND EXISTS (SELECT 1 FROM ${s}.worker_service_applications wsa
                      WHERE wsa.worker_uid = uc.uid AND wsa.status = 'pending_review')`, []
     ),
@@ -767,8 +767,8 @@ const _getDuplicateSummary = async (): Promise<DuplicateSummary> => {
     ),
     // Orphan employee_services
     safeCount(
-      `SELECT COUNT(DISTINCT uid) AS cnt FROM ${s}.employee_services es
-       WHERE NOT EXISTS (SELECT 1 FROM ${s}.user_credentials uc WHERE uc.uid = es.uid)`, []
+      `SELECT COUNT(DISTINCT employee_uid) AS cnt FROM ${s}.employee_services es
+       WHERE NOT EXISTS (SELECT 1 FROM ${s}.user_credentials uc WHERE uc.uid = es.employee_uid)`, []
     ),
     // Orphan worker_service_applications
     safeCount(
@@ -781,7 +781,7 @@ const _getDuplicateSummary = async (): Promise<DuplicateSummary> => {
        FROM ${s}.user_credentials uc
        WHERE uc.role NOT IN (2,4)
          AND (
-           EXISTS (SELECT 1 FROM ${s}.employee_services es     WHERE es.uid = uc.uid)
+           EXISTS (SELECT 1 FROM ${s}.employee_services es     WHERE es.employee_uid = uc.uid)
         OR EXISTS (SELECT 1 FROM ${s}.worker_service_applications wsa WHERE wsa.worker_uid = uc.uid)
          )`, []
     ),
@@ -857,10 +857,10 @@ export const getProviderDuplicates = async (): Promise<ProviderDuplicateReport> 
     ).catch(() => ({ rows: [] })),
     // Orphan employee_services
     dbQuery.query(
-      `SELECT es.uid AS worker_uid, COUNT(*) AS cnt
+      `SELECT es.employee_uid AS worker_uid, COUNT(*) AS cnt
        FROM ${s}.employee_services es
-       WHERE NOT EXISTS (SELECT 1 FROM ${s}.user_credentials uc WHERE uc.uid = es.uid)
-       GROUP BY es.uid LIMIT 100`, []
+       WHERE NOT EXISTS (SELECT 1 FROM ${s}.user_credentials uc WHERE uc.uid = es.employee_uid)
+       GROUP BY es.employee_uid LIMIT 100`, []
     ).catch(() => ({ rows: [] })),
     // Orphan worker_service_applications
     dbQuery.query(
@@ -872,12 +872,12 @@ export const getProviderDuplicates = async (): Promise<ProviderDuplicateReport> 
     // Identity conflicts — non-provider role with provider-related data
     dbQuery.query(
       `SELECT uc.uid, uc.role, uc.email,
-              EXISTS (SELECT 1 FROM ${s}.employee_services es WHERE es.uid = uc.uid) AS has_active_svc,
+              EXISTS (SELECT 1 FROM ${s}.employee_services es WHERE es.employee_uid = uc.uid) AS has_active_svc,
               EXISTS (SELECT 1 FROM ${s}.worker_service_applications wsa WHERE wsa.worker_uid = uc.uid) AS has_apps
        FROM ${s}.user_credentials uc
        WHERE uc.role NOT IN (2,4)
          AND (
-           EXISTS (SELECT 1 FROM ${s}.employee_services es WHERE es.uid = uc.uid)
+           EXISTS (SELECT 1 FROM ${s}.employee_services es WHERE es.employee_uid = uc.uid)
         OR EXISTS (SELECT 1 FROM ${s}.worker_service_applications wsa WHERE wsa.worker_uid = uc.uid)
          )
        LIMIT 100`, []
@@ -885,7 +885,7 @@ export const getProviderDuplicates = async (): Promise<ProviderDuplicateReport> 
     // Legacy active services — active in employee_services with no approved application
     dbQuery.query(
       `SELECT es.uid
-       FROM (SELECT DISTINCT uid FROM ${s}.employee_services) es
+       FROM (SELECT DISTINCT employee_uid AS uid FROM ${s}.employee_services) es
        JOIN ${s}.user_credentials uc ON uc.uid = es.uid AND uc.role IN (2,4)
        WHERE NOT EXISTS (
          SELECT 1 FROM ${s}.worker_service_applications wsa
