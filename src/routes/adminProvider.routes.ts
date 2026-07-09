@@ -38,6 +38,8 @@ router.get('/admin/providers/:uid/services', ...adminOnly, ctrl.getProviderServi
 router.get('/admin/providers/:uid/service-applications', ...adminOnly, ctrl.getProviderServiceApplications);
 router.get('/admin/providers/:uid/catalog-capabilities', ...adminOnly, ctrl.getProviderCatalogCapabilities);
 router.get('/admin/providers/:uid/requirements', ...adminOnly, ctrl.getProviderRequirements);
+router.post('/admin/providers/:uid/requirements', ...adminOnly, ctrl.uploadProviderRequirement);
+router.delete('/admin/providers/:uid/requirements/:id', ...adminOnly, ctrl.deleteProviderRequirement);
 router.get('/admin/providers/:uid/jobs', ...adminOnly, ctrl.getProviderJobs);
 router.get('/admin/providers/:uid/performance', ...adminOnly, ctrl.getProviderPerformance);
 router.get('/admin/providers/:uid/earnings', ...adminOnly, ctrl.getProviderEarnings);

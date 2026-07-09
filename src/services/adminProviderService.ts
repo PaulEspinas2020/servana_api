@@ -11,6 +11,7 @@ import { db } from '../config';
 import mongoDb from '../db/mongodbQuery';
 import * as serviceApplicationService from './serviceApplicationService';
 import * as technicianService from './technicianService';
+import { uploadFileToStorage } from '../helpers/firebaseStorageUploader';
 
 const dbSchema = db.schema;
 
@@ -311,6 +312,32 @@ export const getProviderRequirements = async (uid: string) => {
     uploadedAt: r.uploaded_at,
     requirementType: r.requirement_type ?? 'document',
   }));
+};
+
+const ALLOWED_DOC_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+
+export const uploadProviderRequirement = async (
+  workerUid: string,
+  fileDataUri: string,
+  fileName: string,
+  requirementType?: string,
+) => {
+  const mimeType = fileDataUri.slice(fileDataUri.indexOf(':') + 1, fileDataUri.indexOf(';'));
+  if (!ALLOWED_DOC_MIMES.includes(mimeType)) {
+    throw new Error('File type not allowed. Use JPG, PNG, WebP, or PDF.');
+  }
+  const sanitizedName = String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
+  const fileUrl = await uploadFileToStorage('admin-requirements', `${workerUid}_${Date.now()}`, fileDataUri);
+  const inserted = await technicianService.addWorkerRequirements(workerUid, [{
+    fileUrl,
+    fileName: sanitizedName,
+    requirementType: requirementType || undefined,
+  }]);
+  return inserted[0];
+};
+
+export const deleteProviderRequirement = async (workerUid: string, id: number) => {
+  return technicianService.deleteWorkerRequirement(workerUid, id);
 };
 
 // ── Jobs / Bookings ───────────────────────────────────────────────────────────

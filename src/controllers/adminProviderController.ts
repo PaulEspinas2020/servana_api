@@ -293,6 +293,32 @@ export const getProviderRequirements = async (req: Request, res: Response) => {
   }
 };
 
+export const uploadProviderRequirement = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    const { file, name, requirementType } = req.body;
+    if (!file || !name) return fail(res, 400, 'file (data URI) and name are required');
+    if (!String(file).startsWith('data:')) return fail(res, 422, 'file must be a data URI');
+    const doc = await svc.uploadProviderRequirement(uid, String(file), String(name), requirementType ? String(requirementType) : undefined);
+    return ok(res, doc);
+  } catch (err: any) {
+    const status = err.message?.includes('not allowed') ? 422 : 500;
+    return fail(res, status, err?.message ?? 'Failed to upload requirement');
+  }
+};
+
+export const deleteProviderRequirement = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    const id = Number(req.params.id);
+    if (!id) return fail(res, 400, 'Invalid requirement id');
+    const deleted = await svc.deleteProviderRequirement(uid, id);
+    return ok(res, deleted);
+  } catch (err: any) {
+    return fail(res, 404, err?.message ?? 'Requirement not found');
+  }
+};
+
 // ── Jobs ──────────────────────────────────────────────────────────────────────
 
 export const getProviderJobs = async (req: Request, res: Response) => {
