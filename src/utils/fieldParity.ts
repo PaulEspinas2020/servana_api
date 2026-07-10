@@ -103,8 +103,8 @@ export const PARITY_REGISTRY: ParityGroup[] = [
   },
   {
     canonical: 'scheduleAt',
-    aliases: ['schedule', 'scheduledAt', 'scheduled_at', 'schedule_at'],
-    note: 'DB: schedule  |  controller output: scheduleAt  |  web portal DTO: scheduledAt',
+    aliases: ['schedule', 'scheduledAt', 'scheduled_at', 'schedule_at', 'dateOfBooking', 'date_of_booking'],
+    note: 'DB: schedule  |  controller: scheduleAt  |  web portal DTO: scheduledAt  |  booking request body: dateOfBooking',
   },
   {
     canonical: 'workerStatus',
@@ -115,6 +115,55 @@ export const PARITY_REGISTRY: ParityGroup[] = [
     canonical: 'fcmToken',
     aliases: ['fcm_token'],
     note: 'DB: fcm_token  |  backend: fcmToken',
+  },
+  // Booking lifecycle timestamps
+  {
+    canonical: 'assignedAt',
+    aliases: ['assigned_at'],
+    note: 'bw.assigned_at → technicianController: assignedAt; adminBookingService: assignedAt',
+  },
+  {
+    canonical: 'startedAt',
+    aliases: ['started_at'],
+    note: 'bw.started_at → technicianController: startedAt; adminBookingService: startedAt',
+  },
+  {
+    canonical: 'completedAt',
+    aliases: ['completed_at'],
+    note: 'bw.completed_at → technicianController: completedAt; adminBookingService: completedAt',
+  },
+  {
+    canonical: 'cancelledAt',
+    aliases: ['cancelled_at', 'canceledAt', 'canceled_at'],
+    note: 'DB: cancelled_at  |  response: cancelledAt  |  US-spelling alias: canceledAt',
+  },
+  // Customer identity in booking context
+  {
+    canonical: 'customerUid',
+    aliases: ['customer_uid', 'customerId', 'customer_id'],
+    note: 'Customer Firebase UID on booking — adminBookingService: customerUid (from customer_uid); formatBooking: customerId+customerUid from userId',
+  },
+  // Payment
+  {
+    canonical: 'paymentMethod',
+    aliases: ['payment_method'],
+    note: 'DB: payment_method  |  all responses: paymentMethod (camelCase)',
+  },
+  {
+    canonical: 'paymentStatus',
+    aliases: ['payment_status'],
+    note: 'DB: payment_status  |  response: paymentStatus',
+  },
+  // Booking reference and amount
+  {
+    canonical: 'bookingCode',
+    aliases: ['booking_code', 'referenceNo', 'reference_no'],
+    note: 'Generated SVN-XXXXXX code — providerController + adminProviderService + formatBooking all generate this; admin portal calls it referenceNo',
+  },
+  {
+    canonical: 'finalPrice',
+    aliases: ['final_price', 'quotedPrice', 'quoted_price'],
+    note: 'DB: final_price  |  response: finalPrice (toCamel); admin portal: quotedPrice or finalPrice',
   },
 
   // ── Service / Catalog ────────────────────────────────────────────────────────
@@ -169,8 +218,8 @@ export const PARITY_REGISTRY: ParityGroup[] = [
   // ── Worker / Provider ────────────────────────────────────────────────────────
   {
     canonical: 'workerUid',
-    aliases: ['worker_uid', 'providerUid', 'provider_uid'],
-    note: 'bookings.worker_uid / booking_workers.worker_uid — alias providerUid for admin portal',
+    aliases: ['worker_uid', 'providerUid', 'provider_uid', 'cleanerId', 'cleaner_id'],
+    note: 'bookings.worker_uid / booking_workers.worker_uid — providerUid for admin portal; cleanerId is legacy admin name for the same concept',
   },
   {
     canonical: 'requirementType',
