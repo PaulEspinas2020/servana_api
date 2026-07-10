@@ -13,12 +13,12 @@ function buildServanaLocationId(lat, lon) {
   return 'loc_' + lat.toFixed(6) + '_' + lon.toFixed(6);
 }
 
-function extractAddressComponent(components, types) {
+function extractAddressComponent(components, types, useShortName) {
   for (var i = 0; i < components.length; i++) {
     var c = components[i];
     for (var j = 0; j < types.length; j++) {
       if (c.types && c.types.indexOf(types[j]) !== -1) {
-        return c.long_name || '';
+        return (useShortName ? c.short_name : c.long_name) || '';
       }
     }
   }
@@ -168,11 +168,11 @@ describe('buildServanaLocationId — mobile format contract', () => {
 
 describe('extractAddressComponent — PH address parsing', () => {
   var components = [
-    { types: ['street_number'], long_name: '123' },
-    { types: ['route'], long_name: 'Ayala Avenue' },
-    { types: ['locality'], long_name: 'Makati City' },
-    { types: ['postal_code'], long_name: '1226' },
-    { types: ['country'], long_name: 'Philippines' },
+    { types: ['street_number'], long_name: '123', short_name: '123' },
+    { types: ['route'], long_name: 'Ayala Avenue', short_name: 'Ayala Ave' },
+    { types: ['locality'], long_name: 'Makati City', short_name: 'Makati City' },
+    { types: ['postal_code'], long_name: '1226', short_name: '1226' },
+    { types: ['country'], long_name: 'Philippines', short_name: 'PH' },
   ];
 
   it('extracts locality for postTown (Makati City)', () => {
@@ -181,5 +181,23 @@ describe('extractAddressComponent — PH address parsing', () => {
 
   it('returns empty string for missing type', () => {
     expect(extractAddressComponent(components, ['subpremise'])).toBe('');
+  });
+
+  it('falls through to second type when first type missing (admin_area_level_3 fallback)', () => {
+    var fallback = [{ types: ['administrative_area_level_3'], long_name: 'Pateros', short_name: 'Pateros' }];
+    expect(extractAddressComponent(fallback, ['locality', 'administrative_area_level_3'])).toBe('Pateros');
+  });
+
+  it('useShortName=true returns short_name (country ISO code)', () => {
+    // STITCH fix: country must return "PH" not "Philippines" for mobile parity
+    expect(extractAddressComponent(components, ['country'], true)).toBe('PH');
+  });
+
+  it('useShortName=false (default) returns long_name', () => {
+    expect(extractAddressComponent(components, ['locality'])).toBe('Makati City');
+  });
+
+  it('useShortName=true on route returns short abbreviation', () => {
+    expect(extractAddressComponent(components, ['route'], true)).toBe('Ayala Ave');
   });
 });
