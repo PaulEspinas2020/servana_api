@@ -78,10 +78,23 @@ export async function getSuggestions(
       sessiontoken: sessionToken,
       components: "country:ph",
       language: "en",
-      types: "geocode|establishment",
+      // No types param — omitting is safer; geocode|establishment is an invalid
+      // combination for Legacy Autocomplete and causes INVALID_REQUEST responses.
     },
     timeout: 8000,
   });
+
+  var status: string = (resp.data && resp.data.status) ? resp.data.status : "UNKNOWN_ERROR";
+
+  if (status === "ZERO_RESULTS") {
+    return [];
+  }
+
+  if (status !== "OK") {
+    var errMsg: string = (resp.data && resp.data.error_message) ? resp.data.error_message : "";
+    console.error("[addressSearchService] getSuggestions status:", status, errMsg || "(no error_message)");
+    throw new Error("Google Places autocomplete error: " + status + (errMsg ? " — " + errMsg : ""));
+  }
 
   const predictions: any[] =
     resp.data && resp.data.predictions ? resp.data.predictions : [];
@@ -122,6 +135,18 @@ export async function resolveAddress(
     },
     timeout: 8000,
   });
+
+  var detailStatus: string = (resp.data && resp.data.status) ? resp.data.status : "UNKNOWN_ERROR";
+
+  if (detailStatus === "ZERO_RESULTS" || detailStatus === "NOT_FOUND") {
+    return null;
+  }
+
+  if (detailStatus !== "OK") {
+    var detailErrMsg: string = (resp.data && resp.data.error_message) ? resp.data.error_message : "";
+    console.error("[addressSearchService] resolveAddress status:", detailStatus, detailErrMsg || "(no error_message)");
+    throw new Error("Google Places details error: " + detailStatus + (detailErrMsg ? " — " + detailErrMsg : ""));
+  }
 
   var result = resp.data && resp.data.result ? resp.data.result : null;
   if (!result) {
