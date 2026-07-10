@@ -250,7 +250,15 @@ export const approveServiceApplication = async (req: Request, res: Response) => 
       throw txErr;
     }
 
-    return ok(res, { id, status: 'approved' });
+    return ok(res, {
+      id,
+      status: 'approved',
+      affectedProviderUid: app.worker_uid,
+      changedScopes: ['applications', 'activeServices', 'identity'],
+    }, {
+      requestId: `admin-app-approve-${Date.now()}`,
+      generatedAt: new Date().toISOString(),
+    });
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
     return fail(res, code, err?.message ?? 'Failed to approve application');
@@ -293,7 +301,15 @@ export const rejectServiceApplication = async (req: Request, res: Response) => {
       [admin, reason ?? null, id]
     );
 
-    return ok(res, { id, status: 'rejected' });
+    return ok(res, {
+      id,
+      status: 'rejected',
+      affectedProviderUid: app.worker_uid,
+      changedScopes: ['applications', 'identity'],
+    }, {
+      requestId: `admin-app-reject-${Date.now()}`,
+      generatedAt: new Date().toISOString(),
+    });
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
     return fail(res, code, err?.message ?? 'Failed to reject application');
