@@ -88,6 +88,29 @@ export const initProviderCatalogSchema = async (): Promise<void> => {
     ALTER TABLE ${dbSchema}.user_credentials
     ADD COLUMN IF NOT EXISTS account_status TEXT NOT NULL DEFAULT 'pending'
   `, []);
+
+  // 7. is_mobile_protected flag on offerings — marks level_2 values that ServanaWorker/ServanaClient
+  //    hard-code (cannot be renamed, deleted, or archived while live mobile bookings reference them).
+  await dbQuery.query(`
+    ALTER TABLE ${dbSchema}.provider_catalog_offerings
+    ADD COLUMN IF NOT EXISTS is_mobile_protected BOOLEAN NOT NULL DEFAULT false
+  `, []);
+
+  // 8. Catalog audit events — append-only log; fire-and-forget writes.
+  await dbQuery.query(`
+    CREATE TABLE IF NOT EXISTS ${dbSchema}.catalog_audit_events (
+      id          SERIAL PRIMARY KEY,
+      actor_uid   TEXT,
+      action      VARCHAR(100) NOT NULL,
+      entity_type VARCHAR(50)  NOT NULL,
+      entity_id   TEXT,
+      before_json JSONB,
+      after_json  JSONB,
+      reason      TEXT,
+      request_id  TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `, []);
 };
 
 // ─── Seed ────────────────────────────────────────────────────────────────────
@@ -224,12 +247,17 @@ export const seedBuiltInOfferings = async (): Promise<void> => {
 
     if (existing.rows.length > 0) {
       offeringId = Number(existing.rows[0].id);
+      // Backfill is_mobile_protected for builtins inserted before column was added
+      await dbQuery.query(
+        `UPDATE ${dbSchema}.provider_catalog_offerings SET is_mobile_protected = true WHERE id = $1 AND is_mobile_protected = false`,
+        [offeringId]
+      );
     } else {
       const ins = await dbQuery.query(
         `INSERT INTO ${dbSchema}.provider_catalog_offerings
           (catalog_key, name, short_description, provider_description, icon_key,
-           display_order, is_builtin, status, provider_web_visible)
-         VALUES ($1, $2, $3, $4, $5, $6, true, 'active', true)
+           display_order, is_builtin, status, provider_web_visible, is_mobile_protected)
+         VALUES ($1, $2, $3, $4, $5, $6, true, 'active', true, true)
          RETURNING id`,
         [
           seed.catalogKey,
@@ -804,4 +832,330 @@ export const updateAddonStatus = async (
   );
   if (res.rows.length === 0) throw new Error('Add-on not found');
   return { addonOptionId, isActive };
+};
+
+// ─── Audit helpers ────────────────────────────────────────────────────────────
+
+interface AuditEvent {
+  actorUid?: string;
+  action: string;
+  entityType: string;
+  entityId?: string;
+  beforeJson?: any;
+  afterJson?: any;
+  reason?: string;
+  requestId?: string;
+}
+
+const logAudit = (event: AuditEvent): void => {
+  // Fire-and-forget — never blocks a mutation, never throws
+  dbQuery.query(
+    `INSERT INTO ${dbSchema}.catalog_audit_events
+      (actor_uid, action, entity_type, entity_id, before_json, after_json, reason, request_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      event.actorUid ?? null,
+      event.action,
+      event.entityType,
+      event.entityId ?? null,
+      event.beforeJson ? JSON.stringify(event.beforeJson) : null,
+      event.afterJson  ? JSON.stringify(event.afterJson)  : null,
+      event.reason     ?? null,
+      event.requestId  ?? null,
+    ]
+  ).catch(() => {});
+};
+
+// ─── Admin — Catalog Overview (consolidated read model) ───────────────────────
+
+export const getAdminCatalogOverview = async (filter: {
+  search?: string;
+  status?: string;
+  mobileProtected?: boolean;
+} = {}): Promise<any[]> => {
+  const conditions: string[] = [];
+  const params: any[] = [];
+
+  if (filter.search) {
+    params.push(`%${filter.search}%`);
+    conditions.push(`(o.name ILIKE $${params.length} OR o.catalog_key ILIKE $${params.length})`);
+  }
+  if (filter.status) {
+    params.push(filter.status);
+    conditions.push(`o.status = $${params.length}`);
+  }
+  if (filter.mobileProtected !== undefined) {
+    params.push(filter.mobileProtected);
+    conditions.push(`COALESCE(o.is_mobile_protected, false) = $${params.length}`);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const res = await dbQuery.query(
+    `SELECT o.id, o.catalog_key, o.name, o.status, o.is_builtin,
+            COALESCE(o.is_mobile_protected, false) AS is_mobile_protected,
+            o.provider_web_visible, o.legacy_customer_mobile_visible,
+            o.display_order, o.updated_at, o.version, o.icon_key
+     FROM ${dbSchema}.provider_catalog_offerings o
+     ${where}
+     ORDER BY o.display_order, o.name`,
+    params
+  );
+  if (res.rows.length === 0) return [];
+
+  const offeringIds = res.rows.map((r: any) => Number(r.id));
+
+  const mappingsRes = await dbQuery.query(
+    `SELECT m.id, m.offering_id, m.service_id, m.level_2, m.is_active, m.display_order,
+            s.name AS service_family_name,
+            (SELECT COUNT(*) FROM ${dbSchema}.service_options so
+             WHERE so.service_id = m.service_id AND so.level_2 = m.level_2
+               AND so.option_type = 'MAIN' AND (so.is_active IS NULL OR so.is_active = true)
+            ) AS specific_service_count,
+            (SELECT COALESCE(MIN(so2.base_price), 0) FROM ${dbSchema}.service_options so2
+             WHERE so2.service_id = m.service_id AND so2.level_2 = m.level_2
+               AND so2.option_type = 'MAIN' AND (so2.is_active IS NULL OR so2.is_active = true)
+            ) AS min_price,
+            (SELECT COALESCE(MAX(so2.base_price), 0) FROM ${dbSchema}.service_options so2
+             WHERE so2.service_id = m.service_id AND so2.level_2 = m.level_2
+               AND so2.option_type = 'MAIN' AND (so2.is_active IS NULL OR so2.is_active = true)
+            ) AS max_price
+     FROM ${dbSchema}.provider_catalog_offering_mappings m
+     JOIN ${dbSchema}.services s ON s.id = m.service_id
+     WHERE m.offering_id = ANY($1)
+     ORDER BY m.offering_id, m.display_order`,
+    [offeringIds]
+  );
+
+  const mappingsByOffering = new Map<number, any[]>();
+  for (const m of mappingsRes.rows) {
+    const oid = Number(m.offering_id);
+    if (!mappingsByOffering.has(oid)) mappingsByOffering.set(oid, []);
+    mappingsByOffering.get(oid)!.push({
+      mappingId: Number(m.id),
+      serviceId: Number(m.service_id),
+      serviceFamilyName: m.service_family_name,
+      level2: m.level_2,
+      isActive: Boolean(m.is_active),
+      displayOrder: Number(m.display_order),
+      specificServiceCount: Number(m.specific_service_count),
+      minPrice: Number(m.min_price) || null,
+      maxPrice: Number(m.max_price) || null,
+    });
+  }
+
+  return res.rows.map((o: any) => {
+    const mappings = mappingsByOffering.get(Number(o.id)) ?? [];
+    const activeMappings = mappings.filter((m: any) => m.isActive);
+    const totalSpecificServices = activeMappings.reduce((sum: number, m: any) => sum + m.specificServiceCount, 0);
+    return {
+      offeringId: Number(o.id),
+      catalogKey: o.catalog_key,
+      name: o.name,
+      status: o.status,
+      isBuiltin: Boolean(o.is_builtin),
+      isMobileProtected: Boolean(o.is_mobile_protected),
+      iconKey: o.icon_key ?? null,
+      providerVisible: Boolean(o.provider_web_visible),
+      customerVisible: Boolean(o.legacy_customer_mobile_visible),
+      displayOrder: Number(o.display_order),
+      lastUpdatedAt: o.updated_at,
+      version: Number(o.version),
+      activeMappingCount: activeMappings.length,
+      totalSpecificServices,
+      mappings,
+    };
+  });
+};
+
+// ─── Admin — Mappings CRUD ────────────────────────────────────────────────────
+
+export const createMapping = async (
+  offeringId: number,
+  data: { serviceId: number; level2: string; displayOrder?: number },
+  adminUid: string
+): Promise<any> => {
+  const offeringCheck = await dbQuery.query(
+    `SELECT id, status FROM ${dbSchema}.provider_catalog_offerings WHERE id = $1`,
+    [offeringId]
+  );
+  if (offeringCheck.rows.length === 0) throw new Error('Offering not found');
+  if (offeringCheck.rows[0].status === 'archived') throw new Error('Cannot add mapping to an archived offering');
+
+  const svcCheck = await dbQuery.query(
+    `SELECT id, name FROM ${dbSchema}.services WHERE id = $1`,
+    [data.serviceId]
+  );
+  if (svcCheck.rows.length === 0) throw new Error('Service family not found');
+
+  const existing = await dbQuery.query(
+    `SELECT id, is_active FROM ${dbSchema}.provider_catalog_offering_mappings
+     WHERE offering_id = $1 AND service_id = $2 AND level_2 = $3`,
+    [offeringId, data.serviceId, data.level2]
+  );
+
+  if (existing.rows.length > 0) {
+    if (Boolean(existing.rows[0].is_active)) {
+      throw new Error(`Mapping for "${data.level2}" already exists and is active`);
+    }
+    // Reactivate archived mapping
+    const res = await dbQuery.query(
+      `UPDATE ${dbSchema}.provider_catalog_offering_mappings
+       SET is_active = true, display_order = $1, updated_at = NOW()
+       WHERE id = $2 RETURNING *`,
+      [data.displayOrder ?? 99, existing.rows[0].id]
+    );
+    logAudit({ actorUid: adminUid, action: 'reactivate_mapping', entityType: 'mapping', entityId: String(existing.rows[0].id), afterJson: { isActive: true } });
+    return { ...toCamel(res.rows[0]), serviceFamilyName: svcCheck.rows[0].name };
+  }
+
+  const res = await dbQuery.query(
+    `INSERT INTO ${dbSchema}.provider_catalog_offering_mappings
+      (offering_id, service_id, level_2, display_order, is_active)
+     VALUES ($1, $2, $3, $4, true)
+     RETURNING *`,
+    [offeringId, data.serviceId, data.level2, data.displayOrder ?? 99]
+  );
+  logAudit({ actorUid: adminUid, action: 'create_mapping', entityType: 'mapping', entityId: String(res.rows[0].id), afterJson: { offeringId, serviceId: data.serviceId, level2: data.level2 } });
+  return { ...toCamel(res.rows[0]), serviceFamilyName: svcCheck.rows[0].name };
+};
+
+export const updateMapping = async (
+  mappingId: number,
+  data: { displayOrder?: number; isActive?: boolean },
+  adminUid: string
+): Promise<any> => {
+  const res = await dbQuery.query(
+    `UPDATE ${dbSchema}.provider_catalog_offering_mappings SET
+       display_order = COALESCE($1, display_order),
+       is_active     = COALESCE($2, is_active),
+       updated_at    = NOW()
+     WHERE id = $3
+     RETURNING *`,
+    [data.displayOrder ?? null, data.isActive ?? null, mappingId]
+  );
+  if (res.rows.length === 0) throw new Error('Mapping not found');
+  logAudit({ actorUid: adminUid, action: 'update_mapping', entityType: 'mapping', entityId: String(mappingId), afterJson: data });
+  return toCamel(res.rows[0]);
+};
+
+export const archiveMapping = async (mappingId: number, adminUid: string): Promise<any> => {
+  const mapping = await dbQuery.query(
+    `SELECT m.offering_id, o.status FROM ${dbSchema}.provider_catalog_offering_mappings m
+     JOIN ${dbSchema}.provider_catalog_offerings o ON o.id = m.offering_id
+     WHERE m.id = $1`,
+    [mappingId]
+  );
+  if (mapping.rows.length === 0) throw new Error('Mapping not found');
+
+  const { offering_id, status } = mapping.rows[0];
+  if (status === 'active') {
+    const remaining = await dbQuery.query(
+      `SELECT COUNT(*) AS cnt FROM ${dbSchema}.provider_catalog_offering_mappings
+       WHERE offering_id = $1 AND is_active = true AND id != $2`,
+      [offering_id, mappingId]
+    );
+    if (Number(remaining.rows[0].cnt) === 0) {
+      throw new Error('Cannot archive the last active mapping on a published offering');
+    }
+  }
+
+  const res = await dbQuery.query(
+    `UPDATE ${dbSchema}.provider_catalog_offering_mappings
+     SET is_active = false, updated_at = NOW()
+     WHERE id = $1 RETURNING *`,
+    [mappingId]
+  );
+  logAudit({ actorUid: adminUid, action: 'archive_mapping', entityType: 'mapping', entityId: String(mappingId), afterJson: { isActive: false } });
+  return toCamel(res.rows[0]);
+};
+
+// ─── Admin — Publish Preview & Publish ────────────────────────────────────────
+
+export const runPublishPreview = async (offeringId: number): Promise<{
+  canPublish: boolean;
+  blockers: string[];
+  warnings: string[];
+}> => {
+  const offering = await getAdminOffering(offeringId);
+  if (!offering) return { canPublish: false, blockers: ['Offering not found'], warnings: [] };
+
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+
+  if (offering.status === 'archived') {
+    blockers.push('Offering is archived and cannot be published');
+  }
+
+  const activeMappings = (offering.mappings ?? []).filter((m: any) => Boolean(m.isActive));
+  if (activeMappings.length === 0) {
+    blockers.push('Offering has no active option-group mappings — add at least one mapping first');
+  }
+
+  for (const m of activeMappings) {
+    const ssRes = await dbQuery.query(
+      `SELECT COUNT(*) AS cnt FROM ${dbSchema}.service_options
+       WHERE service_id = $1 AND level_2 = $2 AND option_type = 'MAIN'
+         AND (is_active IS NULL OR is_active = true) AND base_price > 0`,
+      [m.serviceId, m.level2]
+    );
+    if (Number(ssRes.rows[0]?.cnt ?? 0) === 0) {
+      blockers.push(`Mapping "${m.level2}" has no active specific services with a price — add specific services first`);
+    }
+  }
+
+  if (!offering.providerWebVisible) {
+    warnings.push('Offering will not be visible to providers on the web portal (providerWebVisible is false)');
+  }
+
+  return { canPublish: blockers.length === 0, blockers, warnings };
+};
+
+export const publishOffering = async (offeringId: number, adminUid: string): Promise<any> => {
+  const preview = await runPublishPreview(offeringId);
+  if (!preview.canPublish) {
+    const err: any = new Error(`Cannot publish: ${preview.blockers.join('; ')}`);
+    err.code = 'PUBLISH_BLOCKED';
+    err.blockers = preview.blockers;
+    throw err;
+  }
+  const result = await updateOfferingStatus(offeringId, 'active', adminUid);
+  logAudit({ actorUid: adminUid, action: 'publish', entityType: 'offering', entityId: String(offeringId), afterJson: { status: 'active' } });
+  return result;
+};
+
+// ─── Admin — Audit Trail ─────────────────────────────────────────────────────
+
+export const getAuditTrail = async (filter: {
+  entityType?: string;
+  entityId?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<any[]> => {
+  const conditions: string[] = [];
+  const params: any[] = [];
+
+  if (filter.entityType) {
+    params.push(filter.entityType);
+    conditions.push(`entity_type = $${params.length}`);
+  }
+  if (filter.entityId) {
+    params.push(filter.entityId);
+    conditions.push(`entity_id = $${params.length}`);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  params.push(Math.min(filter.limit ?? 50, 200));
+  const limitIdx = params.length;
+  params.push(filter.offset ?? 0);
+  const offsetIdx = params.length;
+
+  const res = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.catalog_audit_events
+     ${where}
+     ORDER BY created_at DESC
+     LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    params
+  );
+  return res.rows.map(toCamel);
 };

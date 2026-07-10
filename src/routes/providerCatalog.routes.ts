@@ -91,4 +91,45 @@ router.post(
   ctrl.createSpecificService
 );
 
+// Mappings CRUD
+router.post(
+  "/admin/provider-catalog/offerings/:offeringId/mappings",
+  verifyAuth, verifyRoles([1]),
+  ctrl.createMapping
+);
+router.patch(
+  "/admin/provider-catalog/mappings/:mappingId",
+  verifyAuth, verifyRoles([1]),
+  ctrl.updateMapping
+);
+router.delete(
+  "/admin/provider-catalog/mappings/:mappingId",
+  verifyAuth, verifyRoles([1]),
+  ctrl.archiveMapping
+);
+
+// Publish flow
+router.post(
+  "/admin/provider-catalog/offerings/:offeringId/publish-preview",
+  verifyAuth, verifyRoles([1]),
+  ctrl.publishPreview
+);
+router.post(
+  "/admin/provider-catalog/offerings/:offeringId/publish",
+  verifyAuth, verifyRoles([1]),
+  ctrl.publish
+);
+
+// Overview and audit (before :offeringId routes to avoid shadowing)
+router.get(
+  "/admin/provider-catalog/overview",
+  verifyAuth, verifyRoles([1]),
+  ctrl.getCatalogOverview
+);
+router.get(
+  "/admin/provider-catalog/audit",
+  verifyAuth, verifyRoles([1]),
+  ctrl.getAudit
+);
+
 export default router;
