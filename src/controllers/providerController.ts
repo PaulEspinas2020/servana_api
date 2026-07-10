@@ -117,6 +117,7 @@ const bookingCode = (id: any) => `SVN-${String(id).padStart(6, "0")}`;
 
 const toJobDto = (r: any) => ({
   id: String(r.id),
+  bookingId: String(r.id),
   bookingCode: bookingCode(r.id),
   serviceName: r.service_name || "",
   categoryName: r.category_name || "",
@@ -240,6 +241,7 @@ export const getEarnings = async (req: Request, res: Response) => {
       const gross = Number(r.final_price || 0);
       return {
         id: String(r.id),
+        bookingId: String(r.id),
         bookingCode: bookingCode(r.id),
         serviceName: r.service_name || "",
         completedAt: r.schedule,

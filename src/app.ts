@@ -5,6 +5,8 @@ import cookieParser from "cookie-parser";
 import formidable from "formidable";
 
 import dotenv from "dotenv";
+import { parityMiddleware } from "./middleware/parityMiddleware";
+import { requestParityMiddleware } from "./middleware/requestParityMiddleware";
 
 dotenv.config();
 
@@ -52,6 +54,11 @@ app.use((req, _res, next) => {
 // 10mb covers base64-encoded images up to ~7.5 MB raw; processor outputs ≤3.5 MB (≈4.7 MB base64).
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
+
+// SWEEP request parity — enriches incoming request bodies with cross-platform field aliases
+app.use(requestParityMiddleware);
+// SWEEP response parity — enriches every JSON response with cross-platform field aliases
+app.use(parityMiddleware);
 app.use((req: Request, res: Response, next: NextFunction) => {
     if (req.is("multipart/form-data") == "multipart/form-data") {
         const form = formidable({ multiples: true, maxFileSize: 15 * 1024 * 1024 });
@@ -123,6 +130,9 @@ app.use("/api", cors(corsOptionsDelegate), adminProviderRoutes);
 import adminOnboardingRoutes from "./routes/adminOnboarding.routes";
 app.use("/api", cors(corsOptionsDelegate), adminOnboardingRoutes);
 
+import adminBookingRoutes from "./routes/adminBooking.routes";
+app.use("/api", cors(corsOptionsDelegate), adminBookingRoutes);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
@@ -169,6 +179,15 @@ import { ensureProviderWebSchema } from "./services/providerOnboardingService";
     await ensureProviderWebSchema();
   } catch (err) {
     console.error("[provider-web-onboarding] schema error:", err);
+  }
+})();
+
+import { ensureBookingOpsSchema } from "./services/adminBookingService";
+(async () => {
+  try {
+    await ensureBookingOpsSchema();
+  } catch (err) {
+    console.error("[booking-ops] schema error:", err);
   }
 })();
 
