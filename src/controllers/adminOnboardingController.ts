@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import * as svc from '../services/adminOnboardingService';
+import { adminError, AdminErrorCode } from '../helpers/adminError';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -9,8 +10,12 @@ const ok = (res: Response, data: any, meta?: any) =>
 const created = (res: Response, data: any) =>
   res.status(201).json({ status: 'success', data });
 
-const fail = (res: Response, status: number, message: string) =>
-  res.status(status).json({ status: 'failed', message });
+const HTTP_TO_CODE: Record<number, AdminErrorCode> = {
+  400: 'BUSINESS_RULE', 403: 'FORBIDDEN', 404: 'NOT_FOUND',
+  409: 'CONFLICT', 422: 'VALIDATION_ERROR', 500: 'SERVER_ERROR',
+};
+const fail = (res: Response, httpStatus: number, message: string) =>
+  adminError(res, httpStatus, HTTP_TO_CODE[httpStatus] ?? 'SERVER_ERROR', message);
 
 const actorUid = (req: Request): string => req.user?.uid ?? '';
 

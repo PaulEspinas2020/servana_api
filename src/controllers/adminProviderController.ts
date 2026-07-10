@@ -1,14 +1,19 @@
 import { Request, Response } from 'express';
 import * as svc from '../services/adminProviderService';
 import * as appSvc from '../services/serviceApplicationService';
+import { adminError, AdminErrorCode } from '../helpers/adminError';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const ok = (res: Response, data: any, meta?: any) =>
   res.status(200).json({ status: 'success', data, ...(meta ? { meta } : {}) });
 
-const fail = (res: Response, status: number, message: string) =>
-  res.status(status).json({ status: 'failed', message });
+const HTTP_TO_CODE: Record<number, AdminErrorCode> = {
+  400: 'BUSINESS_RULE', 403: 'FORBIDDEN', 404: 'NOT_FOUND',
+  409: 'CONFLICT', 422: 'VALIDATION_ERROR', 500: 'SERVER_ERROR',
+};
+const fail = (res: Response, httpStatus: number, message: string) =>
+  adminError(res, httpStatus, HTTP_TO_CODE[httpStatus] ?? 'SERVER_ERROR', message);
 
 const parseIntQ = (val: any, fallback: number) => {
   const n = parseInt(val, 10);
