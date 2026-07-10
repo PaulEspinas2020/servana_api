@@ -36,7 +36,21 @@ export const listProviders = async (req: Request, res: Response) => {
       sortDir: (sort_dir as any) ?? 'desc',
     });
 
-    return ok(res, result.rows, {
+    const rows = result.rows.map((r: any) => ({
+      uid:              r.uid,
+      firstName:        r.first_name        ?? null,
+      lastName:         r.last_name         ?? null,
+      email:            r.email             ?? null,
+      phoneNumber:      r.phone_number      ?? null,
+      role:             r.role,
+      accountStatus:    r.account_status    ?? null,
+      isArchive:        r.is_archive        ?? false,
+      isEmailVerified:  r.is_email_verified ?? false,
+      createdDate:      r.created_date      ?? null,
+      photoUrl:         r.photo_url         ?? null,
+    }));
+
+    return ok(res, rows, {
       total: result.total,
       page: result.page,
       limit: result.limit,
