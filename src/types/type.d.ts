@@ -16,6 +16,7 @@ declare global {
         lastName: string;
         role: number;
         isArchived: boolean;
+        isEmailVerified?: boolean;
         createdDate: Date;
         phoneNumber?: string | null;
         fcmToken?: string;

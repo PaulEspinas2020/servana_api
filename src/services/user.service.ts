@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 const dbSchema = db.schema;
 import dayjs from "dayjs";
 import uploadInStorage from "../helpers/firebaseStorageUploader";
+import { applyParity } from "../utils/fieldParity";
 
 const now = dayjs();
 const OTP_EXPIRY_MINUTES = 10;
@@ -342,8 +343,8 @@ const updateUserPhoneNumber = async (phoneNumber: string | undefined, uid: strin
     }
 };
 
-const formatUserCredentials = (raw: any): UserCredentials => {
-    return {
+const formatUserCredentials = (raw: any): UserCredentials & Record<string, unknown> => {
+    return applyParity({
         id: raw.uid,
         email: raw.email,
         firstName: raw.first_name,
@@ -351,9 +352,10 @@ const formatUserCredentials = (raw: any): UserCredentials => {
         role: raw.role,
         createdDate: raw.created_date,
         isArchived: raw.is_archive,
+        isEmailVerified: raw.is_email_verified ?? false,
         phoneNumber: raw.phone_number ?? null,
         fcmToken: raw.fcm_token,
-    };
+    });
 };
 
 const formatUserProfile = (raw: any) => {
