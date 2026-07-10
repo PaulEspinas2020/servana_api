@@ -123,6 +123,9 @@ app.use("/api", cors(corsOptionsDelegate), adminProviderRoutes);
 import adminOnboardingRoutes from "./routes/adminOnboarding.routes";
 app.use("/api", cors(corsOptionsDelegate), adminOnboardingRoutes);
 
+import adminBookingRoutes from "./routes/adminBooking.routes";
+app.use("/api", cors(corsOptionsDelegate), adminBookingRoutes);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
@@ -169,6 +172,15 @@ import { ensureProviderWebSchema } from "./services/providerOnboardingService";
     await ensureProviderWebSchema();
   } catch (err) {
     console.error("[provider-web-onboarding] schema error:", err);
+  }
+})();
+
+import { ensureBookingOpsSchema } from "./services/adminBookingService";
+(async () => {
+  try {
+    await ensureBookingOpsSchema();
+  } catch (err) {
+    console.error("[booking-ops] schema error:", err);
   }
 })();
 
