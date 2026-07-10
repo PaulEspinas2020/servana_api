@@ -162,8 +162,8 @@ export const PARITY_REGISTRY: ParityGroup[] = [
   },
   {
     canonical: 'finalPrice',
-    aliases: ['final_price', 'quotedPrice', 'quoted_price'],
-    note: 'DB: final_price  |  response: finalPrice (toCamel); admin portal: quotedPrice or finalPrice',
+    aliases: ['final_price', 'quotedPrice', 'quoted_price', 'bookingAmount', 'booking_amount'],
+    note: 'DB: final_price  |  response: finalPrice (toCamel)  |  admin portal: quotedPrice/finalPrice  |  provider portal: bookingAmount',
   },
 
   // ── Service / Catalog ────────────────────────────────────────────────────────

@@ -496,6 +496,7 @@ export const getProviderJobs = async (uid: string, filter: ProviderJobsFilter = 
 
   const rows = rowsRes.rows.map((r: any) => ({
     id: String(r.id),
+    bookingId: String(r.id),
     bookingCode: `SVN-${String(r.id).padStart(6, '0')}`,
     status: r.status ?? '',
     serviceName: r.service_name ?? '',
