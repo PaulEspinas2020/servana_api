@@ -195,6 +195,11 @@ export const PARITY_REGISTRY: ParityGroup[] = [
 
   // ── Address ──────────────────────────────────────────────────────────────────
   {
+    canonical: 'userAddressId',
+    aliases: ['user_address_id', 'addressId', 'address_id'],
+    note: 'bookings.user_address_id FK — booking creation body: userAddressId (service) vs addressId (admin portal BookingRequestBody); request middleware bridges them',
+  },
+  {
     canonical: 'addressOne',
     aliases: ['address_one', 'addressLine', 'address_line', 'address'],
     note: 'user_address.address_one → toCamel: addressOne | job card: address.addressOne | legacy: address',

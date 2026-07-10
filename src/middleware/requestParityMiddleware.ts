@@ -55,5 +55,11 @@ export function requestParityMiddleware(
     req.body = enrichBody(req.body);
   }
 
+  // Also normalize URL query params so ?scheduled_at=X works the same as ?schedule=X
+  if (req.query && typeof req.query === 'object') {
+    const enriched = applyContextSafeParity(req.query as Record<string, unknown>);
+    Object.assign(req.query, enriched);
+  }
+
   next();
 }
