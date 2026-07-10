@@ -52,6 +52,9 @@ app.use((req, _res, next) => {
 // 10mb covers base64-encoded images up to ~7.5 MB raw; processor outputs ≤3.5 MB (≈4.7 MB base64).
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
+
+// SWEEP parity middleware — enriches every JSON response with cross-platform field aliases
+app.use(parityMiddleware);
 app.use((req: Request, res: Response, next: NextFunction) => {
     if (req.is("multipart/form-data") == "multipart/form-data") {
         const form = formidable({ multiples: true, maxFileSize: 15 * 1024 * 1024 });
@@ -176,6 +179,7 @@ import { ensureProviderWebSchema } from "./services/providerOnboardingService";
 })();
 
 import { ensureBookingOpsSchema } from "./services/adminBookingService";
+import { parityMiddleware } from "./middleware/parityMiddleware";
 (async () => {
   try {
     await ensureBookingOpsSchema();
