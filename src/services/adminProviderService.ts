@@ -22,6 +22,11 @@ export interface ProviderListFilter {
   role?: number;
   accountStatus?: string;
   isArchive?: boolean;
+  hasDocuments?: boolean;      // true = has any docs; false = missing docs
+  hasPendingApps?: boolean;    // true = has pending_review applications
+  hasActiveServices?: boolean; // true = has active employee_services rows
+  hasAvailability?: boolean;   // true = has worker_availability row
+  hasServiceArea?: boolean;    // true = has worker_service_area row
   page?: number;
   limit?: number;
   sortBy?: 'name' | 'created_date' | 'account_status';
@@ -34,17 +39,22 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
     role,
     accountStatus,
     isArchive,
+    hasDocuments,
+    hasPendingApps,
+    hasActiveServices,
+    hasAvailability,
+    hasServiceArea,
     page = 1,
     limit = 50,
     sortBy = 'created_date',
     sortDir = 'desc',
   } = filter;
 
+  const s = dbSchema;
   const offset = (page - 1) * limit;
   const params: any[] = [];
   const where: string[] = [];
 
-  // Exclude role=1 (admins) and role=3 (customers) from provider list
   where.push(`uc.role IN (2, 4)`);
 
   if (search) {
@@ -69,6 +79,18 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
     params.push(isArchive);
     where.push(`uc.is_archive = $${params.length}`);
   }
+
+  // Provider-domain filters — resolved at read-model layer
+  if (hasDocuments === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_requirements wr_f WHERE wr_f.worker_uid = uc.uid)`);
+  if (hasDocuments === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_requirements wr_f WHERE wr_f.worker_uid = uc.uid)`);
+  if (hasPendingApps === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_service_applications wsa_f WHERE wsa_f.worker_uid = uc.uid AND wsa_f.status = 'pending_review')`);
+  if (hasPendingApps === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_service_applications wsa_f WHERE wsa_f.worker_uid = uc.uid AND wsa_f.status = 'pending_review')`);
+  if (hasActiveServices === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.employee_services es_f WHERE es_f.employee_uid = uc.uid)`);
+  if (hasActiveServices === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.employee_services es_f WHERE es_f.employee_uid = uc.uid)`);
+  if (hasAvailability === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_availability wa_f WHERE wa_f.uid = uc.uid)`);
+  if (hasAvailability === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa_f WHERE wa_f.uid = uc.uid)`);
+  if (hasServiceArea === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_service_area wsa2_f WHERE wsa2_f.uid = uc.uid)`);
+  if (hasServiceArea === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_service_area wsa2_f WHERE wsa2_f.uid = uc.uid)`);
 
   const sortColumn: Record<string, string> = {
     name: `uc.first_name`,
@@ -97,16 +119,24 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
          uc.is_archive,
          uc.is_email_verified,
          uc.created_date,
-         up.photo_url
-       FROM ${dbSchema}.user_credentials uc
-       LEFT JOIN ${dbSchema}.user_profile up ON up.uid = uc.uid
+         up.photo_url,
+         -- Document summary (resolved by backend — prevents JOIN inflation)
+         COALESCE((SELECT COUNT(*)::int FROM ${s}.worker_requirements wr2 WHERE wr2.worker_uid = uc.uid), 0) AS doc_total,
+         -- Service summary (resolved by backend — pending vs active separate)
+         COALESCE((SELECT COUNT(*)::int FROM ${s}.worker_service_applications wsa2 WHERE wsa2.worker_uid = uc.uid AND wsa2.status = 'pending_review'), 0) AS pending_apps,
+         COALESCE((SELECT COUNT(*)::int FROM ${s}.employee_services es2 WHERE es2.employee_uid = uc.uid), 0) AS active_svc,
+         -- Availability and service area (resolved by backend)
+         CASE WHEN EXISTS (SELECT 1 FROM ${s}.worker_availability wa2 WHERE wa2.uid = uc.uid) THEN 'saved' ELSE 'missing' END AS avail_status,
+         CASE WHEN EXISTS (SELECT 1 FROM ${s}.worker_service_area wsa3 WHERE wsa3.uid = uc.uid) THEN 'saved' ELSE 'missing' END AS area_status
+       FROM ${s}.user_credentials uc
+       LEFT JOIN ${s}.user_profile up ON up.uid = uc.uid
        ${whereClause}
        ORDER BY ${col} ${dir}
        LIMIT $${limitP} OFFSET $${offsetP}`,
       params
     ),
     dbQuery.query(
-      `SELECT COUNT(*) FROM ${dbSchema}.user_credentials uc ${whereClause}`,
+      `SELECT COUNT(*) FROM ${s}.user_credentials uc ${whereClause}`,
       params.slice(0, -2)
     ),
   ]);
@@ -225,6 +255,17 @@ export const getProviderMetrics = async () => {
     duplicateCandidates:          dupSummary.duplicateCandidates,
     orphanProviderReferences:     dupSummary.orphanReferences,
     identityConflicts:            dupSummary.identityConflicts,
+    // Canonical aliases (command contract Section 8) — same values, shorter keys
+    missingDocuments:    Number(d.missing_docs      ?? 0),
+    pendingApplications: Number(a.with_pending_apps ?? 0),
+    activeServices:      Number(activeSvcRes.rows[0]?.with_active_svc ?? 0),
+    missingAvailability: missingAvail,
+    missingServiceArea:  missingArea,
+    attentionNeeded:     Math.max(0,
+      Number(d.missing_docs ?? 0)
+      + (missingAvail >= 0 ? missingAvail : 0)
+      + (missingArea  >= 0 ? missingArea  : 0)
+    ),
   };
 };
 
@@ -676,8 +717,8 @@ export const getProviderOverlapMap = async (uid: string): Promise<ProviderOverla
     safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.user_profile              WHERE uid = $1`,         [uid]),
     safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.worker_requirements       WHERE worker_uid = $1`,  [uid]),
     dbQuery.query(`SELECT status, COUNT(*)::int AS cnt FROM ${s}.worker_service_applications WHERE worker_uid = $1 GROUP BY status`, [uid]),
-    safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.employee_services         WHERE uid = $1`,         [uid]),
-    safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.employee_catalog_capabilities WHERE uid = $1`,     [uid]),
+    safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.employee_services         WHERE employee_uid = $1`, [uid]),
+    safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.employee_catalog_capabilities WHERE employee_uid = $1`, [uid]),
     safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.worker_availability       WHERE uid = $1`,         [uid]),
     safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.worker_service_area       WHERE uid = $1`,         [uid]),
     safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.worker_locations          WHERE uid = $1`,         [uid]),
@@ -695,8 +736,8 @@ export const getProviderOverlapMap = async (uid: string): Promise<ProviderOverla
     { table: 'user_profile',                  column: 'uid',        presentAs: 'profile record',                      rowCount: profileCnt },
     { table: 'worker_requirements',           column: 'worker_uid', presentAs: 'uploaded documents',                  rowCount: reqCnt },
     { table: 'worker_service_applications',   column: 'worker_uid', presentAs: 'service applications (all statuses)', rowCount: totalApps },
-    { table: 'employee_services',             column: 'uid',        presentAs: 'active service assignments',          rowCount: activeSvcCnt },
-    { table: 'employee_catalog_capabilities', column: 'uid',        presentAs: 'catalog capabilities',                rowCount: catalogCapCnt },
+    { table: 'employee_services',             column: 'employee_uid', presentAs: 'active service assignments',        rowCount: activeSvcCnt },
+    { table: 'employee_catalog_capabilities', column: 'employee_uid', presentAs: 'catalog capabilities',             rowCount: catalogCapCnt },
     { table: 'worker_availability',           column: 'uid',        presentAs: 'availability schedule',               rowCount: availCnt },
     { table: 'worker_service_area',           column: 'uid',        presentAs: 'service area config',                 rowCount: svcAreaCnt },
     { table: 'worker_locations',              column: 'uid',        presentAs: 'location/online status',              rowCount: locCnt },
