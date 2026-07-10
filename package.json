@@ -4,10 +4,15 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc && cp servana-serviceAccountKey.json ./dist",
     "start": "tsc -p . && node dist/app.js",
-    "dev": "nodemon --files src/app.ts"
+    "dev": "nodemon --files src/app.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "jest",
+    "test:ci": "jest --runInBand --ci",
+    "verify": "npm run typecheck && npm run test:ci",
+    "verify:quick": "npm run typecheck",
+    "guard:protected-contracts": "node scripts/guard-protected-contracts.mjs"
   },
   "keywords": [],
   "author": "Cla H.",
@@ -39,6 +44,7 @@
     "@types/node-cron": "^3.0.11",
     "@types/pg": "^8.16.0",
     "@types/socket.io": "^3.0.2",
+    "jest": "^30.4.2",
     "nodemon": "^3.1.11",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
