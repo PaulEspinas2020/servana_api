@@ -278,10 +278,16 @@ const getUserProfile = async (uid: string) => {
 const updateUserProfile = async (profileUpdateReq: ProfileUpdateReq) => {
     let rawUrl = null;
 
+    // COALESCE preserves existing values when null is passed (e.g. name-only updates
+    // must not wipe photo_url — the FE never sends photoFile/photoUrl for name edits).
     const upsertQuery = `INSERT INTO ${dbSchema}.user_profile (birthdate, gender, photo_url, uid)
         VALUES ($1, $2, $3, $4)
         ON CONFLICT (uid)
-            DO UPDATE SET birthdate=$1, gender=$2, photo_url=$3 returning *`;
+            DO UPDATE SET
+              birthdate = COALESCE(EXCLUDED.birthdate, user_profile.birthdate),
+              gender    = COALESCE(EXCLUDED.gender,    user_profile.gender),
+              photo_url = COALESCE(EXCLUDED.photo_url, user_profile.photo_url)
+            RETURNING *`;
 
     const { birthdate, photoUrl, photoFile, gender, id, phoneNumber } = profileUpdateReq;
     // first_name / last_name come from the provider portal PUT /user/updateprofile body

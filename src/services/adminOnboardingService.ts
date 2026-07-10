@@ -476,8 +476,8 @@ export const listCases = async (filter: QueueFilter = {}) => {
     submittedAt: r.submitted_at ?? null,
     lastActivityAt: r.last_activity_at ?? null,
     version: r.version ?? 0,
-    requirementsCount: Number(r.req_count ?? 0),
-    pendingApplications: Number(r.pending_apps ?? 0),
+    reqCount:     Number(r.req_count    ?? 0),
+    pendingApps:  Number(r.pending_apps ?? 0),
     activeServices: Number(r.active_services ?? 0),
   }));
 
