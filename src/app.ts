@@ -5,6 +5,7 @@ import cookieParser from "cookie-parser";
 import formidable from "formidable";
 
 import dotenv from "dotenv";
+import { parityMiddleware } from "./middleware/parityMiddleware";
 
 dotenv.config();
 
@@ -179,7 +180,6 @@ import { ensureProviderWebSchema } from "./services/providerOnboardingService";
 })();
 
 import { ensureBookingOpsSchema } from "./services/adminBookingService";
-import { parityMiddleware } from "./middleware/parityMiddleware";
 (async () => {
   try {
     await ensureBookingOpsSchema();
