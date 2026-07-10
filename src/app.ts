@@ -6,6 +6,7 @@ import formidable from "formidable";
 
 import dotenv from "dotenv";
 import { parityMiddleware } from "./middleware/parityMiddleware";
+import { requestParityMiddleware } from "./middleware/requestParityMiddleware";
 
 dotenv.config();
 
@@ -54,7 +55,9 @@ app.use((req, _res, next) => {
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// SWEEP parity middleware — enriches every JSON response with cross-platform field aliases
+// SWEEP request parity — enriches incoming request bodies with cross-platform field aliases
+app.use(requestParityMiddleware);
+// SWEEP response parity — enriches every JSON response with cross-platform field aliases
 app.use(parityMiddleware);
 app.use((req: Request, res: Response, next: NextFunction) => {
     if (req.is("multipart/form-data") == "multipart/form-data") {
