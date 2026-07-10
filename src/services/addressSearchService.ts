@@ -47,13 +47,14 @@ function buildServanaLocationId(lat: number, lon: number): string {
 
 function extractAddressComponent(
   components: any[],
-  types: string[]
+  types: string[],
+  useShortName?: boolean
 ): string {
   for (var i = 0; i < components.length; i++) {
     var c = components[i];
     for (var j = 0; j < types.length; j++) {
       if (c.types && c.types.indexOf(types[j]) !== -1) {
-        return c.long_name || "";
+        return (useShortName ? c.short_name : c.long_name) || "";
       }
     }
   }
@@ -187,7 +188,7 @@ export async function resolveAddress(
     "administrative_area_level_2",
   ]);
   var zipCode = extractAddressComponent(components, ["postal_code"]);
-  var country = extractAddressComponent(components, ["country"]);
+  var country = extractAddressComponent(components, ["country"], true); // short_name = ISO code (PH, not Philippines)
 
   return {
     externalPlaceId: placeId,

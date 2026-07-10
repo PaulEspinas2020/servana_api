@@ -62,6 +62,12 @@ export const getAddressDetails = async (req: Request, res: Response) => {
         .json({ status: "failed", message: "placeId is required" });
     }
 
+    if (placeId.length > 255) {
+      return res
+        .status(400)
+        .json({ status: "failed", message: "placeId is invalid" });
+    }
+
     if (!sessionToken) {
       return res
         .status(400)
