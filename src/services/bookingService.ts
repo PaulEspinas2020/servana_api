@@ -10,6 +10,7 @@ import { getLatLonByLocationId } from "../services/address.service";
 import { assignNearestWorker } from "../services/technicianService";
 import { send } from "../helpers/mailer";
 import { getEmailById, getNameByEmail } from "./user.service";
+import { toCamel } from "../helpers/idGenerator";
 
 export const createBooking = async (
   userId: string,
@@ -440,3 +441,54 @@ export const getDashboardAnalytics = async () => {
 
   return res.rows[0];
 };
+
+/**
+ * SWEEP Field Parity — Booking Entity Formatter
+ *
+ * Converts a raw DB booking row to a cross-platform normalised shape:
+ *   - Keeps every field toCamel() produces (preserves mobile/web contracts)
+ *   - Adds alias fields so every platform finds the name it expects:
+ *       id / bookingId          — booking primary key
+ *       schedule / scheduleAt / scheduledAt — appointment datetime
+ *       workerUid / providerUid — assigned provider Firebase UID
+ *       userId / customerId / customerUid — customer Firebase UID
+ *       status / statusLower    — booking status (UPPERCASE + lowercase variant)
+ *       workerStatus / assignmentStatus — booking_workers.status
+ *       bookingCode             — human-readable SVN-XXXXXX code
+ *
+ * NON-DESTRUCTIVE: never overwrites an existing field.
+ * Booking `id` = numeric PK, NOT a Firebase UID — applyParity() is NOT used
+ * here to avoid the id→uid alias collision that applies only to user objects.
+ */
+export const formatBooking = (raw: any): Record<string, unknown> => {
+  const c: any = toCamel(raw);
+
+  const bookingPk = c.id ?? raw.id;
+  const scheduleVal = c.schedule ?? raw.schedule ?? null;
+  const workerUidVal = c.workerUid ?? raw.worker_uid ?? null;
+  const userIdVal = c.userId ?? raw.user_id ?? null;
+  const statusVal: string = (c.status ?? raw.status ?? '');
+  const workerStatusVal = c.workerStatus ?? raw.worker_status ?? null;
+
+  return {
+    ...c,
+    // Booking ID aliases
+    ...(bookingPk !== undefined && !('bookingId' in c) ? { bookingId: bookingPk } : {}),
+    bookingCode: c.bookingCode ?? `SVN-${String(bookingPk).padStart(6, '0')}`,
+    // Schedule aliases
+    ...(scheduleVal !== null && !('scheduleAt' in c)  ? { scheduleAt:  scheduleVal } : {}),
+    ...(scheduleVal !== null && !('scheduledAt' in c) ? { scheduledAt: scheduleVal } : {}),
+    // Provider/worker UID aliases
+    ...(workerUidVal !== null && !('providerUid' in c) ? { providerUid: workerUidVal } : {}),
+    // Customer UID aliases
+    ...(userIdVal !== null && !('customerId'  in c) ? { customerId:  userIdVal } : {}),
+    ...(userIdVal !== null && !('customerUid' in c) ? { customerUid: userIdVal } : {}),
+    // Status: UPPERCASE from DB stays, lowercase variant added for platforms that normalise
+    ...(statusVal && !('statusLower' in c) ? { statusLower: statusVal.toLowerCase() } : {}),
+    // Worker/assignment status aliases
+    ...(workerStatusVal !== null && !('assignmentStatus' in c) ? { assignmentStatus: workerStatusVal } : {}),
+  };
+};
+
+export const formatBookings = (rows: any[]): Record<string, unknown>[] =>
+  rows.map(formatBooking);

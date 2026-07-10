@@ -360,12 +360,12 @@ const formatUserCredentials = (raw: any): UserCredentials & Record<string, unkno
 
 const formatUserProfile = (raw: any) => {
     const credentials = formatUserCredentials(raw);
-    return {
+    return applyParity({
         ...credentials,
         birthdate: raw.birthdate,
         gender: raw.gender,
         photoUrl: raw.photo_url,
-    };
+    });
 };
 
 const storeEmailOtp = async (email: string, code: string) => {

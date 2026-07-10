@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import * as bookingService from "../services/bookingService";
-import { toCamel } from "../helpers/idGenerator";
+import { formatBooking, formatBookings } from "../services/bookingService";
 export const createBooking = async (req: any, res: any) => {
   try {
     const userId = req.query.userId as string;
@@ -32,7 +32,7 @@ export const confirmOtp = async (req: Request, res: Response) => {
     // If you have auth: const userId = (req as any).user?.uid;
     const booking = await bookingService.confirmOtp(bookingId, otp /*, userId */);
 
-    return res.json({ success: true, booking: toCamel(booking) });
+    return res.json({ success: true, booking: formatBooking(booking) });
   } catch (e: any) {
     return res.status(400).json({ success: false, message: e.message });
   }
@@ -53,7 +53,7 @@ export const getBooking = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: "Booking not found" });
     }
 
-    return res.json({ success: true, booking: toCamel(booking) });
+    return res.json({ success: true, booking: formatBooking(booking) });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }
@@ -62,8 +62,7 @@ export const getBooking = async (req: Request, res: Response) => {
 export const listAllBookings = async (_req: Request, res: Response) => {
   try {
     const bookings = await bookingService.getAllBookings();
-    const toCamelRows = (rows: any[]) => rows.map(toCamel);
-    res.json({ success: true, bookings: toCamelRows(bookings) });
+    res.json({ success: true, bookings: formatBookings(bookings) });
   } catch (error: any) {
     res.status(500).json({
       success: false,
@@ -84,9 +83,7 @@ export const listUserBookings = async (req: Request, res: Response) => {
     }
 
     const bookings = await bookingService.getBookingsByUserId(userId);
-
-    const toCamelRows = (rows: any[]) => rows.map(toCamel);
-    res.json({ success: true, bookings: toCamelRows(bookings) });
+    res.json({ success: true, bookings: formatBookings(bookings) });
   } catch (error: any) {
     res.status(500).json({
       success: false,
@@ -105,8 +102,7 @@ export const getTracking = async (req: Request, res: Response) => {
 
     // If you have auth: const userId = (req as any).user?.uid;
     const tracking = await bookingService.getTracking(bookingId /*, userId */);
-    const toCamelRows = (rows: any[]) => rows.map(toCamel);
-    return res.json({ success: true, tracking: toCamelRows(tracking) });
+    return res.json({ success: true, tracking: formatBookings(tracking) });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }
