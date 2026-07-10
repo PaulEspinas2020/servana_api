@@ -22,6 +22,11 @@ export interface ProviderListFilter {
   role?: number;
   accountStatus?: string;
   isArchive?: boolean;
+  hasDocuments?: boolean;      // true = has any docs; false = missing docs
+  hasPendingApps?: boolean;    // true = has pending_review applications
+  hasActiveServices?: boolean; // true = has active employee_services rows
+  hasAvailability?: boolean;   // true = has worker_availability row
+  hasServiceArea?: boolean;    // true = has worker_service_area row
   page?: number;
   limit?: number;
   sortBy?: 'name' | 'created_date' | 'account_status';
@@ -34,17 +39,22 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
     role,
     accountStatus,
     isArchive,
+    hasDocuments,
+    hasPendingApps,
+    hasActiveServices,
+    hasAvailability,
+    hasServiceArea,
     page = 1,
     limit = 50,
     sortBy = 'created_date',
     sortDir = 'desc',
   } = filter;
 
+  const s = dbSchema;
   const offset = (page - 1) * limit;
   const params: any[] = [];
   const where: string[] = [];
 
-  // Exclude role=1 (admins) and role=3 (customers) from provider list
   where.push(`uc.role IN (2, 4)`);
 
   if (search) {
@@ -69,6 +79,18 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
     params.push(isArchive);
     where.push(`uc.is_archive = $${params.length}`);
   }
+
+  // Provider-domain filters — resolved at read-model layer
+  if (hasDocuments === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_requirements wr_f WHERE wr_f.worker_uid = uc.uid)`);
+  if (hasDocuments === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_requirements wr_f WHERE wr_f.worker_uid = uc.uid)`);
+  if (hasPendingApps === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_service_applications wsa_f WHERE wsa_f.worker_uid = uc.uid AND wsa_f.status = 'pending_review')`);
+  if (hasPendingApps === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_service_applications wsa_f WHERE wsa_f.worker_uid = uc.uid AND wsa_f.status = 'pending_review')`);
+  if (hasActiveServices === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.employee_services es_f WHERE es_f.employee_uid = uc.uid)`);
+  if (hasActiveServices === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.employee_services es_f WHERE es_f.employee_uid = uc.uid)`);
+  if (hasAvailability === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_availability wa_f WHERE wa_f.uid = uc.uid)`);
+  if (hasAvailability === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa_f WHERE wa_f.uid = uc.uid)`);
+  if (hasServiceArea === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_service_area wsa2_f WHERE wsa2_f.uid = uc.uid)`);
+  if (hasServiceArea === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_service_area wsa2_f WHERE wsa2_f.uid = uc.uid)`);
 
   const sortColumn: Record<string, string> = {
     name: `uc.first_name`,
@@ -97,16 +119,24 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
          uc.is_archive,
          uc.is_email_verified,
          uc.created_date,
-         up.photo_url
-       FROM ${dbSchema}.user_credentials uc
-       LEFT JOIN ${dbSchema}.user_profile up ON up.uid = uc.uid
+         up.photo_url,
+         -- Document summary (resolved by backend)
+         COALESCE((SELECT COUNT(*)::int FROM ${s}.worker_requirements wr2 WHERE wr2.worker_uid = uc.uid), 0) AS doc_total,
+         -- Service summary (resolved by backend — keeps pending vs active separate)
+         COALESCE((SELECT COUNT(*)::int FROM ${s}.worker_service_applications wsa2 WHERE wsa2.worker_uid = uc.uid AND wsa2.status = 'pending_review'), 0) AS pending_apps,
+         COALESCE((SELECT COUNT(*)::int FROM ${s}.employee_services es2 WHERE es2.employee_uid = uc.uid), 0) AS active_svc,
+         -- Availability and service area (resolved by backend)
+         CASE WHEN EXISTS (SELECT 1 FROM ${s}.worker_availability wa2 WHERE wa2.uid = uc.uid) THEN 'saved' ELSE 'missing' END AS avail_status,
+         CASE WHEN EXISTS (SELECT 1 FROM ${s}.worker_service_area wsa3 WHERE wsa3.uid = uc.uid) THEN 'saved' ELSE 'missing' END AS area_status
+       FROM ${s}.user_credentials uc
+       LEFT JOIN ${s}.user_profile up ON up.uid = uc.uid
        ${whereClause}
        ORDER BY ${col} ${dir}
        LIMIT $${limitP} OFFSET $${offsetP}`,
       params
     ),
     dbQuery.query(
-      `SELECT COUNT(*) FROM ${dbSchema}.user_credentials uc ${whereClause}`,
+      `SELECT COUNT(*) FROM ${s}.user_credentials uc ${whereClause}`,
       params.slice(0, -2)
     ),
   ]);
@@ -135,9 +165,9 @@ const safeCount = async (sql: string, params: any[]): Promise<number> => {
 export const getProviderMetrics = async () => {
   const s = dbSchema;
 
-  const [baseRes, docsRes, appsRes, activeSvcRes, bothRes, dupSummary,
+  const [baseRes, docsRes, appsRes, activeSvcRes, bothRes,
          missingAvail, missingArea] = await Promise.all([
-    // Base counts — one row per UID from user_credentials only (no duplicate risk)
+    // Base counts — distinct UIDs from user_credentials only
     dbQuery.query(
       `SELECT
          COUNT(*) FILTER (WHERE role IN (2,4))                                                 AS total,
@@ -182,8 +212,6 @@ export const getProviderMetrics = async () => {
          AND EXISTS (SELECT 1 FROM ${s}.worker_service_applications wsa
                      WHERE wsa.worker_uid = uc.uid AND wsa.status = 'pending_review')`, []
     ),
-    // Duplicate summary (reuse internal helper)
-    _getDuplicateSummary(),
     // Missing availability (defensive — table may not exist)
     safeCount(
       `SELECT COUNT(DISTINCT uc.uid) AS cnt
@@ -205,26 +233,21 @@ export const getProviderMetrics = async () => {
   const a  = appsRes.rows[0]    ?? {};
 
   return {
-    // Legacy shape (unchanged — existing UI consumes these)
-    total:        Number(b.total        ?? 0),
-    active:       Number(b.active       ?? 0),
-    archived:     Number(b.archived     ?? 0),
+    total:        Number(b.total          ?? 0),
+    active:       Number(b.active         ?? 0),
+    archived:     Number(b.archived       ?? 0),
     pendingReview:Number(b.pending_review ?? 0),
-    suspended:    Number(b.suspended    ?? 0),
-    rejected:     Number(b.rejected     ?? 0),
-    // Extended deduped metrics (new)
-    providersWithDocuments:                           Number(d.with_docs   ?? 0),
-    providersMissingDocuments:                        Number(d.missing_docs ?? 0),
-    providersWithServiceApplications:                 Number(a.with_apps   ?? 0),
-    providersWithPendingServiceApplications:          Number(a.with_pending_apps ?? 0),
-    providersWithActiveServices:                      Number(activeSvcRes.rows[0]?.with_active_svc ?? 0),
+    suspended:    Number(b.suspended      ?? 0),
+    rejected:     Number(b.rejected       ?? 0),
+    // Extended deduped metrics
+    providersWithDocuments:                              Number(d.with_docs        ?? 0),
+    providersMissingDocuments:                           Number(d.missing_docs     ?? 0),
+    providersWithServiceApplications:                    Number(a.with_apps        ?? 0),
+    providersWithPendingServiceApplications:             Number(a.with_pending_apps ?? 0),
+    providersWithActiveServices:                         Number(activeSvcRes.rows[0]?.with_active_svc ?? 0),
     providersWithBothActiveServiceAndPendingApplication: Number(bothRes.rows[0]?.both ?? 0),
     providersMissingAvailability: missingAvail,
     providersMissingServiceArea:  missingArea,
-    providersWithOverlapWarnings: dupSummary.sameUidOverlaps,
-    duplicateCandidates:          dupSummary.duplicateCandidates,
-    orphanProviderReferences:     dupSummary.orphanReferences,
-    identityConflicts:            dupSummary.identityConflicts,
   };
 };
 

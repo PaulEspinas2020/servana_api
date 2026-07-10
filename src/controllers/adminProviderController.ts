@@ -21,15 +21,23 @@ const adminUid = (req: Request): string => req.user?.uid ?? '';
 
 export const listProviders = async (req: Request, res: Response) => {
   try {
-    const { search, role, account_status, is_archive, sort_by, sort_dir } = req.query;
+    const { search, role, account_status, is_archive, sort_by, sort_dir,
+            has_documents, has_pending_apps, has_active_services, has_availability, has_service_area } = req.query;
     const page = parseIntQ(req.query.page, 1);
     const limit = Math.min(parseIntQ(req.query.limit, 50), 200);
+
+    const parseBool = (v: any) => v === undefined ? undefined : v === 'true';
 
     const result = await svc.listProviders({
       search: search as string | undefined,
       role: role !== undefined ? Number(role) : undefined,
       accountStatus: account_status as string | undefined,
       isArchive: is_archive !== undefined ? is_archive === 'true' : undefined,
+      hasDocuments:      parseBool(has_documents),
+      hasPendingApps:    parseBool(has_pending_apps),
+      hasActiveServices: parseBool(has_active_services),
+      hasAvailability:   parseBool(has_availability),
+      hasServiceArea:    parseBool(has_service_area),
       page,
       limit,
       sortBy: (sort_by as any) ?? 'created_date',
@@ -37,17 +45,23 @@ export const listProviders = async (req: Request, res: Response) => {
     });
 
     const rows = result.rows.map((r: any) => ({
-      uid:              r.uid,
-      firstName:        r.first_name        ?? null,
-      lastName:         r.last_name         ?? null,
-      email:            r.email             ?? null,
-      phoneNumber:      r.phone_number      ?? null,
-      role:             r.role,
-      accountStatus:    r.account_status    ?? null,
-      isArchive:        r.is_archive        ?? false,
-      isEmailVerified:  r.is_email_verified ?? false,
-      createdDate:      r.created_date      ?? null,
-      photoUrl:         r.photo_url         ?? null,
+      uid:             r.uid,
+      firstName:       r.first_name        ?? null,
+      lastName:        r.last_name         ?? null,
+      email:           r.email             ?? null,
+      phoneNumber:     r.phone_number      ?? null,
+      role:            r.role,
+      providerType:    r.role === 2 ? 'marketplace_provider' : r.role === 4 ? 'internal_provider' : 'unknown',
+      accountStatus:   r.account_status    ?? null,
+      isArchive:       r.is_archive        ?? false,
+      isEmailVerified: r.is_email_verified ?? false,
+      createdDate:     r.created_date      ?? null,
+      photoUrl:        r.photo_url         ?? null,
+      // Consolidated summaries — backend resolves, frontend displays
+      documentSummary: { total: Number(r.doc_total ?? 0) },
+      serviceSummary:  { pendingApplications: Number(r.pending_apps ?? 0), activeServices: Number(r.active_svc ?? 0) },
+      availabilityStatus: r.avail_status ?? 'unknown',
+      serviceAreaStatus:  r.area_status  ?? 'unknown',
     }));
 
     return ok(res, rows, {
@@ -436,26 +450,3 @@ export const setProviderArchive = async (req: Request, res: Response) => {
   }
 };
 
-// ── Overlap Map (diagnostic) ──────────────────────────────────────────────────
-
-export const getProviderOverlapMap = async (req: Request, res: Response) => {
-  try {
-    const uid = String(req.params.uid);
-    const report = await svc.getProviderOverlapMap(uid);
-    return ok(res, report);
-  } catch (err: any) {
-    const code = err?.statusCode ?? 500;
-    return fail(res, code, err?.message ?? 'Failed to fetch overlap map');
-  }
-};
-
-// ── Duplicate Detection Report ────────────────────────────────────────────────
-
-export const getProviderDuplicates = async (_req: Request, res: Response) => {
-  try {
-    const report = await svc.getProviderDuplicates();
-    return ok(res, report);
-  } catch (err: any) {
-    return fail(res, 500, err?.message ?? 'Failed to fetch duplicate report');
-  }
-};

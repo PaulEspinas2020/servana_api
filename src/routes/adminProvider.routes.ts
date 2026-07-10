@@ -11,8 +11,6 @@ const adminOnly = [verifyAuth, verifyRoles([1])];
 // GET  /api/admin/providers               — list with search/filter/sort/pagination
 // GET  /api/admin/providers/metrics       — summary metric cards
 router.get('/admin/providers/metrics', ...adminOnly, ctrl.getProviderMetrics);
-// GET /api/admin/providers/duplicates — duplicate detection + orphan report (read-only diagnostic)
-router.get('/admin/providers/duplicates', ...adminOnly, ctrl.getProviderDuplicates);
 router.get('/admin/providers', ...adminOnly, ctrl.listProviders);
 
 // ── Service Applications (global view) ───────────────────────────────────────
@@ -55,8 +53,6 @@ router.get('/admin/providers/:uid/availability', ...adminOnly, ctrl.getProviderA
 router.get('/admin/providers/:uid/service-area', ...adminOnly, ctrl.getProviderServiceArea);
 router.patch('/admin/providers/:uid/account-status', ...adminOnly, ctrl.updateProviderAccountStatus);
 router.patch('/admin/providers/:uid/archive', ...adminOnly, ctrl.setProviderArchive);
-// GET /api/admin/providers/:uid/overlap-map — diagnostic: tables, counts, inconsistencies
-router.get('/admin/providers/:uid/overlap-map', ...adminOnly, ctrl.getProviderOverlapMap);
 
 // ── Mobile Attribution (per-provider) ─────────────────────────────────────────
 // GET  /api/admin/providers/:uid/attribution         — per-provider source attribution
