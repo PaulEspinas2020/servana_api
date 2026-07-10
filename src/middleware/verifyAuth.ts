@@ -1,33 +1,34 @@
 import { Request, Response, NextFunction } from "express";
 import { firebaseAdmin } from "../middleware/firebaseApp";
-
 import { tempId } from "../config";
-import { getAuth as getAuthAdmin } from 'firebase-admin/auth'
+import { getAuth as getAuthAdmin } from 'firebase-admin/auth';
 
 const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
 
 const validateFirebaseIdToken = async (req: Request, res: Response, next: NextFunction) => {
   if (!tempId) {
-    if (
-      (!req.headers.authorization ||
-        !req.headers.authorization.startsWith("Bearer ")) &&
-      !(req.cookies && req.cookies.__session)
-    ) {
-      res.status(403).send("Unauthorized");
+    const authHeader = req.headers.authorization;
+    const cookieToken = req.cookies?.__session;
+
+    if (!authHeader?.startsWith("Bearer ") && !cookieToken) {
+      res.status(401).json({
+        status: "failed",
+        code: "UNAUTHENTICATED",
+        message: "Authentication is required",
+      });
       return;
     }
 
-    let idToken;
+    const idToken = authHeader?.startsWith("Bearer ")
+      ? authHeader.split("Bearer ")[1]
+      : cookieToken;
 
-    if (
-      req.headers.authorization &&
-      req.headers.authorization.startsWith("Bearer ")
-    ) {
-      idToken = req.headers.authorization.split("Bearer ")[1];
-    } else if (req.cookies) {
-      idToken = req.cookies.__session;
-    } else {
-      res.status(403).send("Unauthorized");
+    if (!idToken) {
+      res.status(401).json({
+        status: "failed",
+        code: "UNAUTHENTICATED",
+        message: "Authentication is required",
+      });
       return;
     }
 
@@ -35,21 +36,24 @@ const validateFirebaseIdToken = async (req: Request, res: Response, next: NextFu
       const decodedIdToken = await defaultAuthAdmin.verifyIdToken(idToken);
       req.user = decodedIdToken;
       next();
-      return;
     } catch (error: any) {
-      if (error.code === "auth/id-token-expired") {
-        res.status(403).send("Token Expired. Login again.");
+      if (error.code === "auth/id-token-expired" || error.code === "auth/argument-error") {
+        res.status(401).json({
+          status: "failed",
+          code: "TOKEN_EXPIRED",
+          message: "Session expired. Please log in again.",
+        });
         return;
       }
-      res.status(403).send(error);
-      return;
+      res.status(401).json({
+        status: "failed",
+        code: "INVALID_TOKEN",
+        message: "Authentication token is invalid",
+      });
     }
   } else {
-    req['user'] = {
-      uid: tempId
-    }
+    req['user'] = { uid: tempId };
     next();
-    return;
   }
 };
 
