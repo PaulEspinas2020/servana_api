@@ -431,13 +431,19 @@ export const listAdminOfferings = async (): Promise<any[]> => {
 
 export const getAdminOffering = async (offeringId: number): Promise<any | null> => {
   const offerRes = await dbQuery.query(
-    `SELECT * FROM ${dbSchema}.provider_catalog_offerings WHERE id = $1`,
+    `SELECT id, catalog_key, name, short_description, provider_description, icon_key,
+            banner_path, display_order, is_builtin, status,
+            provider_web_visible, customer_web_visible,
+            legacy_provider_mobile_visible AS is_mobile_protected,
+            version, created_at, updated_at
+     FROM ${dbSchema}.provider_catalog_offerings WHERE id = $1`,
     [offeringId]
   );
   if (offerRes.rows.length === 0) return null;
 
   const mappingsRes = await dbQuery.query(
-    `SELECT m.*, s.name AS service_family_name
+    `SELECT m.id AS mapping_id, m.offering_id, m.service_id, m.level_2, m.display_order, m.is_active,
+            s.name AS service_family_name
      FROM ${dbSchema}.provider_catalog_offering_mappings m
      JOIN ${dbSchema}.services s ON s.id = m.service_id
      WHERE m.offering_id = $1
@@ -445,9 +451,49 @@ export const getAdminOffering = async (offeringId: number): Promise<any | null> 
     [offeringId]
   );
 
+  const mappingStatsRes = await dbQuery.query(
+    `SELECT m.id AS mapping_id,
+            COUNT(so.id)::int  AS specific_service_count,
+            MIN(so.base_price) AS min_price,
+            MAX(so.base_price) AS max_price
+     FROM ${dbSchema}.provider_catalog_offering_mappings m
+     LEFT JOIN ${dbSchema}.service_options so
+       ON so.service_id = m.service_id
+       AND so.level_2 = m.level_2
+       AND so.option_type = 'MAIN'
+       AND (so.is_active IS NULL OR so.is_active = true)
+     WHERE m.offering_id = $1
+     GROUP BY m.id`,
+    [offeringId]
+  );
+
+  const statsMap = new Map<number, { specific_service_count: number; min_price: number | null; max_price: number | null }>();
+  for (const r of mappingStatsRes.rows) {
+    statsMap.set(Number(r.mapping_id), {
+      specific_service_count: Number(r.specific_service_count),
+      min_price: r.min_price != null ? Number(r.min_price) : null,
+      max_price: r.max_price != null ? Number(r.max_price) : null,
+    });
+  }
+
+  const offer = toCamel(offerRes.rows[0]);
   return {
-    ...toCamel(offerRes.rows[0]),
-    mappings: mappingsRes.rows.map(toCamel),
+    ...offer,
+    isMobileProtected: Boolean(offerRes.rows[0].is_mobile_protected),
+    mappings: mappingsRes.rows.map(m => {
+      const stats = statsMap.get(Number(m.mapping_id));
+      return {
+        mappingId: Number(m.mapping_id),
+        serviceId: Number(m.service_id),
+        serviceFamilyName: m.service_family_name,
+        level2: m.level_2,
+        isActive: Boolean(m.is_active),
+        displayOrder: Number(m.display_order),
+        specificServiceCount: stats?.specific_service_count ?? 0,
+        minPrice: stats?.min_price ?? null,
+        maxPrice: stats?.max_price ?? null,
+      };
+    }),
   };
 };
 
@@ -750,7 +796,7 @@ export const getAdminSpecificService = async (serviceOptionId: number): Promise<
   if (res.rows.length === 0) return null;
 
   const addonRes = await dbQuery.query(
-    `SELECT id, level_3, unit, base_price, is_active
+    `SELECT id, parent_option_id, level_3, unit, base_price, is_active
      FROM ${dbSchema}.service_options
      WHERE parent_option_id = $1 AND option_type = 'ADD_ON'
      ORDER BY level_3`,
