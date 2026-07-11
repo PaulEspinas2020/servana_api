@@ -76,11 +76,11 @@ export const upsertSourceAttribution = async (
     await ensureProviderWebSchema();
     const now = new Date().toISOString();
     const webCols = sourceClient === 'provider_web'
-      ? `, first_provider_web_seen_at = COALESCE(first_provider_web_seen_at, $3::timestamptz)
+      ? `, first_provider_web_seen_at = COALESCE(provider_source_attribution.first_provider_web_seen_at, $3::timestamptz)
          , last_provider_web_seen_at = $3::timestamptz`
       : '';
     const mobileCols = sourceClient === 'provider_mobile'
-      ? `, first_provider_mobile_seen_at = COALESCE(first_provider_mobile_seen_at, $3::timestamptz)
+      ? `, first_provider_mobile_seen_at = COALESCE(provider_source_attribution.first_provider_mobile_seen_at, $3::timestamptz)
          , last_provider_mobile_seen_at = $3::timestamptz`
       : '';
 
