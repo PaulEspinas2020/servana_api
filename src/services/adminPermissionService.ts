@@ -413,7 +413,7 @@ export async function ensurePermissionSchema(): Promise<void> {
     INSERT INTO ${s}.admin_users (admin_uid, email, display_name, is_super_admin, account_status, created_by)
     SELECT uc.uid,
            COALESCE(u.email, uc.uid),
-           COALESCE(u.display_name, u.first_name),
+           NULLIF(TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')), ''),
            TRUE,
            'active',
            'system'
@@ -463,11 +463,13 @@ export async function getAdminUser(adminUid: string): Promise<AdminUserRow | nul
 export async function ensureAdminUserRow(adminUid: string): Promise<void> {
   // Look up email from users table; fall back to uid if not found
   const userRes = await dbQuery.query(
-    `SELECT email, display_name FROM users WHERE uid = $1 LIMIT 1`,
+    `SELECT email, first_name, last_name FROM users WHERE uid = $1 LIMIT 1`,
     [adminUid]
   );
   const email = userRes.rows[0]?.email ?? adminUid;
-  const displayName = userRes.rows[0]?.display_name ?? null;
+  const fn = userRes.rows[0]?.first_name ?? '';
+  const ln = userRes.rows[0]?.last_name ?? '';
+  const displayName = (fn + ' ' + ln).trim() || null;
   await dbQuery.query(
     `INSERT INTO ${s}.admin_users (admin_uid, email, display_name, is_super_admin, account_status, created_by)
      VALUES ($1, $2, $3, FALSE, 'active', 'system')
