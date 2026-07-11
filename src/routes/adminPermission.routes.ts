@@ -21,9 +21,9 @@ router.get('/admin/admin-users',
 router.post('/admin/admin-users',
   ...adminOnly, requireSuperAdmin, ctrl.createAdminUser);
 
-// ── Bootstrap Super Admin (role-1 token, no existing super admins required) ───
+// ── Bootstrap Super Admin (any authenticated user; service enforces first-caller-wins) ───
 router.post('/admin/admin-users/bootstrap-super-admin',
-  verifyAuth, verifyRoles([1]), ctrl.bootstrapSuperAdmin);
+  verifyAuth, ctrl.bootstrapSuperAdmin);
 
 // ── Admin user detail ─────────────────────────────────────────────────────────
 router.get('/admin/admin-users/:adminUid',
