@@ -14,7 +14,8 @@ export type AuditEntityType =
   | 'service_option' | 'addon' | 'provider_application' | 'provider_requirement'
   | 'onboarding_case' | 'payment' | 'notification' | 'settings' | 'admin_role' | 'system'
   | 'catalog_offering' | 'catalog_mapping' | 'catalog_service_option' | 'catalog_addon'
-  | 'disbursement' | 'refund_review' | 'reconciliation_exception' | 'ledger_entry';
+  | 'disbursement' | 'refund_review' | 'reconciliation_exception' | 'ledger_entry'
+  | 'admin_user' | 'permission_grant' | 'permission_profile';
 
 export interface AuditWriteOpts {
   action: string;
@@ -82,6 +83,10 @@ const HIGH_RISK_ACTIONS: string[] = [
   'finance_payment_gcash_approved', 'finance_payment_gcash_rejected',
   'finance_payout_retry_triggered', 'finance_refund_approved',
   'finance_reconciliation_run', 'finance_internal_fixer_tagged',
+  // Permission high-risk
+  'super_admin_granted', 'super_admin_revoked',
+  'admin_user_created', 'admin_user_deactivated',
+  'admin_permissions_updated',
 ];
 
 // ── Action label map ──────────────────────────────────────────────────────────
@@ -177,12 +182,22 @@ const ACTION_LABELS: Record<string, string> = {
   user_restored: 'User Restored',
   user_role_changed: 'User Role Changed',
   user_account_status_changed: 'Account Status Changed',
-  // Admin / RBAC
+  // Admin users / permissions
   admin_role_created: 'Role Created',
   admin_role_updated: 'Role Updated',
   admin_role_deleted: 'Role Deleted',
   admin_permission_granted: 'Permission Granted',
   admin_permission_revoked: 'Permission Revoked',
+  admin_user_created: 'Admin User Created',
+  admin_user_updated: 'Admin User Updated',
+  admin_user_deactivated: 'Admin User Deactivated',
+  admin_user_reactivated: 'Admin User Reactivated',
+  admin_permissions_updated: 'Admin Permissions Updated',
+  admin_permissions_previewed: 'Permissions Previewed',
+  super_admin_granted: 'Super Admin Granted',
+  super_admin_revoked: 'Super Admin Revoked',
+  admin_permission_change_blocked: 'Permission Change Blocked',
+  admin_access_denied: 'Admin Access Denied',
   settings_updated: 'Settings Updated',
   // System
   audit_export_requested: 'Audit Export Requested',

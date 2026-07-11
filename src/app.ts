@@ -158,6 +158,9 @@ app.use("/api", cors(corsOptionsDelegate), adminAutoOnlineRoutes);
 import adminFinanceRoutes from "./routes/adminFinance.routes";
 app.use("/api", cors(corsOptionsDelegate), adminFinanceRoutes);
 
+import adminPermissionRoutes from "./routes/adminPermission.routes";
+app.use("/api", cors(corsOptionsDelegate), adminPermissionRoutes);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
@@ -249,6 +252,15 @@ import { ensureFinanceSchema } from "./services/adminFinanceService";
     await ensureFinanceSchema();
   } catch (err) {
     console.error("[admin-finance] schema error:", err);
+  }
+})();
+
+import { ensurePermissionSchema } from "./services/adminPermissionService";
+(async () => {
+  try {
+    await ensurePermissionSchema();
+  } catch (err) {
+    console.error("[admin-permission] schema error:", err);
   }
 })();
 
