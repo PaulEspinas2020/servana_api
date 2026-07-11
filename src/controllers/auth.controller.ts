@@ -147,6 +147,10 @@ export const addEmployeesController = async (req: Request, res: Response) => {
         const results = await authService.addEmployees(employees);
         const failed = results.filter((r) => !r.success);
 
+        results.filter((r) => r.success && (r as any).uid).forEach((r) => {
+            autoOnlineEngine.evaluateProvider((r as any).uid, 'system', null).catch(() => {});
+        });
+
         return res.status(200).json({
             status: "success",
             total: results.length,

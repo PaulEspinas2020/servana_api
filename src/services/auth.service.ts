@@ -412,7 +412,7 @@ const addEmployees = async (employees: EmployeeInput[]) => {
 
         send(email, "employee_invite", { email, password, otp_code: otpCode, first_name: firstName });
 
-        return { email, success: true, requirements: uploadedRequirements };
+        return { email, success: true, uid: firebaseUser.uid, requirements: uploadedRequirements };
     };
 
     return Promise.all(

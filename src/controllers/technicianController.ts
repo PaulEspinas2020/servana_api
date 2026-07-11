@@ -3,6 +3,7 @@ import * as technician from "../services/technicianService";
 import { toCamel } from "../helpers/idGenerator";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import { logProviderClientActivity } from "../services/adminMobileAttributionService";
+import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 
 export const listByRole = async (req: Request, res: Response) => {
   try {
@@ -318,6 +319,7 @@ export const assignEmployeeServices = async (req: Request, res: Response) => {
     }
 
     const result = await technician.assignServicesToEmployee(uid, serviceIds);
+    autoOnlineEngine.evaluateProvider(uid, 'system', null).catch(() => {});
     return res.json({ success: true, assigned: result });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to assign services" });
@@ -333,6 +335,7 @@ export const removeEmployeeService = async (req: Request, res: Response) => {
     }
 
     const result = await technician.removeServiceFromEmployee(uid, Number(serviceId));
+    autoOnlineEngine.evaluateProvider(uid, 'system', null).catch(() => {});
     return res.json({ success: true, removed: toCamel(result) });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to remove service" });

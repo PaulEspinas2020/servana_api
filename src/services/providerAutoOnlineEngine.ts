@@ -486,6 +486,9 @@ export const revokeAutoOnline = async (
     [providerUid]
   );
 
+  // Clear MongoDB online flag so the provider is no longer dispatched
+  await syncOnlineStatus(providerUid, false);
+
   await writeAuditEvent(providerUid, 'provider_auto_online_revoked', null, { reason }, reason, actorType, actorUid);
 };
 
@@ -519,6 +522,9 @@ export const disableAutoOnline = async (
      WHERE provider_uid = $1 AND status = 'active'`,
     [providerUid]
   );
+
+  // Clear MongoDB online flag so the provider is no longer dispatched
+  await syncOnlineStatus(providerUid, false);
 
   await writeAuditEvent(providerUid, 'provider_auto_online_disabled_by_admin', null, { reason }, reason, 'admin', adminUid);
 };
@@ -633,6 +639,15 @@ export const syncProvisionalBookableServices = async (providerUid: string): Prom
     );
     await writeAuditEvent(providerUid, 'provider_provisional_bookable_service_created', null, { serviceId, source }, 'auto_online_apply', 'system', null);
   }
+
+  // Deactivate any provisionals no longer in the current service set (e.g. cancelled/rejected applications)
+  const currentIds = [...services.keys()];
+  await dbQuery.query(
+    `UPDATE ${s}.provider_provisional_bookable_services
+     SET status = 'inactive', updated_at = NOW()
+     WHERE provider_uid = $1 AND service_id != ALL($2::int[]) AND status = 'active'`,
+    [providerUid, currentIds]
+  );
 };
 
 // ── Audit ─────────────────────────────────────────────────────────────────────
