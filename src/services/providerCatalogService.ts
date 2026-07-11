@@ -480,7 +480,7 @@ export const getAdminOffering = async (offeringId: number): Promise<any | null> 
   return {
     ...offer,
     isMobileProtected: Boolean(offerRes.rows[0].is_mobile_protected),
-    mappings: mappingsRes.rows.map(m => {
+    mappings: mappingsRes.rows.map((m: any) => {
       const stats = statsMap.get(Number(m.mapping_id));
       return {
         mappingId: Number(m.mapping_id),
