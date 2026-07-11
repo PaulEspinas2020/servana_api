@@ -418,7 +418,7 @@ export async function ensurePermissionSchema(): Promise<void> {
            'active',
            'system'
     FROM ${s}.user_credentials uc
-    LEFT JOIN ${s}.users u ON u.uid = uc.uid
+    LEFT JOIN users u ON u.uid = uc.uid
     WHERE uc.role = 1
     ON CONFLICT (admin_uid) DO NOTHING
   `);
@@ -463,7 +463,7 @@ export async function getAdminUser(adminUid: string): Promise<AdminUserRow | nul
 export async function ensureAdminUserRow(adminUid: string): Promise<void> {
   // Look up email from users table; fall back to uid if not found
   const userRes = await dbQuery.query(
-    `SELECT email, display_name FROM ${s}.users WHERE uid = $1 LIMIT 1`,
+    `SELECT email, display_name FROM users WHERE uid = $1 LIMIT 1`,
     [adminUid]
   );
   const email = userRes.rows[0]?.email ?? adminUid;
