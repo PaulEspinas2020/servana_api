@@ -1,0 +1,296 @@
+/**
+ * ProviderServiceAreaEngine — canonical service-area management for Admin.
+ *
+ * Reads from and writes to the existing PostgreSQL worker_service_areas table
+ * (PK = worker_uid) that the mobile app also uses.
+ *
+ * Additive columns (coverage_mode, branch_ids, radius_km, updated_by, version)
+ * are added via ALTER TABLE … ADD COLUMN IF NOT EXISTS — zero impact on mobile.
+ *
+ * MOBILE CONTRACT PROTECTION:
+ *   - worker_service_areas: PK = worker_uid, existing city_ids / label untouched
+ *   - New columns are nullable/defaulted
+ *   - No provider.routes.ts / technician.routes.ts changes
+ */
+
+import dbQuery from '../db/dbQuery';
+import { db } from '../config';
+
+const s = db.schema;
+
+// ── Schema bootstrap ──────────────────────────────────────────────────────────
+
+const ensureServiceAreaColumns = async () => {
+  await dbQuery.query(
+    `CREATE TABLE IF NOT EXISTS ${s}.worker_service_areas (
+       worker_uid TEXT PRIMARY KEY,
+       city_ids   JSONB NOT NULL DEFAULT '[]',
+       label      TEXT,
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    []
+  );
+  await dbQuery.query(
+    `ALTER TABLE ${s}.worker_service_areas
+       ADD COLUMN IF NOT EXISTS coverage_mode TEXT NOT NULL DEFAULT 'city',
+       ADD COLUMN IF NOT EXISTS branch_ids    JSONB NOT NULL DEFAULT '[]',
+       ADD COLUMN IF NOT EXISTS radius_km     NUMERIC(6,2),
+       ADD COLUMN IF NOT EXISTS updated_by    TEXT,
+       ADD COLUMN IF NOT EXISTS version       INTEGER NOT NULL DEFAULT 1`,
+    []
+  );
+};
+
+let _bootstrapped = false;
+const bootstrap = async () => {
+  if (_bootstrapped) return;
+  await ensureServiceAreaColumns();
+  _bootstrapped = true;
+};
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export type CoverageMode = 'city' | 'branch' | 'radius';
+
+export interface ProviderServiceAreaProfile {
+  providerUid: string;
+  status: 'saved' | 'missing';
+  coverageMode: CoverageMode;
+  cityIds: string[];
+  branchIds: string[];
+  radiusKm: number | null;
+  label: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  version: number;
+  compatibility: {
+    legacyWorkerServiceAreasSynced: boolean;
+    source: 'canonical' | 'legacy' | 'missing';
+  };
+}
+
+export interface ServiceAreaSavePayload {
+  coverageMode: CoverageMode;
+  cityIds?: string[];
+  branchIds?: string[];
+  radiusKm?: number | null;
+  label?: string | null;
+}
+
+// ── Validation ────────────────────────────────────────────────────────────────
+
+const VALID_MODES: CoverageMode[] = ['city', 'branch', 'radius'];
+
+export const validateServiceArea = (payload: ServiceAreaSavePayload): string[] => {
+  const errors: string[] = [];
+
+  if (!VALID_MODES.includes(payload.coverageMode)) {
+    errors.push(`coverageMode must be one of: ${VALID_MODES.join(', ')}`);
+  }
+
+  if (payload.coverageMode === 'city') {
+    if (!Array.isArray(payload.cityIds) || payload.cityIds.length === 0) {
+      errors.push('cityIds must be a non-empty array when coverageMode is "city"');
+    }
+  }
+
+  if (payload.coverageMode === 'branch') {
+    if (!Array.isArray(payload.branchIds) || payload.branchIds.length === 0) {
+      errors.push('branchIds must be a non-empty array when coverageMode is "branch"');
+    }
+  }
+
+  if (payload.coverageMode === 'radius') {
+    if (typeof payload.radiusKm !== 'number' || payload.radiusKm <= 0) {
+      errors.push('radiusKm must be a positive number when coverageMode is "radius"');
+    }
+  }
+
+  return errors;
+};
+
+// ── Read ──────────────────────────────────────────────────────────────────────
+
+export const getServiceAreaProfile = async (providerUid: string): Promise<ProviderServiceAreaProfile> => {
+  await bootstrap();
+
+  const res = await dbQuery.query(
+    `SELECT worker_uid, city_ids, label, updated_at,
+            COALESCE(coverage_mode, 'city') AS coverage_mode,
+            COALESCE(branch_ids, '[]'::jsonb) AS branch_ids,
+            radius_km, updated_by, COALESCE(version, 1) AS version
+     FROM ${s}.worker_service_areas
+     WHERE worker_uid = $1`,
+    [providerUid]
+  );
+
+  const row = res.rows[0] ?? null;
+
+  if (!row) {
+    return {
+      providerUid,
+      status: 'missing',
+      coverageMode: 'city',
+      cityIds: [],
+      branchIds: [],
+      radiusKm: null,
+      label: null,
+      updatedAt: null,
+      updatedBy: null,
+      version: 1,
+      compatibility: { legacyWorkerServiceAreasSynced: true, source: 'missing' },
+    };
+  }
+
+  const cityIds   = Array.isArray(row.city_ids)   ? row.city_ids   : [];
+  const branchIds = Array.isArray(row.branch_ids) ? row.branch_ids : [];
+
+  return {
+    providerUid,
+    status: 'saved',
+    coverageMode: row.coverage_mode as CoverageMode,
+    cityIds,
+    branchIds,
+    radiusKm: row.radius_km !== null && row.radius_km !== undefined ? Number(row.radius_km) : null,
+    label: row.label ?? null,
+    updatedAt: row.updated_at ?? null,
+    updatedBy: row.updated_by ?? null,
+    version: Number(row.version),
+    compatibility: { legacyWorkerServiceAreasSynced: true, source: 'canonical' },
+  };
+};
+
+// ── Save ──────────────────────────────────────────────────────────────────────
+
+export const saveServiceArea = async (
+  providerUid: string,
+  payload: ServiceAreaSavePayload,
+  actorUid: string,
+  expectedVersion?: number,
+): Promise<{ version: number; updatedAt: string }> => {
+  await bootstrap();
+
+  const errors = validateServiceArea(payload);
+  if (errors.length > 0) {
+    const err: any = new Error(`Validation failed: ${errors.join('; ')}`);
+    err.statusCode = 422;
+    err.errors = errors;
+    throw err;
+  }
+
+  if (expectedVersion !== undefined) {
+    const cur = await dbQuery.query(
+      `SELECT version FROM ${s}.worker_service_areas WHERE worker_uid = $1`,
+      [providerUid]
+    );
+    const currentVersion = Number(cur.rows[0]?.version ?? 0);
+    if (cur.rowCount && currentVersion !== expectedVersion) {
+      const err: any = new Error(
+        `Version conflict: expected ${expectedVersion} but backend has ${currentVersion}. Reload and try again.`
+      );
+      err.statusCode = 409;
+      throw err;
+    }
+  }
+
+  const cityIds   = payload.cityIds   ?? [];
+  const branchIds = payload.branchIds ?? [];
+  const radiusKm  = payload.radiusKm  ?? null;
+  const label     = payload.label     ?? null;
+
+  const res = await dbQuery.query(
+    `INSERT INTO ${s}.worker_service_areas
+       (worker_uid, city_ids, label, updated_at, coverage_mode, branch_ids, radius_km, updated_by, version)
+     VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7, 1)
+     ON CONFLICT (worker_uid) DO UPDATE
+       SET city_ids      = EXCLUDED.city_ids,
+           label         = EXCLUDED.label,
+           updated_at    = NOW(),
+           coverage_mode = EXCLUDED.coverage_mode,
+           branch_ids    = EXCLUDED.branch_ids,
+           radius_km     = EXCLUDED.radius_km,
+           updated_by    = $7,
+           version       = ${s}.worker_service_areas.version + 1
+     RETURNING updated_at, version`,
+    [providerUid, JSON.stringify(cityIds), label, payload.coverageMode, JSON.stringify(branchIds), radiusKm, actorUid]
+  );
+
+  return {
+    version:   Number(res.rows[0].version),
+    updatedAt: res.rows[0].updated_at,
+  };
+};
+
+// ── Coverage check ────────────────────────────────────────────────────────────
+
+export interface CoverageExplanation {
+  providerUid: string;
+  queryCityId: string | null;
+  queryBranchId: string | null;
+  covered: boolean;
+  reasons: Array<{ code: string; severity: 'info' | 'warning' | 'blocker'; message: string }>;
+}
+
+export const isProviderInCoverage = async (
+  providerUid: string,
+  queryCityId: string | null,
+  queryBranchId?: string | null,
+): Promise<boolean> => {
+  const result = await explainCoverage(providerUid, queryCityId, queryBranchId ?? null);
+  return result.covered;
+};
+
+export const explainCoverage = async (
+  providerUid: string,
+  queryCityId: string | null,
+  queryBranchId: string | null = null,
+): Promise<CoverageExplanation> => {
+  await bootstrap();
+
+  const reasons: CoverageExplanation['reasons'] = [];
+  const profile = await getServiceAreaProfile(providerUid);
+
+  if (profile.status === 'missing') {
+    reasons.push({ code: 'NO_SERVICE_AREA', severity: 'warning', message: 'Provider has no service area configured' });
+    return { providerUid, queryCityId, queryBranchId, covered: false, reasons };
+  }
+
+  switch (profile.coverageMode) {
+    case 'city':
+      if (!queryCityId) {
+        reasons.push({ code: 'NO_CITY_QUERY', severity: 'warning', message: 'No city_id provided to check against city-mode coverage' });
+        return { providerUid, queryCityId, queryBranchId, covered: false, reasons };
+      }
+      if (profile.cityIds.includes(queryCityId)) {
+        reasons.push({ code: 'CITY_MATCH', severity: 'info', message: `City ${queryCityId} is in provider's covered cities` });
+      } else {
+        reasons.push({ code: 'CITY_NOT_IN_AREA', severity: 'blocker', message: `City ${queryCityId} is not in provider's service area` });
+      }
+      break;
+
+    case 'branch':
+      if (!queryBranchId) {
+        reasons.push({ code: 'NO_BRANCH_QUERY', severity: 'warning', message: 'No branch_id provided to check against branch-mode coverage' });
+        return { providerUid, queryCityId, queryBranchId, covered: false, reasons };
+      }
+      if (profile.branchIds.includes(queryBranchId)) {
+        reasons.push({ code: 'BRANCH_MATCH', severity: 'info', message: `Branch ${queryBranchId} is in provider's covered branches` });
+      } else {
+        reasons.push({ code: 'BRANCH_NOT_IN_AREA', severity: 'blocker', message: `Branch ${queryBranchId} is not in provider's service branches` });
+      }
+      break;
+
+    case 'radius':
+      // Radius-mode coverage requires a geo lookup; return covered=true
+      // with an info reason so callers handle appropriately
+      reasons.push({
+        code: 'RADIUS_MODE_GEO_REQUIRED',
+        severity: 'info',
+        message: `Provider uses radius mode (${profile.radiusKm} km) — geo-distance lookup required to confirm`,
+      });
+      return { providerUid, queryCityId, queryBranchId, covered: true, reasons };
+  }
+
+  const blockers = reasons.filter(r => r.severity === 'blocker');
+  return { providerUid, queryCityId, queryBranchId, covered: blockers.length === 0, reasons };
+};

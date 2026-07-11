@@ -134,6 +134,9 @@ app.use("/api", cors(corsOptionsDelegate), providerCatalogRoutes);
 import adminProviderRoutes from "./routes/adminProvider.routes";
 app.use("/api", cors(corsOptionsDelegate), adminProviderRoutes);
 
+import adminProviderAvailabilityRoutes from "./routes/adminProviderAvailability.routes";
+app.use("/api", cors(corsOptionsDelegate), adminProviderAvailabilityRoutes);
+
 import adminOnboardingRoutes from "./routes/adminOnboarding.routes";
 app.use("/api", cors(corsOptionsDelegate), adminOnboardingRoutes);
 

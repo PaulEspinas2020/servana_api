@@ -1,9 +1,11 @@
 import { Request, Response } from 'express';
 import * as svc from '../services/adminProviderService';
 import * as appSvc from '../services/serviceApplicationService';
-import { saveWorkerAvailability } from '../services/technicianService';
 import { adminError, AdminErrorCode } from '../helpers/adminError';
 import { auditFire, writeSuccess } from '../services/adminAuditService';
+import * as availEngine from '../services/providerAvailabilityEngine';
+import * as areaEngine  from '../services/providerServiceAreaEngine';
+import * as eligEngine  from '../services/providerEligibilityEngine';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -466,10 +468,137 @@ export const getProviderEarnings = async (req: Request, res: Response) => {
 export const getProviderAvailability = async (req: Request, res: Response) => {
   try {
     const uid = String(req.params.uid);
-    const avail = await svc.getProviderAvailability(uid);
-    return ok(res, avail);
+    const profile = await availEngine.getAvailabilityProfile(uid);
+    return ok(res, profile);
   } catch (err: any) {
-    return fail(res, 500, err?.message ?? 'Failed to fetch availability');
+    return fail(res, err?.statusCode ?? 500, err?.message ?? 'Failed to fetch availability');
+  }
+};
+
+export const getProviderTimeOff = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    const timeOff = await availEngine.listTimeOff(uid);
+    return ok(res, timeOff);
+  } catch (err: any) {
+    return fail(res, err?.statusCode ?? 500, err?.message ?? 'Failed to fetch time-off');
+  }
+};
+
+export const createProviderTimeOff = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    const created = await availEngine.createTimeOff(uid, req.body, adminUid(req));
+    auditFire({
+      action: 'provider_time_off_created',
+      actionCategory: 'provider',
+      outcome: 'success',
+      actorUid: adminUid(req),
+      entityType: 'provider',
+      entityId: uid,
+      after: { timeOffId: created.id, startDate: created.startDate, endDate: created.endDate },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return res.status(201).json({ status: 'success', data: created });
+  } catch (err: any) {
+    return fail(res, err?.statusCode ?? 500, err?.message ?? 'Failed to create time-off');
+  }
+};
+
+export const cancelProviderTimeOff = async (req: Request, res: Response) => {
+  try {
+    const uid      = String(req.params.uid);
+    const timeOffId = Number(req.params.timeOffId);
+    const cancelled = await availEngine.cancelTimeOff(uid, timeOffId, adminUid(req), req.body?.reason);
+    auditFire({
+      action: 'provider_time_off_cancelled',
+      actionCategory: 'provider',
+      outcome: 'success',
+      actorUid: adminUid(req),
+      entityType: 'provider',
+      entityId: uid,
+      after: { timeOffId, cancelledAt: cancelled.cancelledAt },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return ok(res, cancelled);
+  } catch (err: any) {
+    return fail(res, err?.statusCode ?? 500, err?.message ?? 'Failed to cancel time-off');
+  }
+};
+
+export const eligibilityPreviewAdmin = async (req: Request, res: Response) => {
+  try {
+    const uid     = String(req.params.uid);
+    const { startAt, endAt, bookingId } = req.body ?? {};
+
+    let result;
+    if (bookingId) {
+      result = await eligEngine.evaluateProviderForBooking(uid, String(bookingId));
+    } else if (startAt) {
+      result = await eligEngine.evaluateProviderForSlot(uid, {
+        startAt,
+        endAt: endAt ?? new Date(new Date(startAt).getTime() + 2 * 3600000).toISOString(),
+        serviceId: req.body.serviceId ?? null,
+        cityId:    null,
+        branchId:  req.body.branchId  ?? null,
+      });
+    } else {
+      return fail(res, 400, 'Provide either bookingId or startAt');
+    }
+
+    auditFire({
+      action: 'provider_eligibility_preview_run',
+      actionCategory: 'provider',
+      outcome: 'success',
+      actorUid: adminUid(req),
+      entityType: 'provider',
+      entityId: uid,
+      after: { eligible: result.eligible, score: result.score },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
+    return ok(res, result);
+  } catch (err: any) {
+    return fail(res, err?.statusCode ?? 500, err?.message ?? 'Failed to run eligibility preview');
+  }
+};
+
+export const getAvailabilityTimeline = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    const profile  = await availEngine.getAvailabilityProfile(uid);
+    const timeOff  = profile.timeOff.filter(t => t.status === 'active');
+
+    // Build next 14 days timeline
+    const today = new Date();
+    const days: Array<{ date: string; dayLabel: string; available: boolean; timeOffBlocked: boolean; slots: any[] }> = [];
+
+    for (let i = 0; i < 14; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      const dateStr   = d.toISOString().slice(0, 10);
+      const dow       = d.getDay();
+      const blocked   = timeOff.some(t => t.startDate <= dateStr && t.endDate >= dateStr);
+      const daySlots  = profile.weeklySchedule.filter(sl => sl.dayOfWeek === dow && sl.isAvailable);
+
+      days.push({
+        date:            dateStr,
+        dayLabel:        d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
+        available:       !blocked && daySlots.length > 0,
+        timeOffBlocked:  blocked,
+        slots:           daySlots,
+      });
+    }
+
+    return ok(res, { providerUid: uid, timezone: profile.timezone, days });
+  } catch (err: any) {
+    return fail(res, err?.statusCode ?? 500, err?.message ?? 'Failed to get availability timeline');
   }
 };
 
@@ -477,11 +606,11 @@ export const getProviderAvailability = async (req: Request, res: Response) => {
 
 export const getProviderServiceArea = async (req: Request, res: Response) => {
   try {
-    const uid = String(req.params.uid);
-    const area = await svc.getProviderServiceArea(uid);
-    return ok(res, area);
+    const uid     = String(req.params.uid);
+    const profile = await areaEngine.getServiceAreaProfile(uid);
+    return ok(res, profile);
   } catch (err: any) {
-    return fail(res, 500, err?.message ?? 'Failed to fetch service area');
+    return fail(res, err?.statusCode ?? 500, err?.message ?? 'Failed to fetch service area');
   }
 };
 
@@ -550,26 +679,86 @@ export const setProviderArchive = async (req: Request, res: Response) => {
   }
 };
 
-// ── Availability Write (admin-scoped) ─────────────────────────────────────────
+// ── Availability Write (admin-scoped, canonical engine) ───────────────────────
 
 export const saveProviderAvailabilityAdmin = async (req: Request, res: Response) => {
   try {
     const uid = String(req.params.uid);
-    await saveWorkerAvailability(uid, req.body);
-    return ok(res, { uid, saved: true });
+    const { schedule, weeklySchedule, timezone, expectedVersion } = req.body ?? {};
+    const slots = weeklySchedule ?? schedule ?? [];
+
+    const result = await availEngine.saveWeeklySchedule(
+      uid, slots, timezone ?? 'Asia/Manila', adminUid(req), expectedVersion
+    );
+
+    auditFire({
+      action: 'provider_availability_updated',
+      actionCategory: 'provider',
+      outcome: 'success',
+      actorUid: adminUid(req),
+      entityType: 'provider',
+      entityId: uid,
+      after: { version: result.version, slotCount: slots.length },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
+    return ok(res, { uid, saved: true, version: result.version, updatedAt: result.updatedAt });
   } catch (err: any) {
-    return fail(res, 500, err?.message ?? 'Failed to save availability');
+    return fail(res, err?.statusCode ?? 500, err?.message ?? 'Failed to save availability');
   }
 };
 
 export const deleteProviderAvailabilityAdmin = async (req: Request, res: Response) => {
   try {
     const uid = String(req.params.uid);
-    // Clearing availability = saving an empty schedule
-    await saveWorkerAvailability(uid, { schedule: {} });
-    return ok(res, { uid, deleted: true });
+    const result = await availEngine.saveWeeklySchedule(uid, [], 'Asia/Manila', adminUid(req));
+    auditFire({
+      action: 'provider_availability_updated',
+      actionCategory: 'provider',
+      outcome: 'success',
+      actorUid: adminUid(req),
+      entityType: 'provider',
+      entityId: uid,
+      after: { cleared: true, version: result.version },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return ok(res, { uid, deleted: true, version: result.version });
   } catch (err: any) {
-    return fail(res, 500, err?.message ?? 'Failed to delete availability');
+    return fail(res, err?.statusCode ?? 500, err?.message ?? 'Failed to delete availability');
+  }
+};
+
+// ── Service Area Write (admin-scoped, canonical engine) ───────────────────────
+
+export const saveProviderServiceAreaAdmin = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    const { coverageMode, cityIds, branchIds, radiusKm, label, expectedVersion } = req.body ?? {};
+
+    const result = await areaEngine.saveServiceArea(
+      uid, { coverageMode, cityIds, branchIds, radiusKm, label }, adminUid(req), expectedVersion
+    );
+
+    auditFire({
+      action: 'provider_service_area_updated',
+      actionCategory: 'provider',
+      outcome: 'success',
+      actorUid: adminUid(req),
+      entityType: 'provider',
+      entityId: uid,
+      after: { coverageMode, version: result.version },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
+    return ok(res, { uid, saved: true, version: result.version, updatedAt: result.updatedAt });
+  } catch (err: any) {
+    return fail(res, err?.statusCode ?? 500, err?.message ?? 'Failed to save service area');
   }
 };
 

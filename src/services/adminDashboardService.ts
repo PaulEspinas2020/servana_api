@@ -292,10 +292,10 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
                             WHERE wr.worker_uid = uc.uid))                                         AS missing_docs,
           COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
             AND NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa
-                            WHERE wa.uid = uc.uid))                                                AS missing_avail,
+                            WHERE wa.worker_uid = uc.uid))                                         AS missing_avail,
           COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
-            AND NOT EXISTS (SELECT 1 FROM ${s}.worker_service_area wsa
-                            WHERE wsa.uid = uc.uid))                                               AS missing_area,
+            AND NOT EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa
+                            WHERE wsa.worker_uid = uc.uid))                                        AS missing_area,
           COUNT(*) FILTER (WHERE role = 3)                                                        AS total_customers
         FROM ${s}.user_credentials uc
       ),

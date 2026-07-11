@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import * as svc from "../services/adminBookingService";
 import { adminServerError, adminNotFound, adminBadRequest } from "../helpers/adminError";
 import { auditFire, writeSuccess } from "../services/adminAuditService";
+import { listAssignmentCandidates } from "../services/providerEligibilityEngine";
 
 const actorUid = (req: any): string | null =>
   req.user?.uid ?? req.headers['x-admin-uid'] ?? null;
@@ -121,7 +122,19 @@ export const getCandidates = async (req: Request, res: Response) => {
     if (!id || isNaN(id)) {
       return adminBadRequest(res, 'Invalid booking id');
     }
-    const candidates = await svc.getAssignmentCandidates(id);
+    const candidates = await listAssignmentCandidates(String(id));
+    auditFire({
+      action: 'assignment_candidates_viewed',
+      actionCategory: 'booking',
+      outcome: 'success',
+      actorUid: actorUid(req) ?? '',
+      entityType: 'booking',
+      entityId: String(id),
+      after: { candidateCount: candidates.length, eligibleCount: candidates.filter(c => c.eligible).length },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
     return res.json({ status: 'success', data: candidates });
   } catch (err: any) {
     return adminServerError(res, err);

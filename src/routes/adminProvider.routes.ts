@@ -49,10 +49,16 @@ router.delete('/admin/providers/:uid/requirements/:id', ...adminOnly, ctrl.delet
 router.get('/admin/providers/:uid/jobs', ...adminOnly, ctrl.getProviderJobs);
 router.get('/admin/providers/:uid/performance', ...adminOnly, ctrl.getProviderPerformance);
 router.get('/admin/providers/:uid/earnings', ...adminOnly, ctrl.getProviderEarnings);
-router.get('/admin/providers/:uid/availability', ...adminOnly, ctrl.getProviderAvailability);
-router.put('/admin/providers/:uid/availability', ...adminOnly, ctrl.saveProviderAvailabilityAdmin);
-router.delete('/admin/providers/:uid/availability', ...adminOnly, ctrl.deleteProviderAvailabilityAdmin);
-router.get('/admin/providers/:uid/service-area', ...adminOnly, ctrl.getProviderServiceArea);
+router.get('/admin/providers/:uid/availability',                      ...adminOnly, ctrl.getProviderAvailability);
+router.put('/admin/providers/:uid/availability',                      ...adminOnly, ctrl.saveProviderAvailabilityAdmin);
+router.delete('/admin/providers/:uid/availability',                   ...adminOnly, ctrl.deleteProviderAvailabilityAdmin);
+router.get('/admin/providers/:uid/availability/timeline',             ...adminOnly, ctrl.getAvailabilityTimeline);
+router.get('/admin/providers/:uid/time-off',                          ...adminOnly, ctrl.getProviderTimeOff);
+router.post('/admin/providers/:uid/time-off',                         ...adminOnly, ctrl.createProviderTimeOff);
+router.patch('/admin/providers/:uid/time-off/:timeOffId/cancel',      ...adminOnly, ctrl.cancelProviderTimeOff);
+router.post('/admin/providers/:uid/eligibility-preview',              ...adminOnly, ctrl.eligibilityPreviewAdmin);
+router.get('/admin/providers/:uid/service-area',                      ...adminOnly, ctrl.getProviderServiceArea);
+router.put('/admin/providers/:uid/service-area',                      ...adminOnly, ctrl.saveProviderServiceAreaAdmin);
 router.patch('/admin/providers/:uid/account-status', ...adminOnly, ctrl.updateProviderAccountStatus);
 router.patch('/admin/providers/:uid/archive', ...adminOnly, ctrl.setProviderArchive);
 

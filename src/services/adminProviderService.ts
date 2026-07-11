@@ -87,10 +87,10 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
   if (hasPendingApps === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_service_applications wsa_f WHERE wsa_f.worker_uid = uc.uid AND wsa_f.status = 'pending_review')`);
   if (hasActiveServices === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.employee_services es_f WHERE es_f.employee_uid = uc.uid)`);
   if (hasActiveServices === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.employee_services es_f WHERE es_f.employee_uid = uc.uid)`);
-  if (hasAvailability === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_availability wa_f WHERE wa_f.uid = uc.uid)`);
-  if (hasAvailability === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa_f WHERE wa_f.uid = uc.uid)`);
-  if (hasServiceArea === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_service_area wsa2_f WHERE wsa2_f.uid = uc.uid)`);
-  if (hasServiceArea === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_service_area wsa2_f WHERE wsa2_f.uid = uc.uid)`);
+  if (hasAvailability === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_availability wa_f WHERE wa_f.worker_uid = uc.uid)`);
+  if (hasAvailability === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa_f WHERE wa_f.worker_uid = uc.uid)`);
+  if (hasServiceArea === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa2_f WHERE wsa2_f.worker_uid = uc.uid)`);
+  if (hasServiceArea === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa2_f WHERE wsa2_f.worker_uid = uc.uid)`);
 
   const sortColumn: Record<string, string> = {
     name: `uc.first_name`,
@@ -126,8 +126,8 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
          COALESCE((SELECT COUNT(*)::int FROM ${s}.worker_service_applications wsa2 WHERE wsa2.worker_uid = uc.uid AND wsa2.status = 'pending_review'), 0) AS pending_apps,
          COALESCE((SELECT COUNT(*)::int FROM ${s}.employee_services es2 WHERE es2.employee_uid = uc.uid), 0) AS active_svc,
          -- Availability and service area (resolved by backend)
-         CASE WHEN EXISTS (SELECT 1 FROM ${s}.worker_availability wa2 WHERE wa2.uid = uc.uid) THEN 'saved' ELSE 'missing' END AS avail_status,
-         CASE WHEN EXISTS (SELECT 1 FROM ${s}.worker_service_area wsa3 WHERE wsa3.uid = uc.uid) THEN 'saved' ELSE 'missing' END AS area_status
+         CASE WHEN EXISTS (SELECT 1 FROM ${s}.worker_availability wa2 WHERE wa2.worker_uid = uc.uid) THEN 'saved' ELSE 'missing' END AS avail_status,
+         CASE WHEN EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa3 WHERE wsa3.worker_uid = uc.uid) THEN 'saved' ELSE 'missing' END AS area_status
        FROM ${s}.user_credentials uc
        LEFT JOIN ${s}.user_profile up ON up.uid = uc.uid
        ${whereClause}
@@ -217,14 +217,14 @@ export const getProviderMetrics = async () => {
       `SELECT COUNT(DISTINCT uc.uid) AS cnt
        FROM ${s}.user_credentials uc
        WHERE uc.role IN (2,4)
-         AND NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa WHERE wa.uid = uc.uid)`, []
+         AND NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa WHERE wa.worker_uid = uc.uid)`, []
     ),
     // Missing service area (defensive)
     safeCount(
       `SELECT COUNT(DISTINCT uc.uid) AS cnt
        FROM ${s}.user_credentials uc
        WHERE uc.role IN (2,4)
-         AND NOT EXISTS (SELECT 1 FROM ${s}.worker_service_area wsa WHERE wsa.uid = uc.uid)`, []
+         AND NOT EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa WHERE wsa.worker_uid = uc.uid)`, []
     ),
   ]);
 
@@ -702,8 +702,8 @@ export const getProviderOverlapMap = async (uid: string): Promise<ProviderOverla
     dbQuery.query(`SELECT status, COUNT(*)::int AS cnt FROM ${s}.worker_service_applications WHERE worker_uid = $1 GROUP BY status`, [uid]),
     safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.employee_services         WHERE uid = $1`,         [uid]),
     safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.employee_catalog_capabilities WHERE uid = $1`,     [uid]),
-    safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.worker_availability       WHERE uid = $1`,         [uid]),
-    safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.worker_service_area       WHERE uid = $1`,         [uid]),
+    safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.worker_availability       WHERE worker_uid = $1`,  [uid]),
+    safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.worker_service_areas      WHERE worker_uid = $1`,  [uid]),
     safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.worker_locations          WHERE uid = $1`,         [uid]),
     safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.booking_workers           WHERE worker_uid = $1`,  [uid]),
   ]);
@@ -721,8 +721,8 @@ export const getProviderOverlapMap = async (uid: string): Promise<ProviderOverla
     { table: 'worker_service_applications',   column: 'worker_uid', presentAs: 'service applications (all statuses)', rowCount: totalApps },
     { table: 'employee_services',             column: 'uid',        presentAs: 'active service assignments',          rowCount: activeSvcCnt },
     { table: 'employee_catalog_capabilities', column: 'uid',        presentAs: 'catalog capabilities',                rowCount: catalogCapCnt },
-    { table: 'worker_availability',           column: 'uid',        presentAs: 'availability schedule',               rowCount: availCnt },
-    { table: 'worker_service_area',           column: 'uid',        presentAs: 'service area config',                 rowCount: svcAreaCnt },
+    { table: 'worker_availability',           column: 'worker_uid', presentAs: 'availability schedule',               rowCount: availCnt },
+    { table: 'worker_service_areas',          column: 'worker_uid', presentAs: 'service area config',                 rowCount: svcAreaCnt },
     { table: 'worker_locations',              column: 'uid',        presentAs: 'location/online status',              rowCount: locCnt },
     { table: 'booking_workers',               column: 'worker_uid', presentAs: 'booking assignments',                 rowCount: bookingCnt },
   ];
