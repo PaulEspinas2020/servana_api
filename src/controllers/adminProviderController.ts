@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import * as svc from '../services/adminProviderService';
 import * as appSvc from '../services/serviceApplicationService';
 import { adminError, AdminErrorCode } from '../helpers/adminError';
+import { auditFire, writeSuccess } from '../services/adminAuditService';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -252,6 +253,23 @@ export const approveServiceApplication = async (req: Request, res: Response) => 
       throw txErr;
     }
 
+    // Awaited: high-risk action requires strong audit consistency
+    await writeSuccess({
+      action: 'provider_application_approved',
+      actionCategory: 'provider',
+      actorUid: admin,
+      entityType: 'provider_application',
+      entityId: String(id),
+      relatedEntities: [{ entityType: 'provider', entityId: app.worker_uid }],
+      before: { status: app.status },
+      after: { status: 'approved' },
+      changedFields: ['status'],
+      reason: reason ?? null,
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return ok(res, { id, status: 'approved' });
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
@@ -295,6 +313,23 @@ export const rejectServiceApplication = async (req: Request, res: Response) => {
       [admin, reason ?? null, id]
     );
 
+    // Awaited: high-risk action requires strong audit consistency
+    await writeSuccess({
+      action: 'provider_application_rejected',
+      actionCategory: 'provider',
+      actorUid: admin,
+      entityType: 'provider_application',
+      entityId: String(id),
+      relatedEntities: [{ entityType: 'provider', entityId: app.worker_uid }],
+      before: { status: app.status },
+      after: { status: 'rejected' },
+      changedFields: ['status'],
+      reason: reason ?? null,
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return ok(res, { id, status: 'rejected' });
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
@@ -333,6 +368,22 @@ export const uploadProviderRequirement = async (req: Request, res: Response) => 
     if (!file || !name) return fail(res, 400, 'file (data URI) and name are required');
     if (!String(file).startsWith('data:')) return fail(res, 422, 'file must be a data URI');
     const doc = await svc.uploadProviderRequirement(uid, String(file), String(name), requirementType ? String(requirementType) : undefined);
+
+    auditFire({
+      action: 'provider_document_uploaded',
+      actionCategory: 'file',
+      outcome: 'success',
+      actorUid: adminUid(req),
+      entityType: 'provider_requirement',
+      entityId: String(doc?.id ?? 'unknown'),
+      entityDisplayName: String(name),
+      relatedEntities: [{ entityType: 'provider', entityId: uid }],
+      after: { requirementType: requirementType ?? null, name },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return ok(res, doc);
   } catch (err: any) {
     const status = err.message?.includes('not allowed') ? 422 : 500;
@@ -346,6 +397,20 @@ export const deleteProviderRequirement = async (req: Request, res: Response) => 
     const id = Number(req.params.id);
     if (!id) return fail(res, 400, 'Invalid requirement id');
     const deleted = await svc.deleteProviderRequirement(uid, id);
+
+    auditFire({
+      action: 'provider_document_deleted',
+      actionCategory: 'file',
+      outcome: 'success',
+      actorUid: adminUid(req),
+      entityType: 'provider_requirement',
+      entityId: String(id),
+      relatedEntities: [{ entityType: 'provider', entityId: uid }],
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return ok(res, deleted);
   } catch (err: any) {
     return fail(res, 404, err?.message ?? 'Requirement not found');
@@ -429,6 +494,21 @@ export const updateProviderAccountStatus = async (req: Request, res: Response) =
     if (!accountStatus) return fail(res, 400, 'accountStatus is required');
 
     const updated = await svc.updateProviderAccountStatus(uid, accountStatus, adminUid(req), reason);
+
+    auditFire({
+      action: 'provider_status_changed',
+      actionCategory: 'provider',
+      outcome: 'success',
+      actorUid: adminUid(req),
+      entityType: 'provider',
+      entityId: uid,
+      after: { accountStatus },
+      reason: reason ?? null,
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return ok(res, { uid: updated.uid, accountStatus: updated.account_status });
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
@@ -448,6 +528,20 @@ export const setProviderArchive = async (req: Request, res: Response) => {
     }
 
     const updated = await svc.setProviderArchive(uid, isArchive);
+
+    auditFire({
+      action: isArchive ? 'provider_archived' : 'provider_restored',
+      actionCategory: 'provider',
+      outcome: 'success',
+      actorUid: adminUid(req),
+      entityType: 'provider',
+      entityId: uid,
+      after: { isArchive },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return ok(res, { uid: updated.uid, isArchive: updated.is_archive });
   } catch (err: any) {
     const code = err?.statusCode ?? 500;

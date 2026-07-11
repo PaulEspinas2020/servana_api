@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import * as svc from "../services/adminBookingService";
 import { adminServerError, adminNotFound, adminBadRequest } from "../helpers/adminError";
+import { auditFire, writeSuccess } from "../services/adminAuditService";
 
 const actorUid = (req: any): string | null =>
   req.user?.uid ?? req.headers['x-admin-uid'] ?? null;
@@ -138,6 +139,21 @@ export const assignProvider = async (req: Request, res: Response) => {
       return adminBadRequest(res, 'providerUid is required');
     }
     const result = await svc.adminAssignProvider(id, providerUid, actorUid(req), reason);
+
+    auditFire({
+      action: 'booking_assigned',
+      actionCategory: 'booking',
+      outcome: 'success',
+      actorUid: actorUid(req) ?? '',
+      entityType: 'booking',
+      entityId: String(id),
+      after: { providerUid },
+      reason: reason ?? null,
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return res.json({ status: 'success', data: result });
   } catch (err: any) {
     return adminServerError(res, err);
@@ -158,6 +174,21 @@ export const reassignProvider = async (req: Request, res: Response) => {
       return adminBadRequest(res, 'reason is required for reassignment');
     }
     const result = await svc.adminReassignProvider(id, toProviderUid, actorUid(req), reason);
+
+    auditFire({
+      action: 'booking_reassigned',
+      actionCategory: 'booking',
+      outcome: 'success',
+      actorUid: actorUid(req) ?? '',
+      entityType: 'booking',
+      entityId: String(id),
+      after: { providerUid: toProviderUid },
+      reason: reason ?? null,
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return res.json({ status: 'success', data: result });
   } catch (err: any) {
     return adminServerError(res, err);
@@ -178,6 +209,21 @@ export const rescheduleBooking = async (req: Request, res: Response) => {
       return adminBadRequest(res, 'reason is required for reschedule');
     }
     const result = await svc.adminRescheduleBooking(id, scheduledAt, reason, actorUid(req));
+
+    auditFire({
+      action: 'booking_rescheduled',
+      actionCategory: 'booking',
+      outcome: 'success',
+      actorUid: actorUid(req) ?? '',
+      entityType: 'booking',
+      entityId: String(id),
+      after: { scheduledAt },
+      reason: reason ?? null,
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return res.json({ status: 'success', data: result });
   } catch (err: any) {
     return adminServerError(res, err);
@@ -195,6 +241,20 @@ export const cancelBooking = async (req: Request, res: Response) => {
       return adminBadRequest(res, 'reason is required for cancellation');
     }
     const result = await svc.adminCancelBooking(id, reason, actorUid(req), reasonCode, refundAction);
+
+    await writeSuccess({
+      action: 'booking_cancelled',
+      actionCategory: 'booking',
+      actorUid: actorUid(req) ?? '',
+      entityType: 'booking',
+      entityId: String(id),
+      after: { status: 'cancelled', reasonCode: reasonCode ?? null, refundAction: refundAction ?? null },
+      reason: reason ?? null,
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return res.json({ status: 'success', data: result });
   } catch (err: any) {
     return adminServerError(res, err);
@@ -217,6 +277,21 @@ export const escalateBooking = async (req: Request, res: Response) => {
     const result = await svc.adminEscalateBooking(
       id, reason, severity, actorUid(req), { reasonCode, assignedTeam }
     );
+
+    auditFire({
+      action: 'booking_escalated',
+      actionCategory: 'booking',
+      outcome: 'success',
+      actorUid: actorUid(req) ?? '',
+      entityType: 'booking',
+      entityId: String(id),
+      after: { severity, reasonCode: reasonCode ?? null, assignedTeam: assignedTeam ?? null },
+      reason: reason ?? null,
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return res.status(201).json({ status: 'success', data: result });
   } catch (err: any) {
     return adminServerError(res, err);
@@ -231,6 +306,20 @@ export const approveCompletion = async (req: Request, res: Response) => {
       return adminBadRequest(res, 'Invalid booking id');
     }
     const result = await svc.adminApproveCompletion(id, actorUid(req), reason);
+
+    await writeSuccess({
+      action: 'booking_completion_approved',
+      actionCategory: 'booking',
+      actorUid: actorUid(req) ?? '',
+      entityType: 'booking',
+      entityId: String(id),
+      after: { status: 'completed' },
+      reason: reason ?? null,
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return res.json({ status: 'success', data: result });
   } catch (err: any) {
     return adminServerError(res, err);

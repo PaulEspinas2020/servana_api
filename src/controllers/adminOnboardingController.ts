@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import * as svc from '../services/adminOnboardingService';
 import { adminError, AdminErrorCode } from '../helpers/adminError';
+import { auditFire, writeSuccess } from '../services/adminAuditService';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -91,6 +92,21 @@ export const assignCase = async (req: Request, res: Response) => {
       actorUid(req),
       reason,
     );
+
+    auditFire({
+      action: 'onboarding_case_assigned',
+      actionCategory: 'onboarding',
+      outcome: 'success',
+      actorUid: actorUid(req),
+      entityType: 'onboarding_case',
+      entityId: caseId,
+      after: { reviewerUid: reviewer_uid ?? null },
+      reason: reason ?? null,
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return ok(res, result);
   } catch (err: any) {
     return fail(res, 400, err?.message ?? 'Failed to assign case');
@@ -105,6 +121,20 @@ export const setPriority = async (req: Request, res: Response) => {
     const { priority } = req.body as { priority: string };
     if (!priority) return fail(res, 400, 'priority is required');
     const result = await svc.setPriority(caseId, priority, actorUid(req));
+
+    auditFire({
+      action: 'onboarding_case_priority_changed',
+      actionCategory: 'onboarding',
+      outcome: 'success',
+      actorUid: actorUid(req),
+      entityType: 'onboarding_case',
+      entityId: caseId,
+      after: { priority },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return ok(res, result);
   } catch (err: any) {
     return fail(res, 400, err?.message ?? 'Failed to set priority');
@@ -126,6 +156,21 @@ export const moveCase = async (req: Request, res: Response) => {
       return fail(res, 400, 'expected_version is required');
     }
     const result = await svc.moveCase(caseId, to_status, expected_version, actorUid(req), reason);
+
+    auditFire({
+      action: 'onboarding_case_moved',
+      actionCategory: 'onboarding',
+      outcome: 'success',
+      actorUid: actorUid(req),
+      entityType: 'onboarding_case',
+      entityId: caseId,
+      after: { status: to_status },
+      reason: reason ?? null,
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return ok(res, result);
   } catch (err: any) {
     const status = (err as any)?.statusCode ?? 400;
@@ -161,6 +206,20 @@ export const approveRequirement = async (req: Request, res: Response) => {
       providerMessage: provider_message,
       internalRationale: internal_rationale,
     });
+
+    auditFire({
+      action: 'onboarding_requirement_approved',
+      actionCategory: 'onboarding',
+      outcome: 'success',
+      actorUid: actorUid(req),
+      entityType: 'provider_requirement',
+      entityId: String(id),
+      after: { decision: 'approved', reasonCode: reason_code ?? null },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return ok(res, result);
   } catch (err: any) {
     return fail(res, 400, err?.message ?? 'Failed to approve requirement');
@@ -180,6 +239,20 @@ export const rejectRequirement = async (req: Request, res: Response) => {
       providerMessage: provider_message,
       internalRationale: internal_rationale,
     });
+
+    auditFire({
+      action: 'onboarding_requirement_rejected',
+      actionCategory: 'onboarding',
+      outcome: 'success',
+      actorUid: actorUid(req),
+      entityType: 'provider_requirement',
+      entityId: String(id),
+      after: { decision: 'rejected', reasonCode: reason_code ?? null },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return ok(res, result);
   } catch (err: any) {
     return fail(res, 400, err?.message ?? 'Failed to reject requirement');
@@ -199,6 +272,20 @@ export const requestResubmission = async (req: Request, res: Response) => {
       providerMessage: provider_message,
       internalRationale: internal_rationale,
     });
+
+    auditFire({
+      action: 'onboarding_resubmission_requested',
+      actionCategory: 'onboarding',
+      outcome: 'success',
+      actorUid: actorUid(req),
+      entityType: 'provider_requirement',
+      entityId: String(id),
+      after: { decision: 'needs_resubmission', reasonCode: reason_code ?? null },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return ok(res, result);
   } catch (err: any) {
     return fail(res, 400, err?.message ?? 'Failed to request resubmission');
@@ -220,6 +307,19 @@ export const finalApproveProvider = async (req: Request, res: Response) => {
       actorUid(req),
       provider_message,
     );
+
+    await writeSuccess({
+      action: 'onboarding_final_approved',
+      actionCategory: 'onboarding',
+      actorUid: actorUid(req),
+      entityType: 'onboarding_case',
+      entityId: caseId,
+      after: { status: 'approved', providerMessage: provider_message ?? null },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return ok(res, result);
   } catch (err: any) {
     const status = (err as any)?.statusCode ?? 400;
@@ -246,6 +346,23 @@ export const finalRejectProvider = async (req: Request, res: Response) => {
       provider_message ?? '',
       internal_rationale,
     );
+
+    await writeSuccess({
+      action: 'onboarding_final_rejected',
+      actionCategory: 'onboarding',
+      actorUid: actorUid(req),
+      entityType: 'onboarding_case',
+      entityId: caseId,
+      after: {
+        status: 'rejected',
+        reasonCode: reason_code ?? null,
+        providerMessage: provider_message ?? null,
+      },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return ok(res, result);
   } catch (err: any) {
     const status = (err as any)?.statusCode ?? 400;
@@ -288,6 +405,20 @@ export const addCaseNote = async (req: Request, res: Response) => {
     const noteType: 'internal' | 'provider_message' | 'escalation' =
       validTypes.includes(note_type) ? note_type : 'internal';
     const note = await svc.addNote(caseId, actorUid(req), String(body).trim(), noteType);
+
+    auditFire({
+      action: 'onboarding_note_added',
+      actionCategory: 'onboarding',
+      outcome: 'success',
+      actorUid: actorUid(req),
+      entityType: 'onboarding_case',
+      entityId: caseId,
+      after: { noteType },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
     return created(res, note);
   } catch (err: any) {
     return fail(res, 400, err?.message ?? 'Failed to add note');

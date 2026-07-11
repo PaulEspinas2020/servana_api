@@ -3,6 +3,7 @@ import http from "http";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import formidable from "formidable";
+import { randomUUID } from "crypto";
 
 import dotenv from "dotenv";
 import { parityMiddleware } from "./middleware/parityMiddleware";
@@ -34,6 +35,12 @@ app.disable("x-powered-by");
 app.set("trust proxy", true);
 app.use(cors(corsOptionsDelegate))
 app.use(cookieParser());
+
+// Stamp every request with a stable UUID for tracing and audit correlation
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  (req as any).id = randomUUID();
+  next();
+});
 app.use(
   "/api/paymongo/webhook",
   express.raw({ type: "application/json" })
@@ -136,6 +143,9 @@ app.use("/api", cors(corsOptionsDelegate), adminBookingRoutes);
 import adminDashboardRoutes from "./routes/adminDashboard.routes";
 app.use("/api", cors(corsOptionsDelegate), adminDashboardRoutes);
 
+import adminAuditRoutes from "./routes/adminAudit.routes";
+app.use("/api", cors(corsOptionsDelegate), adminAuditRoutes);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
@@ -191,6 +201,15 @@ import { ensureBookingOpsSchema } from "./services/adminBookingService";
     await ensureBookingOpsSchema();
   } catch (err) {
     console.error("[booking-ops] schema error:", err);
+  }
+})();
+
+import { ensureAuditSchema } from "./services/adminAuditService";
+(async () => {
+  try {
+    await ensureAuditSchema();
+  } catch (err) {
+    console.error("[admin-audit] schema error:", err);
   }
 })();
 
