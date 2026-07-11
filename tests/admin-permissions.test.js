@@ -777,12 +777,18 @@ describe('Protected mobile and provider-web routes — no changes', () => {
     expect(fs.existsSync(paymentRoutes)).toBe(true);
   });
 
-  test('provider catalog routes file unchanged', () => {
+  test('provider catalog routes file: provider-facing route has no permission gate, admin routes do', () => {
     const catalogRoutes = path.resolve(__dirname, '../src/routes/providerCatalog.routes.ts');
     expect(fs.existsSync(catalogRoutes)).toBe(true);
     const src = fs.readFileSync(catalogRoutes, 'utf8');
-    // Must not import requirePermission (no admin permission added to provider web routes)
-    expect(src).not.toContain("requirePermission");
+    // Provider-facing offering route must NOT have requirePermission (would break provider web app)
+    const providerBlock = src.indexOf('"/provider-catalog/v1/offerings"');
+    expect(providerBlock).toBeGreaterThan(-1);
+    expect(src.substring(providerBlock, providerBlock + 200)).not.toContain('requirePermission');
+    // Admin routes MUST have requirePermission (security enforcement)
+    expect(src).toContain("requirePermission");
+    expect(src).toContain("services.view");
+    expect(src).toContain("services.publish");
   });
 
   test('adminPermissionService does not modify existing provider/booking/payment tables', () => {

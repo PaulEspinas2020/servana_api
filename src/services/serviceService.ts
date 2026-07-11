@@ -216,7 +216,6 @@ export const checkCoverageGeo = async (serviceId: number, lat: number, lon: numb
     );
 
     const match = r.rows.find((x: any) => Number(x.distance_km) <= Number(x.radius_km));
-    console.log("Coverage check:", { covered: !!match, nearest: r.rows[0] || null, matched: match || null });
     return {
         covered: !!match,
         nearest: r.rows[0] || null,
@@ -313,7 +312,6 @@ export const updateFullService = async (
     serviceId: number,
     payload: any
 ) => {
-    console.log("Updating service:", { serviceId, payload });
     try {
         /**
          * 1. Validate service exists
@@ -388,7 +386,6 @@ export const updateFullService = async (
          */
         for (const lvl2 of payload.options) {
             for (const item of lvl2.items) {
-                console.log(item)
                 const mainRes = await dbQuery.query(
                     `
           INSERT INTO ${dbSchema}.service_options

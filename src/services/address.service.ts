@@ -142,10 +142,8 @@ const updateLocationInDB = async (locationId: string, addressId: string, lat: nu
 const getAllAddressesOfUser = async (userId: string, role: string) => {
     let searchQuery: string;
     let params: any[];
-    console.log("with role", role);
     if (role === '1' || role === '0') {
         // Admin: fetch addresses of all users with role 3
-        console.log("Admin fetching all addresses of users with role 3");
         searchQuery = `
             SELECT ua.* FROM ${dbSchema}.user_address ua
             INNER JOIN ${dbSchema}.user_credentials u ON u.uid = ua.uid
@@ -162,7 +160,6 @@ const getAllAddressesOfUser = async (userId: string, role: string) => {
 
     try {
         const { rows } = await dbQuery.query(searchQuery, params);
-        console.log("Fetched addresses from DB for user", userId, "with role", role, ":", rows);
 
         if (!rows || rows.length === 0) return [];
 

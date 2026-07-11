@@ -6,7 +6,6 @@ import { transformServiceCatalog } from "../services/serviceService";
 
 export const listServices = async (req: Request, res: Response) => {
   try {
-    console.log("Getting all services...");
     const dbResponse = await serviceService.getAllServices();
     successMessage.data = dbResponse;
     res.status(status.success).send(successMessage);

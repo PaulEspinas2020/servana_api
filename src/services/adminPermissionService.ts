@@ -1,6 +1,7 @@
 import dbQuery from '../db/dbQuery';
 import { db } from '../config';
 import { auditFire } from './adminAuditService';
+import { toCamel } from '../helpers/idGenerator';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -585,7 +586,7 @@ export async function listAdminUsers(filter: {
     [...params, limit, offset]
   );
 
-  return { data: dataRes.rows, total, page, limit };
+  return { data: dataRes.rows.map(toCamel), total, page, limit };
 }
 
 export async function getAdminUserDetail(adminUid: string): Promise<any | null> {
@@ -598,7 +599,7 @@ export async function getAdminUserDetail(adminUid: string): Promise<any | null> 
      WHERE au.admin_uid = $1 LIMIT 1`,
     [adminUid]
   );
-  return res.rows[0] ?? null;
+  return res.rows[0] ? toCamel(res.rows[0]) : null;
 }
 
 export async function createAdminUser(
@@ -636,7 +637,7 @@ export async function createAdminUser(
 
   invalidatePermissionCache(data.adminUid);
   invalidatePermissionCache(`sa:${data.adminUid}`);
-  return res.rows[0];
+  return toCamel(res.rows[0]);
 }
 
 export async function updateAdminUser(
@@ -666,7 +667,7 @@ export async function updateAdminUser(
     actorUid, actorDisplayName: actorName, outcome: 'success', metadata: data, requestId,
   });
 
-  return res.rows[0];
+  return toCamel(res.rows[0]);
 }
 
 export async function updateAdminUserStatus(

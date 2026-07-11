@@ -454,8 +454,6 @@ const applyNearestWorkerTranspoFee = async (
     const transpoFee = computeTranspoFee(nearest.distanceKm);
     const roundedDist = Math.round(nearest.distanceKm * 100) / 100;
 
-    console.log(`No worker assigned — using nearest DB worker distance ${roundedDist} km → transpo_fee ${transpoFee}`);
-
     await dbQuery.query(
       `
       UPDATE ${dbSchema}.bookings
@@ -522,8 +520,6 @@ export const assignNearestWorker = async (
     [bookingId]
   );
 
-  console.log("Booking schedule:", bookingRes.rows[0]?.schedule);
-
   if (!bookingRes.rowCount) {
     throw new Error("Booking not found");
   }
@@ -557,9 +553,7 @@ export const assignNearestWorker = async (
     await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);
     return { assigned: false, reason: "NO_WORKER_ONLINE" };
   }
-  console.log(`Found ${onlineWorkers.length} online workers${serviceId ? ` for service ${serviceId}` : ""}`);
   const availableWorkers = onlineWorkers.filter((w: any) => !busyUids.has(w.uid));
-  console.log(`After filtering busy workers, ${availableWorkers.length} available workers remain`);
   if (!availableWorkers.length) {
     await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);
     return { assigned: false, reason: "NO_WORKER_AVAILABLE" };
@@ -577,14 +571,12 @@ export const assignNearestWorker = async (
     .sort((a, b) => a.distanceKm - b.distanceKm);
 
   const best = ranked[0];
-    console.log(`Nearest worker: ${best.uid} at ${best.distanceKm.toFixed(2)} km`);
   const avgSpeedKph = 30;
   const etaMinutes = Math.floor(
     Math.max(5, Math.ceil((best.distanceKm / avgSpeedKph) * 60))
   );
   const otpCode = generateOTP();
   const transpoFee = computeTranspoFee(best.distanceKm);
-  console.log(`Computed ETA: ${etaMinutes} minutes, OTP: ${otpCode}, Transpo Fee: ${transpoFee}`);
   // Apply transpo fee: add to final_price and persist into pricing_breakdown
   await dbQuery.query(
     `

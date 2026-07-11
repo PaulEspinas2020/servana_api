@@ -4,7 +4,6 @@ import { formatBooking, formatBookings } from "../services/bookingService";
 export const createBooking = async (req: any, res: any) => {
   try {
     const userId = req.query.userId as string;
-    console.log("Creating booking for user", userId);
     const booking = await bookingService.createBooking(
       userId,
       req.body

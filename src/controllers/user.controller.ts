@@ -46,7 +46,6 @@ const getAllAddressesOfUser = async (req: Request, res: Response) => {
     
     try {
         const role = await userService.getRoleById(uid);
-        console.log("Getting all addresses of user", uid, "with role", role);
         const dbResponse = await addressService.getAllAddressesOfUser(uid, role);
 
         successMessage.data = dbResponse;

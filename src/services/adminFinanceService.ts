@@ -1,6 +1,7 @@
 import dbQuery from '../db/dbQuery';
 import { db } from '../config';
 import { auditFire } from './adminAuditService';
+import { toCamel } from '../helpers/idGenerator';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -286,7 +287,7 @@ export async function listPayments(filter: PaymentFilter = {}): Promise<{
     dParams
   );
 
-  return { rows: dataR.rows, total, page, limit };
+  return { rows: dataR.rows.map(toCamel), total, page, limit };
 }
 
 export async function getPaymentDetail(paymentId: number): Promise<unknown> {
@@ -301,7 +302,7 @@ export async function getPaymentDetail(paymentId: number): Promise<unknown> {
      LIMIT 1`,
     [paymentId]
   );
-  return r.rows[0] ?? null;
+  return r.rows[0] ? toCamel(r.rows[0]) : null;
 }
 
 export async function listGcashPendingQueue(): Promise<unknown[]> {
@@ -316,7 +317,7 @@ export async function listGcashPendingQueue(): Promise<unknown[]> {
      WHERE p.method = 'GCASH' AND p.status = 'PENDING'
      ORDER BY p.updated_at ASC`
   );
-  return r.rows;
+  return r.rows.map(toCamel);
 }
 
 // ── GCash Approval / Rejection ────────────────────────────────────────────────
@@ -577,7 +578,7 @@ export async function listLedgerEntries(filter: {
     dp
   );
 
-  return { rows: dataR.rows, total, page, limit };
+  return { rows: dataR.rows.map(toCamel), total, page, limit };
 }
 
 export async function getBookingLedger(bookingId: number): Promise<unknown[]> {
@@ -589,7 +590,7 @@ export async function getBookingLedger(bookingId: number): Promise<unknown[]> {
      ORDER BY le.created_at DESC`,
     [bookingId]
   );
-  return r.rows;
+  return r.rows.map(toCamel);
 }
 
 // ── Payouts / Disbursements ───────────────────────────────────────────────────
@@ -646,7 +647,7 @@ export async function listPayouts(filter: PayoutFilter = {}): Promise<{
     dp
   );
 
-  return { rows: dataR.rows, total, page, limit };
+  return { rows: dataR.rows.map(toCamel), total, page, limit };
 }
 
 export async function getPayoutDetail(disbursementId: number): Promise<unknown> {
@@ -661,7 +662,7 @@ export async function getPayoutDetail(disbursementId: number): Promise<unknown> 
      WHERE d.id = $1 LIMIT 1`,
     [disbursementId]
   );
-  return r.rows[0] ?? null;
+  return r.rows[0] ? toCamel(r.rows[0]) : null;
 }
 
 export async function holdPayout(
@@ -915,7 +916,7 @@ export async function listRefundReviews(filter: {
     dp
   );
 
-  return { rows: dataR.rows, total, page, limit };
+  return { rows: dataR.rows.map(toCamel), total, page, limit };
 }
 
 export async function getRefundReview(refundId: number): Promise<unknown> {
@@ -930,7 +931,7 @@ export async function getRefundReview(refundId: number): Promise<unknown> {
      WHERE rr.id = $1 LIMIT 1`,
     [refundId]
   );
-  return r.rows[0] ?? null;
+  return r.rows[0] ? toCamel(r.rows[0]) : null;
 }
 
 export async function approveRefund(
@@ -1344,7 +1345,7 @@ export async function listExceptions(filter: {
     dp
   );
 
-  return { rows: dataR.rows, total, page, limit };
+  return { rows: dataR.rows.map(toCamel), total, page, limit };
 }
 
 export async function resolveException(

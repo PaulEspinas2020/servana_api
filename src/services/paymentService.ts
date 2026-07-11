@@ -399,7 +399,6 @@ export const processWebhook = async (req: Request, _res: Response) => {
   const eventType = payload?.data?.attributes?.type;
   const eventData = payload?.data?.attributes?.data;
   const providerPaymentId = eventData?.id;
-  console.log({ eventId, eventType, providerPaymentId });
   if (!eventId || !eventType || !providerPaymentId) {
     throw new Error("Invalid webhook payload");
   }
@@ -425,7 +424,6 @@ export const processWebhook = async (req: Request, _res: Response) => {
 
     const checkoutSessionId = payload.data.attributes.data.id;
     const attributes = checkoutSession?.attributes;
-    console.log({ checkoutSessionId, attributes });
     if (!checkoutSessionId) {
       throw new Error("Missing checkout_session_id");
     }
@@ -446,7 +444,6 @@ export const processWebhook = async (req: Request, _res: Response) => {
     if (!r.rowCount) return;
 
     const payment = r.rows[0];
-    console.log({ payment });
     // ======================
     // ADDITIONAL REQUEST
     // ======================

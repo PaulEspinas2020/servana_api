@@ -26,7 +26,6 @@ const handle = (res: Response, e: any) => {
 export const listConversations = async (req: any, res: Response) => {
   try {
     const actor = await getActor(req);
-    console.log("Listing conversations for actor", actor);
     const conversations = await chatService.listConversations(actor);
     return res.json({ success: true, conversations });
   } catch (e: any) {

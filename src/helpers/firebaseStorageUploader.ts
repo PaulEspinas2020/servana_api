@@ -38,8 +38,6 @@ export const uploadFileToStorage = (folder: string, fileName: string, dataUri: s
 
 const uploadInStorage = (folder: string, fileName: string, uploadedFile: any) =>
     new Promise((resolve, reject) => {
-        console.log("Uploading image ...");
-
         const imgType = uploadedFile.slice(uploadedFile.indexOf(":") + 1, uploadedFile.indexOf(";"));
 
         // const base64 = uploadedFile.slice(uploadedFile.indexOf(",") + 1);
@@ -65,14 +63,11 @@ const uploadInStorage = (folder: string, fileName: string, uploadedFile: any) =>
                 if (error) {
                     console.error("Error uploading file:", error);
                 } else {
-                    console.log("File uploaded successfully.");
-
                     file.getSignedUrl({
                         action: "read",
                         expires: "01-17-2027", // Set expiration date for the URL
                     })
                         .then((urls) => {
-                            console.log("Public URL:", urls[0]);
                             resolve(urls[0])
                         })
                         .catch((err) => {
