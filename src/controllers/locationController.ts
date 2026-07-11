@@ -17,7 +17,9 @@
 import { Request, Response } from "express";
 import * as addressSearchService from "../services/addressSearchService";
 
-const MIN_QUERY_LENGTH = 3;
+// 2 chars minimum — supports numeric-prefix queries like "12" and two-letter
+// inputs.  Must stay in sync with SEARCH_MIN_CHARS in the Angular component.
+const MIN_QUERY_LENGTH = 2;
 
 export const getAddressSuggestions = async (req: Request, res: Response) => {
   try {

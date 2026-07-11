@@ -4,12 +4,15 @@
  *
  * Re-implements the controller logic in plain JS (same pattern as other test files)
  * because ts-jest is not configured.
+ *
+ * Changes from previous version:
+ *   MIN_QUERY_LENGTH lowered from 3 to 2 to support numeric-prefix queries ("12").
  */
 
 // ── Minimal controller logic re-implemented ───────────────────────────────────
 // (mirrors locationController.ts exactly)
 
-const MIN_QUERY_LENGTH = 3;
+const MIN_QUERY_LENGTH = 2;
 
 async function getAddressSuggestions(req, mockService) {
   const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
@@ -79,15 +82,29 @@ const MOCK_RESOLVED = {
   servanaLocationId: 'loc_14.554700_121.024400',
 };
 
-// ── getAddressSuggestions ─────────────────────────────────────────────────────
+// ── getAddressSuggestions — input validation ──────────────────────────────────
 
 describe('getAddressSuggestions — input validation', () => {
-  it('query shorter than 3 chars → 200 empty suggestions (no service call)', async () => {
+  it('single char query → 200 empty suggestions (too short for min=2)', async () => {
     const service = { getSuggestions: jest.fn() };
-    const res = await getAddressSuggestions({ query: { q: 'Ma', sessionToken: 'tok-1' } }, service);
+    const res = await getAddressSuggestions({ query: { q: 'M', sessionToken: 'tok-1' } }, service);
     expect(res.status).toBe(200);
     expect(res.body.data.suggestions).toEqual([]);
     expect(service.getSuggestions).not.toHaveBeenCalled();
+  });
+
+  it('2-char query → triggers service call (numeric prefix supported)', async () => {
+    const service = { getSuggestions: jest.fn().mockResolvedValue([MOCK_SUGGESTION]) };
+    const res = await getAddressSuggestions({ query: { q: '12', sessionToken: 'tok-num' } }, service);
+    expect(res.status).toBe(200);
+    expect(service.getSuggestions).toHaveBeenCalledWith('12', 'tok-num');
+  });
+
+  it('2-char alphabetical query → triggers service call', async () => {
+    const service = { getSuggestions: jest.fn().mockResolvedValue([]) };
+    const res = await getAddressSuggestions({ query: { q: 'Ma', sessionToken: 'tok-ma' } }, service);
+    expect(res.status).toBe(200);
+    expect(service.getSuggestions).toHaveBeenCalledWith('Ma', 'tok-ma');
   });
 
   it('empty query → 200 empty suggestions', async () => {
@@ -120,6 +137,21 @@ describe('getAddressSuggestions — happy path', () => {
     expect(res.body.data.suggestions).toHaveLength(1);
     expect(res.body.data.suggestions[0].id).toBe('ChIJ_makati');
     expect(service.getSuggestions).toHaveBeenCalledWith('Makati', 'tok-ok');
+  });
+
+  it('numeric prefix query "12 Mabini" → 200 with service results', async () => {
+    const numericSuggestion = {
+      id: 'ChIJ_mabini',
+      primaryText: '12 Mabini Street',
+      secondaryText: 'Barangay San Antonio, Makati City',
+      fullText: '12 Mabini Street, San Antonio, Makati City, Metro Manila',
+      types: ['street_address'],
+      provider: 'google',
+    };
+    const service = { getSuggestions: jest.fn().mockResolvedValue([numericSuggestion]) };
+    const res = await getAddressSuggestions({ query: { q: '12 Mabini', sessionToken: 'tok-num2' } }, service);
+    expect(res.status).toBe(200);
+    expect(res.body.data.suggestions[0].primaryText).toBe('12 Mabini Street');
   });
 
   it('service returns empty array → 200 with empty suggestions', async () => {
@@ -224,7 +256,6 @@ describe('servanaLocationId format contract', () => {
     );
     const id = res.body.data.result.servanaLocationId;
     expect(id).toMatch(/^loc_\d+\.\d{6}_\d+\.\d{6}$/);
-    // Verify exact format matches what mobile generates: loc_{lat.toFixed(6)}_{lon.toFixed(6)}
     const { latitude, longitude } = res.body.data.result;
     expect(id).toBe('loc_' + latitude.toFixed(6) + '_' + longitude.toFixed(6));
   });
