@@ -64,6 +64,30 @@ router.patch(
   ctrl.updateAddonStatus
 );
 
+// Overview + Audit (no :offeringId — must be before /offerings/:offeringId to avoid shadowing)
+router.get(
+  "/admin/provider-catalog/overview",
+  verifyAuth, verifyRoles([1]),
+  ctrl.getCatalogOverview
+);
+router.get(
+  "/admin/provider-catalog/audit",
+  verifyAuth, verifyRoles([1]),
+  ctrl.getCatalogAuditTrail
+);
+
+// Mapping routes (no :offeringId segment on PATCH/DELETE)
+router.patch(
+  "/admin/provider-catalog/mappings/:mappingId",
+  verifyAuth, verifyRoles([1]),
+  ctrl.updateOfferingMapping
+);
+router.delete(
+  "/admin/provider-catalog/mappings/:mappingId",
+  verifyAuth, verifyRoles([1]),
+  ctrl.archiveOfferingMapping
+);
+
 // Offering routes with :offeringId (must be after /specific-services/* to avoid shadowing)
 router.get(
   "/admin/provider-catalog/offerings/:offeringId",
@@ -79,6 +103,21 @@ router.patch(
   "/admin/provider-catalog/offerings/:offeringId/status",
   verifyAuth, verifyRoles([1]),
   ctrl.updateOfferingStatus
+);
+router.post(
+  "/admin/provider-catalog/offerings/:offeringId/mappings",
+  verifyAuth, verifyRoles([1]),
+  ctrl.createOfferingMapping
+);
+router.post(
+  "/admin/provider-catalog/offerings/:offeringId/publish-preview",
+  verifyAuth, verifyRoles([1]),
+  ctrl.publishPreviewOffering
+);
+router.post(
+  "/admin/provider-catalog/offerings/:offeringId/publish",
+  verifyAuth, verifyRoles([1]),
+  ctrl.publishOffering
 );
 router.get(
   "/admin/provider-catalog/offerings/:offeringId/specific-services",

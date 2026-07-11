@@ -805,3 +805,306 @@ export const updateAddonStatus = async (
   if (res.rows.length === 0) throw new Error('Add-on not found');
   return { addonOptionId, isActive };
 };
+
+// ─── Admin — Catalog Overview (enhanced listing with mappings) ────────────────
+
+export const getCatalogOverview = async (filter: {
+  search?: string;
+  status?: string;
+  mobileProtected?: boolean;
+} = {}): Promise<any[]> => {
+  const conditions: string[] = [];
+  const params: any[] = [];
+
+  if (filter.search) {
+    params.push(`%${filter.search}%`);
+    conditions.push(`(o.name ILIKE $${params.length} OR o.catalog_key ILIKE $${params.length})`);
+  }
+  if (filter.status) {
+    params.push(filter.status);
+    conditions.push(`o.status = $${params.length}`);
+  }
+  if (filter.mobileProtected !== undefined) {
+    params.push(filter.mobileProtected);
+    conditions.push(`o.legacy_provider_mobile_visible = $${params.length}`);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const offeringsRes = await dbQuery.query(
+    `SELECT o.id, o.catalog_key, o.name, o.status, o.is_builtin,
+            o.legacy_provider_mobile_visible AS is_mobile_protected,
+            o.icon_key, o.provider_web_visible AS provider_visible,
+            o.customer_web_visible AS customer_visible,
+            o.display_order, o.updated_at AS last_updated_at, o.version
+     FROM ${dbSchema}.provider_catalog_offerings o
+     ${where}
+     ORDER BY o.display_order, o.name`,
+    params
+  );
+
+  if (offeringsRes.rows.length === 0) return [];
+
+  const ids: number[] = offeringsRes.rows.map((o: any) => Number(o.id));
+
+  const mappingsRes = await dbQuery.query(
+    `SELECT m.id, m.offering_id, m.service_id, m.level_2, m.display_order, m.is_active,
+            s.name AS service_family_name
+     FROM ${dbSchema}.provider_catalog_offering_mappings m
+     JOIN ${dbSchema}.services s ON s.id = m.service_id
+     WHERE m.offering_id = ANY($1)
+     ORDER BY m.offering_id, m.display_order`,
+    [ids]
+  );
+
+  // Count specific services per offering (via active mappings)
+  const ssCountRes = await dbQuery.query(
+    `SELECT m.offering_id, COUNT(DISTINCT so.id) AS specific_service_count
+     FROM ${dbSchema}.provider_catalog_offering_mappings m
+     JOIN ${dbSchema}.service_options so
+       ON so.service_id = m.service_id AND so.level_2 = m.level_2
+       AND so.option_type = 'MAIN' AND (so.is_active IS NULL OR so.is_active = true)
+     WHERE m.offering_id = ANY($1) AND m.is_active = true
+     GROUP BY m.offering_id`,
+    [ids]
+  );
+
+  const mappingsByOffering = new Map<number, any[]>();
+  for (const m of mappingsRes.rows) {
+    const oid = Number(m.offering_id);
+    if (!mappingsByOffering.has(oid)) mappingsByOffering.set(oid, []);
+    mappingsByOffering.get(oid)!.push({
+      mappingId: Number(m.id),
+      serviceId: Number(m.service_id),
+      serviceFamilyName: m.service_family_name,
+      level2: m.level_2,
+      isActive: Boolean(m.is_active),
+      displayOrder: Number(m.display_order),
+    });
+  }
+
+  const ssCountByOffering = new Map<number, number>();
+  for (const r of ssCountRes.rows) {
+    ssCountByOffering.set(Number(r.offering_id), Number(r.specific_service_count));
+  }
+
+  return offeringsRes.rows.map((o: any) => {
+    const mappings = mappingsByOffering.get(Number(o.id)) ?? [];
+    return {
+      offeringId: Number(o.id),
+      catalogKey: o.catalog_key,
+      name: o.name,
+      status: o.status,
+      isBuiltin: Boolean(o.is_builtin),
+      isMobileProtected: Boolean(o.is_mobile_protected),
+      iconKey: o.icon_key || null,
+      providerVisible: Boolean(o.provider_visible),
+      customerVisible: Boolean(o.customer_visible),
+      displayOrder: Number(o.display_order),
+      lastUpdatedAt: o.last_updated_at ? new Date(o.last_updated_at).toISOString() : null,
+      version: Number(o.version),
+      activeMappingCount: mappings.filter((m: any) => m.isActive).length,
+      totalSpecificServices: ssCountByOffering.get(Number(o.id)) ?? 0,
+      mappings,
+    };
+  });
+};
+
+// ─── Admin — Offering Mappings CRUD ──────────────────────────────────────────
+
+export const createOfferingMapping = async (
+  offeringId: number,
+  data: { serviceId: number; level2: string; displayOrder?: number },
+  adminUid: string
+): Promise<any> => {
+  if (!data.serviceId || !data.level2) throw new Error('serviceId and level2 are required');
+
+  const offering = await dbQuery.query(
+    `SELECT id, is_builtin FROM ${dbSchema}.provider_catalog_offerings WHERE id = $1`,
+    [offeringId]
+  );
+  if (offering.rows.length === 0) throw new Error('Offering not found');
+
+  const svc = await dbQuery.query(
+    `SELECT id, name FROM ${dbSchema}.services WHERE id = $1`,
+    [data.serviceId]
+  );
+  if (svc.rows.length === 0) throw new Error('Service not found');
+
+  const res = await dbQuery.query(
+    `INSERT INTO ${dbSchema}.provider_catalog_offering_mappings
+      (offering_id, service_id, level_2, display_order, is_active)
+     VALUES ($1, $2, $3, $4, true)
+     ON CONFLICT (offering_id, service_id, level_2)
+       DO UPDATE SET is_active = true, display_order = EXCLUDED.display_order,
+                     updated_at = NOW()
+     RETURNING *`,
+    [offeringId, data.serviceId, data.level2, data.displayOrder ?? 0]
+  );
+
+  const row = res.rows[0];
+  return {
+    mappingId: Number(row.id),
+    offeringId: Number(row.offering_id),
+    serviceId: Number(row.service_id),
+    serviceFamilyName: svc.rows[0].name,
+    level2: row.level_2,
+    isActive: Boolean(row.is_active),
+    displayOrder: Number(row.display_order),
+  };
+};
+
+export const updateOfferingMapping = async (
+  mappingId: number,
+  data: { displayOrder?: number; isActive?: boolean },
+  adminUid: string
+): Promise<any> => {
+  const res = await dbQuery.query(
+    `UPDATE ${dbSchema}.provider_catalog_offering_mappings SET
+       display_order = COALESCE($1, display_order),
+       is_active     = COALESCE($2, is_active),
+       updated_at    = NOW()
+     WHERE id = $3
+     RETURNING *, (SELECT name FROM ${dbSchema}.services s WHERE s.id = service_id) AS service_family_name`,
+    [data.displayOrder ?? null, data.isActive ?? null, mappingId]
+  );
+  if (res.rows.length === 0) throw new Error('Mapping not found');
+  const row = res.rows[0];
+  return {
+    mappingId: Number(row.id),
+    offeringId: Number(row.offering_id),
+    serviceId: Number(row.service_id),
+    serviceFamilyName: row.service_family_name,
+    level2: row.level_2,
+    isActive: Boolean(row.is_active),
+    displayOrder: Number(row.display_order),
+  };
+};
+
+export const archiveOfferingMapping = async (
+  mappingId: number,
+  adminUid: string
+): Promise<any> => {
+  const res = await dbQuery.query(
+    `UPDATE ${dbSchema}.provider_catalog_offering_mappings SET
+       is_active = false, updated_at = NOW()
+     WHERE id = $1
+     RETURNING id`,
+    [mappingId]
+  );
+  if (res.rows.length === 0) throw new Error('Mapping not found');
+  return { mappingId, archived: true };
+};
+
+// ─── Admin — Publish Preview + Publish ───────────────────────────────────────
+
+export const getPublishPreview = async (offeringId: number): Promise<{
+  canPublish: boolean;
+  blockers: string[];
+  warnings: string[];
+}> => {
+  const offering = await dbQuery.query(
+    `SELECT id, name, status, is_builtin FROM ${dbSchema}.provider_catalog_offerings WHERE id = $1`,
+    [offeringId]
+  );
+  if (offering.rows.length === 0) throw new Error('Offering not found');
+
+  const o = offering.rows[0];
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+
+  if (o.status === 'archived') {
+    blockers.push('Archived offerings cannot be published. Restore the offering first.');
+  }
+
+  // Check active mappings
+  const mappings = await dbQuery.query(
+    `SELECT m.id, m.service_id, m.level_2,
+            COUNT(so.id) AS ss_count
+     FROM ${dbSchema}.provider_catalog_offering_mappings m
+     LEFT JOIN ${dbSchema}.service_options so
+       ON so.service_id = m.service_id AND so.level_2 = m.level_2
+       AND so.option_type = 'MAIN' AND (so.is_active IS NULL OR so.is_active = true)
+     WHERE m.offering_id = $1 AND m.is_active = true
+     GROUP BY m.id, m.service_id, m.level_2`,
+    [offeringId]
+  );
+
+  if (mappings.rows.length === 0) {
+    blockers.push('At least one active service mapping is required before publishing.');
+  } else {
+    for (const m of mappings.rows) {
+      if (Number(m.ss_count) === 0) {
+        warnings.push(`Mapping "${m.level_2}" has no active specific services — it will appear empty to providers.`);
+      }
+    }
+  }
+
+  return {
+    canPublish: blockers.length === 0,
+    blockers,
+    warnings,
+  };
+};
+
+export const publishOffering = async (
+  offeringId: number,
+  adminUid: string
+): Promise<any> => {
+  const preview = await getPublishPreview(offeringId);
+  if (!preview.canPublish) {
+    throw Object.assign(
+      new Error(`Cannot publish: ${preview.blockers[0]}`),
+      { code: 'VALIDATION', blockers: preview.blockers }
+    );
+  }
+  return updateOfferingStatus(offeringId, 'active', adminUid);
+};
+
+// ─── Admin — Catalog Audit Trail ─────────────────────────────────────────────
+
+export const getCatalogAuditTrail = async (filter: {
+  entityType?: string;
+  entityId?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<any[]> => {
+  const conditions: string[] = [`ae.entity_type IN ('catalog_offering', 'catalog_mapping', 'catalog_service_option', 'catalog_addon')`];
+  const params: any[] = [];
+
+  if (filter.entityType) {
+    params.push(filter.entityType);
+    conditions.push(`ae.entity_type = $${params.length}`);
+  }
+  if (filter.entityId) {
+    params.push(filter.entityId);
+    conditions.push(`ae.entity_id = $${params.length}`);
+  }
+
+  const limit = Math.min(filter.limit ?? 50, 200);
+  const offset = filter.offset ?? 0;
+  params.push(limit, offset);
+
+  const res = await dbQuery.query(
+    `SELECT ae.id, ae.actor_uid, ae.action, ae.entity_type, ae.entity_id,
+            ae.before_json, ae.after_json, ae.reason, ae.request_id, ae.created_at
+     FROM ${dbSchema}.admin_audit_events ae
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY ae.created_at DESC
+     LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  ).catch(() => ({ rows: [] as any[] }));
+
+  return res.rows.map((r: any) => ({
+    id: Number(r.id),
+    actorUid: r.actor_uid || null,
+    action: r.action,
+    entityType: r.entity_type,
+    entityId: r.entity_id || null,
+    beforeJson: r.before_json || null,
+    afterJson: r.after_json || null,
+    reason: r.reason || null,
+    requestId: r.request_id || null,
+    createdAt: r.created_at ? new Date(r.created_at).toISOString() : null,
+  }));
+};

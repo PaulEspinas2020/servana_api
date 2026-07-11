@@ -222,3 +222,123 @@ export const updateAddonStatus = async (req: Request, res: Response) => {
     return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
   }
 };
+
+// ─── Admin — Catalog Overview ─────────────────────────────────────────────────
+
+// GET /admin/provider-catalog/overview
+export const getCatalogOverview = async (req: Request, res: Response) => {
+  try {
+    const filter = {
+      search: req.query.search as string | undefined,
+      status: req.query.status as string | undefined,
+      mobileProtected: req.query.mobileProtected !== undefined
+        ? req.query.mobileProtected === "true"
+        : undefined,
+    };
+    const data = await svc.getCatalogOverview(filter);
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
+  }
+};
+
+// ─── Admin — Catalog Audit Trail ─────────────────────────────────────────────
+
+// GET /admin/provider-catalog/audit
+export const getCatalogAuditTrail = async (req: Request, res: Response) => {
+  try {
+    const filter = {
+      entityType: req.query.entityType as string | undefined,
+      entityId: req.query.entityId as string | undefined,
+      limit: req.query.limit ? Number(req.query.limit) : undefined,
+      offset: req.query.offset ? Number(req.query.offset) : undefined,
+    };
+    const data = await svc.getCatalogAuditTrail(filter);
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
+  }
+};
+
+// ─── Admin — Offering Mappings ────────────────────────────────────────────────
+
+// POST /admin/provider-catalog/offerings/:offeringId/mappings
+export const createOfferingMapping = async (req: Request, res: Response) => {
+  try {
+    const offeringId = Number(req.params.offeringId);
+    if (!offeringId) return res.status(400).json({ status: "failed", message: "Invalid offeringId" });
+    const adminUid = (req as any).user?.uid ?? "system";
+    const data = await svc.createOfferingMapping(
+      offeringId,
+      { serviceId: Number(req.body.serviceId), level2: req.body.level2, displayOrder: req.body.displayOrder },
+      adminUid
+    );
+    return res.status(201).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
+  }
+};
+
+// PATCH /admin/provider-catalog/mappings/:mappingId
+export const updateOfferingMapping = async (req: Request, res: Response) => {
+  try {
+    const mappingId = Number(req.params.mappingId);
+    if (!mappingId) return res.status(400).json({ status: "failed", message: "Invalid mappingId" });
+    const adminUid = (req as any).user?.uid ?? "system";
+    const data = await svc.updateOfferingMapping(
+      mappingId,
+      { displayOrder: req.body.displayOrder, isActive: req.body.isActive },
+      adminUid
+    );
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
+  }
+};
+
+// DELETE /admin/provider-catalog/mappings/:mappingId
+export const archiveOfferingMapping = async (req: Request, res: Response) => {
+  try {
+    const mappingId = Number(req.params.mappingId);
+    if (!mappingId) return res.status(400).json({ status: "failed", message: "Invalid mappingId" });
+    const adminUid = (req as any).user?.uid ?? "system";
+    const data = await svc.archiveOfferingMapping(mappingId, adminUid);
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
+  }
+};
+
+// ─── Admin — Publish Preview + Publish ───────────────────────────────────────
+
+// POST /admin/provider-catalog/offerings/:offeringId/publish-preview
+export const publishPreviewOffering = async (req: Request, res: Response) => {
+  try {
+    const offeringId = Number(req.params.offeringId);
+    if (!offeringId) return res.status(400).json({ status: "failed", message: "Invalid offeringId" });
+    const data = await svc.getPublishPreview(offeringId);
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
+  }
+};
+
+// POST /admin/provider-catalog/offerings/:offeringId/publish
+export const publishOffering = async (req: Request, res: Response) => {
+  try {
+    const offeringId = Number(req.params.offeringId);
+    if (!offeringId) return res.status(400).json({ status: "failed", message: "Invalid offeringId" });
+    const adminUid = (req as any).user?.uid ?? "system";
+    const data = await svc.publishOffering(offeringId, adminUid);
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    if ((error as any).code === "VALIDATION") {
+      return res.status(422).json({
+        status: "failed",
+        message: error?.message ?? "Validation failed",
+        blockers: (error as any).blockers ?? [],
+      });
+    }
+    return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
+  }
+};

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import * as svc from '../services/adminProviderService';
 import * as appSvc from '../services/serviceApplicationService';
+import { saveWorkerAvailability } from '../services/technicianService';
 import { adminError, AdminErrorCode } from '../helpers/adminError';
 import { auditFire, writeSuccess } from '../services/adminAuditService';
 
@@ -546,6 +547,29 @@ export const setProviderArchive = async (req: Request, res: Response) => {
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
     return fail(res, code, err?.message ?? 'Failed to update archive status');
+  }
+};
+
+// ── Availability Write (admin-scoped) ─────────────────────────────────────────
+
+export const saveProviderAvailabilityAdmin = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    await saveWorkerAvailability(uid, req.body);
+    return ok(res, { uid, saved: true });
+  } catch (err: any) {
+    return fail(res, 500, err?.message ?? 'Failed to save availability');
+  }
+};
+
+export const deleteProviderAvailabilityAdmin = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    // Clearing availability = saving an empty schedule
+    await saveWorkerAvailability(uid, { schedule: {} });
+    return ok(res, { uid, deleted: true });
+  } catch (err: any) {
+    return fail(res, 500, err?.message ?? 'Failed to delete availability');
   }
 };
 

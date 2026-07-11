@@ -50,6 +50,8 @@ router.get('/admin/providers/:uid/jobs', ...adminOnly, ctrl.getProviderJobs);
 router.get('/admin/providers/:uid/performance', ...adminOnly, ctrl.getProviderPerformance);
 router.get('/admin/providers/:uid/earnings', ...adminOnly, ctrl.getProviderEarnings);
 router.get('/admin/providers/:uid/availability', ...adminOnly, ctrl.getProviderAvailability);
+router.put('/admin/providers/:uid/availability', ...adminOnly, ctrl.saveProviderAvailabilityAdmin);
+router.delete('/admin/providers/:uid/availability', ...adminOnly, ctrl.deleteProviderAvailabilityAdmin);
 router.get('/admin/providers/:uid/service-area', ...adminOnly, ctrl.getProviderServiceArea);
 router.patch('/admin/providers/:uid/account-status', ...adminOnly, ctrl.updateProviderAccountStatus);
 router.patch('/admin/providers/:uid/archive', ...adminOnly, ctrl.setProviderArchive);
