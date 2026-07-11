@@ -155,6 +155,9 @@ app.use("/api", cors(corsOptionsDelegate), adminCommunicationRoutes);
 import adminAutoOnlineRoutes from "./routes/adminAutoOnline.routes";
 app.use("/api", cors(corsOptionsDelegate), adminAutoOnlineRoutes);
 
+import adminFinanceRoutes from "./routes/adminFinance.routes";
+app.use("/api", cors(corsOptionsDelegate), adminFinanceRoutes);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
@@ -237,6 +240,15 @@ import { bootstrap as bootstrapAutoOnline } from "./services/providerAutoOnlineE
     await bootstrapAutoOnline();
   } catch (err) {
     console.error("[auto-online] schema error:", err);
+  }
+})();
+
+import { ensureFinanceSchema } from "./services/adminFinanceService";
+(async () => {
+  try {
+    await ensureFinanceSchema();
+  } catch (err) {
+    console.error("[admin-finance] schema error:", err);
   }
 })();
 

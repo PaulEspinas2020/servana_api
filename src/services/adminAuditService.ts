@@ -8,12 +8,13 @@ export type AuditOutcome = 'success' | 'failed' | 'blocked';
 export type AuditCategory =
   | 'auth' | 'provider' | 'onboarding' | 'booking' | 'payment'
   | 'catalog' | 'customer' | 'user' | 'admin' | 'settings'
-  | 'notification' | 'file' | 'system';
+  | 'notification' | 'file' | 'system' | 'finance';
 export type AuditEntityType =
   | 'provider' | 'booking' | 'customer' | 'user' | 'service'
   | 'service_option' | 'addon' | 'provider_application' | 'provider_requirement'
   | 'onboarding_case' | 'payment' | 'notification' | 'settings' | 'admin_role' | 'system'
-  | 'catalog_offering' | 'catalog_mapping' | 'catalog_service_option' | 'catalog_addon';
+  | 'catalog_offering' | 'catalog_mapping' | 'catalog_service_option' | 'catalog_addon'
+  | 'disbursement' | 'refund_review' | 'reconciliation_exception' | 'ledger_entry';
 
 export interface AuditWriteOpts {
   action: string;
@@ -77,6 +78,10 @@ const HIGH_RISK_ACTIONS: string[] = [
   'admin_role_created', 'admin_role_deleted',
   'admin_permission_granted', 'admin_permission_revoked',
   'audit_export_requested',
+  // Finance high-risk
+  'finance_payment_gcash_approved', 'finance_payment_gcash_rejected',
+  'finance_payout_retry_triggered', 'finance_refund_approved',
+  'finance_reconciliation_run', 'finance_internal_fixer_tagged',
 ];
 
 // ── Action label map ──────────────────────────────────────────────────────────
@@ -138,6 +143,22 @@ const ACTION_LABELS: Record<string, string> = {
   payment_approved: 'Payment Approved',
   payment_rejected: 'Payment Rejected',
   cash_payment_marked_paid: 'Cash Payment Marked Paid',
+  // Finance operations
+  finance_payment_gcash_approved: 'GCash Payment Approved',
+  finance_payment_gcash_rejected: 'GCash Payment Rejected',
+  finance_payment_cash_confirmed: 'Cash Payment Confirmed',
+  finance_payout_held: 'Payout Held',
+  finance_payout_hold_released: 'Payout Hold Released',
+  finance_payout_retry_triggered: 'Payout Retry Triggered',
+  finance_refund_opened: 'Refund Review Opened',
+  finance_refund_approved: 'Refund Approved',
+  finance_refund_rejected: 'Refund Rejected',
+  finance_refund_processed: 'Refund Processed',
+  finance_reconciliation_run: 'Reconciliation Run',
+  finance_exception_resolved: 'Exception Resolved',
+  finance_exception_ignored: 'Exception Ignored',
+  finance_ledger_entry_created: 'Ledger Entry Created',
+  finance_internal_fixer_tagged: 'Provider Tagged as Internal Fixer',
   // Catalog
   catalog_offering_created: 'Offering Created',
   catalog_offering_updated: 'Offering Updated',
