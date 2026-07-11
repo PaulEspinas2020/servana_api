@@ -3,6 +3,7 @@ import { successMessage, errorMessage, status } from "../helpers/status";
 import * as authService from "../services/auth.service";
 import * as firebaseFunction from "../services/firebaseFunctions.service";
 import { upsertSourceAttribution } from "../services/providerOnboardingService";
+import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 
 const signin = async (req: Request, res: Response) => {
     const { email, password, fcmToken } = req.body;
@@ -121,6 +122,8 @@ export const providerRegisterController = async (req: Request, res: Response) =>
     if (result?.data?.uid) {
       const src = (sourceClient as string) || 'provider_web';
       upsertSourceAttribution(result.data.uid, src as any, true, 'registration').catch(() => {});
+      // Non-blocking auto-online eligibility check on new provider registration
+      autoOnlineEngine.evaluateProvider(result.data.uid, 'system', null).catch(() => {});
     }
 
     return res.status(200).json(result);

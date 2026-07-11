@@ -27,6 +27,8 @@ export interface ProviderListFilter {
   hasActiveServices?: boolean; // true = has active employee_services rows
   hasAvailability?: boolean;   // true = has worker_availability row
   hasServiceArea?: boolean;    // true = has worker_service_area row
+  hasAutoOnline?: boolean;     // true = auto-online active
+  hasBookable?: boolean;       // true = bookable via auto-online
   page?: number;
   limit?: number;
   sortBy?: 'name' | 'created_date' | 'account_status';
@@ -44,6 +46,8 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
     hasActiveServices,
     hasAvailability,
     hasServiceArea,
+    hasAutoOnline,
+    hasBookable,
     page = 1,
     limit = 50,
     sortBy = 'created_date',
@@ -91,6 +95,10 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
   if (hasAvailability === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa_f WHERE wa_f.worker_uid = uc.uid)`);
   if (hasServiceArea === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa2_f WHERE wsa2_f.worker_uid = uc.uid)`);
   if (hasServiceArea === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa2_f WHERE wsa2_f.worker_uid = uc.uid)`);
+  if (hasAutoOnline === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.provider_auto_online_state paos_f WHERE paos_f.provider_uid = uc.uid AND paos_f.is_auto_online = TRUE)`);
+  if (hasAutoOnline === false) where.push(`(NOT EXISTS (SELECT 1 FROM ${s}.provider_auto_online_state paos_f WHERE paos_f.provider_uid = uc.uid) OR EXISTS (SELECT 1 FROM ${s}.provider_auto_online_state paos_f2 WHERE paos_f2.provider_uid = uc.uid AND paos_f2.is_auto_online = FALSE))`);
+  if (hasBookable === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.provider_auto_online_state paos_b WHERE paos_b.provider_uid = uc.uid AND paos_b.is_bookable = TRUE)`);
+  if (hasBookable === false) where.push(`(NOT EXISTS (SELECT 1 FROM ${s}.provider_auto_online_state paos_b WHERE paos_b.provider_uid = uc.uid) OR EXISTS (SELECT 1 FROM ${s}.provider_auto_online_state paos_b2 WHERE paos_b2.provider_uid = uc.uid AND paos_b2.is_bookable = FALSE))`);
 
   const sortColumn: Record<string, string> = {
     name: `uc.first_name`,
@@ -127,9 +135,14 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
          COALESCE((SELECT COUNT(*)::int FROM ${s}.employee_services es2 WHERE es2.employee_uid = uc.uid), 0) AS active_svc,
          -- Availability and service area (resolved by backend)
          CASE WHEN EXISTS (SELECT 1 FROM ${s}.worker_availability wa2 WHERE wa2.worker_uid = uc.uid) THEN 'saved' ELSE 'missing' END AS avail_status,
-         CASE WHEN EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa3 WHERE wsa3.worker_uid = uc.uid) THEN 'saved' ELSE 'missing' END AS area_status
+         CASE WHEN EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa3 WHERE wsa3.worker_uid = uc.uid) THEN 'saved' ELSE 'missing' END AS area_status,
+         -- Auto-Online Engine fields
+         COALESCE(paos.is_auto_online, FALSE) AS is_auto_online,
+         COALESCE(paos.is_bookable, FALSE) AS is_bookable,
+         paos.activation_mode
        FROM ${s}.user_credentials uc
        LEFT JOIN ${s}.user_profile up ON up.uid = uc.uid
+       LEFT JOIN ${s}.provider_auto_online_state paos ON paos.provider_uid = uc.uid
        ${whereClause}
        ORDER BY ${col} ${dir}
        LIMIT $${limitP} OFFSET $${offsetP}`,

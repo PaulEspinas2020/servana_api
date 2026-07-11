@@ -11,6 +11,7 @@ import * as serviceApplicationService from "../services/serviceApplicationServic
 import * as onboardingService from "../services/providerOnboardingService";
 import * as availEngine from "../services/providerAvailabilityEngine";
 import * as areaEngine from "../services/providerServiceAreaEngine";
+import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 
 const dbSchema = db.schema;
 
@@ -600,6 +601,7 @@ export const uploadWorkerRequirement = async (req: Request, res: Response) => {
     const fileUrl = await uploadFileToStorage("provider-requirements", `${uid}_${Date.now()}`, file);
     const inserted = await technicianService.addWorkerRequirements(uid, [{ fileUrl, fileName: sanitizedName, requirementType: sanitizedType }]);
     const row = inserted[0];
+    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
     return res.status(201).json({
       status: "success",
       data: {
@@ -632,6 +634,7 @@ export const deleteWorkerRequirementOwn = async (req: Request, res: Response) =>
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ status: "failed", message: "Invalid id" });
     await technicianService.deleteWorkerRequirement(uid, id);
+    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: error?.message || "Requirement not found" });
@@ -657,6 +660,7 @@ export const submitOnboarding = async (req: Request, res: Response) => {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
     const data = await onboardingService.submitOnboarding(uid);
+    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
     const code = (error as any).statusCode;
@@ -1664,6 +1668,7 @@ export const submitServiceApplication = async (req: Request, res: Response) => {
     }
 
     const app = await serviceApplicationService.submitApplication(uid, serviceId);
+    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
     return res.status(201).json({ success: true, application: toApplicationDto(app) });
   } catch (error: any) {
     const status = error.statusCode ?? 500;
@@ -1685,6 +1690,7 @@ export const cancelServiceApplication = async (req: Request, res: Response) => {
     if (!applicationId) return res.status(400).json({ success: false, message: "applicationId is required" });
 
     const app = await serviceApplicationService.cancelApplication(applicationId, uid);
+    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
     return res.json({ success: true, application: toApplicationDto(app) });
   } catch (error: any) {
     const status = error.statusCode ?? 500;

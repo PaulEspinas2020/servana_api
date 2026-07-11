@@ -152,6 +152,9 @@ app.use("/api", cors(corsOptionsDelegate), adminAuditRoutes);
 import adminCommunicationRoutes from "./routes/adminCommunication.routes";
 app.use("/api", cors(corsOptionsDelegate), adminCommunicationRoutes);
 
+import adminAutoOnlineRoutes from "./routes/adminAutoOnline.routes";
+app.use("/api", cors(corsOptionsDelegate), adminAutoOnlineRoutes);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
@@ -225,6 +228,15 @@ import { ensureCommunicationSchema } from "./services/adminCommunicationService"
     await ensureCommunicationSchema();
   } catch (err) {
     console.error("[admin-communication] schema error:", err);
+  }
+})();
+
+import { bootstrap as bootstrapAutoOnline } from "./services/providerAutoOnlineEngine";
+(async () => {
+  try {
+    await bootstrapAutoOnline();
+  } catch (err) {
+    console.error("[auto-online] schema error:", err);
   }
 })();
 

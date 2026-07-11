@@ -3,6 +3,7 @@ import dbQuery from "../db/dbQuery";
 import mongoDb from "../db/mongodbQuery";
 import { generateOTP } from "../helpers/otp";
 import { send } from "../helpers/mailer";
+import { getAutoBookableProviderUids } from "./providerAutoOnlineEngine";
 import { getUserInfoByBookingId } from "./user.service";
 import { computeTranspoFee } from "./pricingService";
 import { createNotification } from "./notification.service";
@@ -489,6 +490,25 @@ const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => 
   return 2 * R * Math.asin(Math.sqrt(a));
 };
 
+// Merge auto-bookable providers who may only be in worker_service_applications (not employee_services)
+const mergeAutoBookableProviders = async (existing: any[], serviceId: number | null | undefined): Promise<any[]> => {
+  try {
+    const autoUids = await getAutoBookableProviderUids(serviceId ?? undefined);
+    if (!autoUids.length) return existing;
+    const existingSet = new Set(existing.map((w: any) => w.uid));
+    const missing = autoUids.filter(uid => !existingSet.has(uid));
+    if (!missing.length) return existing;
+    const col = (await mongoDb).collection('worker_locations');
+    const docs = await col.find(
+      { uid: { $in: missing }, is_online: true, loc: { $exists: true } },
+      { projection: { uid: 1, loc: 1, updatedAt: 1 } }
+    ).toArray();
+    return [...existing, ...docs];
+  } catch {
+    return existing;
+  }
+};
+
 export const assignNearestWorker = async (
   bookingId: number,
   userLat: number,
@@ -527,9 +547,11 @@ export const assignNearestWorker = async (
   const busyUids = new Set(busyRes.rows.map((r: any) => r.worker_uid));
 
   // 3. Get online workers qualified for this service, filter out busy ones
-  const onlineWorkers = serviceId
+  // Merge auto-bookable providers who may only be in worker_service_applications
+  const rawOnline = serviceId
     ? await listOnlineWorkersByService(serviceId)
     : await listOnlineWorkers();
+  const onlineWorkers = await mergeAutoBookableProviders(rawOnline, serviceId);
 
   if (!onlineWorkers.length) {
     await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);

@@ -6,6 +6,7 @@ import { auditFire, writeSuccess } from '../services/adminAuditService';
 import * as availEngine from '../services/providerAvailabilityEngine';
 import * as areaEngine  from '../services/providerServiceAreaEngine';
 import * as eligEngine  from '../services/providerEligibilityEngine';
+import * as autoOnlineEngine from '../services/providerAutoOnlineEngine';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -31,7 +32,8 @@ const adminUid = (req: Request): string => req.user?.uid ?? '';
 export const listProviders = async (req: Request, res: Response) => {
   try {
     const { search, role, account_status, is_archive, sort_by, sort_dir,
-            has_documents, has_pending_apps, has_active_services, has_availability, has_service_area } = req.query;
+            has_documents, has_pending_apps, has_active_services, has_availability, has_service_area,
+            has_auto_online, has_bookable } = req.query;
     const page = parseIntQ(req.query.page, 1);
     const limit = Math.min(parseIntQ(req.query.limit, 50), 200);
 
@@ -47,6 +49,8 @@ export const listProviders = async (req: Request, res: Response) => {
       hasActiveServices: parseBool(has_active_services),
       hasAvailability:   parseBool(has_availability),
       hasServiceArea:    parseBool(has_service_area),
+      hasAutoOnline:     parseBool(has_auto_online),
+      hasBookable:       parseBool(has_bookable),
       page,
       limit,
       sortBy: (sort_by as any) ?? 'created_date',
@@ -71,6 +75,9 @@ export const listProviders = async (req: Request, res: Response) => {
       serviceSummary:  { pendingApplications: Number(r.pending_apps ?? 0), activeServices: Number(r.active_svc ?? 0) },
       availabilityStatus: r.avail_status ?? 'unknown',
       serviceAreaStatus:  r.area_status  ?? 'unknown',
+      isAutoOnline: r.is_auto_online ?? false,
+      isBookable:   r.is_bookable    ?? false,
+      autoOnlineSource: r.activation_mode ?? null,
     }));
 
     return ok(res, rows, {
@@ -273,6 +280,7 @@ export const approveServiceApplication = async (req: Request, res: Response) => 
       userAgent: req.headers['user-agent'] ?? null,
     });
 
+    autoOnlineEngine.evaluateProvider(app.worker_uid, 'admin', admin).catch(() => {});
     return ok(res, { id, status: 'approved' });
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
@@ -333,6 +341,7 @@ export const rejectServiceApplication = async (req: Request, res: Response) => {
       userAgent: req.headers['user-agent'] ?? null,
     });
 
+    autoOnlineEngine.evaluateProvider(app.worker_uid, 'admin', admin).catch(() => {});
     return ok(res, { id, status: 'rejected' });
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
@@ -387,6 +396,7 @@ export const uploadProviderRequirement = async (req: Request, res: Response) => 
       userAgent: req.headers['user-agent'] ?? null,
     });
 
+    autoOnlineEngine.evaluateProvider(uid, 'admin', adminUid(req)).catch(() => {});
     return ok(res, doc);
   } catch (err: any) {
     const status = err.message?.includes('not allowed') ? 422 : 500;
@@ -414,6 +424,7 @@ export const deleteProviderRequirement = async (req: Request, res: Response) => 
       userAgent: req.headers['user-agent'] ?? null,
     });
 
+    autoOnlineEngine.evaluateProvider(uid, 'admin', adminUid(req)).catch(() => {});
     return ok(res, deleted);
   } catch (err: any) {
     return fail(res, 404, err?.message ?? 'Requirement not found');
@@ -639,6 +650,7 @@ export const updateProviderAccountStatus = async (req: Request, res: Response) =
       userAgent: req.headers['user-agent'] ?? null,
     });
 
+    autoOnlineEngine.evaluateProvider(uid, 'admin', adminUid(req)).catch(() => {});
     return ok(res, { uid: updated.uid, accountStatus: updated.account_status });
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
@@ -672,6 +684,7 @@ export const setProviderArchive = async (req: Request, res: Response) => {
       userAgent: req.headers['user-agent'] ?? null,
     });
 
+    autoOnlineEngine.evaluateProvider(uid, 'admin', adminUid(req)).catch(() => {});
     return ok(res, { uid: updated.uid, isArchive: updated.is_archive });
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
