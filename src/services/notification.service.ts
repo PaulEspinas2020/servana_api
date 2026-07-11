@@ -1,6 +1,7 @@
 import dbQuery from "../db/dbQuery";
 import { db } from "../config";
 import { emitToProvider } from "../provider.realtime";
+import { logCommunicationEvent } from "./adminCommunicationService";
 const dbSchema = db.schema;
 
 // ─── Lazy table init ──────────────────────────────────────────────────────────
@@ -275,6 +276,20 @@ export async function createNotification(workerUid: string, data: NotificationIn
   const notification = mapNotificationRow(rows[0]);
   // Push real-time — no-op when socket server is not initialised (e.g. during tests)
   emitToProvider(workerUid, "notification", notification);
+  // Fire-and-forget admin log
+  logCommunicationEvent({
+    channel: 'socket',
+    status: 'sent',
+    severity: (data.severity as any) || 'info',
+    category: 'notification',
+    recipientUid: workerUid,
+    recipientRole: 'provider',
+    senderRole: 'system',
+    subject: data.title,
+    safeBody: data.safeBody ? data.safeBody.substring(0, 300) : null,
+    templateName: data.type || 'system',
+    metadata: { notificationKey: notification.notificationKey, type: notification.type },
+  }).catch(() => {});
   return notification;
 }
 

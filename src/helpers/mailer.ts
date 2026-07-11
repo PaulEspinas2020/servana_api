@@ -3,6 +3,7 @@ import {
   isValidEmail
 } from "../helpers/validation";
 import sgMail from '@sendgrid/mail'
+import { logCommunicationEvent } from "../services/adminCommunicationService";
 
 if(mailerKey) sgMail.setApiKey(mailerKey);
 
@@ -38,11 +39,39 @@ const send = (recipient:string, templateToUse:string, data: any) => {
   };
 
   sgMail.send(msg).then(() => {
+      logCommunicationEvent({
+        channel: 'email',
+        status: 'sent',
+        category: deriveCategoryFromTemplate(templateToUse),
+        recipientEmail: email,
+        templateName: templateToUse,
+        subject: templateToUse.replace(/_/g, ' '),
+        senderRole: 'system',
+      }).catch(() => {});
       return 'Email sent!';
   }, error => {
       console.log(error);
       if (error.response?.body) console.log(error.response.body);
+      logCommunicationEvent({
+        channel: 'email',
+        status: 'failed',
+        severity: 'error',
+        category: deriveCategoryFromTemplate(templateToUse),
+        recipientEmail: email,
+        templateName: templateToUse,
+        subject: templateToUse.replace(/_/g, ' '),
+        senderRole: 'system',
+        errorMessage: error && error.message ? String(error.message).substring(0, 500) : 'SendGrid error',
+      }).catch(() => {});
   });
+}
+
+function deriveCategoryFromTemplate(name: string): any {
+  if (name.startsWith('booking') || name.startsWith('additional_work')) return 'booking';
+  if (name.startsWith('payment') || name.startsWith('refund')) return 'payment';
+  if (name.startsWith('verify_email') || name.startsWith('forgot_password') || name.startsWith('employee_invite')) return 'auth';
+  if (name.startsWith('verify_booking')) return 'booking';
+  return 'system';
 }
 
 export {

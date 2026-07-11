@@ -146,6 +146,9 @@ app.use("/api", cors(corsOptionsDelegate), adminDashboardRoutes);
 import adminAuditRoutes from "./routes/adminAudit.routes";
 app.use("/api", cors(corsOptionsDelegate), adminAuditRoutes);
 
+import adminCommunicationRoutes from "./routes/adminCommunication.routes";
+app.use("/api", cors(corsOptionsDelegate), adminCommunicationRoutes);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
@@ -210,6 +213,15 @@ import { ensureAuditSchema } from "./services/adminAuditService";
     await ensureAuditSchema();
   } catch (err) {
     console.error("[admin-audit] schema error:", err);
+  }
+})();
+
+import { ensureCommunicationSchema } from "./services/adminCommunicationService";
+(async () => {
+  try {
+    await ensureCommunicationSchema();
+  } catch (err) {
+    console.error("[admin-communication] schema error:", err);
   }
 })();
 
