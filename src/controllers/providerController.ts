@@ -9,8 +9,65 @@ import * as notificationService from "../services/notification.service";
 import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
 import * as serviceApplicationService from "../services/serviceApplicationService";
 import * as onboardingService from "../services/providerOnboardingService";
+import * as availEngine from "../services/providerAvailabilityEngine";
+import * as areaEngine from "../services/providerServiceAreaEngine";
 
 const dbSchema = db.schema;
+
+// ── Availability bridge: Provider Web ↔ canonical engine shapes ───────────────
+
+const DAY_TO_DOW: Record<string, number> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+const DOW_TO_DAY: Record<number, string> = { 0: 'sun', 1: 'mon', 2: 'tue', 3: 'wed', 4: 'thu', 5: 'fri', 6: 'sat' };
+const WEB_ALL_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+const ENGINE_DOW_LABELS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+function bridgeToEngineSlots(schedule: any[]): availEngine.WeeklyScheduleSlot[] {
+  const slots: availEngine.WeeklyScheduleSlot[] = [];
+  for (const day of schedule) {
+    const dow = DAY_TO_DOW[day.day] ?? -1;
+    if (dow === -1) continue;
+    const dayLabel = ENGINE_DOW_LABELS[dow] ?? '';
+    if (!day.enabled || !Array.isArray(day.slots) || day.slots.length === 0) {
+      // Represent disabled day as an unavailable placeholder so the day is tracked
+      slots.push({ dayOfWeek: dow as 0|1|2|3|4|5|6, dayLabel, startTime: '09:00', endTime: '17:00', isAvailable: false, maxJobs: null });
+    } else {
+      for (const s of day.slots) {
+        if (s.startTime && s.endTime) {
+          slots.push({ dayOfWeek: dow as 0|1|2|3|4|5|6, dayLabel, startTime: s.startTime, endTime: s.endTime, isAvailable: true, maxJobs: null });
+        }
+      }
+    }
+  }
+  return slots;
+}
+
+function bridgeToWebSchedule(engineSlots: availEngine.WeeklyScheduleSlot[]): any[] {
+  const byDay: Record<string, { id: string; startTime: string; endTime: string }[]> = {};
+  for (const sl of engineSlots) {
+    if (!sl.isAvailable) continue;
+    const dayKey = DOW_TO_DAY[sl.dayOfWeek];
+    if (!dayKey) continue;
+    if (!byDay[dayKey]) byDay[dayKey] = [];
+    byDay[dayKey].push({ id: `slot-${dayKey}-${sl.startTime.replace(':', '')}`, startTime: sl.startTime, endTime: sl.endTime });
+  }
+  return WEB_ALL_DAYS.map(day => ({ day, enabled: (byDay[day]?.length ?? 0) > 0, slots: byDay[day] ?? [] }));
+}
+
+function bridgeToWebTimeOff(timeOff: availEngine.ProviderTimeOff[]): any[] {
+  return timeOff
+    .filter(t => t.status === 'active')
+    .map(t => ({
+      id:        String(t.id),
+      startDate: t.startDate,
+      endDate:   t.endDate,
+      allDay:    true,
+      startTime: null,
+      endTime:   null,
+      reason:    t.reason ?? 'other',
+      note:      null,
+      createdAt: t.createdAt,
+    }));
+}
 
 // ─── Auth/Me ──────────────────────────────────────────────────────────────────
 
@@ -429,20 +486,17 @@ export const submitForReview = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Availability (MongoDB — worker_availability / worker_time_off) ───────────
-
-const DEFAULT_DAYS = ['mon','tue','wed','thu','fri','sat','sun'];
+// ─── Availability (canonical PostgreSQL engine — shared with mobile + admin) ──
 
 export const getWorkerAvailability = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const col = (await mongoDb).collection("worker_availability");
-    const doc = await col.findOne({ uid }, { projection: { _id: 0, uid: 0 } });
-    const schedule = doc?.schedule ?? DEFAULT_DAYS.map(day => ({ day, enabled: false, slots: [] }));
+    const profile = await availEngine.getAvailabilityProfile(uid);
+    const schedule = bridgeToWebSchedule(profile.weeklySchedule);
     return res.status(200).json({
       status: "success",
-      data: { schedule, timezone: doc?.timezone ?? "Asia/Manila", updatedAt: doc?.updatedAt ?? null },
+      data: { schedule, timezone: profile.timezone, updatedAt: profile.updatedAt },
     });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
@@ -457,16 +511,12 @@ export const saveWorkerAvailability = async (req: Request, res: Response) => {
     if (!Array.isArray(schedule)) {
       return res.status(400).json({ status: "failed", message: "schedule must be an array" });
     }
-    const now = new Date();
-    const col = (await mongoDb).collection("worker_availability");
-    await col.updateOne(
-      { uid },
-      { $set: { uid, schedule, timezone: timezone ?? "Asia/Manila", updatedAt: now } },
-      { upsert: true }
-    );
-    return res.status(200).json({ status: "success", data: { success: true, updatedAt: now.toISOString() } });
+    const engineSlots = bridgeToEngineSlots(schedule);
+    const result = await availEngine.saveWeeklySchedule(uid, engineSlots, timezone ?? "Asia/Manila", uid);
+    return res.status(200).json({ status: "success", data: { success: true, updatedAt: result.updatedAt } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    const code = error?.statusCode ?? 500;
+    return res.status(code).json({ status: "failed", message: error?.message || "Server error" });
   }
 };
 
@@ -474,9 +524,8 @@ export const getWorkerTimeOff = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const col = (await mongoDb).collection("worker_time_off");
-    const docs = await col.find({ uid }, { projection: { _id: 0, uid: 0 } }).toArray();
-    return res.status(200).json({ status: "success", data: { timeOff: docs } });
+    const timeOff = await availEngine.listTimeOff(uid);
+    return res.status(200).json({ status: "success", data: { timeOff: bridgeToWebTimeOff(timeOff) } });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
   }
@@ -486,26 +535,26 @@ export const createWorkerTimeOff = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const { startDate, endDate, allDay, startTime, endTime, reason, note } = req.body;
+    const { startDate, endDate, reason, allDay, startTime, endTime, note } = req.body;
     if (!startDate || !endDate || !reason) {
       return res.status(400).json({ status: "failed", message: "startDate, endDate, and reason are required" });
     }
-    const id = `toff-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-    const record = {
-      uid, id, startDate, endDate,
-      allDay: allDay ?? true,
+    const record = await availEngine.createTimeOff(uid, { startDate, endDate, reason }, uid);
+    const dto = {
+      id:        String(record.id),
+      startDate: record.startDate,
+      endDate:   record.endDate,
+      allDay:    allDay ?? true,
       startTime: startTime ?? null,
-      endTime: endTime ?? null,
-      reason,
-      note: note ?? null,
-      createdAt: new Date().toISOString(),
+      endTime:   endTime ?? null,
+      reason:    record.reason ?? reason,
+      note:      note ?? null,
+      createdAt: record.createdAt,
     };
-    const col = (await mongoDb).collection("worker_time_off");
-    await col.insertOne(record);
-    const { uid: _u, ...dto } = record;
     return res.status(201).json({ status: "success", data: dto });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    const code = error?.statusCode ?? 500;
+    return res.status(code).json({ status: "failed", message: error?.message || "Server error" });
   }
 };
 
@@ -515,14 +564,15 @@ export const deleteWorkerTimeOff = async (req: Request, res: Response) => {
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
     const { id } = req.params;
     if (!id) return res.status(400).json({ status: "failed", message: "id is required" });
-    const col = (await mongoDb).collection("worker_time_off");
-    const result = await col.deleteOne({ uid, id });
-    if (!result.deletedCount) {
-      return res.status(404).json({ status: "failed", message: "Time-off period not found or does not belong to this provider" });
+    const numericId = Number(id);
+    if (!Number.isInteger(numericId) || numericId <= 0) {
+      return res.status(404).json({ status: "failed", message: "Time-off period not found" });
     }
+    await availEngine.cancelTimeOff(uid, numericId, uid);
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    const code = error?.statusCode ?? (error?.message?.includes("not found") ? 404 : 500);
+    return res.status(code).json({ status: "failed", message: error?.message || "Server error" });
   }
 };
 
@@ -1176,37 +1226,16 @@ export const revokeAllProviderSessions = async (req: Request, res: Response) => 
   }
 };
 
-// ─── Service Area (MongoDB — worker_service_areas) ────────────────────────────
-
-const CITY_NAMES: Record<string, string> = {
-  manila: 'City of Manila', quezon: 'Quezon City', makati: 'Makati City',
-  taguig: 'Taguig City', pasig: 'Pasig City', mandaluyong: 'Mandaluyong City',
-  marikina: 'Marikina City', caloocan: 'Caloocan City', malabon: 'Malabon City',
-  navotas: 'Navotas City', valenzuela: 'Valenzuela City', 'las-pinas': 'Las Piñas City',
-  muntinlupa: 'Muntinlupa City', paranaque: 'Parañaque City', pasay: 'Pasay City',
-  pateros: 'Pateros', 'san-juan': 'San Juan City',
-  bacoor: 'Bacoor City', imus: 'Imus City', antipolo: 'Antipolo City',
-  'san-jose-del-monte': 'San Jose del Monte',
-};
-
-const VALID_CITY_IDS = new Set(Object.keys(CITY_NAMES));
-
-function buildAreaLabel(cityIds: string[]): string {
-  if (cityIds.length === 0) return '';
-  const names = cityIds.slice(0, 3).map(id => CITY_NAMES[id] || id);
-  const suffix = cityIds.length > 3 ? ` + ${cityIds.length - 3} more` : '';
-  return names.join(', ') + suffix;
-}
+// ─── Service Area (canonical PostgreSQL engine — shared with mobile + admin) ──
 
 export const getWorkerServiceArea = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const col = (await mongoDb).collection("worker_service_areas");
-    const doc = await col.findOne({ uid }, { projection: { _id: 0, uid: 0 } });
+    const profile = await areaEngine.getServiceAreaProfile(uid);
     return res.status(200).json({
       status: "success",
-      data: { cityIds: doc?.cityIds || [], label: doc?.label || '', updatedAt: doc?.updatedAt || null },
+      data: { cityIds: profile.cityIds, label: profile.label ?? '', updatedAt: profile.updatedAt },
     });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
@@ -1221,16 +1250,11 @@ export const saveWorkerServiceArea = async (req: Request, res: Response) => {
     if (!Array.isArray(cityIds)) {
       return res.status(400).json({ status: "failed", message: "cityIds must be an array" });
     }
-    const clean: string[] = cityIds
-      .filter((id: any) => typeof id === 'string' && VALID_CITY_IDS.has(id))
-      .slice(0, 21);
-    const now = new Date().toISOString();
-    const label = buildAreaLabel(clean);
-    const col = (await mongoDb).collection("worker_service_areas");
-    await col.updateOne({ uid }, { $set: { uid, cityIds: clean, label, updatedAt: now } }, { upsert: true });
-    return res.status(200).json({ status: "success", data: { success: true, updatedAt: now, label } });
+    const result = await areaEngine.saveServiceArea(uid, { coverageMode: 'city', cityIds }, uid);
+    return res.status(200).json({ status: "success", data: { success: true, updatedAt: result.updatedAt } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    const code = error?.statusCode ?? 500;
+    return res.status(code).json({ status: "failed", message: error?.message || "Server error" });
   }
 };
 
