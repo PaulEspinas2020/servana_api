@@ -101,6 +101,12 @@ export const ensureBookingOpsSchema = async (): Promise<void> => {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `, []);
+
+  // booking_workers is a pre-existing table — add admin-portal columns if missing
+  await dbQuery.query(`
+    ALTER TABLE ${dbSchema}.booking_workers
+    ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ DEFAULT NOW()
+  `, []);
 };
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
