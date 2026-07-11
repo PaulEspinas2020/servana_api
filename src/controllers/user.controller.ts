@@ -59,9 +59,14 @@ const getAllAddressesOfUser = async (req: Request, res: Response) => {
 
 const getAddressByAddressId = async (req: Request, res: Response) => {
     const id = req.query.id as string;
+    const { uid } = req.user;
 
     try {
         const dbResponse = await addressService.getAddressByAddressId(id);
+
+        if (!dbResponse || dbResponse.userId !== uid) {
+            return res.status(403).json({ status: "failed", message: "Access denied" });
+        }
 
         successMessage.data = dbResponse;
         res.status(status.success).send(successMessage);
@@ -72,7 +77,8 @@ const getAddressByAddressId = async (req: Request, res: Response) => {
 };
 
 const getUserProfile = async (req: Request, res: Response) => {
-    const id = req.query.id as string;
+    // Always read the authenticated user's own profile — never allow a query-param UID override.
+    const id = req.user.uid;
 
     try {
         const dbResponse = await userService.getUserProfile(id);
@@ -107,7 +113,7 @@ const makeAddressPrimary = async (req: Request, res: Response) => {
     const addressId = req.query.addressId as string;
 
     try {
-        const dbResponse = await addressService.makeAddressPrimary(addressId);
+        const dbResponse = await addressService.makeAddressPrimary(addressId, uid);
         await addressService.makeOtherAddressNotPrimary(addressId, uid);
 
         await createLogEntry("Update", uid, dbResponse.addressId, "Address");
@@ -125,7 +131,7 @@ const deleteAddress = async (req: Request, res: Response) => {
     const addressId = req.query.addressId as string;
 
     try {
-        const dbResponse = await addressService.deleteAddress(addressId);
+        const dbResponse = await addressService.deleteAddress(addressId, uid);
 
         await createLogEntry("Delete", uid, addressId, "Address");
 
@@ -156,6 +162,12 @@ const archiveUser = async (req: Request, res: Response) => {
 
 const getAddressesByUserId = async (req: Request, res: Response) => {
     const { userId } = req.params as { userId: string };
+
+    // When the caller is authenticated (browser session), enforce ownership.
+    // Unauthenticated calls pass through for mobile parity.
+    if (req.user && req.user.uid !== userId) {
+        return res.status(403).json({ status: "failed", message: "Access denied" });
+    }
 
     try {
         const dbResponse = await addressService.getAddressesByUserId(userId);

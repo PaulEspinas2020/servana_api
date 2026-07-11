@@ -14,9 +14,26 @@ const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
  * Initialize Socket.IO on the /chat namespace.
  * Call once from app.ts with the http.Server instance.
  */
+const ALLOWED_ORIGINS = [
+  "http://localhost:4200",
+  "https://provider.servana.com.ph",
+  "https://admin.servana.com.ph",
+  "https://www.servana.com.ph",
+  "https://servana.com.ph",
+];
+
 export const initChatSocket = (httpServer: HttpServer) => {
   const io = new Server(httpServer, {
-    cors: { origin: "*" }, // tighten to your frontend origin(s) in production
+    cors: {
+      origin: (origin, callback) => {
+        // Allow requests with no origin (mobile apps, server-side, same-origin)
+        if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error("Not allowed by CORS"));
+        }
+      },
+    },
   });
 
   setIo(io); // let the service layer broadcast

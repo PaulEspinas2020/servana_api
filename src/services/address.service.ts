@@ -187,13 +187,14 @@ const getAddressByAddressId = async (addressId: string) => {
     }
 };
 
-const makeAddressPrimary = async (addressId: string) => {
-    const searchQuery = `UPDATE ${dbSchema}.user_address SET is_primary = true WHERE address_id = $1 returning *`;
+const makeAddressPrimary = async (addressId: string, ownerUid: string) => {
+    // ownerUid enforces ownership at the DB level — prevents one user making another's address primary.
+    const searchQuery = `UPDATE ${dbSchema}.user_address SET is_primary = true WHERE address_id = $1 AND uid = $2 returning *`;
 
     try {
-        const { rows } = await dbQuery.query(searchQuery, [addressId]);
+        const { rows } = await dbQuery.query(searchQuery, [addressId, ownerUid]);
 
-        if (!rows || rows.length == 0) throw "Failed to update address";
+        if (!rows || rows.length == 0) throw "Address not found or access denied";
 
         const dbResponse = await formattedAddress(rows[0]);
         return dbResponse;
@@ -213,11 +214,13 @@ const makeOtherAddressNotPrimary = async (addressId: string, userId: string) => 
     }
 };
 
-const deleteAddress = async (addressId: string) => {
-    const searchQuery = `DELETE FROM ${dbSchema}.user_address WHERE address_id = $1`;
+const deleteAddress = async (addressId: string, ownerUid: string) => {
+    // ownerUid enforces ownership at the DB level — prevents one user deleting another's address.
+    const searchQuery = `DELETE FROM ${dbSchema}.user_address WHERE address_id = $1 AND uid = $2`;
 
     try {
-        await dbQuery.query(searchQuery, [addressId]);
+        const result = await dbQuery.query(searchQuery, [addressId, ownerUid]);
+        if ((result.rowCount ?? 0) === 0) throw "Address not found or access denied";
         return "success";
     } catch (error) {
         throw error;

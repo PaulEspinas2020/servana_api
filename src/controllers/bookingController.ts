@@ -82,6 +82,13 @@ export const listUserBookings = async (req: Request, res: Response) => {
       });
     }
 
+    // When the caller has a verified JWT (browser session), enforce ownership.
+    // Mobile clients call without a token — unauthenticated path is unchanged for parity.
+    const actor = (req as any).user;
+    if (actor?.uid && actor.uid !== userId) {
+      return res.status(403).json({ success: false, message: "Access denied" });
+    }
+
     const bookings = await bookingService.getBookingsByUserId(userId);
     res.json({ success: true, bookings: formatBookings(bookings) });
   } catch (error: any) {

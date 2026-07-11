@@ -1,6 +1,7 @@
 import { Router } from "express";
 import * as bookingController from "../controllers/bookingController";
 import verifyAuth from "../middleware/verifyAuth";
+import verifyAuthOptional from "../middleware/verifyAuthOptional";
 
 const router = Router();
 
@@ -8,7 +9,9 @@ const router = Router();
 // to prevent Express from matching them as booking IDs.
 router.get("/bookings/all", verifyAuth, bookingController.listAllBookings);
 router.get("/dashboard/summary", verifyAuth, bookingController.getAnalytics);
-router.get("/users/:userId/bookings", bookingController.listUserBookings);
+// verifyAuthOptional: unauthenticated mobile calls pass through; authenticated browser sessions
+// must own the userId in the path (enforced in the controller).
+router.get("/users/:userId/bookings", verifyAuthOptional, bookingController.listUserBookings);
 
 router.post("/bookings", bookingController.createBooking);
 router.post("/:id/confirm-otp", bookingController.confirmOtp);

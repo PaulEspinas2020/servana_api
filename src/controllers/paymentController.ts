@@ -60,21 +60,14 @@ export const createPaymongoPayment = async (req: Request, res: Response) => {
 
 export const paymongoWebhook = async (req: Request, res: Response) => {
   try {
-    console.log("PAYMONGO WEBHOOK HIT");
-    console.log("Headers:", req.headers);
-    console.log("Body:", req.body);
-    console.log("RawBody:", (req as any).rawBody);
-
     await paymentService.processWebhook(req, res);
-
+    // processWebhook now throws on all error paths — this 200 is the only response sent.
     res.status(200).json({ received: true });
-
   } catch (error: any) {
-
-    res.status(400).json({
+    const isSignatureError = error?.message === "Invalid signature" || error?.message === "Missing signature header";
+    res.status(isSignatureError ? 401 : 400).json({
       success: false,
-      message: error.message
+      message: error.message,
     });
-
   }
 };

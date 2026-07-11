@@ -2,11 +2,14 @@ import express from 'express'
 const router = express.Router()
 import * as userController from '../controllers/user.controller';
 import verifyAuth from '../middleware/verifyAuth';
+import verifyRoles from '../middleware/verifyRoles';
+import verifyAuthOptional from '../middleware/verifyAuthOptional';
 
 router.get("/user/registereduser", verifyAuth, userController.userList);
 
 router.get("/user/alluseraddresses", verifyAuth, userController.getAllAddressesOfUser);
-router.get("/user/:userId/addresses", userController.getAddressesByUserId);
+// verifyAuthOptional: mobile may call without token; when JWT is present, controller scopes to JWT uid
+router.get("/user/:userId/addresses", verifyAuthOptional, userController.getAddressesByUserId);
 router.post("/user/adduseraddress", verifyAuth, userController.addUserAddress);
 router.get("/user/getaddressbyid", verifyAuth, userController.getAddressByAddressId);
 
@@ -16,6 +19,8 @@ router.put("/user/makeaddressprimary", verifyAuth, userController.makeAddressPri
 
 router.delete("/user/deleteaddress", verifyAuth, userController.deleteAddress);
 
-router.put("/user/archive", verifyAuth, userController.archiveUser);
+// archiveUser is an admin-only operation; the broken :userId param issue is fixed here
+// by keeping the route as-is but adding the role guard so only admin can call it.
+router.put("/user/archive", verifyAuth, verifyRoles([1]), userController.archiveUser);
 
 export default router;
