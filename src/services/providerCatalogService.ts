@@ -1,6 +1,7 @@
 import { db } from "../config";
 import dbQuery from "../db/dbQuery";
 import { toCamel } from "../helpers/idGenerator";
+import { auditFire } from "./adminAuditService";
 const dbSchema = db.schema;
 
 // ─── Schema init ─────────────────────────────────────────────────────────────
@@ -389,6 +390,31 @@ export const getOfferingsForProvider = async (): Promise<any[]> => {
   });
 };
 
+// ─── Admin — Offering Providers (Compatibility tab) ──────────────────────────
+
+export const getOfferingProviders = async (offeringId: number): Promise<any[]> => {
+  const res = await dbQuery.query(
+    `SELECT ecc.employee_uid, ecc.status, ecc.approved_at, ecc.created_at,
+            uc.first_name, uc.last_name, uc.email
+     FROM ${dbSchema}.employee_catalog_capabilities ecc
+     LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = ecc.employee_uid
+     WHERE ecc.offering_id = $1
+     ORDER BY ecc.created_at DESC`,
+    [offeringId]
+  );
+  return res.rows.map(toCamel);
+};
+
+// ─── Admin — Service Family Lookup ────────────────────────────────────────────
+
+export const listServiceFamilies = async (): Promise<Array<{ id: number; name: string }>> => {
+  const res = await dbQuery.query(
+    `SELECT id, name FROM ${dbSchema}.services ORDER BY name`,
+    []
+  );
+  return res.rows.map((r: any) => ({ id: Number(r.id), name: r.name as string }));
+};
+
 // ─── Admin — Offerings CRUD ───────────────────────────────────────────────────
 
 export const listAdminOfferings = async (): Promise<any[]> => {
@@ -463,7 +489,9 @@ export const createOffering = async (
       adminUid,
     ]
   );
-  return toCamel(res.rows[0]);
+  const result = toCamel(res.rows[0]);
+  auditFire({ action: 'catalog_offering.create', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_offering', entityId: String(result.id), after: { catalogKey: result.catalogKey, name: result.name } });
+  return result;
 };
 
 export const updateOffering = async (
@@ -519,7 +547,9 @@ export const updateOffering = async (
       offeringId,
     ]
   );
-  return toCamel(res.rows[0]);
+  const result = toCamel(res.rows[0]);
+  auditFire({ action: 'catalog_offering.update', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_offering', entityId: String(offeringId), after: { name: result.name, status: result.status } });
+  return result;
 };
 
 export const updateOfferingStatus = async (
@@ -542,7 +572,9 @@ export const updateOfferingStatus = async (
     [newStatus, adminUid, offeringId]
   );
   if (res.rows.length === 0) throw new Error('Offering not found');
-  return toCamel(res.rows[0]);
+  const result = toCamel(res.rows[0]);
+  auditFire({ action: `catalog_offering.${newStatus}`, actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_offering', entityId: String(offeringId), after: { status: newStatus } });
+  return result;
 };
 
 // ─── Admin — Specific Services CRUD ──────────────────────────────────────────
@@ -635,6 +667,7 @@ export const createSpecificService = async (
     ]
   );
 
+  auditFire({ action: 'catalog_service_option.create', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_service_option', entityId: String(optionId), after: { level2: data.level2, level3: data.level3, basePrice: data.basePrice } });
   return {
     serviceOptionId: optionId,
     serviceId,
@@ -728,18 +761,21 @@ export const updateSpecificService = async (
     );
   }
 
+  auditFire({ action: 'catalog_service_option.update', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_service_option', entityId: String(serviceOptionId), after: data as Record<string, unknown> });
   return getAdminSpecificService(serviceOptionId);
 };
 
 export const updateSpecificServiceStatus = async (
   serviceOptionId: number,
-  isActive: boolean
+  isActive: boolean,
+  adminUid: string = 'system'
 ): Promise<any> => {
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.service_options SET is_active = $1 WHERE id = $2 AND option_type = 'MAIN' RETURNING id`,
     [isActive, serviceOptionId]
   );
   if (res.rows.length === 0) throw new Error('Specific service not found');
+  auditFire({ action: `catalog_service_option.${isActive ? 'activate' : 'deactivate'}`, actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_service_option', entityId: String(serviceOptionId), after: { isActive } });
   return { serviceOptionId, isActive };
 };
 
@@ -769,7 +805,9 @@ export const createAddon = async (
     [parent.rows[0].service_id, parent.rows[0].level_2, data.level3, data.basePrice, data.unit, parentOptionId]
   );
 
-  return { ...toCamel(res.rows[0]), parentOptionId };
+  const addon = { ...toCamel(res.rows[0]), parentOptionId };
+  auditFire({ action: 'catalog_addon.create', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_addon', entityId: String(addon.id), after: { level3: data.level3, basePrice: data.basePrice, parentOptionId } });
+  return addon;
 };
 
 export const updateAddon = async (
@@ -791,18 +829,22 @@ export const updateAddon = async (
     [data.level3 ?? null, data.unit ?? null, data.basePrice ?? null, addonOptionId]
   );
   if (res.rows.length === 0) throw new Error('Add-on not found');
-  return toCamel(res.rows[0]);
+  const updated = toCamel(res.rows[0]);
+  auditFire({ action: 'catalog_addon.update', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_addon', entityId: String(addonOptionId), after: data as Record<string, unknown> });
+  return updated;
 };
 
 export const updateAddonStatus = async (
   addonOptionId: number,
-  isActive: boolean
+  isActive: boolean,
+  adminUid: string = 'system'
 ): Promise<any> => {
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.service_options SET is_active = $1 WHERE id = $2 AND option_type = 'ADD_ON' RETURNING id`,
     [isActive, addonOptionId]
   );
   if (res.rows.length === 0) throw new Error('Add-on not found');
+  auditFire({ action: `catalog_addon.${isActive ? 'activate' : 'deactivate'}`, actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_addon', entityId: String(addonOptionId), after: { isActive } });
   return { addonOptionId, isActive };
 };
 
@@ -869,10 +911,37 @@ export const getCatalogOverview = async (filter: {
     [ids]
   );
 
+  // Per-mapping specific-service count and price range
+  const mappingStatsRes = await dbQuery.query(
+    `SELECT m.id AS mapping_id,
+            COUNT(so.id)::int  AS specific_service_count,
+            MIN(so.base_price) AS min_price,
+            MAX(so.base_price) AS max_price
+     FROM ${dbSchema}.provider_catalog_offering_mappings m
+     LEFT JOIN ${dbSchema}.service_options so
+       ON so.service_id = m.service_id
+       AND so.level_2 = m.level_2
+       AND so.option_type = 'MAIN'
+       AND (so.is_active IS NULL OR so.is_active = true)
+     WHERE m.offering_id = ANY($1)
+     GROUP BY m.id`,
+    [ids]
+  );
+
+  const mappingStatsMap = new Map<number, { specific_service_count: number; min_price: number | null; max_price: number | null }>();
+  for (const r of mappingStatsRes.rows) {
+    mappingStatsMap.set(Number(r.mapping_id), {
+      specific_service_count: Number(r.specific_service_count),
+      min_price: r.min_price != null ? Number(r.min_price) : null,
+      max_price: r.max_price != null ? Number(r.max_price) : null,
+    });
+  }
+
   const mappingsByOffering = new Map<number, any[]>();
   for (const m of mappingsRes.rows) {
     const oid = Number(m.offering_id);
     if (!mappingsByOffering.has(oid)) mappingsByOffering.set(oid, []);
+    const stats = mappingStatsMap.get(Number(m.id));
     mappingsByOffering.get(oid)!.push({
       mappingId: Number(m.id),
       serviceId: Number(m.service_id),
@@ -880,6 +949,9 @@ export const getCatalogOverview = async (filter: {
       level2: m.level_2,
       isActive: Boolean(m.is_active),
       displayOrder: Number(m.display_order),
+      specificServiceCount: stats?.specific_service_count ?? 0,
+      minPrice: stats?.min_price ?? null,
+      maxPrice: stats?.max_price ?? null,
     });
   }
 
@@ -943,7 +1015,7 @@ export const createOfferingMapping = async (
   );
 
   const row = res.rows[0];
-  return {
+  const mapping = {
     mappingId: Number(row.id),
     offeringId: Number(row.offering_id),
     serviceId: Number(row.service_id),
@@ -952,6 +1024,8 @@ export const createOfferingMapping = async (
     isActive: Boolean(row.is_active),
     displayOrder: Number(row.display_order),
   };
+  auditFire({ action: 'catalog_mapping.create', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_mapping', entityId: String(mapping.mappingId), after: { level2: mapping.level2, serviceId: mapping.serviceId, offeringId } });
+  return mapping;
 };
 
 export const updateOfferingMapping = async (
@@ -970,7 +1044,7 @@ export const updateOfferingMapping = async (
   );
   if (res.rows.length === 0) throw new Error('Mapping not found');
   const row = res.rows[0];
-  return {
+  const updated = {
     mappingId: Number(row.id),
     offeringId: Number(row.offering_id),
     serviceId: Number(row.service_id),
@@ -979,6 +1053,8 @@ export const updateOfferingMapping = async (
     isActive: Boolean(row.is_active),
     displayOrder: Number(row.display_order),
   };
+  auditFire({ action: 'catalog_mapping.update', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_mapping', entityId: String(mappingId), after: data as Record<string, unknown> });
+  return updated;
 };
 
 export const archiveOfferingMapping = async (
@@ -993,6 +1069,7 @@ export const archiveOfferingMapping = async (
     [mappingId]
   );
   if (res.rows.length === 0) throw new Error('Mapping not found');
+  auditFire({ action: 'catalog_mapping.archive', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_mapping', entityId: String(mappingId), after: { archived: true } });
   return { mappingId, archived: true };
 };
 

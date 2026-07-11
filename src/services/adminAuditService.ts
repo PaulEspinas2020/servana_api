@@ -12,7 +12,8 @@ export type AuditCategory =
 export type AuditEntityType =
   | 'provider' | 'booking' | 'customer' | 'user' | 'service'
   | 'service_option' | 'addon' | 'provider_application' | 'provider_requirement'
-  | 'onboarding_case' | 'payment' | 'notification' | 'settings' | 'admin_role' | 'system';
+  | 'onboarding_case' | 'payment' | 'notification' | 'settings' | 'admin_role' | 'system'
+  | 'catalog_offering' | 'catalog_mapping' | 'catalog_service_option' | 'catalog_addon';
 
 export interface AuditWriteOpts {
   action: string;

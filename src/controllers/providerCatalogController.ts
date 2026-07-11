@@ -15,6 +15,31 @@ export const getOfferingsForProvider = async (req: Request, res: Response) => {
   }
 };
 
+// ─── Admin — Offering Providers ──────────────────────────────────────────────
+
+// GET /admin/provider-catalog/offerings/:offeringId/providers
+export const getOfferingProviders = async (req: Request, res: Response) => {
+  try {
+    const offeringId = Number(req.params.offeringId);
+    const data = await svc.getOfferingProviders(offeringId);
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
+  }
+};
+
+// ─── Admin — Service Families ─────────────────────────────────────────────────
+
+// GET /admin/provider-catalog/service-families
+export const listServiceFamilies = async (req: Request, res: Response) => {
+  try {
+    const data = await svc.listServiceFamilies();
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
+  }
+};
+
 // ─── Admin — Offerings ────────────────────────────────────────────────────────
 
 // GET /admin/provider-catalog/offerings
@@ -160,7 +185,8 @@ export const updateSpecificServiceStatus = async (req: Request, res: Response) =
   try {
     const id = Number(req.params.serviceOptionId);
     const isActive = req.body.isActive === true || req.body.isActive === "true";
-    const data = await svc.updateSpecificServiceStatus(id, isActive);
+    const adminUid = (req as any).user?.uid ?? "system";
+    const data = await svc.updateSpecificServiceStatus(id, isActive, adminUid);
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
     return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
@@ -216,7 +242,8 @@ export const updateAddonStatus = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.addonOptionId);
     const isActive = req.body.isActive === true || req.body.isActive === "true";
-    const data = await svc.updateAddonStatus(id, isActive);
+    const adminUid = (req as any).user?.uid ?? "system";
+    const data = await svc.updateAddonStatus(id, isActive, adminUid);
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
     return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });

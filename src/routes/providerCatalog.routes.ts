@@ -64,6 +64,13 @@ router.patch(
   ctrl.updateAddonStatus
 );
 
+// Service family lookup for the wizard's mapping step
+router.get(
+  "/admin/provider-catalog/service-families",
+  verifyAuth, verifyRoles([1]),
+  ctrl.listServiceFamilies
+);
+
 // Overview + Audit (no :offeringId — must be before /offerings/:offeringId to avoid shadowing)
 router.get(
   "/admin/provider-catalog/overview",
@@ -118,6 +125,11 @@ router.post(
   "/admin/provider-catalog/offerings/:offeringId/publish",
   verifyAuth, verifyRoles([1]),
   ctrl.publishOffering
+);
+router.get(
+  "/admin/provider-catalog/offerings/:offeringId/providers",
+  verifyAuth, verifyRoles([1]),
+  ctrl.getOfferingProviders
 );
 router.get(
   "/admin/provider-catalog/offerings/:offeringId/specific-services",
