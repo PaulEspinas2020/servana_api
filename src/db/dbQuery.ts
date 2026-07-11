@@ -4,7 +4,9 @@ import { db } from "../config";
 const Pool = pg.Pool;
 
 const pool = new Pool({
-    max: 1,
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
     user: db.user,
     port: db.port ? parseInt(db.port): 5432,
     host: db.host,
