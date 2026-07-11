@@ -3,6 +3,8 @@ import { db } from '../config';
 import { auditFire } from './adminAuditService';
 import { toCamel } from '../helpers/idGenerator';
 
+const s = db.schema;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type AdminAccountStatus = 'active' | 'inactive' | 'suspended' | 'archived';
@@ -452,7 +454,7 @@ export async function ensurePermissionSchema(): Promise<void> {
 
 export async function getAdminUser(adminUid: string): Promise<AdminUserRow | null> {
   const res = await dbQuery.query(
-    `SELECT * FROM admin_users WHERE admin_uid = $1 LIMIT 1`,
+    `SELECT * FROM ${s}.admin_users WHERE admin_uid = $1 LIMIT 1`,
     [adminUid]
   );
   return res.rows[0] ?? null;
@@ -461,13 +463,13 @@ export async function getAdminUser(adminUid: string): Promise<AdminUserRow | nul
 export async function ensureAdminUserRow(adminUid: string): Promise<void> {
   // Look up email from users table; fall back to uid if not found
   const userRes = await dbQuery.query(
-    `SELECT email, display_name FROM users WHERE uid = $1 LIMIT 1`,
+    `SELECT email, display_name FROM ${s}.users WHERE uid = $1 LIMIT 1`,
     [adminUid]
   );
   const email = userRes.rows[0]?.email ?? adminUid;
   const displayName = userRes.rows[0]?.display_name ?? null;
   await dbQuery.query(
-    `INSERT INTO admin_users (admin_uid, email, display_name, is_super_admin, account_status, created_by)
+    `INSERT INTO ${s}.admin_users (admin_uid, email, display_name, is_super_admin, account_status, created_by)
      VALUES ($1, $2, $3, FALSE, 'active', 'system')
      ON CONFLICT (admin_uid) DO NOTHING`,
     [adminUid, email, displayName]
@@ -480,7 +482,7 @@ export async function isSuperAdmin(adminUid: string): Promise<boolean> {
     return cached.perms.includes('__super_admin__');
   }
   const res = await dbQuery.query(
-    `SELECT is_super_admin FROM admin_users WHERE admin_uid = $1 LIMIT 1`,
+    `SELECT is_super_admin FROM ${s}.admin_users WHERE admin_uid = $1 LIMIT 1`,
     [adminUid]
   );
   const val = res.rows[0]?.is_super_admin === true;
@@ -503,7 +505,7 @@ export async function hasPermission(adminUid: string, key: string): Promise<bool
 
   // Load grants from DB
   const res = await dbQuery.query(
-    `SELECT permission_key FROM admin_permission_grants
+    `SELECT permission_key FROM ${s}.admin_permission_grants
      WHERE admin_uid = $1 AND granted = TRUE AND revoked_at IS NULL`,
     [adminUid]
   );
@@ -526,12 +528,12 @@ export async function getEffectivePermissions(adminUid: string): Promise<AdminEf
   if (admin.is_super_admin) {
     // Super Admin effectively holds all permissions
     const defsRes = await dbQuery.query(
-      `SELECT permission_key FROM admin_permission_definitions WHERE is_active = TRUE`
+      `SELECT permission_key FROM ${s}.admin_permission_definitions WHERE is_active = TRUE`
     );
     permissions = defsRes.rows.map((r: any) => r.permission_key as string);
   } else {
     const res = await dbQuery.query(
-      `SELECT permission_key FROM admin_permission_grants
+      `SELECT permission_key FROM ${s}.admin_permission_grants
        WHERE admin_uid = $1 AND granted = TRUE AND revoked_at IS NULL`,
       [adminUid]
     );
@@ -570,16 +572,16 @@ export async function listAdminUsers(filter: {
   const where = wheres.length ? `WHERE ${wheres.join(' AND ')}` : '';
 
   const countRes = await dbQuery.query(
-    `SELECT COUNT(*) FROM admin_users au ${where}`, params
+    `SELECT COUNT(*) FROM ${s}.admin_users au ${where}`, params
   );
   const total = Number(countRes.rows[0]?.count ?? 0);
 
   const dataRes = await dbQuery.query(
     `SELECT au.*,
-       (SELECT COUNT(*) FROM admin_permission_grants g
+       (SELECT COUNT(*) FROM ${s}.admin_permission_grants g
         WHERE g.admin_uid = au.admin_uid AND g.granted = TRUE AND g.revoked_at IS NULL)
          AS permission_count
-     FROM admin_users au
+     FROM ${s}.admin_users au
      ${where}
      ORDER BY au.created_at DESC
      LIMIT $${p} OFFSET $${p + 1}`,
@@ -592,10 +594,10 @@ export async function listAdminUsers(filter: {
 export async function getAdminUserDetail(adminUid: string): Promise<any | null> {
   const res = await dbQuery.query(
     `SELECT au.*,
-       (SELECT COUNT(*) FROM admin_permission_grants g
+       (SELECT COUNT(*) FROM ${s}.admin_permission_grants g
         WHERE g.admin_uid = au.admin_uid AND g.granted = TRUE AND g.revoked_at IS NULL)
          AS permission_count
-     FROM admin_users au
+     FROM ${s}.admin_users au
      WHERE au.admin_uid = $1 LIMIT 1`,
     [adminUid]
   );
@@ -615,13 +617,13 @@ export async function createAdminUser(
 
   // Ensure user has role=1 in user_credentials (upsert)
   await dbQuery.query(
-    `INSERT INTO user_credentials (uid, role) VALUES ($1, 1)
+    `INSERT INTO ${s}.user_credentials (uid, role) VALUES ($1, 1)
      ON CONFLICT (uid) DO UPDATE SET role = 1`,
     [data.adminUid]
   );
 
   const res = await dbQuery.query(
-    `INSERT INTO admin_users (admin_uid, email, display_name, is_super_admin, account_status, created_by)
+    `INSERT INTO ${s}.admin_users (admin_uid, email, display_name, is_super_admin, account_status, created_by)
      VALUES ($1, $2, $3, $4, 'active', $5)
      RETURNING *`,
     [data.adminUid, data.email, data.displayName ?? null, data.isSuperAdmin ?? false, actorUid]
@@ -657,7 +659,7 @@ export async function updateAdminUser(
   if (data.email !== undefined) { sets.push(`email = $${p++}`); params.push(data.email); }
 
   const res = await dbQuery.query(
-    `UPDATE admin_users SET ${sets.join(', ')} WHERE admin_uid = $1 RETURNING *`,
+    `UPDATE ${s}.admin_users SET ${sets.join(', ')} WHERE admin_uid = $1 RETURNING *`,
     params
   );
 
@@ -687,7 +689,7 @@ export async function updateAdminUserStatus(
 
   const deactivatedAt = (status === 'inactive' || status === 'archived') ? 'NOW()' : 'NULL';
   await dbQuery.query(
-    `UPDATE admin_users SET account_status=$2, deactivated_at=${deactivatedAt},
+    `UPDATE ${s}.admin_users SET account_status=$2, deactivated_at=${deactivatedAt},
      updated_by=$3, updated_at=NOW(), version=version+1
      WHERE admin_uid=$1`,
     [adminUid, status, actorUid]
@@ -717,7 +719,7 @@ export async function getPermissionDefinitions(): Promise<{
             is_dangerous AS "isDangerous",
             is_hidden_from_normal_ui AS "isHiddenFromNormalUi",
             display_order AS "displayOrder"
-     FROM admin_permission_definitions
+     FROM ${s}.admin_permission_definitions
      WHERE is_active = TRUE
      ORDER BY display_order ASC`
   );
@@ -750,7 +752,7 @@ export async function getAdminUserPermissions(adminUid: string): Promise<{
 
   if (admin.is_super_admin) {
     const defsRes = await dbQuery.query(
-      `SELECT permission_key FROM admin_permission_definitions WHERE is_active = TRUE`
+      `SELECT permission_key FROM ${s}.admin_permission_definitions WHERE is_active = TRUE`
     );
     return {
       adminUid, isSuperAdmin: true,
@@ -761,7 +763,7 @@ export async function getAdminUserPermissions(adminUid: string): Promise<{
   }
 
   const res = await dbQuery.query(
-    `SELECT permission_key FROM admin_permission_grants
+    `SELECT permission_key FROM ${s}.admin_permission_grants
      WHERE admin_uid = $1 AND granted = TRUE AND revoked_at IS NULL`,
     [adminUid]
   );
@@ -815,7 +817,7 @@ export async function previewPermissionChange(
   if (!admin) throw Object.assign(new Error('Admin user not found'), { code: 'NOT_FOUND' });
 
   const currentRes = await dbQuery.query(
-    `SELECT permission_key FROM admin_permission_grants
+    `SELECT permission_key FROM ${s}.admin_permission_grants
      WHERE admin_uid = $1 AND granted = TRUE AND revoked_at IS NULL`,
     [adminUid]
   );
@@ -825,7 +827,7 @@ export async function previewPermissionChange(
             requires, is_dangerous AS "isDangerous", action_type AS "actionType",
             conflicts_with AS "conflictsWith", module, description,
             is_hidden_from_normal_ui AS "isHiddenFromNormalUi", display_order AS "displayOrder"
-     FROM admin_permission_definitions WHERE is_active = TRUE`
+     FROM ${s}.admin_permission_definitions WHERE is_active = TRUE`
   );
   const allDefs: AdminPermissionDefinitionRow[] = defsRes.rows.map((r: any) => ({
     ...r,
@@ -893,7 +895,7 @@ export async function updateAdminUserPermissions(
             requires, is_dangerous AS "isDangerous", action_type AS "actionType",
             conflicts_with AS "conflictsWith", module, description,
             is_hidden_from_normal_ui AS "isHiddenFromNormalUi", display_order AS "displayOrder"
-     FROM admin_permission_definitions WHERE is_active = TRUE`
+     FROM ${s}.admin_permission_definitions WHERE is_active = TRUE`
   );
   const allDefs: AdminPermissionDefinitionRow[] = defsRes.rows.map((r: any) => ({
     ...r,
@@ -904,7 +906,7 @@ export async function updateAdminUserPermissions(
 
   // Get current permissions before change (for audit)
   const beforeRes = await dbQuery.query(
-    `SELECT permission_key FROM admin_permission_grants
+    `SELECT permission_key FROM ${s}.admin_permission_grants
      WHERE admin_uid = $1 AND granted = TRUE AND revoked_at IS NULL`,
     [adminUid]
   );
@@ -918,7 +920,7 @@ export async function updateAdminUserPermissions(
   // Revoke removed permissions
   if (toRemove.length > 0) {
     await dbQuery.query(
-      `UPDATE admin_permission_grants
+      `UPDATE ${s}.admin_permission_grants
        SET revoked_by=$2, revoked_at=NOW()
        WHERE admin_uid=$1 AND revoked_at IS NULL
          AND permission_key = ANY($3::text[])`,
@@ -929,7 +931,7 @@ export async function updateAdminUserPermissions(
   // Insert new grants
   for (const key of toAdd) {
     await dbQuery.query(
-      `INSERT INTO admin_permission_grants (admin_uid, permission_key, granted, granted_by, reason)
+      `INSERT INTO ${s}.admin_permission_grants (admin_uid, permission_key, granted, granted_by, reason)
        VALUES ($1, $2, TRUE, $3, $4)`,
       [adminUid, key, actorUid, reason]
     );
@@ -937,7 +939,7 @@ export async function updateAdminUserPermissions(
 
   // Append to permission events
   await dbQuery.query(
-    `INSERT INTO admin_permission_events
+    `INSERT INTO ${s}.admin_permission_events
        (target_admin_uid, actor_admin_uid, event_type, added_permissions, removed_permissions,
         before_permissions, after_permissions, reason, request_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
@@ -973,7 +975,7 @@ export async function getPermissionHistory(
             added_permissions AS "addedPermissions", removed_permissions AS "removedPermissions",
             before_permissions AS "beforePermissions", after_permissions AS "afterPermissions",
             reason, request_id AS "requestId", created_at AS "createdAt"
-     FROM admin_permission_events
+     FROM ${s}.admin_permission_events
      WHERE target_admin_uid = $1
      ORDER BY created_at DESC
      LIMIT $2`,
@@ -987,7 +989,7 @@ export async function getPermissionHistory(
 // Throws if removing the given admin would leave zero active Super Admins
 export async function assertAtLeastOneSuperAdmin(excludeUid?: string): Promise<void> {
   const res = await dbQuery.query(
-    `SELECT COUNT(*) FROM admin_users
+    `SELECT COUNT(*) FROM ${s}.admin_users
      WHERE is_super_admin = TRUE AND account_status = 'active'
        AND admin_uid != $1`,
     [excludeUid ?? '']
@@ -1009,7 +1011,7 @@ export async function bootstrapSuperAdmin(
   requestId: string | null
 ): Promise<{ adminUid: string; isSuperAdmin: boolean }> {
   const superAdminCount = await dbQuery.query(
-    `SELECT COUNT(*) FROM admin_users WHERE is_super_admin = TRUE AND account_status = 'active'`
+    `SELECT COUNT(*) FROM ${s}.admin_users WHERE is_super_admin = TRUE AND account_status = 'active'`
   );
   if (Number(superAdminCount.rows[0]?.count ?? 0) > 0) {
     throw Object.assign(
@@ -1019,14 +1021,14 @@ export async function bootstrapSuperAdmin(
   }
 
   await dbQuery.query(
-    `INSERT INTO admin_users (admin_uid, email, display_name, is_super_admin, account_status, created_by)
+    `INSERT INTO ${s}.admin_users (admin_uid, email, display_name, is_super_admin, account_status, created_by)
      VALUES ($1, $2, $3, TRUE, 'active', 'bootstrap')
      ON CONFLICT (admin_uid) DO UPDATE SET is_super_admin=TRUE, updated_at=NOW()`,
     [adminUid, email, displayName]
   );
 
   await dbQuery.query(
-    `INSERT INTO user_credentials (uid, role) VALUES ($1, 1)
+    `INSERT INTO ${s}.user_credentials (uid, role) VALUES ($1, 1)
      ON CONFLICT (uid) DO UPDATE SET role = 1`,
     [adminUid]
   );
