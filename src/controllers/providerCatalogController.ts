@@ -59,8 +59,15 @@ export const createOffering = async (req: Request, res: Response) => {
     const data = await svc.createOffering(req.body, adminUid);
     return res.status(201).json({ status: "success", data });
   } catch (error: any) {
-    const is409 = error.code === "23505"; // unique violation
-    return res.status(is409 ? 409 : 400).json({ status: "failed", message: error?.message ?? "Bad request" });
+    if ((error as any).code === "CATALOG_KEY_ALREADY_EXISTS") {
+      return res.status(409).json({
+        status: "error",
+        code: "CATALOG_KEY_ALREADY_EXISTS",
+        message: error.message,
+        existingOfferingId: (error as any).existingOfferingId ?? null,
+      });
+    }
+    return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
   }
 };
 

@@ -472,26 +472,42 @@ export const createOffering = async (
     throw new Error('catalogKey must be lowercase letters, numbers, and hyphens only');
   }
 
-  const res = await dbQuery.query(
-    `INSERT INTO ${dbSchema}.provider_catalog_offerings
-      (catalog_key, name, short_description, provider_description, icon_key,
-       banner_path, display_order, is_builtin, status, provider_web_visible, created_by, updated_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, false, 'draft', true, $8, $8)
-     RETURNING *`,
-    [
-      data.catalogKey,
-      data.name,
-      data.shortDescription ?? null,
-      data.providerDescription ?? null,
-      data.iconKey ?? null,
-      data.bannerPath ?? null,
-      data.displayOrder ?? 99,
-      adminUid,
-    ]
-  );
-  const result = toCamel(res.rows[0]);
-  auditFire({ action: 'catalog_offering.create', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_offering', entityId: String(result.id), after: { catalogKey: result.catalogKey, name: result.name } });
-  return result;
+  try {
+    const res = await dbQuery.query(
+      `INSERT INTO ${dbSchema}.provider_catalog_offerings
+        (catalog_key, name, short_description, provider_description, icon_key,
+         banner_path, display_order, is_builtin, status, provider_web_visible, created_by, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, false, 'draft', true, $8, $8)
+       RETURNING *`,
+      [
+        data.catalogKey,
+        data.name,
+        data.shortDescription ?? null,
+        data.providerDescription ?? null,
+        data.iconKey ?? null,
+        data.bannerPath ?? null,
+        data.displayOrder ?? 99,
+        adminUid,
+      ]
+    );
+    const result = toCamel(res.rows[0]);
+    auditFire({ action: 'catalog_offering.create', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_offering', entityId: String(result.id), after: { catalogKey: result.catalogKey, name: result.name } });
+    return result;
+  } catch (err: any) {
+    if (err.code === '23505') {
+      // Duplicate catalog_key — look up the existing offering so the frontend can navigate to it
+      const existing = await dbQuery.query(
+        `SELECT id FROM ${dbSchema}.provider_catalog_offerings WHERE catalog_key = $1`,
+        [data.catalogKey]
+      );
+      const existingOfferingId = existing.rows.length > 0 ? Number(existing.rows[0].id) : null;
+      throw Object.assign(
+        new Error(`An offering with catalog key "${data.catalogKey}" already exists.`),
+        { code: 'CATALOG_KEY_ALREADY_EXISTS', existingOfferingId }
+      );
+    }
+    throw err;
+  }
 };
 
 export const updateOffering = async (
@@ -606,7 +622,45 @@ export const listSpecificServicesForOffering = async (offeringId: number): Promi
      ORDER BY so.level_2, so.level_3`,
     [sids, l2s]
   );
-  return res.rows.map(toCamel);
+  if (res.rows.length === 0) return [];
+
+  // Load addons for all specific services in one query
+  const mainIds = res.rows.map((r: any) => Number(r.id));
+  const addonRes = await dbQuery.query(
+    `SELECT id, parent_option_id, level_3, unit, base_price, is_active
+     FROM ${dbSchema}.service_options
+     WHERE parent_option_id = ANY($1) AND option_type = 'ADD_ON'
+     ORDER BY parent_option_id, level_3`,
+    [mainIds]
+  );
+
+  const addonsByParent = new Map<number, any[]>();
+  for (const a of addonRes.rows) {
+    const pid = Number(a.parent_option_id);
+    if (!addonsByParent.has(pid)) addonsByParent.set(pid, []);
+    addonsByParent.get(pid)!.push({
+      id: Number(a.id),
+      parentOptionId: pid,
+      level3: a.level_3,
+      unit: a.unit,
+      basePrice: Number(a.base_price),
+      isActive: a.is_active == null ? true : Boolean(a.is_active),
+    });
+  }
+
+  return res.rows.map((r: any) => ({
+    serviceOptionId: Number(r.id),
+    serviceId: Number(r.service_id),
+    level2: r.level_2,
+    level3: r.level_3,
+    unit: r.unit,
+    basePrice: Number(r.base_price),
+    isActive: r.is_active == null ? true : Boolean(r.is_active),
+    description: r.description || null,
+    inclusions: Array.isArray(r.inclusions) ? r.inclusions : (r.inclusions ? JSON.parse(r.inclusions) : []),
+    exclusions: Array.isArray(r.exclusions) ? r.exclusions : (r.exclusions ? JSON.parse(r.exclusions) : []),
+    addons: addonsByParent.get(Number(r.id)) ?? [],
+  }));
 };
 
 export const createSpecificService = async (

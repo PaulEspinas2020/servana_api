@@ -238,3 +238,113 @@ describe('C15 — controller passes adminUid to status update functions', () => 
     expect(segment).toContain('updateAddonStatus(id, isActive, adminUid)');
   });
 });
+
+// ── C16: CATALOG_KEY_ALREADY_EXISTS duplicate key handling ────────────────────
+
+describe('C16 — createOffering handles duplicate catalog key safely', () => {
+  let svc, ctrl;
+  beforeAll(() => {
+    svc  = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8');
+    ctrl = fs.readFileSync(CTRL('providerCatalogController.ts'), 'utf8');
+  });
+
+  it('service catches PostgreSQL 23505 error code on insert', () => {
+    expect(svc).toContain("err.code === '23505'");
+  });
+
+  it('service looks up existing offering by catalogKey on 23505', () => {
+    expect(svc).toContain('catalog_key = $1');
+    expect(svc).toContain('existingOfferingId');
+  });
+
+  it('service throws tagged error with code CATALOG_KEY_ALREADY_EXISTS', () => {
+    expect(svc).toContain("'CATALOG_KEY_ALREADY_EXISTS'");
+  });
+
+  it('service includes existingOfferingId in thrown error', () => {
+    const idx = svc.indexOf('CATALOG_KEY_ALREADY_EXISTS');
+    const segment = svc.slice(idx, idx + 400);
+    expect(segment).toContain('existingOfferingId');
+  });
+
+  it('service does not expose raw PostgreSQL constraint name in error message', () => {
+    // The error message must not contain the raw PG constraint name
+    expect(svc).not.toContain('provider_catalog_offerings_catalog_key_key');
+  });
+
+  it('controller handles CATALOG_KEY_ALREADY_EXISTS and returns 409', () => {
+    const idx = ctrl.indexOf("code === \"CATALOG_KEY_ALREADY_EXISTS\"");
+    expect(idx).toBeGreaterThan(-1);
+    const segment = ctrl.slice(idx, idx + 300);
+    expect(segment).toContain('res.status(409)');
+  });
+
+  it('controller 409 response includes structured code field', () => {
+    const idx = ctrl.indexOf("code === \"CATALOG_KEY_ALREADY_EXISTS\"");
+    const segment = ctrl.slice(idx, idx + 400);
+    expect(segment).toContain('"CATALOG_KEY_ALREADY_EXISTS"');
+  });
+
+  it('controller 409 response includes existingOfferingId', () => {
+    const idx = ctrl.indexOf("code === \"CATALOG_KEY_ALREADY_EXISTS\"");
+    const segment = ctrl.slice(idx, idx + 400);
+    expect(segment).toContain('existingOfferingId');
+  });
+
+  it('controller createOffering generic error returns 400 not 500', () => {
+    const idx = ctrl.indexOf('export const createOffering');
+    const segment = ctrl.slice(idx, idx + 900);
+    expect(segment).toContain('res.status(400)');
+  });
+});
+
+// ── C16: listSpecificServicesForOffering response shape ───────────────────────
+
+describe('C16 — listSpecificServicesForOffering returns serviceOptionId alias', () => {
+  let svc;
+  beforeAll(() => { svc = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8'); });
+
+  it('response shape uses serviceOptionId alias (not raw id)', () => {
+    const idx = svc.indexOf('listSpecificServicesForOffering');
+    const segment = svc.slice(idx, idx + 4000);
+    expect(segment).toContain('serviceOptionId:');
+  });
+
+  it('serviceOptionId is aliased from Number(r.id)', () => {
+    const idx = svc.indexOf('listSpecificServicesForOffering');
+    const segment = svc.slice(idx, idx + 4000);
+    // Must not rely on toCamel which would return `id` not `serviceOptionId`
+    expect(segment).not.toContain('rows.map(toCamel)');
+  });
+
+  it('response shape includes addons array per specific service', () => {
+    const idx = svc.indexOf('listSpecificServicesForOffering');
+    const segment = svc.slice(idx, idx + 4000);
+    expect(segment).toContain('addons:');
+  });
+
+  it('addons are loaded via a second batch query on parent_option_id', () => {
+    const idx = svc.indexOf('listSpecificServicesForOffering');
+    const segment = svc.slice(idx, idx + 4000);
+    expect(segment).toContain('parent_option_id');
+  });
+
+  it('addons are grouped by parent using addonsByParent Map', () => {
+    const idx = svc.indexOf('listSpecificServicesForOffering');
+    const segment = svc.slice(idx, idx + 4000);
+    expect(segment).toContain('addonsByParent');
+  });
+
+  it('response shape includes isActive field for each specific service', () => {
+    const idx = svc.indexOf('listSpecificServicesForOffering');
+    const segment = svc.slice(idx, idx + 4000);
+    expect(segment).toContain('isActive:');
+  });
+
+  it('inclusions and exclusions are parsed to arrays', () => {
+    const idx = svc.indexOf('listSpecificServicesForOffering');
+    const segment = svc.slice(idx, idx + 4000);
+    expect(segment).toContain('inclusions:');
+    expect(segment).toContain('exclusions:');
+  });
+});
