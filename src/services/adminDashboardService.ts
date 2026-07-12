@@ -148,15 +148,18 @@ const FALLBACK_ONBOARDING: AdminOnboardingHealth = {
   queueTotal: 0, inReview: 0, readyForFinalReview: 0, highPriority: 0, waitingForProvider: 0,
 };
 
+// ── Schema bootstrap (called once from app.ts IIFE) ─────────────────────────
+
+export const ensureDashboardSchema = async (): Promise<void> => {
+  try {
+    await dbQuery.query(`ALTER TABLE ${s}.bookings ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
+  } catch { /* no-op */ }
+};
+
 // ── Main aggregation ─────────────────────────────────────────────────────────
 
 export const getOperationsDashboard = async (): Promise<AdminDashboardOperations> => {
   const now = new Date();
-
-  // Ensure cancelled_at column exists on bookings (added after initial schema)
-  try {
-    await dbQuery.query(`ALTER TABLE ${s}.bookings ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
-  } catch { /* no-op if already exists or insufficient privilege */ }
 
   // ── Core query: bookings + payments + providers + customers ────────────────
   const mainSql = `
@@ -509,7 +512,9 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
     pendingProviderApplications: pendingApplications,
     documentsNeedingReview,
     disputes: n(r.disputes),
-    systemHealth: 'healthy',
+    systemHealth: n(r.disputes) > 0 ? 'incident'
+      : (n(r.late_jobs) > 5 || n(r.payment_exceptions) > 3) ? 'degraded'
+      : 'healthy',
   };
 
   const bookingPipeline: AdminBookingPipeline = {

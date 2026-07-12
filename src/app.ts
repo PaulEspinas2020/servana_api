@@ -264,6 +264,15 @@ import { ensurePermissionSchema } from "./services/adminPermissionService";
   }
 })();
 
+import { ensureDashboardSchema } from "./services/adminDashboardService";
+(async () => {
+  try {
+    await ensureDashboardSchema();
+  } catch (err) {
+    console.error("[admin-dashboard] schema error:", err);
+  }
+})();
+
 httpServer.listen(port, () => {
     console.log(`Magic is running on port ${port}`);
 });
