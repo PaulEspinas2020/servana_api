@@ -181,7 +181,8 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
           p.status    AS pay_status,
           p.method    AS pay_method,
           p.proof_url,
-          COALESCE(p.amount, 0)::numeric AS pay_amount
+          COALESCE(p.amount, 0)::numeric AS pay_amount,
+          p.paid_at
         FROM ${s}.payments p
         ORDER BY p.booking_id, p.id DESC
       ),
@@ -208,6 +209,7 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
           lp.pay_method,
           lp.proof_url,
           lp.pay_amount,
+          COALESCE(lp.paid_at, b.created_at) AS pay_paid_at,
           (esc.booking_id IS NOT NULL)::boolean AS has_escalation,
           CASE
             WHEN esc.booking_id IS NOT NULL                        THEN 'disputed'
@@ -261,11 +263,11 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
             AND raw_status = 'PAID')                                                               AS unassigned_paid,
           -- Revenue
           COALESCE(SUM(pay_amount) FILTER (WHERE pay_status = 'PAID'
-            AND created_at >= (SELECT day_start FROM dr)), 0)::numeric                            AS revenue_today,
+            AND pay_paid_at >= (SELECT day_start FROM dr)), 0)::numeric                           AS revenue_today,
           COALESCE(SUM(pay_amount) FILTER (WHERE pay_status = 'PAID'
-            AND created_at >= (SELECT week_start FROM dr)), 0)::numeric                           AS revenue_week,
+            AND pay_paid_at >= (SELECT week_start FROM dr)), 0)::numeric                          AS revenue_week,
           COALESCE(SUM(pay_amount) FILTER (WHERE pay_status = 'PAID'
-            AND created_at >= (SELECT month_start FROM dr)), 0)::numeric                          AS revenue_month,
+            AND pay_paid_at >= (SELECT month_start FROM dr)), 0)::numeric                         AS revenue_month,
           CASE
             WHEN COUNT(booking_id) FILTER (WHERE pay_status = 'PAID') > 0
             THEN (COALESCE(SUM(pay_amount) FILTER (WHERE pay_status = 'PAID'), 0)
