@@ -58,9 +58,11 @@ export const getBooking = async (req: Request, res: Response) => {
   }
 };
 
-export const listAllBookings = async (_req: Request, res: Response) => {
+export const listAllBookings = async (req: Request, res: Response) => {
   try {
-    const bookings = await bookingService.getAllBookings();
+    const from = req.query.from as string | undefined;
+    const to   = req.query.to   as string | undefined;
+    const bookings = await bookingService.getAllBookings(from, to);
     res.json({ success: true, bookings: formatBookings(bookings) });
   } catch (error: any) {
     res.status(500).json({

@@ -262,7 +262,15 @@ export const getBookingById = async (
   };
 };
 
-export const getAllBookings = async () => {
+export const getAllBookings = async (from?: string, to?: string) => {
+  const params: string[] = [];
+  let whereClause = '';
+
+  if (from && to) {
+    params.push(from, to);
+    whereClause = `WHERE b.schedule >= $1 AND b.schedule < $2`;
+  }
+
   const res = await dbQuery.query(
     `
     SELECT
@@ -301,9 +309,10 @@ export const getAllBookings = async () => {
       AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','DECLINED')
     LEFT JOIN ${dbSchema}.user_credentials w
       ON w.uid = bw.worker_uid
+    ${whereClause}
     ORDER BY b.created_at DESC
     `,
-    []
+    params
   );
 
   return res.rows;
