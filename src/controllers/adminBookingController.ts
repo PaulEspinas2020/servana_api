@@ -420,6 +420,9 @@ export const createAdminBooking = async (req: Request, res: Response) => {
     if (!addressLine?.trim())              return adminBadRequest(res, 'addressLine is required');
     if (!city?.trim())                     return adminBadRequest(res, 'city is required');
     if (lat == null || lon == null)        return adminBadRequest(res, 'lat and lon are required');
+    const latN = Number(lat), lonN = Number(lon);
+    if (isNaN(latN) || latN < -90  || latN > 90)  return adminBadRequest(res, 'lat must be between -90 and 90');
+    if (isNaN(lonN) || lonN < -180 || lonN > 180)  return adminBadRequest(res, 'lon must be between -180 and 180');
     if (!providerUid?.trim())              return adminBadRequest(res, 'providerUid is required');
     if (!['CASH','GCASH','ONLINE'].includes(paymentMethod)) return adminBadRequest(res, 'paymentMethod must be CASH, GCASH, or ONLINE');
     if (!['PAID','PAY_LATER'].includes(paymentStatus))      return adminBadRequest(res, 'paymentStatus must be PAID or PAY_LATER');
