@@ -431,6 +431,74 @@ export const deleteProviderRequirement = async (req: Request, res: Response) => 
   }
 };
 
+export const verifyProviderRequirement = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    const id = Number(req.params.id);
+    if (!id) return fail(res, 400, 'Invalid requirement id');
+    const { internalNote } = req.body;
+    const result = await svc.verifyProviderRequirement(id, adminUid(req), internalNote ? String(internalNote) : undefined);
+
+    auditFire({
+      action: 'provider_document_verified',
+      actionCategory: 'onboarding',
+      outcome: 'success',
+      actorUid: adminUid(req),
+      entityType: 'provider_requirement',
+      entityId: String(id),
+      relatedEntities: [{ entityType: 'provider', entityId: uid }],
+      after: { decision: 'approved' },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
+    autoOnlineEngine.evaluateProvider(uid, 'admin', adminUid(req)).catch(() => {});
+    return ok(res, result);
+  } catch (err: any) {
+    const status = err?.statusCode ?? (err?.message?.includes('not found') ? 404 : 500);
+    return fail(res, status, err?.message ?? 'Failed to verify document');
+  }
+};
+
+export const rejectProviderRequirement = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    const id = Number(req.params.id);
+    if (!id) return fail(res, 400, 'Invalid requirement id');
+    const { reasonCode, providerMessage, internalNote } = req.body;
+    if (!providerMessage || !String(providerMessage).trim()) {
+      return fail(res, 400, 'providerMessage is required to reject a document');
+    }
+    const result = await svc.rejectProviderRequirement(
+      id, adminUid(req),
+      reasonCode ? String(reasonCode) : 'unspecified',
+      String(providerMessage),
+      internalNote ? String(internalNote) : undefined,
+    );
+
+    auditFire({
+      action: 'provider_document_rejected',
+      actionCategory: 'onboarding',
+      outcome: 'success',
+      actorUid: adminUid(req),
+      entityType: 'provider_requirement',
+      entityId: String(id),
+      relatedEntities: [{ entityType: 'provider', entityId: uid }],
+      after: { decision: 'rejected', reasonCode: reasonCode ?? null },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
+    autoOnlineEngine.evaluateProvider(uid, 'admin', adminUid(req)).catch(() => {});
+    return ok(res, result);
+  } catch (err: any) {
+    const status = err?.statusCode ?? (err?.message?.includes('not found') ? 404 : 500);
+    return fail(res, status, err?.message ?? 'Failed to reject document');
+  }
+};
+
 // ── Jobs ──────────────────────────────────────────────────────────────────────
 
 export const getProviderJobs = async (req: Request, res: Response) => {

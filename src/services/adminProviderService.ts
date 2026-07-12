@@ -12,6 +12,7 @@ import mongoDb from '../db/mongodbQuery';
 import * as serviceApplicationService from './serviceApplicationService';
 import * as technicianService from './technicianService';
 import { uploadFileToStorage } from '../helpers/firebaseStorageUploader';
+import * as onboardingService from './adminOnboardingService';
 
 const dbSchema = db.schema;
 
@@ -421,18 +422,44 @@ export const getProviderCatalogCapabilities = async (uid: string) => {
 
 export const getProviderRequirements = async (uid: string) => {
   const res = await dbQuery.query(
-    `SELECT id, file_url, file_name, uploaded_at, requirement_type
-     FROM ${dbSchema}.worker_requirements
-     WHERE worker_uid = $1
-     ORDER BY uploaded_at DESC`,
+    `SELECT wr.id, wr.file_url, wr.file_name, wr.uploaded_at, wr.requirement_type,
+            COALESCE(ld.decision, 'pending_review')          AS current_decision,
+            ld.reason_code,
+            ld.provider_message,
+            ld.internal_rationale                             AS internal_note,
+            ld.reviewer_uid,
+            ld.decided_at                                     AS reviewed_at,
+            ld.id                                             AS decision_id
+     FROM ${dbSchema}.worker_requirements wr
+     LEFT JOIN LATERAL (
+       SELECT decision, reason_code, provider_message, internal_rationale,
+              reviewer_uid, decided_at, id
+       FROM ${dbSchema}.provider_requirement_decisions
+       WHERE worker_requirement_id = wr.id AND NOT is_superseded
+       ORDER BY decided_at DESC LIMIT 1
+     ) ld ON true
+     WHERE wr.worker_uid = $1
+     ORDER BY wr.uploaded_at DESC`,
     [uid]
+  ).catch(() =>
+    dbQuery.query(
+      `SELECT id, file_url, file_name, uploaded_at, requirement_type FROM ${dbSchema}.worker_requirements WHERE worker_uid = $1 ORDER BY uploaded_at DESC`,
+      [uid]
+    )
   );
   return res.rows.map((r: any) => ({
     id: r.id,
     fileName: r.file_name,
     fileUrl: r.file_url,
     uploadedAt: r.uploaded_at,
-    requirementType: r.requirement_type ?? 'document',
+    requirementType: r.requirement_type ?? null,
+    currentDecision: r.current_decision ?? 'pending_review',
+    reasonCode: r.reason_code ?? null,
+    providerMessage: r.provider_message ?? null,
+    internalNote: r.internal_note ?? null,
+    reviewerUid: r.reviewer_uid ?? null,
+    reviewedAt: r.reviewed_at ?? null,
+    decisionId: r.decision_id ?? null,
   }));
 };
 
@@ -460,6 +487,33 @@ export const uploadProviderRequirement = async (
 
 export const deleteProviderRequirement = async (workerUid: string, id: number) => {
   return technicianService.deleteWorkerRequirement(workerUid, id);
+};
+
+export const verifyProviderRequirement = async (
+  requirementId: number,
+  actorUid: string,
+  internalNote?: string,
+) => {
+  return onboardingService.decideRequirement(requirementId, 'approved', actorUid, {
+    internalRationale: internalNote,
+  });
+};
+
+export const rejectProviderRequirement = async (
+  requirementId: number,
+  actorUid: string,
+  reasonCode: string,
+  providerMessage: string,
+  internalNote?: string,
+) => {
+  if (!providerMessage || !providerMessage.trim()) {
+    throw Object.assign(new Error('providerMessage is required to reject a document'), { statusCode: 400 });
+  }
+  return onboardingService.decideRequirement(requirementId, 'rejected', actorUid, {
+    reasonCode,
+    providerMessage: providerMessage.trim(),
+    internalRationale: internalNote,
+  });
 };
 
 // ── Jobs / Bookings ───────────────────────────────────────────────────────────

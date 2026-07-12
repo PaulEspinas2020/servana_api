@@ -27,9 +27,11 @@ router.get('/admin/providers/:uid',                        ...adminOnly, require
 router.get('/admin/providers/:uid/services',               ...adminOnly, requirePermission('providers.active_services.view'), ctrl.getProviderServices);
 router.get('/admin/providers/:uid/service-applications',   ...adminOnly, requirePermission('providers.profile.view'), ctrl.getProviderServiceApplications);
 router.get('/admin/providers/:uid/catalog-capabilities',   ...adminOnly, requirePermission('providers.profile.view'), ctrl.getProviderCatalogCapabilities);
-router.get('/admin/providers/:uid/requirements',           ...adminOnly, requirePermission('providers.documents.view'), ctrl.getProviderRequirements);
-router.post('/admin/providers/:uid/requirements',          ...adminOnly, requirePermission('providers.documents.upload'), ctrl.uploadProviderRequirement);
-router.delete('/admin/providers/:uid/requirements/:id',    ...adminOnly, requirePermission('providers.documents.delete'), ctrl.deleteProviderRequirement);
+router.get('/admin/providers/:uid/requirements',                   ...adminOnly, requirePermission('providers.documents.view'), ctrl.getProviderRequirements);
+router.post('/admin/providers/:uid/requirements',                  ...adminOnly, requirePermission('providers.documents.upload'), ctrl.uploadProviderRequirement);
+router.delete('/admin/providers/:uid/requirements/:id',            ...adminOnly, requirePermission('providers.documents.delete'), ctrl.deleteProviderRequirement);
+router.patch('/admin/providers/:uid/requirements/:id/verify',      ...adminOnly, requirePermission('providers.documents.verify'), ctrl.verifyProviderRequirement);
+router.patch('/admin/providers/:uid/requirements/:id/reject',      ...adminOnly, requirePermission('providers.documents.reject'), ctrl.rejectProviderRequirement);
 router.get('/admin/providers/:uid/jobs',                   ...adminOnly, requirePermission('providers.jobs.view'), ctrl.getProviderJobs);
 router.get('/admin/providers/:uid/performance',            ...adminOnly, requirePermission('providers.performance.view'), ctrl.getProviderPerformance);
 router.get('/admin/providers/:uid/earnings',               ...adminOnly, requirePermission('providers.earnings.view'), ctrl.getProviderEarnings);

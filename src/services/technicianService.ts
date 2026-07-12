@@ -280,12 +280,27 @@ export const getWorkerRequirements = async (workerUid: string) => {
   await ensureRequirementTypeColumn();
   const res = await dbQuery.query(
     `
-    SELECT id, file_url, file_name, uploaded_at, requirement_type
-    FROM ${dbSchema}.worker_requirements
-    WHERE worker_uid = $1
-    ORDER BY uploaded_at ASC
+    SELECT wr.id, wr.file_url, wr.file_name, wr.uploaded_at, wr.requirement_type,
+           COALESCE(ld.decision, 'pending_review')          AS current_decision,
+           ld.provider_message,
+           ld.decided_at                                     AS reviewed_at
+    FROM ${dbSchema}.worker_requirements wr
+    LEFT JOIN LATERAL (
+      SELECT decision, provider_message, decided_at
+      FROM ${dbSchema}.provider_requirement_decisions
+      WHERE worker_requirement_id = wr.id AND NOT is_superseded
+      ORDER BY decided_at DESC LIMIT 1
+    ) ld ON true
+    WHERE wr.worker_uid = $1
+    ORDER BY wr.uploaded_at ASC
     `,
     [workerUid]
+  ).catch(() =>
+    // Fallback if provider_requirement_decisions table not yet created (new installs)
+    dbQuery.query(
+      `SELECT id, file_url, file_name, uploaded_at, requirement_type FROM ${dbSchema}.worker_requirements WHERE worker_uid = $1 ORDER BY uploaded_at ASC`,
+      [workerUid]
+    )
   );
   return res.rows.map((f: any) => ({
     id: f.id,
@@ -293,6 +308,9 @@ export const getWorkerRequirements = async (workerUid: string) => {
     fileName: f.file_name,
     uploadedAt: f.uploaded_at,
     requirementType: f.requirement_type ?? null,
+    currentDecision: f.current_decision ?? 'pending_review',
+    providerMessage: f.provider_message ?? null,
+    reviewedAt: f.reviewed_at ?? null,
   }));
 };
 
