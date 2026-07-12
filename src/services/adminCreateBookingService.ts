@@ -27,6 +27,7 @@ export interface GuestCustomerInput {
   lastName: string;
   phone: string;        // raw; will be normalized
   email?: string | null;
+  sourceChannel?: string | null;
 }
 
 export interface AdminCreateBookingParams {
@@ -552,8 +553,8 @@ export const adminCreateBooking = async (
       // Upsert by phone (same phone = same guest identity across bookings)
       const guestUpsert = await client.query(
         `INSERT INTO ${s}.guest_customers
-           (guest_customer_id, first_name, last_name, phone_normalized, email, created_by_admin_uid)
-         VALUES ($1, $2, $3, $4, $5, $6)
+           (guest_customer_id, first_name, last_name, phone_normalized, email, created_by_admin_uid, source_channel)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (phone_normalized) DO NOTHING
          RETURNING guest_customer_id`,
         [
@@ -563,6 +564,7 @@ export const adminCreateBooking = async (
           guestPhoneNormalized!,
           guest.email?.trim() || null,
           adminActorUid,
+          guest.sourceChannel || null,
         ]
       );
 
