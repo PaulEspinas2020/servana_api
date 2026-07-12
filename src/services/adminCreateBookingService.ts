@@ -87,8 +87,9 @@ export const ensureAdminCreateBookingSchema = async (): Promise<void> => {
     )
   `, []);
 
+  // UNIQUE on phone_normalized — required for ON CONFLICT (phone_normalized) DO NOTHING to work
   await dbQuery.query(`
-    CREATE INDEX IF NOT EXISTS idx_gc_phone ON ${s}.guest_customers (phone_normalized)
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_gc_phone_unique ON ${s}.guest_customers (phone_normalized)
   `, []);
   await dbQuery.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_gc_uuid ON ${s}.guest_customers (guest_customer_id)
@@ -382,9 +383,10 @@ export const validateAndUploadEvidence = async (params: {
     }
   }
 
-  const MAX_BYTES = 15 * 1024 * 1024;
+  // 7 MB raw → ~9.3 MB base64 → stays under the 10 MB express.json body limit
+  const MAX_BYTES = 7 * 1024 * 1024;
   if (buffer.byteLength > MAX_BYTES) {
-    throw Object.assign(new Error('File exceeds 15 MB limit.'), { statusCode: 422 });
+    throw Object.assign(new Error('File exceeds 7 MB limit.'), { statusCode: 422 });
   }
 
   const fileName = `admin-evidence/${adminUid}_${Date.now()}`;
@@ -523,7 +525,7 @@ export const adminCreateBooking = async (
         `INSERT INTO ${s}.guest_customers
            (guest_customer_id, first_name, last_name, phone_normalized, email, created_by_admin_uid)
          VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT DO NOTHING
+         ON CONFLICT (phone_normalized) DO NOTHING
          RETURNING guest_customer_id`,
         [
           guestId,

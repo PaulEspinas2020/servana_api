@@ -23,6 +23,11 @@ describe('adminCreateBooking — schema bootstrap', () => {
     expect(svcSrc).toContain('linked_customer_uid');
   });
 
+  it('creates UNIQUE index on phone_normalized (required for ON CONFLICT (phone_normalized) to work)', () => {
+    expect(svcSrc).toContain('CREATE UNIQUE INDEX IF NOT EXISTS idx_gc_phone_unique');
+    expect(svcSrc).toContain('(phone_normalized)');
+  });
+
   it('creates booking_payment_evidence table', () => {
     expect(svcSrc).toContain('booking_payment_evidence');
     expect(svcSrc).toContain('storage_url');
@@ -148,8 +153,8 @@ describe('adminCreateBooking — guest customer handling', () => {
     expect(txBody).toContain("customerType === 'client' ? customerUid : null");
   });
 
-  it('uses ON CONFLICT DO NOTHING for guest upsert (same phone → same identity)', () => {
-    expect(txBody).toContain('ON CONFLICT DO NOTHING');
+  it('uses ON CONFLICT (phone_normalized) DO NOTHING for guest upsert (same phone → same identity)', () => {
+    expect(txBody).toContain('ON CONFLICT (phone_normalized) DO NOTHING');
   });
 });
 
@@ -166,8 +171,8 @@ describe('adminCreateBooking — payment evidence', () => {
     expect(svcSrc).toContain('0x89, 0x50, 0x4E, 0x47'); // PNG
   });
 
-  it('enforces 15 MB size limit', () => {
-    expect(svcSrc).toContain('15 * 1024 * 1024');
+  it('enforces 7 MB size limit (body-parser cap is 10 MB JSON; 7 MB raw encodes to ~9.3 MB base64)', () => {
+    expect(svcSrc).toContain('7 * 1024 * 1024');
   });
 
   it('uses token-authenticated Firebase Storage (uploadFileToStorage)', () => {
