@@ -311,6 +311,38 @@ export const escalateBooking = async (req: Request, res: Response) => {
   }
 };
 
+export const confirmProviderAssignment = async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    const { providerUid, reason, consentMethod, consentReference } = req.body;
+    if (!id || isNaN(id))        return adminBadRequest(res, 'Invalid booking id');
+    if (!providerUid)            return adminBadRequest(res, 'providerUid is required');
+    if (!reason?.trim())         return adminBadRequest(res, 'reason is required');
+    if (!consentMethod)          return adminBadRequest(res, 'consentMethod is required');
+
+    const result = await svc.adminConfirmProviderAssignment(
+      id, providerUid, actorUid(req), reason, consentMethod, consentReference ?? null
+    );
+
+    await writeSuccess({
+      action: 'booking_provider_accepted_on_behalf',
+      actionCategory: 'booking',
+      actorUid: actorUid(req) ?? '',
+      entityType: 'booking',
+      entityId: String(id),
+      after: { providerUid, consentMethod },
+      reason: reason ?? null,
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
+    return res.json({ status: 'success', data: result });
+  } catch (err: any) {
+    return adminServerError(res, err);
+  }
+};
+
 export const approveCompletion = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);

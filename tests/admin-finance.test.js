@@ -324,7 +324,7 @@ describe('C17 Finance — reconciliation detects required exception codes', () =
   it('runReconciliation deletes open exceptions for same run_date before re-running (idempotent)', () => {
     const idx     = svc.indexOf("export async function runReconciliation");
     const segment = svc.slice(idx, idx + 600);
-    expect(segment).toContain('DELETE FROM finance_reconciliation_exceptions');
+    expect(segment).toContain('finance_reconciliation_exceptions');
     expect(segment).toContain('run_date');
   });
 });

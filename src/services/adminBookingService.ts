@@ -107,6 +107,14 @@ export const ensureBookingOpsSchema = async (): Promise<void> => {
     ALTER TABLE ${dbSchema}.booking_workers
     ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ DEFAULT NOW()
   `, []);
+
+  // Confirmation-on-behalf columns (admin can confirm acceptance for provider)
+  await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS confirmation_source   VARCHAR(40)`, []);
+  await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS admin_actor_uid       VARCHAR(256)`, []);
+  await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS consent_method        VARCHAR(30)`, []);
+  await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS consent_reference     TEXT`, []);
+  await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS confirmation_reason   TEXT`, []);
+  await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS confirmed_at          TIMESTAMPTZ`, []);
 };
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -503,6 +511,9 @@ export const getAdminBookingDetail = async (bookingId: number): Promise<any | nu
       assignedAt: assignment.assigned_at ?? null,
       startedAt: assignment.started_at ?? null,
       completedAt: assignment.completed_at ?? null,
+      confirmedAt: assignment.confirmed_at ?? null,
+      confirmationSource: assignment.confirmation_source ?? null,
+      consentMethod: assignment.consent_method ?? null,
     } : null,
     service: {
       serviceId: bk.service_id ?? null,
@@ -980,4 +991,99 @@ export const adminApproveCompletion = async (
   });
 
   return { bookingId, status: 'COMPLETED' };
+};
+
+// ─── Admin Confirm Provider Assignment (on behalf of provider) ────────────────
+
+const VALID_CONSENT_METHODS = ['verbal', 'written', 'chat_message'] as const;
+type ConsentMethod = typeof VALID_CONSENT_METHODS[number];
+
+export const adminConfirmProviderAssignment = async (
+  bookingId: number,
+  providerUid: string,
+  adminUid: string | null,
+  reason: string,
+  consentMethod: string,
+  consentReference: string | null
+): Promise<any> => {
+  if (!reason?.trim()) throw new Error('reason is required');
+  if (!VALID_CONSENT_METHODS.includes(consentMethod as ConsentMethod)) {
+    throw new Error('consentMethod must be verbal | written | chat_message');
+  }
+
+  const bkRes = await dbQuery.query(
+    `SELECT id, status, worker_uid FROM ${dbSchema}.bookings WHERE id = $1`,
+    [bookingId]
+  );
+  if (!bkRes.rowCount) throw new Error('Booking not found');
+  const bk = bkRes.rows[0];
+
+  const rawStatus = (bk.status ?? '').toUpperCase();
+  if (['CANCELLED', 'CANCELED', 'COMPLETED'].includes(rawStatus)) {
+    throw new Error(`Cannot confirm assignment — booking status is ${bk.status}`);
+  }
+  if (rawStatus === 'IN_PROGRESS') {
+    throw new Error('Booking is already in progress');
+  }
+
+  const bwRes = await dbQuery.query(
+    `SELECT worker_uid, status FROM ${dbSchema}.booking_workers
+     WHERE booking_id = $1
+     ORDER BY assigned_at DESC NULLS LAST
+     LIMIT 1`,
+    [bookingId]
+  );
+  if (!bwRes.rowCount) throw new Error('No provider assignment found for this booking');
+  const bw = bwRes.rows[0];
+
+  if (bw.worker_uid !== providerUid) {
+    throw new Error('providerUid does not match the currently assigned provider');
+  }
+  if (bw.status !== 'ASSIGNED') {
+    throw new Error(`Assignment cannot be confirmed — current status is ${bw.status}`);
+  }
+
+  const updateRes = await dbQuery.query(
+    `UPDATE ${dbSchema}.booking_workers
+     SET status              = 'ACCEPTED',
+         confirmation_source = 'admin_on_behalf_of_provider',
+         admin_actor_uid     = $1,
+         consent_method      = $2,
+         consent_reference   = $3,
+         confirmation_reason = $4,
+         confirmed_at        = NOW()
+     WHERE booking_id = $5
+       AND worker_uid = $6
+       AND status     = 'ASSIGNED'
+     RETURNING confirmed_at`,
+    [adminUid, consentMethod, consentReference ?? null, reason, bookingId, providerUid]
+  );
+
+  if (!updateRes.rowCount) {
+    throw new Error('Confirmation failed — assignment may have changed concurrently');
+  }
+
+  await addTimelineEvent(
+    bookingId,
+    'provider_acceptance_confirmed_by_admin',
+    'Provider acceptance confirmed by admin on behalf of provider',
+    reason, 'admin', adminUid,
+    { providerUid, consentMethod, consentReference: consentReference ?? null }
+  );
+
+  logBookingAudit({
+    bookingId, actorUid: adminUid, actorRole: 'admin',
+    action: 'booking_provider_accepted_on_behalf',
+    before: { assignmentStatus: 'ASSIGNED' },
+    after:  { assignmentStatus: 'ACCEPTED', confirmationSource: 'admin_on_behalf_of_provider', consentMethod },
+    reason,
+  });
+
+  return {
+    bookingId,
+    providerUid,
+    confirmationSource: 'admin_on_behalf_of_provider',
+    confirmedAt: updateRes.rows[0].confirmed_at,
+    consentMethod,
+  };
 };
