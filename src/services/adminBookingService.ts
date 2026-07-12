@@ -393,7 +393,7 @@ export const getAdminBookings = async (
       isUnassigned: !row.worker_uid,
       isLate,
       hasPaymentIssue: ['FAILED', 'REFUND_PENDING'].includes(row.payment_status ?? ''),
-      hasDispute: false,
+      hasDispute: opStatus === 'disputed',
       needsAdminAction: !row.worker_uid && ['new', 'awaiting_assignment'].includes(opStatus),
       createdAt: row.created_at ?? null,
       updatedAt: null,
