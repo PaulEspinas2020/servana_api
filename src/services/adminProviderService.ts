@@ -59,7 +59,7 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
   const params: any[] = [];
   const where: string[] = [];
 
-  where.push(`uc.role IN (2, 4)`);
+  where.push(`uc.role::int IN (2, 4)`);
 
   if (search) {
     params.push(`%${search.toLowerCase()}%`);
@@ -71,7 +71,7 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
 
   if (role !== undefined && role !== null) {
     params.push(role);
-    where.push(`uc.role = $${params.length}`);
+    where.push(`uc.role::int = $${params.length}`);
   }
 
   if (accountStatus) {
@@ -183,12 +183,12 @@ export const getProviderMetrics = async () => {
     // Base counts — distinct UIDs from user_credentials only
     dbQuery.query(
       `SELECT
-         COUNT(*) FILTER (WHERE role IN (2,4))                                                 AS total,
-         COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive=false AND account_status='active') AS active,
-         COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive=true)                             AS archived,
-         COUNT(*) FILTER (WHERE role IN (2,4) AND account_status='pending')                    AS pending_review,
-         COUNT(*) FILTER (WHERE role IN (2,4) AND account_status='suspended')                  AS suspended,
-         COUNT(*) FILTER (WHERE role IN (2,4) AND account_status IN ('rejected','deactivated')) AS rejected
+         COUNT(*) FILTER (WHERE role::int IN (2,4))                                                 AS total,
+         COUNT(*) FILTER (WHERE role::int IN (2,4) AND is_archive=false AND account_status='active') AS active,
+         COUNT(*) FILTER (WHERE role::int IN (2,4) AND is_archive=true)                             AS archived,
+         COUNT(*) FILTER (WHERE role::int IN (2,4) AND account_status='pending')                    AS pending_review,
+         COUNT(*) FILTER (WHERE role::int IN (2,4) AND account_status='suspended')                  AS suspended,
+         COUNT(*) FILTER (WHERE role::int IN (2,4) AND account_status IN ('rejected','deactivated')) AS rejected
        FROM ${s}.user_credentials`, []
     ),
     // Documents — count DISTINCT provider UIDs, not requirement rows
@@ -198,7 +198,7 @@ export const getProviderMetrics = async () => {
          COUNT(DISTINCT uc.uid) FILTER (WHERE wr.worker_uid IS NULL)     AS missing_docs
        FROM ${s}.user_credentials uc
        LEFT JOIN ${s}.worker_requirements wr ON wr.worker_uid = uc.uid
-       WHERE uc.role IN (2,4)`, []
+       WHERE uc.role::int IN (2,4)`, []
     ),
     // Service applications — count DISTINCT provider UIDs
     dbQuery.query(
@@ -207,20 +207,20 @@ export const getProviderMetrics = async () => {
          COUNT(DISTINCT CASE WHEN wsa.status='pending_review' THEN wsa.worker_uid END) AS with_pending_apps
        FROM ${s}.worker_service_applications wsa
        JOIN ${s}.user_credentials uc ON uc.uid = wsa.worker_uid
-       WHERE uc.role IN (2,4)`, []
+       WHERE uc.role::int IN (2,4)`, []
     ),
     // Active services — count DISTINCT provider UIDs via employee_services
     dbQuery.query(
       `SELECT COUNT(DISTINCT es.employee_uid) AS with_active_svc
        FROM ${s}.employee_services es
        JOIN ${s}.user_credentials uc ON uc.uid = es.employee_uid
-       WHERE uc.role IN (2,4)`, []
+       WHERE uc.role::int IN (2,4)`, []
     ),
     // Both active service AND pending application on same UID
     dbQuery.query(
       `SELECT COUNT(DISTINCT uc.uid) AS both
        FROM ${s}.user_credentials uc
-       WHERE uc.role IN (2,4)
+       WHERE uc.role::int IN (2,4)
          AND EXISTS (SELECT 1 FROM ${s}.employee_services es   WHERE es.employee_uid = uc.uid)
          AND EXISTS (SELECT 1 FROM ${s}.worker_service_applications wsa
                      WHERE wsa.worker_uid = uc.uid AND wsa.status = 'pending_review')`, []
@@ -229,14 +229,14 @@ export const getProviderMetrics = async () => {
     safeCount(
       `SELECT COUNT(DISTINCT uc.uid) AS cnt
        FROM ${s}.user_credentials uc
-       WHERE uc.role IN (2,4)
+       WHERE uc.role::int IN (2,4)
          AND NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa WHERE wa.worker_uid = uc.uid)`, []
     ),
     // Missing service area (defensive)
     safeCount(
       `SELECT COUNT(DISTINCT uc.uid) AS cnt
        FROM ${s}.user_credentials uc
-       WHERE uc.role IN (2,4)
+       WHERE uc.role::int IN (2,4)
          AND NOT EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa WHERE wsa.worker_uid = uc.uid)`, []
     ),
   ]);
@@ -564,7 +564,7 @@ export const getProviderEarningsSummary = async (uid: string) => {
     `SELECT
        COUNT(*) AS total_jobs,
        COALESCE(SUM(final_price), 0) AS total_gross,
-       COALESCE(SUM(final_price) FILTER (WHERE DATE_TRUNC('month', schedule) = DATE_TRUNC('month', NOW())), 0) AS this_month_gross
+       COALESCE(SUM(final_price) FILTER (WHERE schedule IS NOT NULL AND schedule::text <> '' AND DATE_TRUNC('month', schedule::text::timestamptz) = DATE_TRUNC('month', NOW())), 0) AS this_month_gross
      FROM ${dbSchema}.bookings
      WHERE worker_uid = $1 AND status = 'COMPLETED'`,
     [uid]
@@ -634,7 +634,7 @@ export const updateProviderAccountStatus = async (
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.user_credentials
      SET account_status = $1, updated_at = NOW()
-     WHERE uid = $2 AND role IN (2,4)
+     WHERE uid = $2 AND role::int IN (2,4)
      RETURNING uid, account_status, role`,
     [newStatus, uid]
   );
@@ -654,7 +654,7 @@ export const setProviderArchive = async (uid: string, isArchive: boolean) => {
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.user_credentials
      SET is_archive = $1, updated_at = NOW()
-     WHERE uid = $2 AND role IN (2,4)
+     WHERE uid = $2 AND role::int IN (2,4)
      RETURNING uid, is_archive, role`,
     [isArchive, uid]
   );
@@ -785,7 +785,7 @@ const _getDuplicateSummary = async (): Promise<DuplicateSummary> => {
     dbQuery.query(
       `SELECT COUNT(*) AS cnt FROM (
          SELECT email FROM ${s}.user_credentials
-         WHERE role IN (2,4) AND email IS NOT NULL AND email != ''
+         WHERE role::int IN (2,4) AND email IS NOT NULL AND email != ''
          GROUP BY LOWER(email) HAVING COUNT(DISTINCT uid) > 1
        ) x`, []
     ),
@@ -793,7 +793,7 @@ const _getDuplicateSummary = async (): Promise<DuplicateSummary> => {
     dbQuery.query(
       `SELECT COUNT(*) AS cnt FROM (
          SELECT phone_number FROM ${s}.user_credentials
-         WHERE role IN (2,4) AND phone_number IS NOT NULL AND phone_number != ''
+         WHERE role::int IN (2,4) AND phone_number IS NOT NULL AND phone_number != ''
          GROUP BY phone_number HAVING COUNT(DISTINCT uid) > 1
        ) x`, []
     ),
@@ -816,7 +816,7 @@ const _getDuplicateSummary = async (): Promise<DuplicateSummary> => {
     dbQuery.query(
       `SELECT COUNT(DISTINCT uc.uid) AS cnt
        FROM ${s}.user_credentials uc
-       WHERE uc.role NOT IN (2,4)
+       WHERE uc.role::int NOT IN (2,4)
          AND (
            EXISTS (SELECT 1 FROM ${s}.employee_services es     WHERE es.employee_uid = uc.uid)
         OR EXISTS (SELECT 1 FROM ${s}.worker_service_applications wsa WHERE wsa.worker_uid = uc.uid)
@@ -873,7 +873,7 @@ export const getProviderDuplicates = async (): Promise<ProviderDuplicateReport> 
     dbQuery.query(
       `SELECT LOWER(email) AS email, array_agg(uid ORDER BY created_date) AS uids, COUNT(*) AS cnt
        FROM ${s}.user_credentials
-       WHERE role IN (2,4) AND email IS NOT NULL AND email != ''
+       WHERE role::int IN (2,4) AND email IS NOT NULL AND email != ''
        GROUP BY LOWER(email) HAVING COUNT(DISTINCT uid) > 1
        ORDER BY cnt DESC LIMIT 100`, []
     ),
@@ -881,7 +881,7 @@ export const getProviderDuplicates = async (): Promise<ProviderDuplicateReport> 
     dbQuery.query(
       `SELECT phone_number, array_agg(uid ORDER BY created_date) AS uids, COUNT(*) AS cnt
        FROM ${s}.user_credentials
-       WHERE role IN (2,4) AND phone_number IS NOT NULL AND phone_number != ''
+       WHERE role::int IN (2,4) AND phone_number IS NOT NULL AND phone_number != ''
        GROUP BY phone_number HAVING COUNT(DISTINCT uid) > 1
        ORDER BY cnt DESC LIMIT 100`, []
     ),
@@ -912,7 +912,7 @@ export const getProviderDuplicates = async (): Promise<ProviderDuplicateReport> 
               EXISTS (SELECT 1 FROM ${s}.employee_services es WHERE es.employee_uid = uc.uid) AS has_active_svc,
               EXISTS (SELECT 1 FROM ${s}.worker_service_applications wsa WHERE wsa.worker_uid = uc.uid) AS has_apps
        FROM ${s}.user_credentials uc
-       WHERE uc.role NOT IN (2,4)
+       WHERE uc.role::int NOT IN (2,4)
          AND (
            EXISTS (SELECT 1 FROM ${s}.employee_services es WHERE es.employee_uid = uc.uid)
         OR EXISTS (SELECT 1 FROM ${s}.worker_service_applications wsa WHERE wsa.worker_uid = uc.uid)
@@ -923,7 +923,7 @@ export const getProviderDuplicates = async (): Promise<ProviderDuplicateReport> 
     dbQuery.query(
       `SELECT es.uid
        FROM (SELECT DISTINCT employee_uid AS uid FROM ${s}.employee_services) es
-       JOIN ${s}.user_credentials uc ON uc.uid = es.uid AND uc.role IN (2,4)
+       JOIN ${s}.user_credentials uc ON uc.uid = es.uid AND uc.role::int IN (2,4)
        WHERE NOT EXISTS (
          SELECT 1 FROM ${s}.worker_service_applications wsa
          WHERE wsa.worker_uid = es.uid AND wsa.status = 'approved'
