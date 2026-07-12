@@ -869,7 +869,7 @@ export const adminCancelBooking = async (
   }
 
   await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET status = 'CANCELLED' WHERE id = $1`,
+    `UPDATE ${dbSchema}.bookings SET status = 'CANCELLED', cancelled_at = NOW() WHERE id = $1`,
     [bookingId]
   );
 

@@ -153,6 +153,11 @@ const FALLBACK_ONBOARDING: AdminOnboardingHealth = {
 export const getOperationsDashboard = async (): Promise<AdminDashboardOperations> => {
   const now = new Date();
 
+  // Ensure cancelled_at column exists on bookings (added after initial schema)
+  try {
+    await dbQuery.query(`ALTER TABLE ${s}.bookings ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
+  } catch { /* no-op if already exists or insufficient privilege */ }
+
   // ── Core query: bookings + payments + providers + customers ────────────────
   const mainSql = `
     WITH
@@ -168,8 +173,9 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
       lw AS (
         SELECT DISTINCT ON (bw.booking_id)
           bw.booking_id,
-          bw.status    AS worker_status,
-          bw.assigned_at
+          bw.status        AS worker_status,
+          bw.assigned_at,
+          bw.completed_at  AS worker_completed_at
         FROM ${s}.booking_workers bw
         ORDER BY bw.booking_id, bw.assigned_at DESC NULLS LAST
       ),
@@ -205,6 +211,8 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
           b.user_id,
           b.status      AS raw_status,
           b.worker_uid,
+          b.cancelled_at,
+          lw.worker_completed_at,
           lp.pay_status,
           lp.pay_method,
           lp.proof_url,
@@ -238,10 +246,10 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
           COUNT(DISTINCT booking_id) FILTER (WHERE ops_status = 'awaiting_assignment')            AS unassigned_jobs,
           COUNT(DISTINCT booking_id) FILTER (WHERE ops_status IN ('in_progress','accepted'))      AS in_progress_jobs,
           COUNT(DISTINCT booking_id) FILTER (WHERE ops_status = 'completed'
-            AND (created_at AT TIME ZONE 'Asia/Manila')::date = (SELECT day_start::date FROM dr)) AS completed_today,
+            AND (COALESCE(worker_completed_at, created_at) AT TIME ZONE 'Asia/Manila')::date = (SELECT day_start::date FROM dr)) AS completed_today,
           COUNT(DISTINCT booking_id) FILTER (WHERE ops_status = 'disputed')                       AS disputes,
           COUNT(DISTINCT booking_id) FILTER (WHERE ops_status = 'cancelled'
-            AND (created_at AT TIME ZONE 'Asia/Manila')::date = (SELECT day_start::date FROM dr)) AS cancellations_today,
+            AND (COALESCE(cancelled_at, created_at) AT TIME ZONE 'Asia/Manila')::date = (SELECT day_start::date FROM dr)) AS cancellations_today,
           COUNT(DISTINCT booking_id) FILTER (WHERE pay_status = 'PENDING'
             AND pay_method = 'GCASH' AND proof_url IS NOT NULL)                                   AS gcash_awaiting,
           COUNT(DISTINCT booking_id) FILTER (WHERE pay_method = 'CASH'

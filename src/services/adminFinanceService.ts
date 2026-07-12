@@ -1,9 +1,11 @@
-import dbQuery from '../db/dbQuery';
+﻿import dbQuery from '../db/dbQuery';
 import { db } from '../config';
 import { auditFire } from './adminAuditService';
 import { toCamel } from '../helpers/idGenerator';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
+
+const s = db.schema;
 
 const SERVANA_COMMISSION = 0.20;
 const WORKER_SHARE_RATE  = 0.80;
@@ -15,30 +17,29 @@ const PAYOUT_MAX_RETRIES = 3;
 // ── Schema bootstrap ──────────────────────────────────────────────────────────
 
 export async function ensureFinanceSchema(): Promise<void> {
-  const s = db.schema;
 
   // ── New columns on payments ────────────────────────────────────────────────
   const paymentCols = [
-    'ALTER TABLE payments ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ',
-    'ALTER TABLE payments ADD COLUMN IF NOT EXISTS reviewed_by TEXT',
-    'ALTER TABLE payments ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ',
-    'ALTER TABLE payments ADD COLUMN IF NOT EXISTS rejection_reason TEXT',
-    'ALTER TABLE payments ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ',
+    `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ`,
+    `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS reviewed_by TEXT`,
+    `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ`,
+    `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS rejection_reason TEXT`,
+    `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ`,
   ];
   for (const sql of paymentCols) await dbQuery.query(sql);
 
   // ── New column on user_credentials ────────────────────────────────────────
   await dbQuery.query(
-    'ALTER TABLE user_credentials ADD COLUMN IF NOT EXISTS is_internal_fixer BOOLEAN DEFAULT false'
+    `ALTER TABLE ${s}.user_credentials ADD COLUMN IF NOT EXISTS is_internal_fixer BOOLEAN DEFAULT false`
   );
 
   // ── New columns on disbursements ──────────────────────────────────────────
   const disburse = [
-    'ALTER TABLE disbursements ADD COLUMN IF NOT EXISTS hold_reason TEXT',
-    'ALTER TABLE disbursements ADD COLUMN IF NOT EXISTS hold_until TIMESTAMPTZ',
-    'ALTER TABLE disbursements ADD COLUMN IF NOT EXISTS held_by TEXT',
-    'ALTER TABLE disbursements ADD COLUMN IF NOT EXISTS retry_count INT DEFAULT 0',
-    'ALTER TABLE disbursements ADD COLUMN IF NOT EXISTS last_retry_at TIMESTAMPTZ',
+    `ALTER TABLE ${s}.disbursements ADD COLUMN IF NOT EXISTS hold_reason TEXT`,
+    `ALTER TABLE ${s}.disbursements ADD COLUMN IF NOT EXISTS hold_until TIMESTAMPTZ`,
+    `ALTER TABLE ${s}.disbursements ADD COLUMN IF NOT EXISTS held_by TEXT`,
+    `ALTER TABLE ${s}.disbursements ADD COLUMN IF NOT EXISTS retry_count INT DEFAULT 0`,
+    `ALTER TABLE ${s}.disbursements ADD COLUMN IF NOT EXISTS last_retry_at TIMESTAMPTZ`,
   ];
   for (const sql of disburse) await dbQuery.query(sql);
 
@@ -46,8 +47,8 @@ export async function ensureFinanceSchema(): Promise<void> {
   await dbQuery.query(`
     CREATE TABLE IF NOT EXISTS ${s}.finance_ledger_entries (
       id                  SERIAL PRIMARY KEY,
-      booking_id          INT NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
-      payment_id          INT REFERENCES payments(id) ON DELETE SET NULL,
+      booking_id          INT NOT NULL REFERENCES ${s}.bookings(id) ON DELETE CASCADE,
+      payment_id          INT REFERENCES ${s}.payments(id) ON DELETE SET NULL,
       provider_uid        TEXT,
       is_internal_fixer   BOOLEAN NOT NULL DEFAULT false,
       gross_amount        NUMERIC(12,2) NOT NULL,
@@ -75,9 +76,9 @@ export async function ensureFinanceSchema(): Promise<void> {
   await dbQuery.query(`
     CREATE TABLE IF NOT EXISTS ${s}.finance_refund_reviews (
       id                      SERIAL PRIMARY KEY,
-      booking_id              INT NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
-      payment_id              INT REFERENCES payments(id) ON DELETE SET NULL,
-      disbursement_id         INT REFERENCES disbursements(id) ON DELETE SET NULL,
+      booking_id              INT NOT NULL REFERENCES ${s}.bookings(id) ON DELETE CASCADE,
+      payment_id              INT REFERENCES ${s}.payments(id) ON DELETE SET NULL,
+      disbursement_id         INT REFERENCES ${s}.disbursements(id) ON DELETE SET NULL,
       amount                  NUMERIC(12,2) NOT NULL,
       currency                TEXT NOT NULL DEFAULT 'PHP',
       status                  TEXT NOT NULL DEFAULT 'requested',
@@ -114,9 +115,9 @@ export async function ensureFinanceSchema(): Promise<void> {
       run_date         DATE NOT NULL DEFAULT CURRENT_DATE,
       exception_code   TEXT NOT NULL,
       severity         TEXT NOT NULL DEFAULT 'warning',
-      booking_id       INT REFERENCES bookings(id) ON DELETE SET NULL,
-      payment_id       INT REFERENCES payments(id) ON DELETE SET NULL,
-      disbursement_id  INT REFERENCES disbursements(id) ON DELETE SET NULL,
+      booking_id       INT REFERENCES ${s}.bookings(id) ON DELETE SET NULL,
+      payment_id       INT REFERENCES ${s}.payments(id) ON DELETE SET NULL,
+      disbursement_id  INT REFERENCES ${s}.disbursements(id) ON DELETE SET NULL,
       amount           NUMERIC(12,2),
       description      TEXT NOT NULL,
       status           TEXT NOT NULL DEFAULT 'open',
@@ -179,30 +180,30 @@ export async function getFinanceSummary(): Promise<{
   const [pToday, rev, gcash, payouts, refunds, exceptions, totalPaid, released] =
     await Promise.all([
       dbQuery.query(
-        `SELECT COALESCE(SUM(amount),0) AS v FROM payments WHERE status='PAID' AND paid_at >= $1`,
+        `SELECT COALESCE(SUM(amount),0) AS v FROM ${s}.payments WHERE status='PAID' AND paid_at >= $1`,
         [todayStart]
       ),
       dbQuery.query(
-        `SELECT COALESCE(SUM(servana_revenue),0) AS v FROM finance_ledger_entries
+        `SELECT COALESCE(SUM(servana_revenue),0) AS v FROM ${s}.finance_ledger_entries
          WHERE created_at >= date_trunc('month', NOW())`
       ),
       dbQuery.query(
-        `SELECT COUNT(*) AS v FROM payments WHERE method='GCASH' AND status='PENDING'`
+        `SELECT COUNT(*) AS v FROM ${s}.payments WHERE method='GCASH' AND status='PENDING'`
       ),
       dbQuery.query(
-        `SELECT COUNT(*) AS v FROM disbursements WHERE status='PENDING'`
+        `SELECT COUNT(*) AS v FROM ${s}.disbursements WHERE status='PENDING'`
       ),
       dbQuery.query(
-        `SELECT COUNT(*) AS v FROM finance_refund_reviews WHERE status IN ('requested','approved')`
+        `SELECT COUNT(*) AS v FROM ${s}.finance_refund_reviews WHERE status IN ('requested','approved')`
       ),
       dbQuery.query(
-        `SELECT COUNT(*) AS v FROM finance_reconciliation_exceptions WHERE status='open'`
+        `SELECT COUNT(*) AS v FROM ${s}.finance_reconciliation_exceptions WHERE status='open'`
       ),
       dbQuery.query(
-        `SELECT COALESCE(SUM(amount),0) AS v FROM payments WHERE status='PAID'`
+        `SELECT COALESCE(SUM(amount),0) AS v FROM ${s}.payments WHERE status='PAID'`
       ),
       dbQuery.query(
-        `SELECT COUNT(*) AS v FROM disbursements WHERE status='RELEASED'`
+        `SELECT COUNT(*) AS v FROM ${s}.disbursements WHERE status='RELEASED'`
       ),
     ]);
 
@@ -266,7 +267,7 @@ export async function listPayments(filter: PaymentFilter = {}): Promise<{
   const { where, params } = buildPaymentWhere(filter);
 
   const countR = await dbQuery.query(
-    `SELECT COUNT(*) AS v FROM payments p LEFT JOIN bookings b ON b.id = p.booking_id ${where}`,
+    `SELECT COUNT(*) AS v FROM ${s}.payments p LEFT JOIN ${s}.bookings b ON b.id = p.booking_id ${where}`,
     params
   );
   const total = toNum(countR.rows[0]?.v);
@@ -279,8 +280,8 @@ export async function listPayments(filter: PaymentFilter = {}): Promise<{
        p.paid_at, p.refunded_at, p.refund_reference, p.updated_at,
        p.reviewed_by, p.reviewed_at, p.rejection_reason, p.rejected_at, p.submitted_at,
        b.booking_reference
-     FROM payments p
-     LEFT JOIN bookings b ON b.id = p.booking_id
+     FROM ${s}.payments p
+     LEFT JOIN ${s}.bookings b ON b.id = p.booking_id
      ${where}
      ORDER BY p.updated_at DESC
      LIMIT $${dParams.length - 1} OFFSET $${dParams.length}`,
@@ -295,8 +296,8 @@ export async function getPaymentDetail(paymentId: number): Promise<unknown> {
     `SELECT
        p.*, b.booking_reference, b.status AS booking_status,
        le.servana_revenue, le.provider_payable, le.is_internal_fixer
-     FROM payments p
-     LEFT JOIN bookings b ON b.id = p.booking_id
+     FROM ${s}.payments p
+     LEFT JOIN ${s}.bookings b ON b.id = p.booking_id
      LEFT JOIN finance_ledger_entries le ON le.payment_id = p.id
      WHERE p.id = $1
      LIMIT 1`,
@@ -312,8 +313,8 @@ export async function listGcashPendingQueue(): Promise<unknown[]> {
        p.submitted_at, p.updated_at,
        b.booking_reference,
        EXTRACT(EPOCH FROM (NOW() - COALESCE(p.submitted_at, p.updated_at)))/3600 AS hours_pending
-     FROM payments p
-     LEFT JOIN bookings b ON b.id = p.booking_id
+     FROM ${s}.payments p
+     LEFT JOIN ${s}.bookings b ON b.id = p.booking_id
      WHERE p.method = 'GCASH' AND p.status = 'PENDING'
      ORDER BY p.updated_at ASC`
   );
@@ -330,7 +331,7 @@ export async function approveGcashPayment(
   ipAddress: string | null
 ): Promise<{ bookingId: number; amount: number }> {
   const existing = await dbQuery.query(
-    `SELECT id, booking_id, amount, status, method FROM payments WHERE id = $1 LIMIT 1`,
+    `SELECT id, booking_id, amount, status, method FROM ${s}.payments WHERE id = $1 LIMIT 1`,
     [paymentId]
   );
   const pay = existing.rows[0];
@@ -344,7 +345,7 @@ export async function approveGcashPayment(
     );
 
   const res = await dbQuery.query(
-    `UPDATE payments
+    `UPDATE ${s}.payments
      SET status='PAID', paid_at=NOW(), reviewed_by=$2, reviewed_at=NOW(), updated_at=NOW()
      WHERE id=$1 AND status='PENDING'
      RETURNING id, booking_id, amount`,
@@ -391,7 +392,7 @@ export async function rejectGcashPayment(
   ipAddress: string | null
 ): Promise<{ bookingId: number }> {
   const existing = await dbQuery.query(
-    `SELECT id, booking_id, status, method FROM payments WHERE id = $1 LIMIT 1`,
+    `SELECT id, booking_id, status, method FROM ${s}.payments WHERE id = $1 LIMIT 1`,
     [paymentId]
   );
   const pay = existing.rows[0];
@@ -405,7 +406,7 @@ export async function rejectGcashPayment(
     );
 
   const res = await dbQuery.query(
-    `UPDATE payments
+    `UPDATE ${s}.payments
      SET status='REJECTED', rejected_at=NOW(), rejection_reason=$2,
          reviewed_by=$3, reviewed_at=NOW(), updated_at=NOW()
      WHERE id=$1 AND status='PENDING'
@@ -446,7 +447,7 @@ export async function adminConfirmCash(
   ipAddress: string | null
 ): Promise<{ bookingId: number; amount: number }> {
   const existing = await dbQuery.query(
-    `SELECT id, booking_id, amount, status, method FROM payments WHERE id = $1 LIMIT 1`,
+    `SELECT id, booking_id, amount, status, method FROM ${s}.payments WHERE id = $1 LIMIT 1`,
     [paymentId]
   );
   const pay = existing.rows[0];
@@ -457,7 +458,7 @@ export async function adminConfirmCash(
     throw Object.assign(new Error('Cash payment already confirmed'), { code: 'BUSINESS_RULE' });
 
   const res = await dbQuery.query(
-    `UPDATE payments
+    `UPDATE ${s}.payments
      SET status='PAID', paid_at=NOW(), reviewed_by=$2, reviewed_at=NOW(), updated_at=NOW()
      WHERE id=$1 AND status != 'PAID'
      RETURNING id, booking_id, amount`,
@@ -509,8 +510,8 @@ export async function createLedgerEntry(opts: LedgerEntryOpts): Promise<number> 
   // Look up provider uid + is_internal_fixer for this booking
   const bRes = await dbQuery.query(
     `SELECT b.worker_uid, COALESCE(uc.is_internal_fixer, false) AS is_internal_fixer
-     FROM bookings b
-     LEFT JOIN user_credentials uc ON uc.uid = b.worker_uid
+     FROM ${s}.bookings b
+     LEFT JOIN ${s}.user_credentials uc ON uc.uid = b.worker_uid
      WHERE b.id = $1 LIMIT 1`,
     [opts.bookingId]
   );
@@ -522,7 +523,7 @@ export async function createLedgerEntry(opts: LedgerEntryOpts): Promise<number> 
     computeRevenueSplit(opts.grossAmount, isInternalFixer);
 
   const ins = await dbQuery.query(
-    `INSERT INTO finance_ledger_entries
+    `INSERT INTO ${s}.finance_ledger_entries
        (booking_id, payment_id, provider_uid, is_internal_fixer,
         gross_amount, servana_revenue, provider_payable, commission_rate,
         recognition_status, source, created_by)
@@ -564,14 +565,14 @@ export async function listLedgerEntries(filter: {
 
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
-  const countR = await dbQuery.query(`SELECT COUNT(*) AS v FROM finance_ledger_entries ${where}`, params);
+  const countR = await dbQuery.query(`SELECT COUNT(*) AS v FROM ${s}.finance_ledger_entries ${where}`, params);
   const total  = toNum(countR.rows[0]?.v);
 
   const dp = [...params, limit, offset];
   const dataR = await dbQuery.query(
     `SELECT le.*, b.booking_reference
-     FROM finance_ledger_entries le
-     LEFT JOIN bookings b ON b.id = le.booking_id
+     FROM ${s}.finance_ledger_entries le
+     LEFT JOIN ${s}.bookings b ON b.id = le.booking_id
      ${where}
      ORDER BY le.created_at DESC
      LIMIT $${dp.length - 1} OFFSET $${dp.length}`,
@@ -584,8 +585,8 @@ export async function listLedgerEntries(filter: {
 export async function getBookingLedger(bookingId: number): Promise<unknown[]> {
   const r = await dbQuery.query(
     `SELECT le.*, p.method AS payment_method, p.status AS payment_status
-     FROM finance_ledger_entries le
-     LEFT JOIN payments p ON p.id = le.payment_id
+     FROM ${s}.finance_ledger_entries le
+     LEFT JOIN ${s}.payments p ON p.id = le.payment_id
      WHERE le.booking_id = $1
      ORDER BY le.created_at DESC`,
     [bookingId]
@@ -625,7 +626,7 @@ export async function listPayouts(filter: PayoutFilter = {}): Promise<{
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
   const countR = await dbQuery.query(
-    `SELECT COUNT(*) AS v FROM disbursements d ${where}`, params
+    `SELECT COUNT(*) AS v FROM ${s}.disbursements d ${where}`, params
   );
   const total = toNum(countR.rows[0]?.v);
 
@@ -638,9 +639,9 @@ export async function listPayouts(filter: PayoutFilter = {}): Promise<{
        d.hold_reason, d.hold_until, d.held_by, d.retry_count, d.last_retry_at,
        b.booking_reference,
        COALESCE(uc.is_internal_fixer, false) AS is_internal_fixer
-     FROM disbursements d
-     LEFT JOIN bookings b ON b.id = d.booking_id
-     LEFT JOIN user_credentials uc ON uc.uid = d.worker_uid
+     FROM ${s}.disbursements d
+     LEFT JOIN ${s}.bookings b ON b.id = d.booking_id
+     LEFT JOIN ${s}.user_credentials uc ON uc.uid = d.worker_uid
      ${where}
      ORDER BY d.created_at DESC
      LIMIT $${dp.length - 1} OFFSET $${dp.length}`,
@@ -655,10 +656,10 @@ export async function getPayoutDetail(disbursementId: number): Promise<unknown> 
     `SELECT d.*, b.booking_reference, b.status AS booking_status,
             COALESCE(uc.is_internal_fixer, false) AS is_internal_fixer,
             p.status AS payment_status, p.amount AS payment_amount
-     FROM disbursements d
-     LEFT JOIN bookings b ON b.id = d.booking_id
-     LEFT JOIN user_credentials uc ON uc.uid = d.worker_uid
-     LEFT JOIN payments p ON p.booking_id = d.booking_id AND p.status = 'PAID'
+     FROM ${s}.disbursements d
+     LEFT JOIN ${s}.bookings b ON b.id = d.booking_id
+     LEFT JOIN ${s}.user_credentials uc ON uc.uid = d.worker_uid
+     LEFT JOIN ${s}.payments p ON p.booking_id = d.booking_id AND p.status = 'PAID'
      WHERE d.id = $1 LIMIT 1`,
     [disbursementId]
   );
@@ -674,7 +675,7 @@ export async function holdPayout(
   requestId: string | null
 ): Promise<void> {
   const res = await dbQuery.query(
-    `UPDATE disbursements
+    `UPDATE ${s}.disbursements
      SET hold_reason=$2, hold_until=$3, held_by=$4, updated_at=NOW()
      WHERE id=$1 AND status='PENDING'
      RETURNING id, booking_id`,
@@ -709,7 +710,7 @@ export async function releasePayoutHold(
   requestId: string | null
 ): Promise<void> {
   const res = await dbQuery.query(
-    `UPDATE disbursements
+    `UPDATE ${s}.disbursements
      SET hold_reason=NULL, hold_until=NULL, held_by=NULL, updated_at=NOW()
      WHERE id=$1 AND hold_reason IS NOT NULL
      RETURNING id, booking_id`,
@@ -740,7 +741,7 @@ export async function retryPayout(
   requestId: string | null
 ): Promise<void> {
   const cur = await dbQuery.query(
-    `SELECT id, booking_id, status, retry_count, is_internal_fixer_job FROM disbursements WHERE id=$1 LIMIT 1`,
+    `SELECT id, booking_id, status, retry_count, is_internal_fixer_job FROM ${s}.disbursements WHERE id=$1 LIMIT 1`,
     [disbursementId]
   );
   const d = cur.rows[0];
@@ -756,7 +757,7 @@ export async function retryPayout(
   }
 
   await dbQuery.query(
-    `UPDATE disbursements
+    `UPDATE ${s}.disbursements
      SET status='PENDING', payout_error=NULL,
          retry_count=COALESCE(retry_count,0)+1, last_retry_at=NOW(), updated_at=NOW()
      WHERE id=$1`,
@@ -787,7 +788,7 @@ export async function setInternalFixer(
   requestId: string | null
 ): Promise<void> {
   const res = await dbQuery.query(
-    `UPDATE user_credentials SET is_internal_fixer=$2, updated_at=NOW()
+    `UPDATE ${s}.user_credentials SET is_internal_fixer=$2, updated_at=NOW()
      WHERE uid=$1 RETURNING uid`,
     [providerUid, isInternalFixer]
   );
@@ -830,7 +831,7 @@ export async function openRefundReview(
 ): Promise<number> {
   // Check if there's an existing open refund for this booking
   const dup = await dbQuery.query(
-    `SELECT id FROM finance_refund_reviews WHERE booking_id=$1 AND status IN ('requested','approved') LIMIT 1`,
+    `SELECT id FROM ${s}.finance_refund_reviews WHERE booking_id=$1 AND status IN ('requested','approved') LIMIT 1`,
     [body.bookingId]
   );
   if (dup.rows.length) {
@@ -842,13 +843,13 @@ export async function openRefundReview(
 
   // Check if the paid payment has an associated disbursement that is RELEASED
   const disbRes = await dbQuery.query(
-    `SELECT id FROM disbursements WHERE booking_id=$1 AND status='RELEASED' LIMIT 1`,
+    `SELECT id FROM ${s}.disbursements WHERE booking_id=$1 AND status='RELEASED' LIMIT 1`,
     [body.bookingId]
   );
   const payoutReversalNeeded = disbRes.rows.length > 0;
 
   const ins = await dbQuery.query(
-    `INSERT INTO finance_refund_reviews
+    `INSERT INTO ${s}.finance_refund_reviews
        (booking_id, payment_id, amount, reason, customer_uid, customer_name,
         requested_by, refund_method, payout_reversal_needed, notes)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
@@ -900,16 +901,16 @@ export async function listRefundReviews(filter: {
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
   const countR = await dbQuery.query(
-    `SELECT COUNT(*) AS v FROM finance_refund_reviews rr ${where}`, params
+    `SELECT COUNT(*) AS v FROM ${s}.finance_refund_reviews rr ${where}`, params
   );
   const total = toNum(countR.rows[0]?.v);
 
   const dp = [...params, limit, offset];
   const dataR = await dbQuery.query(
     `SELECT rr.*, b.booking_reference, p.method AS payment_method
-     FROM finance_refund_reviews rr
-     LEFT JOIN bookings b ON b.id = rr.booking_id
-     LEFT JOIN payments p ON p.id = rr.payment_id
+     FROM ${s}.finance_refund_reviews rr
+     LEFT JOIN ${s}.bookings b ON b.id = rr.booking_id
+     LEFT JOIN ${s}.payments p ON p.id = rr.payment_id
      ${where}
      ORDER BY rr.created_at DESC
      LIMIT $${dp.length - 1} OFFSET $${dp.length}`,
@@ -924,10 +925,10 @@ export async function getRefundReview(refundId: number): Promise<unknown> {
     `SELECT rr.*, b.booking_reference, b.status AS booking_status,
             p.method AS payment_method, p.amount AS payment_amount, p.status AS payment_status,
             d.status AS disbursement_status, d.paymongo_payout_id
-     FROM finance_refund_reviews rr
-     LEFT JOIN bookings b ON b.id = rr.booking_id
-     LEFT JOIN payments p ON p.id = rr.payment_id
-     LEFT JOIN disbursements d ON d.id = rr.disbursement_id
+     FROM ${s}.finance_refund_reviews rr
+     LEFT JOIN ${s}.bookings b ON b.id = rr.booking_id
+     LEFT JOIN ${s}.payments p ON p.id = rr.payment_id
+     LEFT JOIN ${s}.disbursements d ON d.id = rr.disbursement_id
      WHERE rr.id = $1 LIMIT 1`,
     [refundId]
   );
@@ -941,7 +942,7 @@ export async function approveRefund(
   requestId: string | null
 ): Promise<void> {
   const res = await dbQuery.query(
-    `UPDATE finance_refund_reviews
+    `UPDATE ${s}.finance_refund_reviews
      SET status='approved', reviewed_by=$2, reviewed_at=NOW(), updated_at=NOW()
      WHERE id=$1 AND status='requested'
      RETURNING id, booking_id, amount, payout_reversal_needed`,
@@ -974,7 +975,7 @@ export async function rejectRefund(
   requestId: string | null
 ): Promise<void> {
   const res = await dbQuery.query(
-    `UPDATE finance_refund_reviews
+    `UPDATE ${s}.finance_refund_reviews
      SET status='rejected', reviewed_by=$2, reviewed_at=NOW(),
          rejection_reason=$3, updated_at=NOW()
      WHERE id=$1 AND status IN ('requested','approved')
@@ -1008,7 +1009,7 @@ export async function markRefundProcessed(
   requestId: string | null
 ): Promise<void> {
   const res = await dbQuery.query(
-    `UPDATE finance_refund_reviews
+    `UPDATE ${s}.finance_refund_reviews
      SET status='processed', refund_reference=$2, processed_at=NOW(), updated_at=NOW()
      WHERE id=$1 AND status='approved'
      RETURNING id, booking_id, payment_id, amount`,
@@ -1025,7 +1026,7 @@ export async function markRefundProcessed(
   // Update the payment record to reflect the refund
   if (rr.payment_id) {
     await dbQuery.query(
-      `UPDATE payments
+      `UPDATE ${s}.payments
        SET refunded_at=NOW(), refund_reference=$2, updated_at=NOW()
        WHERE id=$1`,
       [rr.payment_id, refundReference]
@@ -1060,7 +1061,7 @@ interface ExceptionInput {
 
 async function insertException(exc: ExceptionInput): Promise<void> {
   await dbQuery.query(
-    `INSERT INTO finance_reconciliation_exceptions
+    `INSERT INTO ${s}.finance_reconciliation_exceptions
        (exception_code, severity, booking_id, payment_id, disbursement_id, amount, description)
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
     [
@@ -1085,7 +1086,7 @@ export async function runReconciliation(
 
   // Close open exceptions from previous run if same date (idempotent re-run)
   await dbQuery.query(
-    `DELETE FROM finance_reconciliation_exceptions WHERE run_date = $1 AND status = 'open'`,
+    `DELETE FROM ${s}.finance_reconciliation_exceptions WHERE run_date = $1 AND status = 'open'`,
     [runDate]
   );
 
@@ -1095,7 +1096,7 @@ export async function runReconciliation(
       const r = await dbQuery.query(
         `SELECT p.id, p.booking_id, p.amount,
                 EXTRACT(EPOCH FROM (NOW() - COALESCE(p.submitted_at, p.updated_at)))/3600 AS hrs
-         FROM payments p
+         FROM ${s}.payments p
          WHERE p.method='GCASH' AND p.status='PENDING'
            AND COALESCE(p.submitted_at, p.updated_at) < NOW() - INTERVAL '${GCASH_SLA_HOURS} hours'`
       );
@@ -1116,7 +1117,7 @@ export async function runReconciliation(
     async () => {
       const r = await dbQuery.query(
         `SELECT p.id, p.booking_id, p.amount
-         FROM payments p
+         FROM ${s}.payments p
          WHERE p.method='CASH' AND p.status != 'PAID'
            AND p.updated_at < NOW() - INTERVAL '${CASH_SLA_HOURS} hours'`
       );
@@ -1136,10 +1137,10 @@ export async function runReconciliation(
     // 3. PayMongo FAILED payments
     async () => {
       const r = await dbQuery.query(
-        `SELECT p.id, p.booking_id, p.amount FROM payments p
+        `SELECT p.id, p.booking_id, p.amount FROM ${s}.payments p
          WHERE p.provider='PAYMONGO' AND p.status='FAILED'
            AND NOT EXISTS (
-             SELECT 1 FROM finance_reconciliation_exceptions e
+             SELECT 1 FROM ${s}.finance_reconciliation_exceptions e
              WHERE e.payment_id = p.id AND e.exception_code='PAYMONGO_FAILED_PAYMENT'
                AND e.status NOT IN ('open')
            )`
@@ -1160,7 +1161,7 @@ export async function runReconciliation(
     // 4. PayMongo checkout without final status (stale)
     async () => {
       const r = await dbQuery.query(
-        `SELECT p.id, p.booking_id, p.amount FROM payments p
+        `SELECT p.id, p.booking_id, p.amount FROM ${s}.payments p
          WHERE p.provider='PAYMONGO' AND p.checkout_url IS NOT NULL
            AND p.status NOT IN ('PAID','FAILED','CANCELLED','REJECTED')
            AND p.updated_at < NOW() - INTERVAL '${PAYMONGO_STALE_HOURS} hours'`
@@ -1181,10 +1182,10 @@ export async function runReconciliation(
     // 5. Released payout without a PAID payment
     async () => {
       const r = await dbQuery.query(
-        `SELECT d.id, d.booking_id, d.worker_share FROM disbursements d
+        `SELECT d.id, d.booking_id, d.worker_share FROM ${s}.disbursements d
          WHERE d.status='RELEASED'
            AND NOT EXISTS (
-             SELECT 1 FROM payments p WHERE p.booking_id=d.booking_id AND p.status='PAID'
+             SELECT 1 FROM ${s}.payments p WHERE p.booking_id=d.booking_id AND p.status='PAID'
            )`
       );
       for (const row of r.rows) {
@@ -1204,7 +1205,7 @@ export async function runReconciliation(
     async () => {
       const r = await dbQuery.query(
         `SELECT booking_id, COUNT(*) AS cnt, SUM(worker_share) AS total
-         FROM disbursements
+         FROM ${s}.disbursements
          WHERE status IN ('PENDING','RELEASED')
          GROUP BY booking_id
          HAVING COUNT(*) > 1`
@@ -1225,8 +1226,8 @@ export async function runReconciliation(
     async () => {
       const r = await dbQuery.query(
         `SELECT d.id, d.booking_id, d.worker_uid, d.worker_share
-         FROM disbursements d
-         JOIN user_credentials uc ON uc.uid = d.worker_uid
+         FROM ${s}.disbursements d
+         JOIN ${s}.user_credentials uc ON uc.uid = d.worker_uid
          WHERE uc.is_internal_fixer = true
            AND d.status IN ('PENDING','RELEASED')`
       );
@@ -1247,7 +1248,7 @@ export async function runReconciliation(
     async () => {
       const r = await dbQuery.query(
         `SELECT id, booking_id, worker_share, payout_error
-         FROM disbursements
+         FROM ${s}.disbursements
          WHERE status='FAILED' AND COALESCE(retry_count,0) >= $1`,
         [PAYOUT_MAX_RETRIES]
       );
@@ -1268,8 +1269,8 @@ export async function runReconciliation(
     async () => {
       const r = await dbQuery.query(
         `SELECT rr.id, rr.booking_id, rr.amount
-         FROM finance_refund_reviews rr
-         JOIN disbursements d ON d.booking_id = rr.booking_id
+         FROM ${s}.finance_refund_reviews rr
+         JOIN ${s}.disbursements d ON d.booking_id = rr.booking_id
          WHERE rr.status = 'approved' AND d.status = 'RELEASED'`
       );
       for (const row of r.rows) {
@@ -1330,15 +1331,15 @@ export async function listExceptions(filter: {
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
   const countR = await dbQuery.query(
-    `SELECT COUNT(*) AS v FROM finance_reconciliation_exceptions e ${where}`, params
+    `SELECT COUNT(*) AS v FROM ${s}.finance_reconciliation_exceptions e ${where}`, params
   );
   const total = toNum(countR.rows[0]?.v);
 
   const dp = [...params, limit, offset];
   const dataR = await dbQuery.query(
     `SELECT e.*, b.booking_reference
-     FROM finance_reconciliation_exceptions e
-     LEFT JOIN bookings b ON b.id = e.booking_id
+     FROM ${s}.finance_reconciliation_exceptions e
+     LEFT JOIN ${s}.bookings b ON b.id = e.booking_id
      ${where}
      ORDER BY e.severity DESC, e.created_at DESC
      LIMIT $${dp.length - 1} OFFSET $${dp.length}`,
@@ -1356,7 +1357,7 @@ export async function resolveException(
   requestId: string | null
 ): Promise<void> {
   const res = await dbQuery.query(
-    `UPDATE finance_reconciliation_exceptions
+    `UPDATE ${s}.finance_reconciliation_exceptions
      SET status='resolved', resolved_by=$2, resolved_at=NOW(),
          resolution_reason=$3, updated_at=NOW()
      WHERE id=$1 AND status IN ('open','acknowledged')
@@ -1389,7 +1390,7 @@ export async function ignoreException(
   requestId: string | null
 ): Promise<void> {
   const res = await dbQuery.query(
-    `UPDATE finance_reconciliation_exceptions
+    `UPDATE ${s}.finance_reconciliation_exceptions
      SET status='ignored', ignored_by=$2, ignored_at=NOW(),
          resolution_reason=$3, updated_at=NOW()
      WHERE id=$1 AND status IN ('open','acknowledged')
