@@ -171,6 +171,35 @@ export const ensureAdminCreateBookingSchema = async (): Promise<void> => {
       []
     );
   } catch { /* non-fatal */ }
+
+  // guest_customers — additional columns added in C10 Guest Customer Management
+  try {
+    await dbQuery.query(
+      `ALTER TABLE ${s}.guest_customers ADD COLUMN IF NOT EXISTS source_channel VARCHAR(50)`,
+      []
+    );
+  } catch { /* already present */ }
+
+  try {
+    await dbQuery.query(
+      `ALTER TABLE ${s}.guest_customers ADD COLUMN IF NOT EXISTS source_details TEXT`,
+      []
+    );
+  } catch { /* already present */ }
+
+  try {
+    await dbQuery.query(
+      `ALTER TABLE ${s}.guest_customers ADD COLUMN IF NOT EXISTS internal_notes TEXT`,
+      []
+    );
+  } catch { /* already present */ }
+
+  try {
+    await dbQuery.query(
+      `ALTER TABLE ${s}.guest_customers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
+      []
+    );
+  } catch { /* already present */ }
 };
 
 // ── Phone normalization ───────────────────────────────────────────────────────

@@ -170,6 +170,9 @@ app.use("/api", cors(corsOptionsDelegate), adminFinanceRoutes);
 import adminPermissionRoutes from "./routes/adminPermission.routes";
 app.use("/api", cors(corsOptionsDelegate), adminPermissionRoutes);
 
+import adminCustomerRoutes from "./routes/adminCustomer.routes";
+app.use("/api", cors(corsOptionsDelegate), adminCustomerRoutes);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";

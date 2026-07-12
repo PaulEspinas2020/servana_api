@@ -206,6 +206,13 @@ const PERMISSION_SEEDS: PermissionSeed[] = [
   { key: 'customers.notes.add', module: 'customers', group_label: 'Customers', label: 'Add Internal Customer Notes', description: '', action_type: 'create', risk_level: 'low', requires: ['customers.details.view'], display_order: 1490 },
   { key: 'customers.export', module: 'customers', group_label: 'Customers', label: 'Export Customers', description: '', action_type: 'export', risk_level: 'medium', requires: ['customers.view'], display_order: 1500 },
 
+  // Guest Customer Management (C10)
+  { key: 'customers.read', module: 'customers', group_label: 'Customers', label: 'Read All Customers (Clients + Guests)', description: 'Access the unified customer list and metrics', action_type: 'view', risk_level: 'low', requires: [], display_order: 1505 },
+  { key: 'customers.read_clients', module: 'customers', group_label: 'Customers', label: 'Read Client Customers', description: 'View registered client accounts (role 3)', action_type: 'view', risk_level: 'low', requires: ['customers.read'], display_order: 1506 },
+  { key: 'customers.read_guests', module: 'customers', group_label: 'Customers', label: 'Read Guest Customers', description: 'View guest customer profiles and their bookings', action_type: 'view', risk_level: 'low', requires: ['customers.read'], display_order: 1507 },
+  { key: 'customers.edit_guest', module: 'customers', group_label: 'Customers', label: 'Edit Guest Customer Profile', description: 'Update guest name, email, source channel, notes', action_type: 'edit', risk_level: 'medium', requires: ['customers.read_guests'], display_order: 1508 },
+  { key: 'customers.link_guest_client', module: 'customers', group_label: 'Customers', label: 'Link Guest to Client Account', description: 'Permanently link a guest identity to a registered client', action_type: 'override', risk_level: 'high', requires: ['customers.read_guests', 'customers.read_clients'], display_order: 1509 },
+
   // Users
   { key: 'users.view', module: 'users', group_label: 'All Users / User Accounts', label: 'View All Users', description: '', action_type: 'view', risk_level: 'low', requires: [], display_order: 1550 },
   { key: 'users.details.view', module: 'users', group_label: 'All Users / User Accounts', label: 'View User Details', description: '', action_type: 'view', risk_level: 'low', requires: ['users.view'], display_order: 1560 },
