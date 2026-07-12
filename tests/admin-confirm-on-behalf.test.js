@@ -102,6 +102,30 @@ describe('adminConfirmProviderAssignment — controller & route', () => {
   });
 });
 
+describe('adminConfirmProviderAssignment — controller validation (all required fields)', () => {
+  const fn = (() => {
+    const idx = ctrlSrc.indexOf('confirmProviderAssignment');
+    return ctrlSrc.slice(idx, idx + 900);
+  })();
+
+  it('rejects missing or empty reason', () => {
+    expect(fn).toContain('reason is required');
+  });
+
+  it('rejects missing consentMethod', () => {
+    expect(fn).toContain('consentMethod is required');
+  });
+
+  it('validates typeof consentMethod is string (prevents number/array injection)', () => {
+    expect(fn).toContain("typeof consentMethod !== 'string'");
+  });
+
+  it('validates typeof providerUid is string with length cap', () => {
+    expect(fn).toContain("typeof providerUid !== 'string'");
+    expect(fn).toContain('providerUid.length > 256');
+  });
+});
+
 describe('adminConfirmProviderAssignment — schema bootstrap', () => {
   it('ensureBookingOpsSchema adds all 6 confirmation columns', () => {
     expect(svcSrc).toContain('confirmation_source');

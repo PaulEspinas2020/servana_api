@@ -124,6 +124,18 @@ export const ensureBookingOpsSchema = async (): Promise<void> => {
       await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS ${col} ${typ}`, []);
     } catch { /* column may already exist with a different type — safe to skip */ }
   }
+
+  // Sparse partial indexes for admin-confirm-on-behalf audit queries
+  try {
+    await dbQuery.query(
+      `CREATE INDEX IF NOT EXISTS idx_bw_confirmation_source ON ${dbSchema}.booking_workers (confirmation_source) WHERE confirmation_source IS NOT NULL`,
+      []
+    );
+    await dbQuery.query(
+      `CREATE INDEX IF NOT EXISTS idx_bw_consent_method ON ${dbSchema}.booking_workers (consent_method) WHERE consent_method IS NOT NULL`,
+      []
+    );
+  } catch { /* indexes optional — non-fatal if DDL fails */ }
 };
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -256,7 +268,7 @@ export const getAdminBookings = async (
   const baseSQL = `
     WITH latest_assignment AS (
       SELECT DISTINCT ON (booking_id)
-        booking_id, worker_uid, status AS worker_status, assigned_at
+        booking_id, worker_uid, status AS worker_status, assigned_at, confirmation_source
       FROM ${dbSchema}.booking_workers
       ORDER BY booking_id, assigned_at DESC NULLS LAST
     ),
@@ -279,6 +291,7 @@ export const getAdminBookings = async (
         la.worker_uid                                AS provider_uid,
         la.worker_status,
         la.assigned_at,
+        la.confirmation_source,
         lp.payment_status,
         cu.uid                                       AS customer_uid,
         COALESCE(cu.first_name,'') || ' ' || COALESCE(cu.last_name,'') AS customer_name,
@@ -356,6 +369,7 @@ export const getAdminBookings = async (
       providerName: (row.provider_name ?? '').trim() || null,
       providerPhone: row.provider_phone ?? null,
       assignmentStatus: row.worker_status ?? null,
+      confirmationSource: (row.confirmation_source as 'admin_on_behalf_of_provider' | null) ?? null,
       serviceId: row.service_id ?? null,
       serviceOptionId: row.service_option_id ?? null,
       serviceName: row.service_name ?? null,
