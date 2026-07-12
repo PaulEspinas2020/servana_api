@@ -169,7 +169,7 @@ export const listAllServiceApplications = async (req: Request, res: Response) =>
       dbQuery.query(
         `SELECT wsa.id, wsa.worker_uid, wsa.service_id, wsa.status,
                 wsa.submitted_at, wsa.reviewed_at, wsa.reviewed_by, wsa.review_reason, wsa.version,
-                s.level_1 AS category, s.level_2 AS service_name,
+                s.name AS category, '' AS service_name,
                 uc.first_name, uc.last_name, uc.email
          FROM ${schema}.worker_service_applications wsa
          LEFT JOIN ${schema}.services s ON s.id = wsa.service_id

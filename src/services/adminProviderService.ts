@@ -336,7 +336,7 @@ export const getProviderIdentity = async (uid: string) => {
 export const getProviderActiveServices = async (uid: string) => {
   const res = await dbQuery.query(
     `SELECT es.service_id, es.created_at,
-            s.level_1 AS category, s.level_2 AS service_name
+            '' AS category, s.name AS service_name
      FROM ${dbSchema}.employee_services es
      LEFT JOIN ${dbSchema}.services s ON s.id = es.service_id
      WHERE es.employee_uid = $1
@@ -358,7 +358,7 @@ export const getProviderServiceApplications = async (uid: string) => {
     `SELECT wsa.id, wsa.service_id, wsa.status, wsa.submitted_at, wsa.updated_at,
             wsa.reviewed_at, wsa.reviewed_by, wsa.review_reason, wsa.version,
             wsa.approved_at, wsa.cancelled_at,
-            s.level_1 AS category, s.level_2 AS service_name,
+            '' AS category, s.name AS service_name,
             rev.first_name AS reviewer_first, rev.last_name AS reviewer_last
      FROM ${dbSchema}.worker_service_applications wsa
      LEFT JOIN ${dbSchema}.services s ON s.id = wsa.service_id
@@ -394,7 +394,7 @@ export const getProviderCatalogCapabilities = async (uid: string) => {
     `SELECT ecc.id, ecc.offering_id, ecc.service_id, ecc.status,
             ecc.approved_at, ecc.suspended_at, ecc.application_id,
             pco.name AS offering_name, pco.catalog_key,
-            s.level_1 AS category, s.level_2 AS service_name
+            s.name AS category, ecc.level_2 AS service_name
      FROM ${dbSchema}.employee_catalog_capabilities ecc
      LEFT JOIN ${dbSchema}.provider_catalog_offerings pco ON pco.id = ecc.offering_id
      LEFT JOIN ${dbSchema}.services s ON s.id = ecc.service_id
@@ -490,7 +490,7 @@ export const getProviderJobs = async (uid: string, filter: ProviderJobsFilter = 
       `SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
               b.transpo_fee, b.quoted_price, b.created_at,
               so.level_2 AS service_name,
-              s.level_1 AS category_name,
+              s.name AS category_name,
               ua.address_one, ua.post_town,
               uc.first_name AS customer_first, uc.last_name AS customer_last
        FROM ${dbSchema}.bookings b
@@ -635,7 +635,7 @@ export const updateProviderAccountStatus = async (
 
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.user_credentials
-     SET account_status = $1, updated_at = NOW()
+     SET account_status = $1
      WHERE uid = $2 AND role::int IN (2,4)
      RETURNING uid, account_status, role`,
     [newStatus, uid]
@@ -655,7 +655,7 @@ export const updateProviderAccountStatus = async (
 export const setProviderArchive = async (uid: string, isArchive: boolean) => {
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.user_credentials
-     SET is_archive = $1, updated_at = NOW()
+     SET is_archive = $1
      WHERE uid = $2 AND role::int IN (2,4)
      RETURNING uid, is_archive, role`,
     [isArchive, uid]

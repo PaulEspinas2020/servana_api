@@ -548,7 +548,7 @@ export const getCaseDetail = async (caseIdOrProviderUid: string) => {
     dbQuery.query(
       `SELECT wsa.id, wsa.service_id, wsa.status, wsa.submitted_at, wsa.version,
               wsa.reviewed_at, wsa.reviewed_by, wsa.review_reason,
-              s.level_1 AS category, s.level_2 AS service_name
+              '' AS category, s.name AS service_name
        FROM ${dbSchema}.worker_service_applications wsa
        LEFT JOIN ${dbSchema}.services s ON s.id = wsa.service_id
        WHERE wsa.worker_uid = $1
