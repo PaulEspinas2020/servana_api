@@ -278,33 +278,17 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
         FROM bops
       ),
 
-      -- Provider + customer aggregations from user_credentials
+      -- Provider + customer basic aggregations (user_credentials only — always safe)
       pa AS (
         SELECT
-          COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false)                           AS total_providers,
+          COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false)        AS total_providers,
           COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
-            AND account_status = 'active')                                                         AS active_providers,
+            AND account_status = 'active')                                      AS active_providers,
           COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
-            AND account_status = 'suspended')                                                      AS suspended_providers,
-          COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = true)                             AS archived_providers,
-          COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
-            AND NOT EXISTS (SELECT 1 FROM ${s}.worker_requirements wr
-                            WHERE wr.worker_uid = uc.uid))                                         AS missing_docs,
-          COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
-            AND NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa
-                            WHERE wa.worker_uid = uc.uid))                                         AS missing_avail,
-          COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
-            AND NOT EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa
-                            WHERE wsa.worker_uid = uc.uid))                                        AS missing_area,
-          COUNT(*) FILTER (WHERE role = 3)                                                        AS total_customers
+            AND account_status = 'suspended')                                   AS suspended_providers,
+          COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = true)          AS archived_providers,
+          COUNT(*) FILTER (WHERE role = 3)                                     AS total_customers
         FROM ${s}.user_credentials uc
-      ),
-
-      -- Pending service applications
-      apps AS (
-        SELECT COUNT(DISTINCT worker_uid) AS cnt
-        FROM ${s}.worker_service_applications
-        WHERE status = 'pending_review'
       ),
 
       -- Providers with pending_review status (proxy for documents needing review)
@@ -322,13 +306,9 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
       pa.active_providers,
       pa.suspended_providers,
       pa.archived_providers,
-      pa.missing_docs,
-      pa.missing_avail,
-      pa.missing_area,
       pa.total_customers,
-      apps.cnt  AS pending_applications,
       docs.cnt  AS documents_needing_review
-    FROM ba, pa, apps, docs_review docs
+    FROM ba, pa, docs_review docs
   `;
 
   const mainResult = await dbQuery.query(mainSql, []);
@@ -338,6 +318,41 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
     const x = Number(v);
     return Number.isFinite(x) ? x : 0;
   };
+
+  // ── Provider health details (optional tables — degrade gracefully) ──────────
+  let missingDocs = 0, missingAvail = 0, missingArea = 0;
+  try {
+    const phRes = await dbQuery.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
+           AND NOT EXISTS (SELECT 1 FROM ${s}.worker_requirements wr
+                           WHERE wr.worker_uid = uc.uid))  AS missing_docs,
+         COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
+           AND NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa
+                           WHERE wa.worker_uid = uc.uid))  AS missing_avail,
+         COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
+           AND NOT EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa
+                           WHERE wsa.worker_uid = uc.uid)) AS missing_area
+       FROM ${s}.user_credentials uc`,
+      []
+    );
+    const ph = phRes.rows[0] ?? {};
+    missingDocs  = n(ph.missing_docs);
+    missingAvail = n(ph.missing_avail);
+    missingArea  = n(ph.missing_area);
+  } catch { /* worker_requirements/availability/service_areas may not exist yet */ }
+
+  // ── Pending service applications (optional table) ───────────────────────────
+  let pendingApplications = 0;
+  try {
+    const appsRes = await dbQuery.query(
+      `SELECT COUNT(DISTINCT worker_uid) AS cnt
+       FROM ${s}.worker_service_applications
+       WHERE status = 'pending_review'`,
+      []
+    );
+    pendingApplications = n(appsRes.rows[0]?.cnt);
+  } catch { /* worker_service_applications may not exist yet */ }
 
   // ── Catalog health (optional table) ────────────────────────────────────────
   let catalogHealth: AdminServiceCatalogHealth = FALLBACK_CATALOG;
@@ -426,7 +441,7 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
     completedToday: n(r.completed_today),
     revenueToday: n(r.revenue_today),
     pendingPayments: n(r.total_pending_payments),
-    pendingProviderApplications: n(r.pending_applications),
+    pendingProviderApplications: pendingApplications,
     documentsNeedingReview: n(r.documents_needing_review),
     disputes: n(r.disputes),
     systemHealth: 'healthy',
@@ -449,10 +464,10 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
   const providerHealth: AdminProviderHealth = {
     totalProviders: n(r.total_providers),
     activeProviders: n(r.active_providers),
-    pendingApplications: n(r.pending_applications),
-    missingDocuments: n(r.missing_docs),
-    missingAvailability: n(r.missing_avail),
-    missingServiceArea: n(r.missing_area),
+    pendingApplications: pendingApplications,
+    missingDocuments: missingDocs,
+    missingAvailability: missingAvail,
+    missingServiceArea: missingArea,
     readyForFinalReview: onboardingHealth.readyForFinalReview,
     suspendedProviders: n(r.suspended_providers),
     archivedProviders: n(r.archived_providers),
@@ -533,14 +548,14 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
       route: '/portal/job-orders?operationsStatus=disputed',
     });
   }
-  if (n(r.pending_applications) > 0) {
+  if (pendingApplications > 0) {
     actionQueue.push({
       id: 'provider_applications',
       type: 'provider_application',
       title: 'Provider Applications Pending',
-      description: `${n(r.pending_applications)} provider(s) have service applications awaiting review`,
+      description: `${pendingApplications} provider(s) have service applications awaiting review`,
       severity: 'normal',
-      count: n(r.pending_applications),
+      count: pendingApplications,
       route: '/portal/provider-onboarding',
     });
   }
