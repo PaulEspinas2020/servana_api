@@ -370,7 +370,7 @@ export const getQueueSummary = async () => {
 
   const res = await dbQuery.query(
     `SELECT
-       COUNT(*) FILTER (WHERE uc.role IN (2,4) AND (poc.onboarding_status IS NULL OR poc.onboarding_status = 'submitted')) AS new_submissions,
+       COUNT(*) FILTER (WHERE uc.role::int IN (2,4) AND (poc.onboarding_status IS NULL OR poc.onboarding_status = 'submitted')) AS new_submissions,
        COUNT(*) FILTER (WHERE poc.onboarding_status = 'in_review') AS in_review,
        COUNT(*) FILTER (WHERE poc.onboarding_status = 'waiting_for_provider') AS waiting_provider,
        COUNT(*) FILTER (WHERE poc.onboarding_status = 'waiting_for_internal_review') AS waiting_internal,
@@ -380,7 +380,7 @@ export const getQueueSummary = async () => {
        COUNT(*) FILTER (WHERE poc.assigned_reviewer IS NULL AND poc.onboarding_status IN ('submitted','queued','in_review')) AS unassigned
      FROM ${dbSchema}.user_credentials uc
      LEFT JOIN ${dbSchema}.provider_onboarding_cases poc ON poc.provider_uid = uc.uid
-     WHERE uc.role IN (2,4) AND uc.is_archive = false`,
+     WHERE uc.role::int IN (2,4) AND uc.is_archive = false`,
     []
   );
 
@@ -403,7 +403,7 @@ export const listCases = async (filter: QueueFilter = {}) => {
   const { status, priority, assignedReviewer, search, waitingParty, page = 1, limit = 30 } = filter;
   const offset = (page - 1) * limit;
   const params: any[] = [];
-  const where: string[] = ['uc.role IN (2,4)', 'uc.is_archive = false'];
+  const where: string[] = ['uc.role::int IN (2,4)', 'uc.is_archive = false'];
 
   if (status) { params.push(status); where.push(`poc.onboarding_status = $${params.length}`); }
   if (priority) { params.push(priority); where.push(`poc.priority = $${params.length}`); }

@@ -63,7 +63,7 @@ export const getProviderSetupSummary = async (): Promise<ProviderSetupSummary> =
            AND NOT EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa WHERE wsa.worker_uid = uc.uid)
        )::int AS missing_both
      FROM ${s}.user_credentials uc
-     WHERE uc.role IN (2, 4)`,
+     WHERE uc.role::int IN (2, 4)`,
     []
   );
 
@@ -100,7 +100,7 @@ export const listProvidersMissingSetup = async (
             ${availCond} AS missing_availability,
             ${areaCond}  AS missing_service_area
      FROM ${s}.user_credentials uc
-     WHERE uc.role IN (2, 4)
+     WHERE uc.role::int IN (2, 4)
        AND uc.account_status = 'active'
        AND uc.is_archive = false
        AND ${missingCond}
@@ -129,7 +129,7 @@ export const getAvailableProviderCount = async (
   const dow = new Date(date).getDay();
 
   let conditions = [
-    `uc.role IN (2, 4)`,
+    `uc.role::int IN (2, 4)`,
     `uc.account_status = 'active'`,
     `uc.is_archive = false`,
     // Has availability on this day of week

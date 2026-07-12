@@ -276,14 +276,14 @@ export const getProviderAttribution = async (providerUid: string) => {
 export const getMobileMetrics = async () => {
   const [totalRes, inferredRes, activityRes, catalogRes] = await Promise.all([
     dbQuery.query(
-      `SELECT COUNT(*) AS total FROM ${dbSchema}.user_credentials WHERE role IN (2,4)`,
+      `SELECT COUNT(*) AS total FROM ${dbSchema}.user_credentials WHERE role::int IN (2,4)`,
     ),
     dbQuery.query(
       `
       SELECT COUNT(DISTINCT es.employee_uid) AS inferred_mobile
       FROM   ${dbSchema}.employee_services es
       JOIN   ${dbSchema}.user_credentials uc ON uc.uid = es.employee_uid
-      WHERE  uc.role IN (2,4)
+      WHERE  uc.role::int IN (2,4)
         AND  EXTRACT(EPOCH FROM (es.created_at - uc.created_date)) BETWEEN 0 AND ${REG_WINDOW_SECONDS}
       `,
     ),
@@ -306,7 +306,7 @@ export const getMobileMetrics = async () => {
         FROM   ${dbSchema}.employee_services es
         JOIN   ${dbSchema}.user_credentials uc ON uc.uid = es.employee_uid
         LEFT JOIN ${dbSchema}.provider_catalog_offering_mappings m ON m.service_id = es.service_id
-        WHERE  uc.role IN (2,4)
+        WHERE  uc.role::int IN (2,4)
         GROUP  BY es.employee_uid
       )
       SELECT
@@ -334,7 +334,7 @@ export const getMobileMetrics = async () => {
 
 export const backfillAttribution = async (): Promise<{ processed: number; inferred: number }> => {
   const providersRes = await dbQuery.query(
-    `SELECT uid FROM ${dbSchema}.user_credentials WHERE role IN (2,4)`,
+    `SELECT uid FROM ${dbSchema}.user_credentials WHERE role::int IN (2,4)`,
   );
 
   let processed = 0;

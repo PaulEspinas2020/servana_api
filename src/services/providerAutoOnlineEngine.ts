@@ -688,7 +688,7 @@ export const evaluateAllProviders = async (
   await bootstrap();
 
   const providersRes = await dbQuery.query(
-    `SELECT uid, first_name, last_name FROM ${s}.user_credentials WHERE role IN (2, 4) AND is_archive = FALSE ORDER BY created_date ASC`,
+    `SELECT uid, first_name, last_name FROM ${s}.user_credentials WHERE role::int IN (2, 4) AND is_archive = FALSE ORDER BY created_date ASC`,
     []
   );
 
@@ -802,7 +802,7 @@ export const getAutoOnlineBlockers = async (page = 1, limit = 50) => {
             p.eligibility_snapshot->>'autoOnline' AS auto_online_snapshot
      FROM ${s}.user_credentials uc
      LEFT JOIN ${s}.provider_auto_online_state p ON p.provider_uid = uc.uid
-     WHERE uc.role IN (2,4) AND uc.is_archive = FALSE
+     WHERE uc.role::int IN (2,4) AND uc.is_archive = FALSE
        AND (p.is_auto_online IS NULL OR p.is_auto_online = FALSE)
      ORDER BY uc.created_date DESC
      LIMIT $1 OFFSET $2`,

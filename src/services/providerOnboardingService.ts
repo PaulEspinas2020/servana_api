@@ -354,14 +354,14 @@ export const getReconciliationReport = async () => {
 
   const [totalRes, attrRes, draftRes, activeNoAppRes, pendingAppsRes, activeServicesRes] = await Promise.all([
     dbQuery.query(
-      `SELECT COUNT(*) AS total FROM ${dbSchema}.user_credentials WHERE role IN (2,4)`,
+      `SELECT COUNT(*) AS total FROM ${dbSchema}.user_credentials WHERE role::int IN (2,4)`,
     ),
     dbQuery.query(
       `
       SELECT COUNT(*) AS with_attribution
       FROM ${dbSchema}.provider_source_attribution psa
       JOIN ${dbSchema}.user_credentials uc ON uc.uid = psa.uid
-      WHERE uc.role IN (2,4)
+      WHERE uc.role::int IN (2,4)
       `,
     ),
     dbQuery.query(
@@ -369,7 +369,7 @@ export const getReconciliationReport = async () => {
       SELECT COUNT(*) AS with_backend_draft
       FROM ${dbSchema}.provider_onboarding_drafts pod
       JOIN ${dbSchema}.user_credentials uc ON uc.uid = pod.uid
-      WHERE uc.role IN (2,4)
+      WHERE uc.role::int IN (2,4)
       `,
     ),
     // Active services but no approved service application (legacy direct inserts)
@@ -378,7 +378,7 @@ export const getReconciliationReport = async () => {
       SELECT uc.uid, uc.first_name, uc.last_name, COUNT(es.service_id) AS active_service_count
       FROM ${dbSchema}.employee_services es
       JOIN ${dbSchema}.user_credentials uc ON uc.uid = es.employee_uid
-      WHERE uc.role IN (2,4)
+      WHERE uc.role::int IN (2,4)
         AND NOT EXISTS (
           SELECT 1 FROM ${dbSchema}.worker_service_applications wsa
           WHERE wsa.worker_uid = es.employee_uid AND wsa.status = 'approved'

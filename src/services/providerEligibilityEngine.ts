@@ -238,7 +238,7 @@ export const listAssignmentCandidates = async (
      FROM ${s}.user_credentials uc
      WHERE uc.account_status = 'active'
        AND uc.is_archive = false
-       AND uc.role IN (2, 4)
+       AND uc.role::int IN (2, 4)
      ORDER BY uc.first_name, uc.last_name`,
     []
   );
