@@ -94,7 +94,9 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
   if (hasAvailability === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_availability wa_f WHERE wa_f.worker_uid = uc.uid)`);
   if (hasAvailability === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa_f WHERE wa_f.worker_uid = uc.uid)`);
   if (hasServiceArea === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa2_f WHERE wsa2_f.worker_uid = uc.uid)`);
-  if (hasServiceArea === false) where.push(`NOT EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa2_f WHERE wsa2_f.worker_uid = uc.uid)`);
+  // false = provider has an explicitly saved but broken city-mode config (empty city_ids)
+  // No row = all-cities default = valid, NOT flagged as missing
+  if (hasServiceArea === false) where.push(`EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa2_f WHERE wsa2_f.worker_uid = uc.uid AND wsa2_f.coverage_mode = 'city' AND (wsa2_f.city_ids IS NULL OR wsa2_f.city_ids = '[]'::jsonb))`);
   if (hasAutoOnline === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.provider_auto_online_state paos_f WHERE paos_f.provider_uid = uc.uid AND paos_f.is_auto_online = TRUE)`);
   if (hasAutoOnline === false) where.push(`(NOT EXISTS (SELECT 1 FROM ${s}.provider_auto_online_state paos_f WHERE paos_f.provider_uid = uc.uid) OR EXISTS (SELECT 1 FROM ${s}.provider_auto_online_state paos_f2 WHERE paos_f2.provider_uid = uc.uid AND paos_f2.is_auto_online = FALSE))`);
   if (hasBookable === true)  where.push(`EXISTS (SELECT 1 FROM ${s}.provider_auto_online_state paos_b WHERE paos_b.provider_uid = uc.uid AND paos_b.is_bookable = TRUE)`);
