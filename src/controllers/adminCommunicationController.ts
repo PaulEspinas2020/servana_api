@@ -291,6 +291,104 @@ export async function previewTemplate(req: Request, res: Response) {
   }
 }
 
+// ── GET /admin/communications/conversations/:id ───────────────────────────────
+
+export async function getConversationDetail(req: Request, res: Response) {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    if (!id) return adminBadRequest(res, 'Invalid conversation id');
+    const detail = await svc.getAdminConversationDetail(id);
+    if (!detail) return adminNotFound(res, 'Conversation');
+    res.json({ status: 'success', data: detail });
+  } catch (err) {
+    adminServerError(res, err);
+  }
+}
+
+// ── GET /admin/communications/conversations/:id/messages ──────────────────────
+
+export async function getConversationMessages(req: Request, res: Response) {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    const q = req.query as Record<string, string | undefined>;
+    const limit = q.limit ? parseInt(q.limit, 10) : 50;
+    const before = q.before ? parseInt(q.before, 10) : undefined;
+    const result = await svc.getAdminConversationMessages(id, limit, before);
+    res.json({ status: 'success', data: result });
+  } catch (err) {
+    adminServerError(res, err);
+  }
+}
+
+// ── POST /admin/communications/conversations/:id/messages ─────────────────────
+
+export async function sendConversationMessage(req: Request, res: Response) {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    const actor: string = (req as any).user?.uid ?? '';
+    if (!actor) return adminBadRequest(res, 'Actor uid required');
+    const { body, clientMsgId } = req.body as Record<string, string>;
+    if (!body || !body.trim()) return adminBadRequest(res, 'body is required');
+    const message = await svc.sendAdminMessage(id, actor, body.trim(), clientMsgId);
+    auditFire({
+      action: 'chat_message_sent',
+      actionCategory: 'notification',
+      outcome: 'success',
+      actorUid: actor,
+      actorType: 'admin',
+      entityType: 'notification',
+      entityId: String(id),
+      source: 'admin_portal',
+      requestId: (req as any).id,
+    });
+    res.status(201).json({ status: 'success', data: message });
+  } catch (err) {
+    adminServerError(res, err);
+  }
+}
+
+// ── GET /admin/communications/reports ────────────────────────────────────────
+
+export async function listReports(req: Request, res: Response) {
+  try {
+    const q = req.query as Record<string, string | undefined>;
+    const limit = q.limit ? parseInt(q.limit, 10) : 50;
+    const items = await svc.listMessageReports(limit);
+    res.json({ status: 'success', data: items });
+  } catch (err) {
+    adminServerError(res, err);
+  }
+}
+
+// ── PATCH /admin/communications/reports/:reportId ─────────────────────────────
+
+export async function resolveReport(req: Request, res: Response) {
+  try {
+    const reportId = parseInt(String(req.params.reportId), 10);
+    const actor: string = (req as any).user?.uid ?? '';
+    const { action, note } = req.body as Record<string, string>;
+    if (!action || !['dismiss', 'redact', 'warn'].includes(action)) {
+      return adminBadRequest(res, 'action must be dismiss, redact, or warn');
+    }
+    const result = await svc.resolveMessageReport(reportId, actor, action as 'dismiss' | 'redact' | 'warn', note);
+    if (!result) return adminNotFound(res, 'Report');
+    auditFire({
+      action: `chat_report_${action}`,
+      actionCategory: 'notification',
+      outcome: 'success',
+      actorUid: actor,
+      actorType: 'admin',
+      entityType: 'notification',
+      entityId: String(reportId),
+      source: 'admin_portal',
+      requestId: (req as any).id,
+    });
+    res.json({ status: 'success', data: result });
+  } catch (err) {
+    adminServerError(res, err);
+  }
+}
+
 // ── GET /admin/communications/conversations ───────────────────────────────────
 
 export async function getConversations(req: Request, res: Response) {

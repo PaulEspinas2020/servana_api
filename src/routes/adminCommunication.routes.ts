@@ -16,6 +16,15 @@ router.get('/admin/communications/failures',                                   .
 // Chat conversation summaries
 router.get('/admin/communications/conversations',                              ...adminOnly, requirePermission('communications.support_conversations.view'), ctrl.getConversations);
 
+// Conversation detail + messages + admin send (must precede /:id to avoid conflicts)
+router.get('/admin/communications/conversations/:id/messages',                ...adminOnly, requirePermission('communications.support_conversations.view'), ctrl.getConversationMessages);
+router.post('/admin/communications/conversations/:id/messages',               ...adminOnly, requirePermission('communications.support_conversations.view'), ctrl.sendConversationMessage);
+router.get('/admin/communications/conversations/:id',                         ...adminOnly, requirePermission('communications.support_conversations.view'), ctrl.getConversationDetail);
+
+// Message reports (moderation)
+router.get('/admin/communications/reports',                                   ...adminOnly, requirePermission('communications.support_conversations.view'), ctrl.listReports);
+router.patch('/admin/communications/reports/:reportId',                       ...adminOnly, requirePermission('communications.support_conversations.view'), ctrl.resolveReport);
+
 // Event list + export
 router.get('/admin/communications/events',                                     ...adminOnly, requirePermission('communications.notification_logs.view'), ctrl.listEvents);
 router.post('/admin/communications/export',                                    ...adminOnly, requirePermission('communications.export'), ctrl.exportEvents);

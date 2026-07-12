@@ -283,6 +283,40 @@ export const listAllConversations = async () => {
   return r.rows;
 };
 
+// ---- Participant removal (reassignment / decline) --------------------------
+
+export const removeParticipant = async (conversationId: number, userUid: string) => {
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.chat_participants
+     SET left_at = NOW()
+     WHERE conversation_id = $1 AND user_uid = $2 AND left_at IS NULL`,
+    [conversationId, userUid]
+  );
+};
+
+// ---- System-message deduplication ------------------------------------------
+
+/** Returns the existing system message row if one with this eventKey already exists. */
+export const findSystemMessage = async (conversationId: number, eventKey: string) => {
+  const r = await dbQuery.query(
+    `SELECT id FROM ${dbSchema}.chat_messages
+     WHERE conversation_id = $1 AND type = 'system' AND metadata->>'eventKey' = $2
+     LIMIT 1`,
+    [conversationId, eventKey]
+  );
+  return r.rows[0] || null;
+};
+
+// ---- Conversation existence check (non-creating) ---------------------------
+
+export const findExistingConversationByBookingId = async (bookingId: number) => {
+  const r = await dbQuery.query(
+    `SELECT id FROM ${dbSchema}.chat_conversations WHERE booking_id = $1`,
+    [bookingId]
+  );
+  return r.rows[0] || null;
+};
+
 // ---- Message reports -------------------------------------------------------
 
 export const insertMessageReport = async (input: {

@@ -564,6 +564,210 @@ export function previewNotificationTemplate(bodyTemplate: string, variables: Rec
   return result;
 }
 
+// ── Admin conversation operations (booking group chat) ────────────────────────
+
+export async function getAdminConversationDetail(conversationId: number) {
+  try {
+    const { rows } = await dbQuery.query(
+      `SELECT
+         c.id, c.booking_id, c.is_closed, c.last_message_at, c.created_at,
+         b.status AS booking_status,
+         b.final_price,
+         b.schedule,
+         b.user_address_id,
+         uc_client.first_name || ' ' || uc_client.last_name AS customer_name,
+         uc_client.email AS customer_email,
+         uc_worker.first_name || ' ' || uc_worker.last_name AS provider_name,
+         so.level_2 AS service_name,
+         (SELECT COUNT(*) FROM ${dbSchema}.chat_messages m WHERE m.conversation_id = c.id AND m.deleted_at IS NULL) AS message_count
+       FROM ${dbSchema}.chat_conversations c
+       LEFT JOIN ${dbSchema}.bookings b ON b.id = c.booking_id
+       LEFT JOIN ${dbSchema}.user_credentials uc_client ON uc_client.uid = b.user_id
+       LEFT JOIN ${dbSchema}.user_credentials uc_worker ON uc_worker.uid = b.worker_uid
+       LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+       WHERE c.id = $1`,
+      [conversationId]
+    );
+    if (!rows.length) return null;
+    const r = rows[0];
+    // Participants
+    const parts = await dbQuery.query(
+      `SELECT p.user_uid, p.role, p.joined_at, p.left_at, p.last_read_message_id,
+              uc.first_name, uc.last_name, uc.email
+         FROM ${dbSchema}.chat_participants p
+         LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = p.user_uid
+        WHERE p.conversation_id = $1 ORDER BY p.joined_at ASC`,
+      [conversationId]
+    );
+    return {
+      conversationId:  r.id,
+      bookingId:       r.booking_id,
+      isClosed:        r.is_closed,
+      lastMessageAt:   r.last_message_at,
+      createdAt:       r.created_at,
+      messageCount:    parseInt(r.message_count || '0', 10),
+      bookingStatus:   r.booking_status ?? null,
+      finalPrice:      r.final_price ?? null,
+      schedule:        r.schedule ?? null,
+      customerName:    r.customer_name ?? null,
+      customerEmail:   r.customer_email ?? null,
+      providerName:    r.provider_name ?? null,
+      serviceName:     r.service_name ?? null,
+      participants:    parts.rows.map((p: any) => ({
+        userUid:           p.user_uid,
+        role:              p.role,
+        joinedAt:          p.joined_at,
+        leftAt:            p.left_at ?? null,
+        lastReadMessageId: p.last_read_message_id ?? null,
+        firstName:         p.first_name ?? null,
+        lastName:          p.last_name ?? null,
+        email:             p.email ?? null,
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function getAdminConversationMessages(conversationId: number, limit = 50, before?: number) {
+  const params: unknown[] = [conversationId, Math.min(limit, 100)];
+  let cursor = '';
+  if (before) { cursor = `AND m.id < $3`; params.push(before); }
+  try {
+    const { rows } = await dbQuery.query(
+      `SELECT m.*,
+              uc.first_name, uc.last_name,
+              COALESCE(
+                json_agg(a.*) FILTER (WHERE a.id IS NOT NULL), '[]'
+              ) AS attachments
+         FROM ${dbSchema}.chat_messages m
+         LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = m.sender_uid
+         LEFT JOIN ${dbSchema}.chat_message_attachments a ON a.message_id = m.id
+        WHERE m.conversation_id = $1 ${cursor}
+        GROUP BY m.id, uc.first_name, uc.last_name
+        ORDER BY m.id DESC LIMIT $2`,
+      params
+    );
+    const messages = rows.map((r: any) => ({
+      messageId:   r.id,
+      conversationId,
+      senderUid:   r.sender_uid,
+      senderRole:  r.sender_role,
+      senderName:  r.first_name ? `${r.first_name} ${r.last_name}` : null,
+      type:        r.type,
+      body:        r.deleted_at ? null : r.body,
+      metadata:    r.metadata,
+      clientMsgId: r.client_msg_id,
+      editedAt:    r.edited_at,
+      deletedAt:   r.deleted_at,
+      createdAt:   r.created_at,
+      attachments: Array.isArray(r.attachments) ? r.attachments : [],
+    }));
+    return { messages, nextCursor: rows.length === Math.min(limit, 100) ? rows[rows.length - 1].id : null };
+  } catch {
+    return { messages: [], nextCursor: null };
+  }
+}
+
+export async function sendAdminMessage(
+  conversationId: number,
+  adminUid: string,
+  body: string,
+  clientMsgId?: string
+) {
+  const { sendMessage } = await import('../chat/chat.service');
+  const actor = { uid: adminUid, role: 1 };
+  return sendMessage(actor, conversationId, {
+    type: 'text',
+    body,
+    clientMsgId: clientMsgId || null,
+  });
+}
+
+export async function listMessageReports(limit = 50) {
+  try {
+    await dbQuery.query(
+      `CREATE TABLE IF NOT EXISTS ${dbSchema}.chat_message_reports (
+         id             SERIAL PRIMARY KEY,
+         reporter_uid   TEXT NOT NULL,
+         message_id     INT  NOT NULL,
+         conversation_id INT NOT NULL,
+         category       TEXT NOT NULL,
+         description    TEXT,
+         status         TEXT NOT NULL DEFAULT 'pending',
+         resolved_by    TEXT,
+         resolved_at    TIMESTAMPTZ,
+         resolution_note TEXT,
+         created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+       )`, []
+    );
+    const { rows } = await dbQuery.query(
+      `SELECT r.*, m.body AS message_body, m.sender_uid, m.conversation_id,
+              uc_rep.first_name || ' ' || uc_rep.last_name AS reporter_name
+         FROM ${dbSchema}.chat_message_reports r
+         LEFT JOIN ${dbSchema}.chat_messages m ON m.id = r.message_id
+         LEFT JOIN ${dbSchema}.user_credentials uc_rep ON uc_rep.uid = r.reporter_uid
+        ORDER BY r.created_at DESC LIMIT $1`,
+      [limit]
+    );
+    return rows.map((r: any) => ({
+      reportId:       r.id,
+      reporterUid:    r.reporter_uid,
+      reporterName:   r.reporter_name ?? null,
+      messageId:      r.message_id,
+      conversationId: r.conversation_id,
+      messageBody:    r.message_body ?? null,
+      senderUid:      r.sender_uid ?? null,
+      category:       r.category,
+      description:    r.description ?? null,
+      status:         r.status,
+      resolvedBy:     r.resolved_by ?? null,
+      resolvedAt:     r.resolved_at ?? null,
+      resolutionNote: r.resolution_note ?? null,
+      createdAt:      r.created_at,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export async function resolveMessageReport(
+  reportId: number,
+  adminUid: string,
+  action: 'dismiss' | 'redact' | 'warn',
+  note?: string
+) {
+  // Ensure the status column exists (lazy migration)
+  try {
+    await dbQuery.query(
+      `ALTER TABLE ${dbSchema}.chat_message_reports
+       ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending',
+       ADD COLUMN IF NOT EXISTS resolved_by TEXT,
+       ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ,
+       ADD COLUMN IF NOT EXISTS resolution_note TEXT`, []
+    );
+  } catch { /* column may already exist */ }
+
+  const { rows } = await dbQuery.query(
+    `UPDATE ${dbSchema}.chat_message_reports
+     SET status = $1, resolved_by = $2, resolved_at = NOW(), resolution_note = $3
+     WHERE id = $4 RETURNING *`,
+    [action === 'dismiss' ? 'dismissed' : 'resolved', adminUid, note || null, reportId]
+  );
+  if (!rows.length) return null;
+
+  if (action === 'redact') {
+    const report = rows[0];
+    await dbQuery.query(
+      `UPDATE ${dbSchema}.chat_messages
+       SET body = '[Message removed by Servana moderator]', deleted_at = NOW()
+       WHERE id = $1`,
+      [report.message_id]
+    );
+  }
+  return rows[0];
+}
+
 // ── Chat conversation summaries (custom Socket.IO chat system) ────────────────
 
 export async function getChatConversationSummaries(limit = 50, bookingId?: string) {

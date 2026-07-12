@@ -8,6 +8,8 @@ import { getUserInfoByBookingId } from "./user.service";
 import { computeTranspoFee } from "./pricingService";
 import { createNotification } from "./notification.service";
 import { createDisbursement } from "./disbursement.service";
+import { getOrCreateConversation, postSystemMessageOnce } from "../chat/chat.service";
+import { findExistingConversationByBookingId } from "../chat/chat.repository";
 
 const dbSchema = db.schema;
 
@@ -952,6 +954,22 @@ export const acceptJob = async (bookingId: number, workerUid: string) => {
     console.error("booking_accepted email failed:", emailErr);
   }
 
+  // AUTO GROUP CHAT: create (or find) the canonical booking conversation and
+  // post an idempotent system message. Fire-and-forget — never blocks job acceptance.
+  (async () => {
+    try {
+      const conv = await getOrCreateConversation(bookingId);
+      await postSystemMessageOnce(
+        conv.id,
+        `provider_accepted_${bookingId}`,
+        'Your service provider has accepted the booking. You can now message them here.',
+        { bookingId, providerUid: workerUid, eventType: 'provider_accepted' }
+      );
+    } catch (chatErr) {
+      console.error('auto group-chat creation failed (acceptJob):', chatErr);
+    }
+  })();
+
   return res.rows[0];
 };
 
@@ -1030,6 +1048,23 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
     );
   }
 
+  // Post a system message (non-blocking, non-creating — only if chat already open)
+  (async () => {
+    try {
+      const existing = await findExistingConversationByBookingId(bookingId);
+      if (existing) {
+        await postSystemMessageOnce(
+          existing.id,
+          `provider_declined_${bookingId}_${workerUid}`,
+          'The assigned provider was unable to accept this booking. We are finding a new provider for you.',
+          { bookingId, providerUid: workerUid, eventType: 'provider_declined' }
+        );
+      }
+    } catch (chatErr) {
+      console.error('system message failed (declineJob):', chatErr);
+    }
+  })();
+
   return {
     declined: true,
     bookingId,
@@ -1090,6 +1125,23 @@ export const startJob = async (
   } catch (emailErr) {
     console.error("booking_started email failed:", emailErr);
   }
+
+  // System message: service started
+  (async () => {
+    try {
+      const existing = await findExistingConversationByBookingId(bookingId);
+      if (existing) {
+        await postSystemMessageOnce(
+          existing.id,
+          `service_started_${bookingId}`,
+          'Your service provider is on the way. Service has started.',
+          { bookingId, providerUid: workerUid, eventType: 'service_started' }
+        );
+      }
+    } catch (chatErr) {
+      console.error('system message failed (startJob):', chatErr);
+    }
+  })();
 
   return res.rows[0];
 };
@@ -1154,6 +1206,23 @@ export const completeJob = async (bookingId: number, workerUid: string) => {
   } catch (emailErr) {
     console.error("booking_completed email failed:", emailErr);
   }
+
+  // System message: service completed
+  (async () => {
+    try {
+      const existing = await findExistingConversationByBookingId(bookingId);
+      if (existing) {
+        await postSystemMessageOnce(
+          existing.id,
+          `service_completed_${bookingId}`,
+          'Service has been completed. Thank you for using Servana! This chat will remain available for 48 hours.',
+          { bookingId, providerUid: workerUid, eventType: 'service_completed' }
+        );
+      }
+    } catch (chatErr) {
+      console.error('system message failed (completeJob):', chatErr);
+    }
+  })();
 
   return res.rows[0];
 };
