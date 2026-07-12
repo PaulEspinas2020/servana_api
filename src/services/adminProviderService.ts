@@ -135,7 +135,7 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
          COALESCE((SELECT COUNT(*)::int FROM ${s}.employee_services es2 WHERE es2.employee_uid = uc.uid), 0) AS active_svc,
          -- Availability and service area (resolved by backend)
          CASE WHEN EXISTS (SELECT 1 FROM ${s}.worker_availability wa2 WHERE wa2.worker_uid = uc.uid) THEN 'saved' ELSE 'missing' END AS avail_status,
-         CASE WHEN EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa3 WHERE wsa3.worker_uid = uc.uid) THEN 'saved' ELSE 'missing' END AS area_status,
+         CASE WHEN EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa3 WHERE wsa3.worker_uid = uc.uid) THEN 'saved' ELSE 'default_all' END AS area_status,
          -- Auto-Online Engine fields
          COALESCE(paos.is_auto_online, FALSE) AS is_auto_online,
          COALESCE(paos.is_bookable, FALSE) AS is_bookable,

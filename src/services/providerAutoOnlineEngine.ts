@@ -370,7 +370,11 @@ export const evaluateProvider = async (
   } catch { /* best-effort */ }
   try {
     const area = await areaEngine.getServiceAreaProfile(providerUid);
-    if (area.status === 'saved') {
+    if (area.status === 'missing') {
+      serviceAreaMode = 'all'; // no explicit restriction = all cities by default
+    } else if (area.coverageMode === 'all_cities') {
+      serviceAreaMode = 'all';
+    } else {
       serviceAreaMode = area.cityIds.length >= ALL_CITY_IDS.length ? 'all' : 'custom';
     }
   } catch { /* best-effort */ }

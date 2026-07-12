@@ -27,6 +27,7 @@ export type EligibilityCheckCode =
   | 'NO_SERVICE_AREA'
   | 'CITY_NOT_IN_AREA'
   | 'BRANCH_NOT_IN_AREA'
+  | 'DEFAULT_ALL_CITIES'
   | 'ELIGIBLE';
 
 export interface EligibilityReason {

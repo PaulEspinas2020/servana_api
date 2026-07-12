@@ -54,13 +54,23 @@ export const getProviderSetupSummary = async (): Promise<ProviderSetupSummary> =
        COUNT(*) FILTER (
          WHERE uc.account_status = 'active'
            AND uc.is_archive = false
-           AND NOT EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa WHERE wsa.worker_uid = uc.uid)
+           AND EXISTS (
+             SELECT 1 FROM ${s}.worker_service_areas wsa
+             WHERE wsa.worker_uid = uc.uid
+               AND wsa.coverage_mode = 'city'
+               AND (wsa.city_ids IS NULL OR wsa.city_ids = '[]'::jsonb)
+           )
        )::int AS missing_service_area,
        COUNT(*) FILTER (
          WHERE uc.account_status = 'active'
            AND uc.is_archive = false
            AND NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa WHERE wa.worker_uid = uc.uid)
-           AND NOT EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa WHERE wsa.worker_uid = uc.uid)
+           AND EXISTS (
+             SELECT 1 FROM ${s}.worker_service_areas wsa
+             WHERE wsa.worker_uid = uc.uid
+               AND wsa.coverage_mode = 'city'
+               AND (wsa.city_ids IS NULL OR wsa.city_ids = '[]'::jsonb)
+           )
        )::int AS missing_both
      FROM ${s}.user_credentials uc
      WHERE uc.role::int IN (2, 4)`,
@@ -85,7 +95,7 @@ export const listProvidersMissingSetup = async (
   limit = 50,
 ): Promise<MissingSetupProvider[]> => {
   const availCond = `NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa WHERE wa.worker_uid = uc.uid)`;
-  const areaCond  = `NOT EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa WHERE wsa.worker_uid = uc.uid)`;
+  const areaCond  = `EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa WHERE wsa.worker_uid = uc.uid AND wsa.coverage_mode = 'city' AND (wsa.city_ids IS NULL OR wsa.city_ids = '[]'::jsonb))`;
 
   let missingCond: string;
   switch (filter) {

@@ -50,7 +50,15 @@ const bootstrap = async () => {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type CoverageMode = 'city' | 'branch' | 'radius';
+export type CoverageMode = 'city' | 'branch' | 'radius' | 'all_cities';
+
+export type ServiceAreaIntent =
+  | 'unconfigured'
+  | 'all_cities'
+  | 'restricted_city'
+  | 'restricted_branch'
+  | 'restricted_radius'
+  | 'invalid';
 
 export interface ProviderServiceAreaProfile {
   providerUid: string;
@@ -79,7 +87,7 @@ export interface ServiceAreaSavePayload {
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
-const VALID_MODES: CoverageMode[] = ['city', 'branch', 'radius'];
+const VALID_MODES: CoverageMode[] = ['city', 'branch', 'radius', 'all_cities'];
 
 export const validateServiceArea = (payload: ServiceAreaSavePayload): string[] => {
   const errors: string[] = [];
@@ -251,11 +259,19 @@ export const explainCoverage = async (
   const profile = await getServiceAreaProfile(providerUid);
 
   if (profile.status === 'missing') {
-    reasons.push({ code: 'NO_SERVICE_AREA', severity: 'warning', message: 'Provider has no service area configured' });
-    return { providerUid, queryCityId, queryBranchId, covered: false, reasons };
+    reasons.push({
+      code: 'DEFAULT_ALL_CITIES',
+      severity: 'info',
+      message: 'Provider has no explicit service area — defaults to all Servana-supported cities',
+    });
+    return { providerUid, queryCityId, queryBranchId, covered: true, reasons };
   }
 
   switch (profile.coverageMode) {
+    case 'all_cities':
+      reasons.push({ code: 'ALL_CITIES_EXPLICIT', severity: 'info', message: 'Provider explicitly covers all Servana-supported cities' });
+      return { providerUid, queryCityId, queryBranchId, covered: true, reasons };
+
     case 'city':
       if (!queryCityId) {
         reasons.push({ code: 'NO_CITY_QUERY', severity: 'warning', message: 'No city_id provided to check against city-mode coverage' });
@@ -293,4 +309,60 @@ export const explainCoverage = async (
 
   const blockers = reasons.filter(r => r.severity === 'blocker');
   return { providerUid, queryCityId, queryBranchId, covered: blockers.length === 0, reasons };
+};
+
+// ── Intent classifier ─────────────────────────────────────────────────────────
+
+export const resolveServiceAreaIntent = (profile: ProviderServiceAreaProfile): ServiceAreaIntent => {
+  if (profile.status === 'missing') return 'unconfigured';
+  if (profile.coverageMode === 'all_cities') return 'all_cities';
+  if (profile.coverageMode === 'city') {
+    return profile.cityIds.length > 0 ? 'restricted_city' : 'invalid';
+  }
+  if (profile.coverageMode === 'branch') {
+    return profile.branchIds.length > 0 ? 'restricted_branch' : 'invalid';
+  }
+  if (profile.coverageMode === 'radius') {
+    return profile.radiusKm !== null && profile.radiusKm > 0 ? 'restricted_radius' : 'invalid';
+  }
+  return 'invalid';
+};
+
+// ── Effective service area resolver ──────────────────────────────────────────
+
+export interface EffectiveServiceArea {
+  providerUid: string;
+  intent: ServiceAreaIntent;
+  coverageMode: CoverageMode | 'system_default';
+  cityIds: string[];
+  branchIds: string[];
+  radiusKm: number | null;
+  source: 'explicit' | 'system_default';
+}
+
+export const getEffectiveServiceArea = async (providerUid: string): Promise<EffectiveServiceArea> => {
+  const profile = await getServiceAreaProfile(providerUid);
+  const intent  = resolveServiceAreaIntent(profile);
+
+  if (intent === 'unconfigured') {
+    return {
+      providerUid,
+      intent,
+      coverageMode: 'system_default',
+      cityIds:   [],
+      branchIds: [],
+      radiusKm:  null,
+      source: 'system_default',
+    };
+  }
+
+  return {
+    providerUid,
+    intent,
+    coverageMode: profile.coverageMode,
+    cityIds:   profile.cityIds,
+    branchIds: profile.branchIds,
+    radiusKm:  profile.radiusKm,
+    source: 'explicit',
+  };
 };
