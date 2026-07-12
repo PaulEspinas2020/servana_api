@@ -294,7 +294,8 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
 
   // ── Provider + customer counts (user_credentials — degrade gracefully) ───────
   let totalProviders = 0, activeProviders = 0, suspendedProviders = 0,
-      archivedProviders = 0, totalCustomers = 0, documentsNeedingReview = 0;
+      archivedProviders = 0, totalCustomers = 0, newCustomersToday = 0,
+      documentsNeedingReview = 0;
   try {
     const paRes = await dbQuery.query(
       `SELECT
@@ -303,16 +304,19 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
          COUNT(*) FILTER (WHERE role::int IN (2,4) AND is_archive = false AND account_status = 'suspended') AS suspended_providers,
          COUNT(*) FILTER (WHERE role::int IN (2,4) AND is_archive = true)                        AS archived_providers,
          COUNT(*) FILTER (WHERE role::int = 3)                                                   AS total_customers,
+         COUNT(*) FILTER (WHERE role::int = 3
+           AND created_date >= DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Manila'))              AS new_customers_today,
          COUNT(*) FILTER (WHERE role::int IN (2,4) AND is_archive = false AND account_status = 'pending')   AS docs_review
        FROM ${s}.user_credentials`,
       []
     );
     const pa = paRes.rows[0] ?? {};
-    totalProviders       = n(pa.total_providers);
-    activeProviders      = n(pa.active_providers);
-    suspendedProviders   = n(pa.suspended_providers);
-    archivedProviders    = n(pa.archived_providers);
-    totalCustomers       = n(pa.total_customers);
+    totalProviders         = n(pa.total_providers);
+    activeProviders        = n(pa.active_providers);
+    suspendedProviders     = n(pa.suspended_providers);
+    archivedProviders      = n(pa.archived_providers);
+    totalCustomers         = n(pa.total_customers);
+    newCustomersToday      = n(pa.new_customers_today);
     documentsNeedingReview = n(pa.docs_review);
   } catch { /* user_credentials role column type mismatch — degrade to 0 */ }
 
@@ -337,6 +341,26 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
     missingDocs  = n(ph.missing_docs);
     missingAvail = n(ph.missing_avail);
     missingArea  = n(ph.missing_area);
+
+    // Accurate docs-pending-review count: providers with at least one requirement
+    // that has no final (approved/rejected) non-superseded decision yet.
+    // Nested try/catch because provider_requirement_decisions is also lazily created.
+    try {
+      const drRes = await dbQuery.query(
+        `SELECT COUNT(DISTINCT wr.worker_uid) AS docs_pending
+         FROM ${s}.worker_requirements wr
+         JOIN ${s}.user_credentials uc ON uc.uid = wr.worker_uid
+         WHERE uc.role::int IN (2,4) AND uc.is_archive = false
+           AND NOT EXISTS (
+             SELECT 1 FROM ${s}.provider_requirement_decisions prd
+             WHERE prd.worker_requirement_id = wr.id
+               AND NOT prd.is_superseded
+               AND prd.decision IN ('approved','rejected')
+           )`,
+        []
+      );
+      documentsNeedingReview = n(drRes.rows[0]?.docs_pending);
+    } catch { /* provider_requirement_decisions not yet created — keep pending-account fallback */ }
   } catch { /* worker_requirements/availability/service_areas may not exist yet */ }
 
   // ── Pending service applications (optional table) ───────────────────────────
@@ -429,6 +453,40 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
     }));
   } catch { /* timeline table may not exist */ }
 
+  // Fallback: if booking_timeline_events doesn't exist yet, surface recent bookings
+  if (recentActivity.length === 0) {
+    try {
+      const bkRes = await dbQuery.query(
+        `SELECT b.id::text AS id, b.status AS raw_status, b.created_at
+         FROM ${s}.bookings b
+         ORDER BY b.created_at DESC
+         LIMIT 20`,
+        []
+      );
+      const statusTypeMap: Record<string, string> = {
+        CONFIRMED: 'booking_created', PAID: 'payment_submitted',
+        COMPLETED: 'job_completed',   CANCELLED: 'booking_cancelled',
+        CANCELED: 'booking_cancelled', DISPUTED: 'dispute_opened',
+      };
+      recentActivity = bkRes.rows.map((row: any) => {
+        const st = String(row.raw_status ?? '').toUpperCase();
+        const type = statusTypeMap[st] ?? 'booking_created';
+        const label = st.charAt(0) + st.slice(1).toLowerCase();
+        return {
+          id: row.id,
+          type,
+          title: `Booking ${label}`,
+          description: null,
+          actorType: null,
+          entityType: 'booking',
+          entityId: row.id,
+          route: `/portal/job-orders/${row.id}`,
+          createdAt: row.created_at?.toISOString?.() ?? String(row.created_at),
+        };
+      });
+    } catch { /* bookings table unavailable */ }
+  }
+
   // ── Assemble sections ─────────────────────────────────────────────────────
 
   const snapshot: AdminDashboardSnapshot = {
@@ -483,7 +541,7 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
 
   const customerHealth: AdminCustomerHealth = {
     totalCustomers,
-    newCustomersToday: 0,
+    newCustomersToday,
     customersWithActiveBookings: n(r.customers_with_active_bookings),
     customersWithPaymentIssues: n(r.customers_with_payment_issues),
     customersWithDisputes: n(r.customers_with_disputes),
