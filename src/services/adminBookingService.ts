@@ -872,7 +872,10 @@ export const adminRescheduleBooking = async (
   );
   if (!bkRes.rowCount) throw new Error('Booking not found');
 
-  const prevSchedule = bkRes.rows[0].schedule;
+  const { schedule: prevSchedule, status } = bkRes.rows[0];
+  if (['COMPLETED', 'CANCELLED', 'CANCELED'].includes((status || '').toUpperCase())) {
+    throw new Error(`Cannot reschedule a booking with status ${status}`);
+  }
 
   await dbQuery.query(
     `UPDATE ${dbSchema}.bookings SET schedule = $1 WHERE id = $2`,
