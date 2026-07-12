@@ -5,7 +5,7 @@ import { auditFire, writeSuccess } from "../services/adminAuditService";
 import { listAssignmentCandidates } from "../services/providerEligibilityEngine";
 
 const actorUid = (req: any): string | null =>
-  req.user?.uid ?? req.headers['x-admin-uid'] ?? null;
+  req.user?.uid ?? null;
 
 export const listBookings = async (req: Request, res: Response) => {
   try {

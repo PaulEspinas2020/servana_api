@@ -230,6 +230,12 @@ export const getAdminBookings = async (
 
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
+  // ops_status is a computed field — add it to the SQL so COUNT + LIMIT apply to the filtered set
+  if (filter.operationsStatus) {
+    params.push(filter.operationsStatus);
+  }
+  const opsFilter = filter.operationsStatus ? `AND ops_status = $${pi++}` : '';
+
   const baseSQL = `
     WITH latest_assignment AS (
       SELECT DISTINCT ON (booking_id)
@@ -242,46 +248,64 @@ export const getAdminBookings = async (
         booking_id, status AS payment_status
       FROM ${dbSchema}.payments
       ORDER BY booking_id, id DESC
+    ),
+    bops AS (
+      SELECT
+        b.id                                         AS booking_id,
+        b.status                                     AS raw_status,
+        b.worker_uid,
+        b.payment_method,
+        b.quoted_price,
+        b.final_price,
+        b.schedule                                   AS scheduled_at,
+        b.created_at,
+        b.updated_at,
+        la.worker_uid                                AS provider_uid,
+        la.worker_status,
+        la.assigned_at,
+        lp.payment_status,
+        cu.uid                                       AS customer_uid,
+        COALESCE(cu.first_name,'') || ' ' || COALESCE(cu.last_name,'') AS customer_name,
+        cu.phone_number                              AS customer_phone,
+        cu.email                                     AS customer_email,
+        COALESCE(wu.first_name,'') || ' ' || COALESCE(wu.last_name,'') AS provider_name,
+        wu.phone_number                              AS provider_phone,
+        s.id                                         AS service_id,
+        so.id                                        AS service_option_id,
+        s.name                                       AS service_name,
+        so.level_3                                   AS specific_service_name,
+        ua.address_one                               AS address_line,
+        ua.post_town                                 AS city,
+        br.id                                        AS branch_id,
+        br.name                                      AS branch_name,
+        br.city                                      AS branch_city,
+        CASE
+          WHEN EXISTS (SELECT 1 FROM ${dbSchema}.booking_escalations esc
+                       WHERE esc.booking_id = b.id AND esc.resolved_at IS NULL) THEN 'disputed'
+          WHEN b.status = 'COMPLETED' OR la.worker_status = 'COMPLETED'        THEN 'completed'
+          WHEN la.worker_status = 'IN_PROGRESS'                                 THEN 'in_progress'
+          WHEN la.worker_status = 'ACCEPTED'                                    THEN 'accepted'
+          WHEN la.worker_status = 'ASSIGNED' OR b.status = 'WORKER_ASSIGNED'   THEN 'assigned'
+          WHEN b.status = 'PENDING_OTP'                                         THEN 'new'
+          WHEN b.status IN ('CONFIRMED','PAID')
+            AND (b.worker_uid IS NULL OR b.worker_uid = '')                     THEN 'awaiting_assignment'
+          WHEN b.status IN ('CONFIRMED','PAID') AND b.worker_uid IS NOT NULL
+            AND b.worker_uid != ''                                               THEN 'assigned'
+          WHEN b.status IN ('CANCELLED','CANCELED')                             THEN 'cancelled'
+          ELSE 'new'
+        END AS ops_status
+      FROM ${dbSchema}.bookings b
+      LEFT JOIN ${dbSchema}.user_credentials cu  ON cu.uid  = b.user_id
+      LEFT JOIN ${dbSchema}.service_options so   ON so.id   = b.service_option_id
+      LEFT JOIN ${dbSchema}.services s           ON s.id    = so.service_id
+      LEFT JOIN ${dbSchema}.user_address ua      ON ua.address_id = b.user_address_id
+      LEFT JOIN latest_payment  lp               ON lp.booking_id = b.id
+      LEFT JOIN ${dbSchema}.branches br          ON br.id   = b.branch_id
+      LEFT JOIN latest_assignment la             ON la.booking_id = b.id
+      LEFT JOIN ${dbSchema}.user_credentials wu  ON wu.uid  = la.worker_uid
+      ${whereClause}
     )
-    SELECT
-      b.id                                         AS booking_id,
-      b.status                                     AS raw_status,
-      b.worker_uid,
-      b.payment_method,
-      b.quoted_price,
-      b.final_price,
-      b.schedule                                   AS scheduled_at,
-      b.created_at,
-      b.updated_at,
-      la.worker_uid                                AS provider_uid,
-      la.worker_status,
-      la.assigned_at,
-      lp.payment_status,
-      cu.uid                                       AS customer_uid,
-      COALESCE(cu.first_name,'') || ' ' || COALESCE(cu.last_name,'') AS customer_name,
-      cu.phone_number                              AS customer_phone,
-      cu.email                                     AS customer_email,
-      COALESCE(wu.first_name,'') || ' ' || COALESCE(wu.last_name,'') AS provider_name,
-      wu.phone_number                              AS provider_phone,
-      s.id                                         AS service_id,
-      so.id                                        AS service_option_id,
-      s.name                                       AS service_name,
-      so.level_3                                   AS specific_service_name,
-      ua.address_one                               AS address_line,
-      ua.post_town                                 AS city,
-      br.id                                        AS branch_id,
-      br.name                                      AS branch_name,
-      br.city                                      AS branch_city
-    FROM ${dbSchema}.bookings b
-    LEFT JOIN ${dbSchema}.user_credentials cu  ON cu.uid  = b.user_id
-    LEFT JOIN ${dbSchema}.service_options so   ON so.id   = b.service_option_id
-    LEFT JOIN ${dbSchema}.services s           ON s.id    = so.service_id
-    LEFT JOIN ${dbSchema}.user_address ua      ON ua.address_id = b.user_address_id
-    LEFT JOIN latest_payment  lp               ON lp.booking_id = b.id
-    LEFT JOIN ${dbSchema}.branches br          ON br.id   = b.branch_id
-    LEFT JOIN latest_assignment la             ON la.booking_id = b.id
-    LEFT JOIN ${dbSchema}.user_credentials wu  ON wu.uid  = la.worker_uid
-    ${whereClause}
+    SELECT * FROM bops WHERE 1=1 ${opsFilter}
   `;
 
   const countRes = await dbQuery.query(
@@ -290,12 +314,12 @@ export const getAdminBookings = async (
   );
 
   const dataRes = await dbQuery.query(
-    `${baseSQL} ORDER BY b.created_at DESC LIMIT $${pi} OFFSET $${pi + 1}`,
+    `${baseSQL} ORDER BY created_at DESC LIMIT $${pi} OFFSET $${pi + 1}`,
     [...params, limit, offset]
   );
 
   let rows = dataRes.rows.map((row: any) => {
-    const opStatus = mapOperationsStatus(
+    const opStatus = (row.ops_status as string) ?? mapOperationsStatus(
       row.raw_status,
       row.worker_status,
       row.worker_uid
@@ -340,9 +364,6 @@ export const getAdminBookings = async (
     };
   });
 
-  if (filter.operationsStatus) {
-    rows = rows.filter((r: any) => r.operationsStatus === filter.operationsStatus);
-  }
   if (filter.needsAdminAction === true) {
     rows = rows.filter((r: any) => r.needsAdminAction);
   }
