@@ -278,7 +278,7 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
           COUNT(DISTINCT user_id) FILTER (WHERE pay_status IN ('FAILED','REFUND_PENDING'))        AS customers_with_payment_issues,
           COUNT(DISTINCT user_id) FILTER (WHERE has_escalation = true)                            AS customers_with_disputes
         FROM bops
-      ),
+      )
 
     SELECT ba.*
     FROM ba
