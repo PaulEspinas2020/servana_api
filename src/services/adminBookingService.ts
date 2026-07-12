@@ -416,10 +416,17 @@ export const getAdminBookingMetrics = async (): Promise<any> => {
         booking_id, worker_uid, status AS worker_status
       FROM ${dbSchema}.booking_workers
       ORDER BY booking_id, assigned_at DESC NULLS LAST
+    ),
+    escalated AS (
+      SELECT DISTINCT booking_id
+      FROM ${dbSchema}.booking_escalations
+      WHERE resolved_at IS NULL
     )
-    SELECT b.id, b.status, b.worker_uid, la.worker_status
+    SELECT b.id, b.status, b.worker_uid, la.worker_status,
+           CASE WHEN e.booking_id IS NOT NULL THEN TRUE ELSE FALSE END AS has_escalation
     FROM ${dbSchema}.bookings b
     LEFT JOIN latest_assignment la ON la.booking_id = b.id
+    LEFT JOIN escalated e ON e.booking_id = b.id
   `, []);
 
   const counts: Record<string, number> = {
@@ -430,7 +437,7 @@ export const getAdminBookingMetrics = async (): Promise<any> => {
 
   for (const row of res.rows) {
     counts['total']++;
-    const s = mapOperationsStatus(row.status, row.worker_status, row.worker_uid);
+    const s = mapOperationsStatus(row.status, row.worker_status, row.worker_uid, !!row.has_escalation);
     counts[s] = (counts[s] ?? 0) + 1;
   }
 
