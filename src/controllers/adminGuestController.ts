@@ -73,7 +73,7 @@ export const listGuests = async (req: Request, res: Response) => {
 // GET /admin/customers/guests/:guestId
 export const getGuestDetail = async (req: Request, res: Response) => {
   try {
-    const { guestId } = req.params;
+    const { guestId } = req.params as { guestId: string };
     if (!guestId) return adminBadRequest(res, 'guestId is required');
     const detail = await svc.getGuestDetail(guestId);
     if (!detail) return adminNotFound(res, 'Guest customer');
@@ -86,7 +86,7 @@ export const getGuestDetail = async (req: Request, res: Response) => {
 // GET /admin/customers/guests/:guestId/bookings
 export const getGuestBookings = async (req: Request, res: Response) => {
   try {
-    const { guestId } = req.params;
+    const { guestId } = req.params as { guestId: string };
     if (!guestId) return adminBadRequest(res, 'guestId is required');
     const bookings = await svc.getGuestBookings(guestId);
     return res.json({ status: 'success', data: bookings });
@@ -98,7 +98,7 @@ export const getGuestBookings = async (req: Request, res: Response) => {
 // PATCH /admin/customers/guests/:guestId
 export const updateGuest = async (req: Request, res: Response) => {
   try {
-    const { guestId } = req.params;
+    const { guestId } = req.params as { guestId: string };
     if (!guestId) return adminBadRequest(res, 'guestId is required');
 
     const { firstName, lastName, email, sourceChannel, sourceDetails, internalNotes } = req.body;
@@ -125,7 +125,7 @@ export const updateGuest = async (req: Request, res: Response) => {
 // POST /admin/customers/guests/:guestId/link-client
 export const linkGuestToClient = async (req: Request, res: Response) => {
   try {
-    const { guestId } = req.params;
+    const { guestId } = req.params as { guestId: string };
     if (!guestId) return adminBadRequest(res, 'guestId is required');
 
     const { customerUid, reason } = req.body;
