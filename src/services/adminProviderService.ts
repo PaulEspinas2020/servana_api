@@ -306,7 +306,7 @@ export const getProviderIdentity = async (uid: string) => {
     lastName: cred.last_name,
     fullName: `${cred.first_name ?? ''} ${cred.last_name ?? ''}`.trim() || cred.email,
     phoneNumber: cred.phone_number,
-    role: cred.role,
+    role: Number(cred.role),
     accountStatus: cred.account_status ?? 'pending',
     isArchive: cred.is_archive,
     isEmailVerified: cred.is_email_verified,
@@ -366,7 +366,7 @@ export const getProviderServiceApplications = async (uid: string) => {
     [uid]
   );
   return res.rows.map((r: any) => ({
-    id: r.id,
+    id: String(r.id),
     serviceId: r.service_id,
     category: r.category ?? '',
     serviceName: r.service_name ?? '',
