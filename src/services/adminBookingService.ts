@@ -293,10 +293,14 @@ export const getAdminBookings = async (
         la.assigned_at,
         la.confirmation_source,
         lp.payment_status,
-        cu.uid                                       AS customer_uid,
-        COALESCE(cu.first_name,'') || ' ' || COALESCE(cu.last_name,'') AS customer_name,
-        cu.phone_number                              AS customer_phone,
-        cu.email                                     AS customer_email,
+        CASE WHEN b.guest_customer_id IS NOT NULL THEN 'guest' ELSE 'client' END AS customer_type,
+        COALESCE(cu.uid, b.guest_customer_id::text)  AS customer_uid,
+        COALESCE(
+          COALESCE(cu.first_name,'') || ' ' || COALESCE(cu.last_name,''),
+          COALESCE(gc.first_name,'') || ' ' || COALESCE(gc.last_name,'')
+        )                                            AS customer_name,
+        COALESCE(cu.phone_number, gc.phone_normalized) AS customer_phone,
+        COALESCE(cu.email, gc.email)                 AS customer_email,
         COALESCE(wu.first_name,'') || ' ' || COALESCE(wu.last_name,'') AS provider_name,
         wu.phone_number                              AS provider_phone,
         s.id                                         AS service_id,
@@ -325,6 +329,7 @@ export const getAdminBookings = async (
         END AS ops_status
       FROM ${dbSchema}.bookings b
       LEFT JOIN ${dbSchema}.user_credentials cu  ON cu.uid  = b.user_id
+      LEFT JOIN ${dbSchema}.guest_customers  gc  ON gc.guest_customer_id = b.guest_customer_id
       LEFT JOIN ${dbSchema}.service_options so   ON so.id   = b.service_option_id
       LEFT JOIN ${dbSchema}.services s           ON s.id    = so.service_id
       LEFT JOIN ${dbSchema}.user_address ua      ON ua.address_id = b.user_address_id
@@ -361,6 +366,7 @@ export const getAdminBookings = async (
       bookingId: row.booking_id,
       rawStatus: row.raw_status,
       operationsStatus: opStatus,
+      customerType: (row.customer_type as 'guest' | 'client') ?? 'client',
       customerUid: row.customer_uid ?? null,
       customerName: (row.customer_name ?? '').trim() || null,
       customerPhone: row.customer_phone ?? null,
@@ -453,10 +459,16 @@ export const getAdminBookingDetail = async (bookingId: number): Promise<any | nu
       b.quoted_price, b.final_price, b.pricing_breakdown,
       b.schedule, b.created_at,
       b.service_option_id, b.branch_id, b.user_address_id, b.user_id,
-      COALESCE(cu.first_name,'') || ' ' || COALESCE(cu.last_name,'')  AS customer_name,
-      cu.uid    AS customer_uid,
-      cu.phone_number AS customer_phone,
-      cu.email  AS customer_email,
+      b.guest_customer_id, b.service_address, b.admin_created,
+      CASE WHEN b.guest_customer_id IS NOT NULL THEN 'guest' ELSE 'client' END AS customer_type,
+      COALESCE(
+        NULLIF(TRIM(COALESCE(cu.first_name,'') || ' ' || COALESCE(cu.last_name,'')), ''),
+        TRIM(COALESCE(gc.first_name,'') || ' ' || COALESCE(gc.last_name,''))
+      )                                              AS customer_name,
+      COALESCE(cu.uid, b.guest_customer_id::text)   AS customer_uid,
+      COALESCE(cu.phone_number, gc.phone_normalized) AS customer_phone,
+      COALESCE(cu.email, gc.email)                   AS customer_email,
+      gc.guest_customer_id  AS gc_id,
       so.id     AS service_option_id_val,
       so.level_3 AS specific_service_name,
       so.base_price,
@@ -479,6 +491,7 @@ export const getAdminBookingDetail = async (bookingId: number): Promise<any | nu
       ua.lon
     FROM ${dbSchema}.bookings b
     LEFT JOIN ${dbSchema}.user_credentials cu ON cu.uid = b.user_id
+    LEFT JOIN ${dbSchema}.guest_customers  gc ON gc.guest_customer_id = b.guest_customer_id
     LEFT JOIN ${dbSchema}.service_options so  ON so.id  = b.service_option_id
     LEFT JOIN ${dbSchema}.services s          ON s.id   = so.service_id
     LEFT JOIN ${dbSchema}.payments p          ON p.booking_id = b.id
@@ -525,7 +538,11 @@ export const getAdminBookingDetail = async (bookingId: number): Promise<any | nu
       name: (bk.customer_name ?? '').trim() || null,
       phone: bk.customer_phone ?? null,
       email: bk.customer_email ?? null,
+      customerType: (bk.customer_type as 'guest' | 'client') ?? 'client',
+      guestCustomerId: bk.gc_id ?? null,
     },
+    adminCreated: bk.admin_created ?? false,
+    serviceAddress: bk.service_address ?? null,
     providerAssignment: assignment ? {
       providerUid: assignment.worker_uid,
       name: (assignment.worker_name ?? '').trim() || null,

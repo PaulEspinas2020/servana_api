@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import * as svc from "../services/adminBookingService";
+import * as createSvc from "../services/adminCreateBookingService";
 import { adminServerError, adminNotFound, adminBadRequest } from "../helpers/adminError";
 import { auditFire, writeSuccess } from "../services/adminAuditService";
 import { listAssignmentCandidates } from "../services/providerEligibilityEngine";
@@ -340,6 +341,145 @@ export const confirmProviderAssignment = async (req: Request, res: Response) => 
 
     return res.json({ status: 'success', data: result });
   } catch (err: any) {
+    return adminServerError(res, err);
+  }
+};
+
+// ── Admin Create Booking ───��───────────────────────────────────────────────────
+
+export const searchClientsForBooking = async (req: Request, res: Response) => {
+  try {
+    const q = String(req.query['q'] ?? '').trim();
+    if (!q || q.length < 2) {
+      return res.json({ status: 'success', data: [] });
+    }
+    const results = await createSvc.searchClients(q);
+    return res.json({ status: 'success', data: results });
+  } catch (err: any) {
+    return adminServerError(res, err);
+  }
+};
+
+export const checkGuestDuplicate = async (req: Request, res: Response) => {
+  try {
+    const phone = String(req.query['phone'] ?? '').trim();
+    if (!phone) return adminBadRequest(res, 'phone is required');
+    const normalized = createSvc.normalizePhilippinePhone(phone);
+    const result = await createSvc.detectGuestDuplicate(normalized);
+    return res.json({ status: 'success', data: { ...result, normalizedPhone: normalized } });
+  } catch (err: any) {
+    return adminServerError(res, err);
+  }
+};
+
+export const getBookableServices = async (_req: Request, res: Response) => {
+  try {
+    const services = await createSvc.getBookableServicesForAdmin();
+    return res.json({ status: 'success', data: services });
+  } catch (err: any) {
+    return adminServerError(res, err);
+  }
+};
+
+export const getSlotCandidates = async (req: Request, res: Response) => {
+  try {
+    const { startAt, endAt, serviceId, cityId, branchId } = req.query as any;
+    if (!startAt) return adminBadRequest(res, 'startAt is required');
+    const derivedEnd = endAt ?? new Date(new Date(startAt).getTime() + 2 * 60 * 60 * 1000).toISOString();
+    const candidates = await createSvc.listCandidatesForSlot({
+      startAt,
+      endAt: derivedEnd,
+      serviceId: serviceId ?? null,
+      cityId:    cityId   ?? null,
+      branchId:  branchId ?? null,
+    });
+    return res.json({ status: 'success', data: candidates });
+  } catch (err: any) {
+    return adminServerError(res, err);
+  }
+};
+
+export const createAdminBooking = async (req: Request, res: Response) => {
+  try {
+    const body = req.body ?? {};
+    const {
+      idempotencyKey, customerType,
+      guest, customerUid,
+      serviceOptionId, addonOptionIds,
+      scheduledAt,
+      addressLine, city, lat, lon,
+      providerUid,
+      paymentMethod, paymentStatus,
+      paymentEvidence,
+    } = body;
+
+    if (!idempotencyKey?.trim())           return adminBadRequest(res, 'idempotencyKey is required');
+    if (!['guest','client'].includes(customerType)) return adminBadRequest(res, 'customerType must be guest or client');
+    if (!serviceOptionId)                  return adminBadRequest(res, 'serviceOptionId is required');
+    if (!scheduledAt)                      return adminBadRequest(res, 'scheduledAt is required');
+    if (!addressLine?.trim())              return adminBadRequest(res, 'addressLine is required');
+    if (!city?.trim())                     return adminBadRequest(res, 'city is required');
+    if (lat == null || lon == null)        return adminBadRequest(res, 'lat and lon are required');
+    if (!providerUid?.trim())              return adminBadRequest(res, 'providerUid is required');
+    if (!['CASH','GCASH','ONLINE'].includes(paymentMethod)) return adminBadRequest(res, 'paymentMethod must be CASH, GCASH, or ONLINE');
+    if (!['PAID','PAY_LATER'].includes(paymentStatus))      return adminBadRequest(res, 'paymentStatus must be PAID or PAY_LATER');
+
+    const result = await createSvc.adminCreateBooking({
+      idempotencyKey,
+      adminActorUid: actorUid(req) ?? '',
+      customerType,
+      guest: customerType === 'guest' ? guest : undefined,
+      customerUid: customerType === 'client' ? customerUid : undefined,
+      serviceOptionId: Number(serviceOptionId),
+      addonOptionIds: Array.isArray(addonOptionIds) ? addonOptionIds.map(Number) : [],
+      scheduledAt,
+      addressLine, city,
+      lat: Number(lat), lon: Number(lon),
+      providerUid,
+      paymentMethod,
+      paymentStatus,
+      paymentEvidence: paymentEvidence ?? null,
+    });
+
+    await writeSuccess({
+      action: 'booking_created_by_admin',
+      actionCategory: 'booking',
+      actorUid: actorUid(req) ?? '',
+      entityType: 'booking',
+      entityId: String(result.bookingId),
+      after: { bookingId: result.bookingId, customerType, providerUid, paymentStatus },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
+    return res.status(201).json({ status: 'success', data: result });
+  } catch (err: any) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({ status: 'failed', message: err.message });
+    }
+    return adminServerError(res, err);
+  }
+};
+
+export const uploadPaymentEvidence = async (req: Request, res: Response) => {
+  try {
+    const { file, fileName } = req.body ?? {};
+    if (!file)      return adminBadRequest(res, 'file (data URI) is required');
+    if (!fileName)  return adminBadRequest(res, 'fileName is required');
+    if (typeof file !== 'string' || !file.startsWith('data:')) {
+      return res.status(422).json({ status: 'failed', message: 'file must be a base64 data URI' });
+    }
+    const result = await createSvc.validateAndUploadEvidence({
+      dataUri: file,
+      originalFileName: String(fileName).slice(0, 255),
+      adminUid: actorUid(req) ?? 'unknown',
+    });
+    return res.json({ status: 'success', data: result });
+  } catch (err: any) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({ status: 'failed', message: err.message });
+    }
     return adminServerError(res, err);
   }
 };

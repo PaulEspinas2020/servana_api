@@ -143,6 +143,15 @@ app.use("/api", cors(corsOptionsDelegate), adminOnboardingRoutes);
 import adminBookingRoutes from "./routes/adminBooking.routes";
 app.use("/api", cors(corsOptionsDelegate), adminBookingRoutes);
 
+import { ensureAdminCreateBookingSchema } from "./services/adminCreateBookingService";
+(async () => {
+  try {
+    await ensureAdminCreateBookingSchema();
+  } catch (err) {
+    console.error("[admin-create-booking] schema error:", err);
+  }
+})();
+
 import adminDashboardRoutes from "./routes/adminDashboard.routes";
 app.use("/api", cors(corsOptionsDelegate), adminDashboardRoutes);
 

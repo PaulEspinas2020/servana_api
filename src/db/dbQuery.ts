@@ -15,6 +15,8 @@ const pool = new Pool({
     password: db.password
 })
 
+export { pool };
+
 export default {
     /**
      * DB Query

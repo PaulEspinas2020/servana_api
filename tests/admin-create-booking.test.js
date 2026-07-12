@@ -1,0 +1,282 @@
+/**
+ * ADMINCREATEBOOKING command — source contracts
+ * Run: npx jest tests/admin-create-booking.test.js
+ */
+
+const fs   = require('fs');
+const path = require('path');
+
+const svcSrc    = fs.readFileSync(path.join(__dirname, '../src/services/adminCreateBookingService.ts'), 'utf-8');
+const ctrlSrc   = fs.readFileSync(path.join(__dirname, '../src/controllers/adminBookingController.ts'), 'utf-8');
+const routeSrc  = fs.readFileSync(path.join(__dirname, '../src/routes/adminBooking.routes.ts'), 'utf-8');
+const permSrc   = fs.readFileSync(path.join(__dirname, '../src/services/adminPermissionService.ts'), 'utf-8');
+const appSrc    = fs.readFileSync(path.join(__dirname, '../src/app.ts'), 'utf-8');
+
+// Isolate the createBooking transaction function body (full function, generous slice)
+const txStart = svcSrc.indexOf('adminCreateBooking =');
+const txBody  = svcSrc.slice(txStart, txStart + 12000);
+
+describe('adminCreateBooking — schema bootstrap', () => {
+  it('creates guest_customers table', () => {
+    expect(svcSrc).toContain('guest_customers');
+    expect(svcSrc).toContain('phone_normalized');
+    expect(svcSrc).toContain('linked_customer_uid');
+  });
+
+  it('creates booking_payment_evidence table', () => {
+    expect(svcSrc).toContain('booking_payment_evidence');
+    expect(svcSrc).toContain('storage_url');
+    expect(svcSrc).toContain('mime_type');
+  });
+
+  it('creates booking_create_idempotency table with UNIQUE constraint', () => {
+    expect(svcSrc).toContain('booking_create_idempotency');
+    expect(svcSrc).toContain('UNIQUE (idempotency_key, admin_actor_uid)');
+  });
+
+  it('adds guest_customer_id column to bookings', () => {
+    expect(svcSrc).toContain('ADD COLUMN IF NOT EXISTS guest_customer_id');
+  });
+
+  it('adds admin_created flag to bookings', () => {
+    expect(svcSrc).toContain('ADD COLUMN IF NOT EXISTS admin_created');
+  });
+
+  it('relaxes user_id NOT NULL for guest support', () => {
+    expect(svcSrc).toContain('ALTER COLUMN user_id DROP NOT NULL');
+  });
+
+  it('wraps each ALTER TABLE in try-catch so one failure does not abort the rest', () => {
+    const alterIdx = svcSrc.indexOf('ALTER TABLE ${s}.bookings ADD COLUMN IF NOT EXISTS guest_customer_id');
+    const catchIdx = svcSrc.indexOf('} catch {', alterIdx);
+    expect(catchIdx).toBeGreaterThan(alterIdx);
+  });
+});
+
+describe('adminCreateBooking — phone normalization', () => {
+  it('normalizes 09XXXXXXXXX → +639XXXXXXXXX', () => {
+    expect(svcSrc).toContain("startsWith('09') && cleaned.length === 11");
+    expect(svcSrc).toContain("'+63' + cleaned.slice(1)");
+  });
+
+  it('normalizes 63XXXXXXXXXX → +63XXXXXXXXXX', () => {
+    expect(svcSrc).toContain("startsWith('63') && cleaned.length === 12");
+  });
+});
+
+describe('adminCreateBooking — idempotency guard', () => {
+  it('checks idempotency BEFORE opening a transaction', () => {
+    const idempIdx  = txBody.indexOf('booking_create_idempotency');
+    const beginIdx  = txBody.indexOf("client.query('BEGIN')");
+    expect(idempIdx).toBeGreaterThanOrEqual(0);
+    expect(beginIdx).toBeGreaterThan(idempIdx);
+  });
+
+  it('records idempotency key inside the transaction', () => {
+    expect(txBody).toContain('INSERT INTO ${s}.booking_create_idempotency');
+    expect(txBody).toContain('ON CONFLICT DO NOTHING');
+  });
+});
+
+describe('adminCreateBooking — transaction safety', () => {
+  it("uses pool.connect() for a true transaction (not pool.query)", () => {
+    expect(svcSrc).toContain('pool.connect()');
+    expect(txBody).toContain("client.query('BEGIN')");
+    expect(txBody).toContain("client.query('COMMIT')");
+    expect(txBody).toContain("client.query('ROLLBACK')");
+    expect(txBody).toContain('client.release()');
+  });
+
+  it('ROLLBACK is inside catch, release is inside finally', () => {
+    expect(txBody).toContain("client.query('ROLLBACK')");
+    expect(txBody).toContain('client.release()');
+    // Verify structural order: BEGIN < ROLLBACK < release
+    const beginIdx    = txBody.indexOf("client.query('BEGIN')");
+    const rollbackIdx = txBody.indexOf("client.query('ROLLBACK')");
+    const releaseIdx  = txBody.indexOf('client.release()');
+    expect(beginIdx).toBeGreaterThanOrEqual(0);
+    expect(rollbackIdx).toBeGreaterThan(beginIdx);
+    expect(releaseIdx).toBeGreaterThan(rollbackIdx);
+  });
+});
+
+describe('adminCreateBooking — booking status rules', () => {
+  it("inserts booking with status='CONFIRMED' — never PENDING_OTP", () => {
+    expect(txBody).toContain("'CONFIRMED'");
+    expect(txBody).not.toContain('PENDING_OTP');
+  });
+
+  it("inserts booking_workers with status='ASSIGNED'", () => {
+    expect(txBody).toContain("'ASSIGNED'");
+    expect(txBody).toContain('booking_workers');
+  });
+
+  it('sets admin_created = true on the booking row', () => {
+    expect(txBody).toContain('admin_created');
+    expect(txBody).toContain('true');
+  });
+});
+
+describe('adminCreateBooking — provider eligibility recheck', () => {
+  it('calls evaluateProviderForSlot at creation time (server-side recheck)', () => {
+    expect(svcSrc).toContain('evaluateProviderForSlot');
+    // recheck is pre-flight before BEGIN — inside adminCreateBooking, eligibility check precedes BEGIN
+    const fnStart     = svcSrc.indexOf('adminCreateBooking =');
+    const fnBody      = svcSrc.slice(fnStart, fnStart + 12000);
+    const evalIdx     = fnBody.indexOf('evaluateProviderForSlot(providerUid');
+    const beginIdx    = fnBody.indexOf("client.query('BEGIN')");
+    expect(evalIdx).toBeGreaterThanOrEqual(0);
+    expect(evalIdx).toBeLessThan(beginIdx);
+  });
+
+  it('uses serviceId from service_options JOIN, not from client payload directly', () => {
+    expect(svcSrc).toContain('String(svcRow.service_id)');
+  });
+
+  it('rejects ineligible provider with 409', () => {
+    expect(svcSrc).toContain('statusCode: 409');
+    expect(svcSrc).toContain('Provider is not eligible for this slot');
+  });
+});
+
+describe('adminCreateBooking — guest customer handling', () => {
+  it('stores guest_customer_id on the booking row', () => {
+    expect(txBody).toContain('guest_customer_id');
+  });
+
+  it('does NOT use a fake Firebase UID for guests (user_id is NULL for guest)', () => {
+    expect(txBody).toContain("customerType === 'client' ? customerUid : null");
+  });
+
+  it('uses ON CONFLICT DO NOTHING for guest upsert (same phone → same identity)', () => {
+    expect(txBody).toContain('ON CONFLICT DO NOTHING');
+  });
+});
+
+describe('adminCreateBooking — payment evidence', () => {
+  it('validates MIME type against allowed list (JPEG/PNG/WebP only)', () => {
+    expect(svcSrc).toContain("'image/jpeg'");
+    expect(svcSrc).toContain("'image/png'");
+    expect(svcSrc).toContain("'image/webp'");
+  });
+
+  it('performs magic-byte verification', () => {
+    expect(svcSrc).toContain('MAGIC_BYTES');
+    expect(svcSrc).toContain('0xFF, 0xD8, 0xFF'); // JPEG
+    expect(svcSrc).toContain('0x89, 0x50, 0x4E, 0x47'); // PNG
+  });
+
+  it('enforces 15 MB size limit', () => {
+    expect(svcSrc).toContain('15 * 1024 * 1024');
+  });
+
+  it('uses token-authenticated Firebase Storage (uploadFileToStorage)', () => {
+    expect(svcSrc).toContain('uploadFileToStorage');
+    expect(svcSrc).toContain("'payment-evidence'");
+  });
+
+  it('stores evidence metadata in booking_payment_evidence (not in bookings directly)', () => {
+    expect(txBody).toContain('booking_payment_evidence');
+    expect(txBody).toContain('storage_url');
+  });
+});
+
+describe('adminCreateBooking — stop conditions (hard rules)', () => {
+  it('does NOT call /api/workers/bookings (mobile endpoint protected)', () => {
+    expect(svcSrc).not.toContain('/api/workers/bookings');
+  });
+
+  it('does NOT call acceptJob (mobile route untouched)', () => {
+    expect(svcSrc).not.toContain('acceptJob');
+  });
+
+  it('does NOT call POST /bookings (customer route untouched)', () => {
+    expect(svcSrc).not.toContain("POST /bookings");
+    expect(svcSrc).not.toContain('createBooking(');
+  });
+
+  it('does NOT generate a fake Firebase UID or call firebase.auth', () => {
+    expect(svcSrc).not.toContain('firebase.auth');
+    expect(svcSrc).not.toContain('createUserWithEmailAndPassword');
+    expect(svcSrc).not.toContain('signInWithEmailAndPassword');
+  });
+});
+
+describe('adminCreateBooking — controller validation', () => {
+  const ctrlFn = (() => {
+    const idx = ctrlSrc.indexOf('createAdminBooking');
+    return ctrlSrc.slice(idx, idx + 2000);
+  })();
+
+  it('rejects missing idempotencyKey', () => {
+    expect(ctrlFn).toContain('idempotencyKey is required');
+  });
+
+  it('rejects invalid customerType (must be guest or client)', () => {
+    expect(ctrlFn).toContain("'guest','client'");
+  });
+
+  it('rejects missing providerUid', () => {
+    expect(ctrlFn).toContain('providerUid is required');
+  });
+
+  it('validates paymentMethod against allowed values', () => {
+    expect(ctrlFn).toContain("'CASH','GCASH','ONLINE'");
+  });
+
+  it('validates paymentStatus against PAID | PAY_LATER', () => {
+    expect(ctrlFn).toContain("'PAID','PAY_LATER'");
+  });
+});
+
+describe('adminCreateBooking — routes', () => {
+  it('POST /admin/bookings is behind bookings.create permission', () => {
+    expect(routeSrc).toContain("'bookings.create'");
+    expect(routeSrc).toContain('createAdminBooking');
+  });
+
+  it('GET /admin/bookings/slot-candidates is before /:id route', () => {
+    const slotIdx    = routeSrc.indexOf('slot-candidates');
+    const idRouteIdx = routeSrc.indexOf('/admin/bookings/:id');
+    expect(slotIdx).toBeGreaterThanOrEqual(0);
+    expect(slotIdx).toBeLessThan(idRouteIdx);
+  });
+
+  it('payment evidence upload route is behind bookings.payment_evidence_upload', () => {
+    expect(routeSrc).toContain("'bookings.payment_evidence_upload'");
+    expect(routeSrc).toContain('uploadPaymentEvidence');
+  });
+
+  it('customer search route uses bookings.create_for_client permission', () => {
+    expect(routeSrc).toContain("'bookings.create_for_client'");
+    expect(routeSrc).toContain('searchClientsForBooking');
+  });
+});
+
+describe('adminCreateBooking — permissions', () => {
+  it('seeds bookings.create permission', () => {
+    expect(permSrc).toContain("key: 'bookings.create'");
+  });
+
+  it('seeds bookings.create_guest permission', () => {
+    expect(permSrc).toContain("key: 'bookings.create_guest'");
+  });
+
+  it('seeds bookings.create_for_client permission', () => {
+    expect(permSrc).toContain("key: 'bookings.create_for_client'");
+  });
+
+  it('seeds bookings.payment_record permission', () => {
+    expect(permSrc).toContain("key: 'bookings.payment_record'");
+  });
+
+  it('seeds bookings.payment_evidence_upload permission', () => {
+    expect(permSrc).toContain("key: 'bookings.payment_evidence_upload'");
+  });
+});
+
+describe('adminCreateBooking — app.ts wiring', () => {
+  it('wires ensureAdminCreateBookingSchema IIFE in app.ts', () => {
+    expect(appSrc).toContain('ensureAdminCreateBookingSchema');
+  });
+});

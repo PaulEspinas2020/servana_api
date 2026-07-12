@@ -7,8 +7,14 @@ import * as ctrl from '../controllers/adminBookingController';
 const router = Router();
 const adminOnly = [verifyAuth, verifyRoles([1])];
 
-// IMPORTANT: /metrics must be registered BEFORE /:id to prevent Express matching it as a booking ID
-router.get('/admin/bookings/metrics', ...adminOnly, requirePermission('bookings.view'), ctrl.getMetrics);
+// IMPORTANT: all static sub-paths must be registered BEFORE /:id routes
+router.get('/admin/bookings/metrics',         ...adminOnly, requirePermission('bookings.view'),                    ctrl.getMetrics);
+router.get('/admin/bookings/slot-candidates', ...adminOnly, requirePermission('bookings.create'),                  ctrl.getSlotCandidates);
+router.get('/admin/services/bookable',        ...adminOnly, requirePermission('bookings.create'),                  ctrl.getBookableServices);
+router.get('/admin/customers/search',         ...adminOnly, requirePermission('bookings.create_for_client'),       ctrl.searchClientsForBooking);
+router.get('/admin/customers/guest-check',    ...adminOnly, requirePermission('bookings.create_guest'),            ctrl.checkGuestDuplicate);
+router.post('/admin/payment-evidence/upload', ...adminOnly, requirePermission('bookings.payment_evidence_upload'), ctrl.uploadPaymentEvidence);
+router.post('/admin/bookings',                ...adminOnly, requirePermission('bookings.create'),                  ctrl.createAdminBooking);
 
 router.get('/admin/bookings',      ...adminOnly, requirePermission('bookings.view'), ctrl.listBookings);
 router.get('/admin/bookings/:id',  ...adminOnly, requirePermission('bookings.details.view'), ctrl.getBookingDetail);
