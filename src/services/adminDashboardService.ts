@@ -280,37 +280,8 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
         FROM bops
       ),
 
-      -- Provider + customer basic aggregations (user_credentials only — always safe)
-      pa AS (
-        SELECT
-          COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false)        AS total_providers,
-          COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
-            AND account_status = 'active')                                      AS active_providers,
-          COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
-            AND account_status = 'suspended')                                   AS suspended_providers,
-          COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = true)          AS archived_providers,
-          COUNT(*) FILTER (WHERE role = 3)                                     AS total_customers
-        FROM ${s}.user_credentials uc
-      ),
-
-      -- Providers with pending_review status (proxy for documents needing review)
-      docs_review AS (
-        SELECT COUNT(*) AS cnt
-        FROM ${s}.user_credentials
-        WHERE role IN (2,4)
-          AND is_archive = false
-          AND account_status = 'pending'
-      )
-
-    SELECT
-      ba.*,
-      pa.total_providers,
-      pa.active_providers,
-      pa.suspended_providers,
-      pa.archived_providers,
-      pa.total_customers,
-      docs.cnt  AS documents_needing_review
-    FROM ba, pa, docs_review docs
+    SELECT ba.*
+    FROM ba
   `;
 
   const mainResult = await dbQuery.query(mainSql, []);
@@ -321,18 +292,42 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
     return Number.isFinite(x) ? x : 0;
   };
 
+  // ── Provider + customer counts (user_credentials — degrade gracefully) ───────
+  let totalProviders = 0, activeProviders = 0, suspendedProviders = 0,
+      archivedProviders = 0, totalCustomers = 0, documentsNeedingReview = 0;
+  try {
+    const paRes = await dbQuery.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE role::int IN (2,4) AND is_archive = false)                       AS total_providers,
+         COUNT(*) FILTER (WHERE role::int IN (2,4) AND is_archive = false AND account_status = 'active')    AS active_providers,
+         COUNT(*) FILTER (WHERE role::int IN (2,4) AND is_archive = false AND account_status = 'suspended') AS suspended_providers,
+         COUNT(*) FILTER (WHERE role::int IN (2,4) AND is_archive = true)                        AS archived_providers,
+         COUNT(*) FILTER (WHERE role::int = 3)                                                   AS total_customers,
+         COUNT(*) FILTER (WHERE role::int IN (2,4) AND is_archive = false AND account_status = 'pending')   AS docs_review
+       FROM ${s}.user_credentials`,
+      []
+    );
+    const pa = paRes.rows[0] ?? {};
+    totalProviders       = n(pa.total_providers);
+    activeProviders      = n(pa.active_providers);
+    suspendedProviders   = n(pa.suspended_providers);
+    archivedProviders    = n(pa.archived_providers);
+    totalCustomers       = n(pa.total_customers);
+    documentsNeedingReview = n(pa.docs_review);
+  } catch { /* user_credentials role column type mismatch — degrade to 0 */ }
+
   // ── Provider health details (optional tables — degrade gracefully) ──────────
   let missingDocs = 0, missingAvail = 0, missingArea = 0;
   try {
     const phRes = await dbQuery.query(
       `SELECT
-         COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
+         COUNT(*) FILTER (WHERE role::int IN (2,4) AND is_archive = false
            AND NOT EXISTS (SELECT 1 FROM ${s}.worker_requirements wr
                            WHERE wr.worker_uid = uc.uid))  AS missing_docs,
-         COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
+         COUNT(*) FILTER (WHERE role::int IN (2,4) AND is_archive = false
            AND NOT EXISTS (SELECT 1 FROM ${s}.worker_availability wa
                            WHERE wa.worker_uid = uc.uid))  AS missing_avail,
-         COUNT(*) FILTER (WHERE role IN (2,4) AND is_archive = false
+         COUNT(*) FILTER (WHERE role::int IN (2,4) AND is_archive = false
            AND NOT EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa
                            WHERE wsa.worker_uid = uc.uid)) AS missing_area
        FROM ${s}.user_credentials uc`,
@@ -444,7 +439,7 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
     revenueToday: n(r.revenue_today),
     pendingPayments: n(r.total_pending_payments),
     pendingProviderApplications: pendingApplications,
-    documentsNeedingReview: n(r.documents_needing_review),
+    documentsNeedingReview,
     disputes: n(r.disputes),
     systemHealth: 'healthy',
   };
@@ -464,15 +459,15 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
   };
 
   const providerHealth: AdminProviderHealth = {
-    totalProviders: n(r.total_providers),
-    activeProviders: n(r.active_providers),
-    pendingApplications: pendingApplications,
+    totalProviders,
+    activeProviders,
+    pendingApplications,
     missingDocuments: missingDocs,
     missingAvailability: missingAvail,
     missingServiceArea: missingArea,
     readyForFinalReview: onboardingHealth.readyForFinalReview,
-    suspendedProviders: n(r.suspended_providers),
-    archivedProviders: n(r.archived_providers),
+    suspendedProviders,
+    archivedProviders,
   };
 
   const paymentHealth: AdminPaymentHealth = {
@@ -487,7 +482,7 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
   };
 
   const customerHealth: AdminCustomerHealth = {
-    totalCustomers: n(r.total_customers),
+    totalCustomers,
     newCustomersToday: 0,
     customersWithActiveBookings: n(r.customers_with_active_bookings),
     customersWithPaymentIssues: n(r.customers_with_payment_issues),
@@ -561,14 +556,14 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
       route: '/portal/provider-onboarding',
     });
   }
-  if (n(r.documents_needing_review) > 0) {
+  if (documentsNeedingReview > 0) {
     actionQueue.push({
       id: 'document_review',
       type: 'document_review',
       title: 'Providers Pending Review',
-      description: `${n(r.documents_needing_review)} provider(s) submitted for review`,
+      description: `${documentsNeedingReview} provider(s) submitted for review`,
       severity: 'normal',
-      count: n(r.documents_needing_review),
+      count: documentsNeedingReview,
       route: '/portal/provider-onboarding?filter=documents',
     });
   }
