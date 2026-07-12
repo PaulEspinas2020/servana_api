@@ -1,5 +1,7 @@
 import { db } from "../config";
 import dbQuery from "../db/dbQuery";
+import { send } from "../helpers/mailer";
+import { getUserInfoByBookingId } from "./user.service";
 const dbSchema = db.schema;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -108,13 +110,20 @@ export const ensureBookingOpsSchema = async (): Promise<void> => {
     ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ DEFAULT NOW()
   `, []);
 
-  // Confirmation-on-behalf columns (admin can confirm acceptance for provider)
-  await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS confirmation_source   VARCHAR(40)`, []);
-  await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS admin_actor_uid       VARCHAR(256)`, []);
-  await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS consent_method        VARCHAR(30)`, []);
-  await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS consent_reference     TEXT`, []);
-  await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS confirmation_reason   TEXT`, []);
-  await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS confirmed_at          TIMESTAMPTZ`, []);
+  // Confirmation-on-behalf columns — wrapped individually so one DDL failure doesn't abort the rest
+  const confirmCols: [string, string][] = [
+    ['confirmation_source',  'VARCHAR(40)'],
+    ['admin_actor_uid',      'VARCHAR(256)'],
+    ['consent_method',       'VARCHAR(30)'],
+    ['consent_reference',    'TEXT'],
+    ['confirmation_reason',  'TEXT'],
+    ['confirmed_at',         'TIMESTAMPTZ'],
+  ];
+  for (const [col, typ] of confirmCols) {
+    try {
+      await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS ${col} ${typ}`, []);
+    } catch { /* column may already exist with a different type — safe to skip */ }
+  }
 };
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -134,7 +143,7 @@ const logBookingAudit = (event: AuditEvent): void => {
       event.reason ?? null,
       event.requestId ?? null,
     ]
-  ).catch(() => {});
+  ).catch((e) => { console.error('[booking-audit] write failed:', e?.message); });
 };
 
 const addTimelineEvent = async (
@@ -1066,10 +1075,35 @@ export const adminConfirmProviderAssignment = async (
   await addTimelineEvent(
     bookingId,
     'provider_acceptance_confirmed_by_admin',
-    'Provider acceptance confirmed by admin on behalf of provider',
+    'Admin confirmed on behalf of provider',
     reason, 'admin', adminUid,
     { providerUid, consentMethod, consentReference: consentReference ?? null }
   );
+
+  // Notify customer — same email as when provider accepts directly
+  try {
+    const userInfo = await getUserInfoByBookingId(bookingId);
+    if (userInfo) {
+      const [schedRes, workerRes] = await Promise.all([
+        dbQuery.query(`SELECT schedule FROM ${dbSchema}.bookings WHERE id = $1`, [bookingId]),
+        dbQuery.query(`SELECT first_name, last_name FROM ${dbSchema}.user_credentials WHERE uid = $1`, [providerUid]),
+      ]);
+      const schedule    = schedRes.rows[0]?.schedule;
+      const workerName  = workerRes.rows[0]
+        ? `${workerRes.rows[0].first_name} ${workerRes.rows[0].last_name}`
+        : 'Your provider';
+      send(userInfo.email, 'booking_accepted', {
+        first_name:   userInfo.firstName,
+        booking_id:   bookingId,
+        worker_name:  workerName,
+        booking_date: schedule ? new Date(schedule).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : '',
+        booking_time: schedule ? new Date(schedule).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '',
+        address:      '',
+      });
+    }
+  } catch (emailErr) {
+    console.error('booking_accepted email failed (admin on behalf):', emailErr);
+  }
 
   logBookingAudit({
     bookingId, actorUid: adminUid, actorRole: 'admin',

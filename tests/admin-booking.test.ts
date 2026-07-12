@@ -215,6 +215,93 @@ describe('adminEscalateBooking', () => {
 
 // ─── Mobile contract protection ───────────────────────────────────────────────
 
+// ─── adminConfirmProviderAssignment — source-inspection contracts ─────────────
+
+import * as fs from 'fs';
+import * as path from 'path';
+
+const svcSrc  = fs.readFileSync(path.join(__dirname, '../src/services/adminBookingService.ts'), 'utf-8');
+const ctrlSrc = fs.readFileSync(path.join(__dirname, '../src/controllers/adminBookingController.ts'), 'utf-8');
+const routeSrc = fs.readFileSync(path.join(__dirname, '../src/routes/adminBooking.routes.ts'), 'utf-8');
+
+describe('adminConfirmProviderAssignment — source contracts', () => {
+  it('accepts exactly verbal | written | chat_message as consent methods', () => {
+    expect(svcSrc).toContain("'verbal'");
+    expect(svcSrc).toContain("'written'");
+    expect(svcSrc).toContain("'chat_message'");
+    expect(svcSrc).toContain('consentMethod must be verbal | written | chat_message');
+  });
+
+  it('UPDATE has AND status = ASSIGNED guard (idempotent concurrency protection)', () => {
+    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
+    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    expect(fn).toContain("AND status     = 'ASSIGNED'");
+  });
+
+  it("sets confirmation_source = 'admin_on_behalf_of_provider'", () => {
+    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
+    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    expect(fn).toContain("'admin_on_behalf_of_provider'");
+  });
+
+  it('does NOT call acceptJob (mobile route stays untouched)', () => {
+    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
+    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    expect(fn).not.toContain('acceptJob');
+  });
+
+  it('does NOT call PUT /api/workers/bookings/:bookingId/accept', () => {
+    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
+    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    expect(fn).not.toContain('/api/workers/bookings');
+  });
+
+  it('sends booking_accepted email to customer', () => {
+    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
+    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    expect(fn).toContain("'booking_accepted'");
+  });
+
+  it('writes timeline event after successful UPDATE', () => {
+    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
+    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    expect(fn).toContain('addTimelineEvent');
+    expect(fn).toContain('provider_acceptance_confirmed_by_admin');
+  });
+
+  it('writes audit event after successful UPDATE', () => {
+    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
+    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    expect(fn).toContain('logBookingAudit');
+    expect(fn).toContain('booking_provider_accepted_on_behalf');
+  });
+
+  it('controller validates providerUid length <= 256', () => {
+    const fnIdx = ctrlSrc.indexOf('confirmProviderAssignment');
+    const fn = ctrlSrc.slice(fnIdx, fnIdx + 800);
+    expect(fn).toContain('256');
+    expect(fn).toContain('providerUid invalid');
+  });
+
+  it('route uses bookings.confirm_on_behalf permission', () => {
+    expect(routeSrc).toContain("'bookings.confirm_on_behalf'");
+    expect(routeSrc).toContain('confirm-provider-assignment');
+  });
+
+  it('rowCount=0 guard throws meaningful error on concurrent change', () => {
+    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
+    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    expect(fn).toContain('assignment may have changed concurrently');
+  });
+
+  it('throws on blocked booking status (CANCELLED/COMPLETED)', () => {
+    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
+    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    expect(fn).toContain("'CANCELLED'");
+    expect(fn).toContain("'COMPLETED'");
+  });
+});
+
 describe('Mobile endpoint contracts — unchanged by Command 5', () => {
   it('POST /api/bookings still accepts customer booking payload', async () => {
     // VERIFY: createBooking route untouched; ServanaClient can still create bookings

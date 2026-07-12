@@ -315,10 +315,11 @@ export const confirmProviderAssignment = async (req: Request, res: Response) => 
   try {
     const id = Number(req.params.id);
     const { providerUid, reason, consentMethod, consentReference } = req.body;
-    if (!id || isNaN(id))        return adminBadRequest(res, 'Invalid booking id');
-    if (!providerUid)            return adminBadRequest(res, 'providerUid is required');
-    if (!reason?.trim())         return adminBadRequest(res, 'reason is required');
-    if (!consentMethod)          return adminBadRequest(res, 'consentMethod is required');
+    if (!id || isNaN(id))                           return adminBadRequest(res, 'Invalid booking id');
+    if (!providerUid)                               return adminBadRequest(res, 'providerUid is required');
+    if (typeof providerUid !== 'string' || providerUid.length > 256) return adminBadRequest(res, 'providerUid invalid');
+    if (!reason?.trim())                            return adminBadRequest(res, 'reason is required');
+    if (!consentMethod)                             return adminBadRequest(res, 'consentMethod is required');
 
     const result = await svc.adminConfirmProviderAssignment(
       id, providerUid, actorUid(req), reason, consentMethod, consentReference ?? null
