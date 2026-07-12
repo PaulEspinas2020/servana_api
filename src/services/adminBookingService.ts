@@ -259,7 +259,6 @@ export const getAdminBookings = async (
         b.final_price,
         b.schedule                                   AS scheduled_at,
         b.created_at,
-        b.updated_at,
         la.worker_uid                                AS provider_uid,
         la.worker_status,
         la.assigned_at,
@@ -360,7 +359,7 @@ export const getAdminBookings = async (
       hasDispute: false,
       needsAdminAction: !row.worker_uid && ['new', 'awaiting_assignment'].includes(opStatus),
       createdAt: row.created_at ?? null,
-      updatedAt: row.updated_at ?? null,
+      updatedAt: null,
     };
   });
 
@@ -421,7 +420,7 @@ export const getAdminBookingDetail = async (bookingId: number): Promise<any | nu
     SELECT
       b.id, b.status, b.worker_uid, b.payment_method,
       b.quoted_price, b.final_price, b.pricing_breakdown,
-      b.schedule, b.created_at, b.updated_at,
+      b.schedule, b.created_at,
       b.service_option_id, b.branch_id, b.user_address_id, b.user_id,
       COALESCE(cu.first_name,'') || ' ' || COALESCE(cu.last_name,'')  AS customer_name,
       cu.uid    AS customer_uid,
@@ -550,7 +549,7 @@ export const getAdminBookingDetail = async (bookingId: number): Promise<any | nu
     escalations: escalationRes.rows,
     pricingBreakdown: bk.pricing_breakdown ?? null,
     createdAt: bk.created_at ?? null,
-    updatedAt: bk.updated_at ?? null,
+    updatedAt: null,
   };
 };
 

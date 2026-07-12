@@ -198,7 +198,9 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
         SELECT
           b.id          AS booking_id,
           b.created_at,
-          b.schedule,
+          CASE WHEN b.schedule IS NOT NULL AND b.schedule::text <> ''
+               THEN b.schedule::text::timestamptz
+               ELSE NULL END AS schedule,
           b.user_id,
           b.status      AS raw_status,
           b.worker_uid,
