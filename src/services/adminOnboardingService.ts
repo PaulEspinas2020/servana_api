@@ -486,14 +486,20 @@ export const listCases = async (filter: QueueFilter = {}) => {
 
 // ── Case detail ───────────────────────────────────────────────────────────────
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const getCaseDetail = async (caseIdOrProviderUid: string) => {
   await ensureOnboardingSchema();
 
-  // Try by case ID first, then by provider UID
-  let caseRes = await dbQuery.query(
-    `SELECT * FROM ${dbSchema}.provider_onboarding_cases WHERE id = $1 LIMIT 1`,
-    [caseIdOrProviderUid]
-  );
+  // Try by case UUID first (skip if not a valid UUID — avoids 22P02 when a
+  // provider UID is passed directly, which the queue does when caseId is null)
+  let caseRes = { rows: [] as any[], rowCount: 0 } as any;
+  if (UUID_RE.test(caseIdOrProviderUid)) {
+    caseRes = await dbQuery.query(
+      `SELECT * FROM ${dbSchema}.provider_onboarding_cases WHERE id = $1 LIMIT 1`,
+      [caseIdOrProviderUid]
+    );
+  }
   if (!caseRes.rowCount) {
     caseRes = await dbQuery.query(
       `SELECT * FROM ${dbSchema}.provider_onboarding_cases WHERE provider_uid = $1 ORDER BY created_at DESC LIMIT 1`,
