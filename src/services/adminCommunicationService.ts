@@ -574,11 +574,13 @@ export async function getAdminConversationDetail(conversationId: number) {
          b.status AS booking_status,
          b.final_price,
          b.schedule,
-         b.user_address_id,
+         b.user_id   AS customer_uid,
+         b.worker_uid AS provider_uid,
          uc_client.first_name || ' ' || uc_client.last_name AS customer_name,
          uc_client.email AS customer_email,
          uc_worker.first_name || ' ' || uc_worker.last_name AS provider_name,
-         so.level_2 AS service_name,
+         uc_worker.email AS provider_email,
+         so.level_2 AS service_title,
          (SELECT COUNT(*) FROM ${dbSchema}.chat_messages m WHERE m.conversation_id = c.id AND m.deleted_at IS NULL) AS message_count
        FROM ${dbSchema}.chat_conversations c
        LEFT JOIN ${dbSchema}.bookings b ON b.id = c.booking_id
@@ -592,36 +594,31 @@ export async function getAdminConversationDetail(conversationId: number) {
     const r = rows[0];
     // Participants
     const parts = await dbQuery.query(
-      `SELECT p.user_uid, p.role, p.joined_at, p.left_at, p.last_read_message_id,
-              uc.first_name, uc.last_name, uc.email
+      `SELECT p.user_uid, p.role, p.joined_at, p.left_at
          FROM ${dbSchema}.chat_participants p
-         LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = p.user_uid
         WHERE p.conversation_id = $1 ORDER BY p.joined_at ASC`,
       [conversationId]
     );
     return {
-      conversationId:  r.id,
-      bookingId:       r.booking_id,
-      isClosed:        r.is_closed,
-      lastMessageAt:   r.last_message_at,
-      createdAt:       r.created_at,
-      messageCount:    parseInt(r.message_count || '0', 10),
-      bookingStatus:   r.booking_status ?? null,
-      finalPrice:      r.final_price ?? null,
-      schedule:        r.schedule ?? null,
-      customerName:    r.customer_name ?? null,
-      customerEmail:   r.customer_email ?? null,
-      providerName:    r.provider_name ?? null,
-      serviceName:     r.service_name ?? null,
-      participants:    parts.rows.map((p: any) => ({
-        userUid:           p.user_uid,
-        role:              p.role,
-        joinedAt:          p.joined_at,
-        leftAt:            p.left_at ?? null,
-        lastReadMessageId: p.last_read_message_id ?? null,
-        firstName:         p.first_name ?? null,
-        lastName:          p.last_name ?? null,
-        email:             p.email ?? null,
+      id:            r.id,
+      bookingId:     r.booking_id,
+      isClosed:      r.is_closed,
+      lastMessageAt: r.last_message_at,
+      createdAt:     r.created_at,
+      messageCount:  parseInt(r.message_count || '0', 10),
+      bookingRef:    r.booking_id ? String(r.booking_id) : null,
+      serviceTitle:  r.service_title ?? null,
+      customerUid:   r.customer_uid ?? null,
+      customerName:  r.customer_name ?? null,
+      customerEmail: r.customer_email ?? null,
+      providerUid:   r.provider_uid ?? null,
+      providerName:  r.provider_name ?? null,
+      providerEmail: r.provider_email ?? null,
+      participants:  parts.rows.map((p: any) => ({
+        uid:      p.user_uid,
+        role:     p.role,
+        joinedAt: p.joined_at,
+        leftAt:   p.left_at ?? null,
       })),
     };
   } catch {
@@ -648,22 +645,25 @@ export async function getAdminConversationMessages(conversationId: number, limit
         ORDER BY m.id DESC LIMIT $2`,
       params
     );
+    const capped = Math.min(limit, 100);
     const messages = rows.map((r: any) => ({
-      messageId:   r.id,
+      id:           r.id,
       conversationId,
-      senderUid:   r.sender_uid,
-      senderRole:  r.sender_role,
-      senderName:  r.first_name ? `${r.first_name} ${r.last_name}` : null,
-      type:        r.type,
-      body:        r.deleted_at ? null : r.body,
-      metadata:    r.metadata,
-      clientMsgId: r.client_msg_id,
-      editedAt:    r.edited_at,
-      deletedAt:   r.deleted_at,
-      createdAt:   r.created_at,
-      attachments: Array.isArray(r.attachments) ? r.attachments : [],
+      senderUid:    r.sender_uid,
+      senderRole:   r.sender_role,
+      senderName:   r.first_name ? `${r.first_name} ${r.last_name}` : null,
+      type:         r.type,
+      body:         r.deleted_at ? null : r.body,
+      metadata:     r.metadata,
+      clientMsgId:  r.client_msg_id,
+      editedAt:     r.edited_at,
+      deletedAt:    r.deleted_at,
+      createdAt:    r.created_at,
+      attachments:  Array.isArray(r.attachments) ? r.attachments : [],
     }));
-    return { messages, nextCursor: rows.length === Math.min(limit, 100) ? rows[rows.length - 1].id : null };
+    const hasMore = rows.length === capped;
+    const oldestId = rows.length ? rows[rows.length - 1].id : null;
+    return { messages, hasMore, oldestId };
   } catch {
     return { messages: [], nextCursor: null };
   }
@@ -711,20 +711,17 @@ export async function listMessageReports(limit = 50) {
       [limit]
     );
     return rows.map((r: any) => ({
-      reportId:       r.id,
-      reporterUid:    r.reporter_uid,
-      reporterName:   r.reporter_name ?? null,
-      messageId:      r.message_id,
-      conversationId: r.conversation_id,
-      messageBody:    r.message_body ?? null,
-      senderUid:      r.sender_uid ?? null,
-      category:       r.category,
-      description:    r.description ?? null,
-      status:         r.status,
-      resolvedBy:     r.resolved_by ?? null,
-      resolvedAt:     r.resolved_at ?? null,
-      resolutionNote: r.resolution_note ?? null,
-      createdAt:      r.created_at,
+      id:              r.id,
+      messageId:       r.message_id,
+      reportedByUid:   r.reporter_uid,
+      reason:          r.category,
+      messageBody:     r.message_body ?? null,
+      conversationId:  r.conversation_id,
+      status:          r.status,
+      resolvedByUid:   r.resolved_by ?? null,
+      resolvedAt:      r.resolved_at ?? null,
+      resolutionNote:  r.resolution_note ?? null,
+      createdAt:       r.created_at,
     }));
   } catch {
     return [];
@@ -752,7 +749,7 @@ export async function resolveMessageReport(
     `UPDATE ${dbSchema}.chat_message_reports
      SET status = $1, resolved_by = $2, resolved_at = NOW(), resolution_note = $3
      WHERE id = $4 RETURNING *`,
-    [action === 'dismiss' ? 'dismissed' : 'resolved', adminUid, note || null, reportId]
+    [action === 'dismiss' ? 'dismissed' : 'actioned', adminUid, note || null, reportId]
   );
   if (!rows.length) return null;
 
