@@ -441,12 +441,13 @@ export const getProviderRequirements = async (uid: string) => {
      WHERE wr.worker_uid = $1
      ORDER BY wr.uploaded_at DESC`,
     [uid]
-  ).catch(() =>
-    dbQuery.query(
+  ).catch((err: any) => {
+    if (err?.code !== '42P01' && err?.code !== '42703') throw err;
+    return dbQuery.query(
       `SELECT id, file_url, file_name, uploaded_at, requirement_type FROM ${dbSchema}.worker_requirements WHERE worker_uid = $1 ORDER BY uploaded_at DESC`,
       [uid]
-    )
-  );
+    );
+  });
   return res.rows.map((r: any) => ({
     id: r.id,
     fileName: r.file_name,
@@ -526,6 +527,31 @@ export const rejectProviderRequirement = async (
     throw Object.assign(new Error('Requirement not found for this provider'), { statusCode: 404 });
   }
   return onboardingService.decideRequirement(requirementId, 'rejected', actorUid, {
+    reasonCode,
+    providerMessage: providerMessage.trim(),
+    internalRationale: internalNote,
+  });
+};
+
+export const needsResubmissionProviderRequirement = async (
+  requirementId: number,
+  actorUid: string,
+  workerUid: string,
+  reasonCode: string,
+  providerMessage: string,
+  internalNote?: string,
+) => {
+  if (!providerMessage || !providerMessage.trim()) {
+    throw Object.assign(new Error('providerMessage is required when requesting resubmission'), { statusCode: 400 });
+  }
+  const owned = await dbQuery.query(
+    `SELECT id FROM ${dbSchema}.worker_requirements WHERE id = $1 AND worker_uid = $2 LIMIT 1`,
+    [requirementId, workerUid]
+  );
+  if (!owned.rowCount) {
+    throw Object.assign(new Error('Requirement not found for this provider'), { statusCode: 404 });
+  }
+  return onboardingService.decideRequirement(requirementId, 'needs_resubmission', actorUid, {
     reasonCode,
     providerMessage: providerMessage.trim(),
     internalRationale: internalNote,

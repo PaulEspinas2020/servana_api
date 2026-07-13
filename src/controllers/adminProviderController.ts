@@ -499,6 +499,44 @@ export const rejectProviderRequirement = async (req: Request, res: Response) => 
   }
 };
 
+export const needsResubmissionProviderRequirement = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    const id = Number(req.params.id);
+    if (!id) return fail(res, 400, 'Invalid requirement id');
+    const { reasonCode, providerMessage, internalNote } = req.body;
+    if (!providerMessage || !String(providerMessage).trim()) {
+      return fail(res, 400, 'providerMessage is required when requesting resubmission');
+    }
+    const result = await svc.needsResubmissionProviderRequirement(
+      id, adminUid(req), uid,
+      reasonCode ? String(reasonCode) : 'unspecified',
+      String(providerMessage),
+      internalNote ? String(internalNote) : undefined,
+    );
+
+    auditFire({
+      action: 'provider_document_needs_resubmission',
+      actionCategory: 'onboarding',
+      outcome: 'success',
+      actorUid: adminUid(req),
+      entityType: 'provider_requirement',
+      entityId: String(id),
+      relatedEntities: [{ entityType: 'provider', entityId: uid }],
+      after: { decision: 'needs_resubmission', reasonCode: reasonCode ?? null },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
+    autoOnlineEngine.evaluateProvider(uid, 'admin', adminUid(req)).catch(() => {});
+    return ok(res, result);
+  } catch (err: any) {
+    const status = err?.statusCode ?? (err?.message?.includes('not found') ? 404 : 500);
+    return fail(res, status, err?.message ?? 'Failed to request resubmission');
+  }
+};
+
 // ── Jobs ──────────────────────────────────────────────────────────────────────
 
 export const getProviderJobs = async (req: Request, res: Response) => {

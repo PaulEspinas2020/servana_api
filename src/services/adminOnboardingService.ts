@@ -780,6 +780,16 @@ export const decideRequirement = async (
   if (!reqRes.rowCount) throw Object.assign(new Error('Requirement not found'), { statusCode: 404 });
   const req = reqRes.rows[0];
 
+  // Resolve human-readable label for provider-facing notification body
+  let docLabel = req.file_name ?? 'your document';
+  if (req.requirement_type) {
+    const defRes = await dbQuery.query(
+      `SELECT provider_facing_title FROM ${dbSchema}.provider_requirement_definitions WHERE code = $1 LIMIT 1`,
+      [req.requirement_type]
+    ).catch(() => ({ rows: [] as any[] }));
+    docLabel = (defRes as any).rows[0]?.provider_facing_title ?? req.requirement_type;
+  }
+
   // Supersede prior non-superseded decisions for this requirement
   await dbQuery.query(
     `UPDATE ${dbSchema}.provider_requirement_decisions SET is_superseded = true
@@ -820,9 +830,9 @@ export const decideRequirement = async (
   // Send provider notification for decisions
   if (decision !== 'escalated') {
     const msgMap: Record<string, { title: string; body: string }> = {
-      approved: { title: 'Document Approved', body: `Your ${req.requirement_type ?? 'document'} has been approved.` },
-      rejected: { title: 'Document Not Accepted', body: opts.providerMessage ?? `Your ${req.requirement_type ?? 'document'} was not accepted. Please check your portal for details.` },
-      needs_resubmission: { title: 'Action Required: Resubmit Document', body: opts.providerMessage ?? `Please resubmit your ${req.requirement_type ?? 'document'}.` },
+      approved: { title: 'Document Approved', body: `Your ${docLabel} has been approved.` },
+      rejected: { title: 'Document Not Accepted', body: opts.providerMessage ?? `Your ${docLabel} was not accepted. Please check your portal for details.` },
+      needs_resubmission: { title: 'Action Required: Resubmit Document', body: opts.providerMessage ?? `Please resubmit your ${docLabel}.` },
     };
     const msg = msgMap[decision];
     if (msg) {

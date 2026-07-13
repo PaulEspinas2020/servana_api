@@ -295,13 +295,14 @@ export const getWorkerRequirements = async (workerUid: string) => {
     ORDER BY wr.uploaded_at ASC
     `,
     [workerUid]
-  ).catch(() =>
-    // Fallback if provider_requirement_decisions table not yet created (new installs)
-    dbQuery.query(
+  ).catch((err: any) => {
+    // Only suppress "relation does not exist" (42P01) and "column does not exist" (42703)
+    if (err?.code !== '42P01' && err?.code !== '42703') throw err;
+    return dbQuery.query(
       `SELECT id, file_url, file_name, uploaded_at, requirement_type FROM ${dbSchema}.worker_requirements WHERE worker_uid = $1 ORDER BY uploaded_at ASC`,
       [workerUid]
-    )
-  );
+    );
+  });
   return res.rows.map((f: any) => ({
     id: f.id,
     fileUrl: f.file_url,
@@ -315,15 +316,32 @@ export const getWorkerRequirements = async (workerUid: string) => {
 };
 
 export const deleteWorkerRequirement = async (workerUid: string, id: number) => {
+  const check = await dbQuery.query(
+    `SELECT wr.id, COALESCE(ld.decision, 'pending_review') AS current_decision
+     FROM ${dbSchema}.worker_requirements wr
+     LEFT JOIN LATERAL (
+       SELECT decision FROM ${dbSchema}.provider_requirement_decisions
+       WHERE worker_requirement_id = wr.id AND NOT is_superseded
+       ORDER BY decided_at DESC LIMIT 1
+     ) ld ON true
+     WHERE wr.id = $1 AND wr.worker_uid = $2 LIMIT 1`,
+    [id, workerUid]
+  ).catch((err: any) => {
+    if (err?.code !== '42P01' && err?.code !== '42703') throw err;
+    return dbQuery.query(
+      `SELECT id, 'pending_review'::text AS current_decision FROM ${dbSchema}.worker_requirements WHERE id = $1 AND worker_uid = $2 LIMIT 1`,
+      [id, workerUid]
+    );
+  });
+  if (!check.rowCount) throw Object.assign(new Error('Requirement not found for this worker'), { statusCode: 404 });
+  if (check.rows[0].current_decision === 'approved') {
+    throw Object.assign(new Error('Approved documents cannot be deleted. Contact support if you need to replace an approved document.'), { statusCode: 409 });
+  }
   const res = await dbQuery.query(
-    `
-    DELETE FROM ${dbSchema}.worker_requirements
-    WHERE id = $1 AND worker_uid = $2
-    RETURNING id, file_name
-    `,
+    `DELETE FROM ${dbSchema}.worker_requirements WHERE id = $1 AND worker_uid = $2 RETURNING id, file_name`,
     [id, workerUid]
   );
-  if (!res.rowCount) throw new Error("Requirement not found for this worker");
+  if (!res.rowCount) throw Object.assign(new Error('Requirement not found for this worker'), { statusCode: 404 });
   return res.rows[0];
 };
 
