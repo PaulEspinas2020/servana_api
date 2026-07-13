@@ -853,6 +853,89 @@ export const deleteProviderAvailabilityAdmin = async (req: Request, res: Respons
 
 // ── Service Area Write (admin-scoped, canonical engine) ───────────────────────
 
+// ── Requirement Definitions ───────────────────────────────────────────────────
+
+export const getRequirementDefinitions = async (_req: Request, res: Response) => {
+  try {
+    return ok(res, svc.getRequirementDefinitions());
+  } catch (err: any) {
+    return fail(res, 500, err.message || 'Failed to load requirement definitions');
+  }
+};
+
+// ── Provider Profile Update ───────────────────────────────────────────────────
+
+export const updateProviderProfile = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    const { firstName, lastName, phoneNumber, birthdate, gender } = req.body || {};
+
+    const fields: any = {};
+    if (firstName !== undefined) fields.firstName = firstName;
+    if (lastName  !== undefined) fields.lastName  = lastName;
+    if (phoneNumber !== undefined) fields.phoneNumber = phoneNumber;
+    if (birthdate !== undefined) fields.birthdate = birthdate;
+    if (gender !== undefined) fields.gender = gender;
+
+    const updated = await svc.updateProviderProfile(uid, fields, adminUid(req));
+
+    await writeSuccess({
+      action: 'PROVIDER.PROFILE.UPDATED_BY_ADMIN',
+      actionCategory: 'provider',
+      actorUid: adminUid(req),
+      entityType: 'provider',
+      entityId: uid,
+      changedFields: Object.keys(fields),
+      reason: (req.body && req.body.reason) || null,
+      requestId: (req as any).id || null,
+      ipAddress: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+    });
+
+    return ok(res, updated);
+  } catch (err: any) {
+    const code = err.statusCode || 500;
+    return fail(res, code, err.message || 'Failed to update provider profile');
+  }
+};
+
+// ── Remove Provider Service Association ───────────────────────────────────────
+
+export const removeProviderService = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    const serviceId = Number(req.params.serviceId);
+    if (!serviceId) return fail(res, 400, 'Invalid serviceId');
+
+    const { reason } = req.body || {};
+    if (!reason || !String(reason).trim()) {
+      return fail(res, 400, 'reason is required to remove a provider service');
+    }
+
+    const result = await svc.removeProviderService(uid, serviceId, adminUid(req), String(reason));
+
+    await writeSuccess({
+      action: 'PROVIDER.SERVICE.REMOVED',
+      actionCategory: 'provider',
+      actorUid: adminUid(req),
+      entityType: 'provider_service',
+      entityId: String(serviceId),
+      relatedEntities: [{ entityType: 'provider', entityId: uid }],
+      after: { serviceId, serviceName: result.serviceName, removed: true },
+      reason: String(reason),
+      requestId: (req as any).id || null,
+      ipAddress: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+    });
+
+    autoOnlineEngine.evaluateProvider(uid, 'admin', adminUid(req)).catch(function() {});
+    return ok(res, result);
+  } catch (err: any) {
+    const code = err.statusCode || (String(err.message || '').includes('not found') ? 404 : 500);
+    return fail(res, code, err.message || 'Failed to remove provider service');
+  }
+};
+
 export const saveProviderServiceAreaAdmin = async (req: Request, res: Response) => {
   try {
     const uid = String(req.params.uid);

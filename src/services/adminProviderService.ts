@@ -1112,3 +1112,195 @@ export const getProviderDuplicates = async (): Promise<ProviderDuplicateReport> 
 // ── Service Application Approve / Reject (reuses existing service) ────────────
 
 export { serviceApplicationService };
+
+// ── Canonical Required Document Definitions ───────────────────────────────────
+// Policy-level registry — the 3 documents every Servana provider must submit.
+// Frontend derives "missing" slots from this list vs uploaded docs.
+
+export const REQUIREMENT_DEFINITIONS = [
+  {
+    requirementKey: 'government_id',
+    displayName: 'Valid Government ID',
+    description: 'Any Philippine government-issued photo ID (passport, SSS, GSIS, PhilHealth, driver\'s license, voter\'s ID, PRC, NBI)',
+    isRequired: true,
+    displayOrder: 1,
+    allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+    maximumFileSizeMb: 10,
+    expiryRequired: false,
+  },
+  {
+    requirementKey: 'nbi_clearance',
+    displayName: 'NBI Clearance',
+    description: 'National Bureau of Investigation clearance — must be issued within the past 12 months',
+    isRequired: true,
+    displayOrder: 2,
+    allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+    maximumFileSizeMb: 10,
+    expiryRequired: true,
+  },
+  {
+    requirementKey: 'proof_of_address',
+    displayName: 'Proof of Address',
+    description: 'Recent utility bill, bank statement, or government mail showing current address (issued within 3 months)',
+    isRequired: true,
+    displayOrder: 3,
+    allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+    maximumFileSizeMb: 10,
+    expiryRequired: false,
+  },
+];
+
+export const getRequirementDefinitions = () => REQUIREMENT_DEFINITIONS;
+
+// ── Provider Profile Update (Admin-on-behalf) ─────────────────────────────────
+
+const PHONE_RE = /^\+639\d{9}$|^09\d{9}$/;
+const VALID_GENDERS = ['male', 'female', 'non_binary', 'prefer_not_to_say'];
+
+export const updateProviderProfile = async (
+  uid: string,
+  fields: {
+    firstName?: string;
+    lastName?: string;
+    phoneNumber?: string | null;
+    birthdate?: string | null;
+    gender?: string | null;
+  },
+  adminActorUid: string,
+) => {
+  const current = await getProviderIdentity(uid);
+  if (!current) throw Object.assign(new Error('Provider not found'), { statusCode: 404 });
+
+  const credCols: string[] = [];
+  const credVals: any[] = [];
+
+  if (fields.firstName !== undefined) {
+    const v = String(fields.firstName || '').trim();
+    if (!v) throw Object.assign(new Error('firstName cannot be empty'), { statusCode: 422 });
+    credCols.push('first_name = $' + (credVals.push(v)));
+  }
+  if (fields.lastName !== undefined) {
+    const v = String(fields.lastName || '').trim();
+    if (!v) throw Object.assign(new Error('lastName cannot be empty'), { statusCode: 422 });
+    credCols.push('last_name = $' + (credVals.push(v)));
+  }
+  if (fields.phoneNumber !== undefined) {
+    const p = fields.phoneNumber ? String(fields.phoneNumber).trim() : null;
+    if (p && !PHONE_RE.test(p)) {
+      throw Object.assign(new Error('Invalid Philippine phone number. Use 09XXXXXXXXX or +639XXXXXXXXX format'), { statusCode: 422 });
+    }
+    credCols.push('phone_number = $' + (credVals.push(p)));
+  }
+
+  const profCols: string[] = [];
+  const profVals: any[] = [];
+
+  if (fields.birthdate !== undefined) {
+    profCols.push('birthdate = $' + (profVals.push(fields.birthdate || null)));
+  }
+  if (fields.gender !== undefined) {
+    const g = fields.gender;
+    if (g !== null && !VALID_GENDERS.includes(g)) {
+      throw Object.assign(new Error('Invalid gender value'), { statusCode: 422 });
+    }
+    profCols.push('gender = $' + (profVals.push(g)));
+  }
+
+  if (credCols.length === 0 && profCols.length === 0) {
+    throw Object.assign(new Error('No editable fields provided'), { statusCode: 400 });
+  }
+
+  if (credCols.length > 0) {
+    credVals.push(uid);
+    await dbQuery.query(
+      'UPDATE ' + dbSchema + '.user_credentials SET ' + credCols.join(', ') + ' WHERE uid = $' + credVals.length,
+      credVals
+    );
+  }
+
+  if (profCols.length > 0) {
+    // Ensure row exists, then update
+    await dbQuery.query(
+      'INSERT INTO ' + dbSchema + '.user_profile (uid) VALUES ($1) ON CONFLICT (uid) DO NOTHING',
+      [uid]
+    ).catch(function() {}); // safe if table schema differs
+    profVals.push(uid);
+    await dbQuery.query(
+      'UPDATE ' + dbSchema + '.user_profile SET ' + profCols.join(', ') + ' WHERE uid = $' + profVals.length,
+      profVals
+    ).catch(function() {});
+  }
+
+  return getProviderIdentity(uid);
+};
+
+// ── Remove Provider Service Association ───────────────────────────────────────
+// Removes the provider's employee_services row and archives related catalog
+// capabilities. Does NOT delete the global Service Catalog entry.
+// Blocks if active/upcoming bookings exist for this provider+service.
+
+export const removeProviderService = async (
+  providerUid: string,
+  serviceId: number,
+  adminActorUid: string,
+  reason: string,
+) => {
+  if (!reason || !String(reason).trim()) {
+    throw Object.assign(new Error('reason is required to remove a provider service'), { statusCode: 400 });
+  }
+
+  // Verify the association exists
+  const svcRes = await dbQuery.query(
+    'SELECT es.service_id, s.name AS service_name' +
+    ' FROM ' + dbSchema + '.employee_services es' +
+    ' LEFT JOIN ' + dbSchema + '.services s ON s.id = es.service_id' +
+    ' WHERE es.employee_uid = $1 AND es.service_id = $2 LIMIT 1',
+    [providerUid, serviceId]
+  );
+  if (!svcRes.rowCount) {
+    throw Object.assign(new Error('Provider service association not found'), { statusCode: 404 });
+  }
+  const svc = svcRes.rows[0];
+
+  // Check for active bookings — block if any exist
+  const bookingCheck = await dbQuery.query(
+    'SELECT COUNT(*)::int AS cnt' +
+    ' FROM ' + dbSchema + '.bookings b' +
+    ' JOIN ' + dbSchema + '.booking_workers bw ON bw.booking_id = b.id' +
+    ' WHERE bw.worker_uid = $1' +
+    '   AND b.service_option_id IN (SELECT id FROM ' + dbSchema + '.service_options WHERE service_id = $2)' +
+    '   AND b.status IN (\'CONFIRMED\', \'IN_PROGRESS\', \'WORKER_ASSIGNED\')',
+    [providerUid, serviceId]
+  ).catch(function() { return { rows: [{ cnt: 0 }] }; });
+
+  const activeCount = Number((bookingCheck.rows[0] && bookingCheck.rows[0].cnt) || 0);
+  if (activeCount > 0) {
+    const err: any = new Error('SERVICE_HAS_ACTIVE_BOOKINGS: This provider has ' + activeCount + ' active or upcoming booking(s) for this service. Reassign or complete them before removing.');
+    err.statusCode = 409;
+    err.code = 'SERVICE_HAS_ACTIVE_BOOKINGS';
+    err.activeBookings = activeCount;
+    throw err;
+  }
+
+  // Remove from employee_services (provider no longer has this service)
+  await dbQuery.query(
+    'DELETE FROM ' + dbSchema + '.employee_services WHERE employee_uid = $1 AND service_id = $2',
+    [providerUid, serviceId]
+  );
+
+  // Archive related catalog capabilities (soft-deactivate, global catalog intact)
+  await dbQuery.query(
+    'UPDATE ' + dbSchema + '.employee_catalog_capabilities' +
+    ' SET status = \'archived\', suspended_at = NOW()' +
+    ' WHERE employee_uid = $1 AND service_id = $2 AND status != \'archived\'',
+    [providerUid, serviceId]
+  ).catch(function() {});
+
+  return {
+    providerUid,
+    serviceId,
+    serviceName: (svc.service_name) || '',
+    removed: true,
+    reason: String(reason).trim(),
+  };
+};

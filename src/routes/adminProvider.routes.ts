@@ -17,6 +17,10 @@ router.get('/admin/providers/service-applications',            ...adminOnly, req
 router.patch('/admin/providers/service-applications/:id/approve', ...adminOnly, requirePermission('providers.status.change'), ctrl.approveServiceApplication);
 router.patch('/admin/providers/service-applications/:id/reject',  ...adminOnly, requirePermission('providers.status.change'), ctrl.rejectServiceApplication);
 
+// ── Canonical requirement definitions (policy registry) ──────────────────────
+// NOTE: must stay ABOVE /:uid routes
+router.get('/admin/providers/requirement-definitions', ...adminOnly, requirePermission('providers.documents.view'), ctrl.getRequirementDefinitions);
+
 // ── Mobile Attribution & Catalog Association ──────────────────────────────────
 // NOTE: must stay ABOVE /:uid routes or Express matches mobile-metrics as uid
 router.get('/admin/providers/mobile-metrics',          ...adminOnly, requirePermission('providers.view'), attrCtrl.getMobileMetrics);
@@ -48,6 +52,12 @@ router.get('/admin/providers/:uid/service-area',                   ...adminOnly,
 router.put('/admin/providers/:uid/service-area',                   ...adminOnly, requirePermission('provider_service_area.edit'), ctrl.saveProviderServiceAreaAdmin);
 router.patch('/admin/providers/:uid/account-status',   ...adminOnly, requirePermission('providers.status.change'), ctrl.updateProviderAccountStatus);
 router.patch('/admin/providers/:uid/archive',          ...adminOnly, requirePermission('providers.archive'), ctrl.setProviderArchive);
+
+// ── Profile Edit ──────────────────────────────────────────────────────────────
+router.patch('/admin/providers/:uid/profile',          ...adminOnly, requirePermission('providers.profile.edit'), ctrl.updateProviderProfile);
+
+// ── Service Removal ───────────────────────────────────────────────────────────
+router.delete('/admin/providers/:uid/services/:serviceId', ...adminOnly, requirePermission('providers.services.remove'), ctrl.removeProviderService);
 
 // ── Mobile Attribution (per-provider) ─────────────────────────────────────────
 router.get('/admin/providers/:uid/attribution',        ...adminOnly, requirePermission('providers.profile.view'), attrCtrl.getProviderAttribution);
