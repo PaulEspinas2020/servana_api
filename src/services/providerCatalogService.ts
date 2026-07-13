@@ -426,7 +426,11 @@ export const listAdminOfferings = async (): Promise<any[]> => {
      ORDER BY o.display_order, o.name`,
     []
   );
-  return res.rows.map(toCamel);
+  return res.rows.map((r: any) => {
+    const item = toCamel(r);
+    item.isMobileProtected = Boolean(r.legacy_provider_mobile_visible);
+    return item;
+  });
 };
 
 export const getAdminOffering = async (offeringId: number): Promise<any | null> => {
@@ -538,6 +542,7 @@ export const createOffering = async (
       ]
     );
     const result = toCamel(res.rows[0]);
+    result.isMobileProtected = Boolean(res.rows[0].legacy_provider_mobile_visible);
     auditFire({ action: 'catalog_offering.create', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_offering', entityId: String(result.id), after: { catalogKey: result.catalogKey, name: result.name } });
     return result;
   } catch (err: any) {
@@ -569,6 +574,7 @@ export const updateOffering = async (
     providerWebVisible?: boolean;
     customerWebVisible?: boolean;
     legacyProviderMobileVisible?: boolean;
+    legacyCustomerMobileVisible?: boolean;
     version: number;
   },
   adminUid: string
@@ -594,6 +600,7 @@ export const updateOffering = async (
        provider_web_visible           = COALESCE($7, provider_web_visible),
        customer_web_visible           = COALESCE($8, customer_web_visible),
        legacy_provider_mobile_visible = COALESCE($11, legacy_provider_mobile_visible),
+       legacy_customer_mobile_visible = COALESCE($12, legacy_customer_mobile_visible),
        updated_by                     = $9,
        updated_at                     = NOW(),
        version                        = version + 1
@@ -611,9 +618,11 @@ export const updateOffering = async (
       adminUid,
       offeringId,
       data.legacyProviderMobileVisible !== undefined ? data.legacyProviderMobileVisible : null,
+      data.legacyCustomerMobileVisible !== undefined ? data.legacyCustomerMobileVisible : null,
     ]
   );
   const result = toCamel(res.rows[0]);
+  result.isMobileProtected = Boolean(res.rows[0].legacy_provider_mobile_visible);
   auditFire({ action: 'catalog_offering.update', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_offering', entityId: String(offeringId), after: { name: result.name, status: result.status } });
   return result;
 };
