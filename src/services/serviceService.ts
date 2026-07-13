@@ -54,6 +54,7 @@ export const getOptionsWithAddons = async (serviceId: number) => {
       ON m.service_option_id = so.id
     WHERE so.service_id = $1
       AND so.option_type = 'MAIN'
+      AND so.is_active = true
     ORDER BY so.level_2, so.level_3
     `,
         [serviceId]
@@ -65,6 +66,7 @@ export const getOptionsWithAddons = async (serviceId: number) => {
     FROM ${dbSchema}.service_options
     WHERE service_id = $1
       AND option_type = 'ADD_ON'
+      AND is_active = true
     ORDER BY level_2, level_3
     `,
         [serviceId]
