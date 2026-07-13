@@ -78,6 +78,7 @@ router.put("/worker/service-area", verifyAuth, provider.saveWorkerServiceArea);
 
 // Profile photo (P0-07)
 router.post("/worker/profile/photo", verifyAuth, provider.uploadWorkerProfilePhoto);
+router.delete("/worker/profile/photo", verifyAuth, provider.deleteWorkerProfilePhoto);
 
 // Safety incidents (P0-01 / P0-02 / P0-03)
 // unread-count pattern: non-param routes registered before param routes

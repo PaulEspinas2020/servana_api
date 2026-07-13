@@ -1326,6 +1326,43 @@ export const uploadWorkerProfilePhoto = async (req: Request, res: Response) => {
   }
 };
 
+export const deleteWorkerProfilePhoto = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    await ensureProfileTable();
+    // Read current URL so we can delete the file from Firebase Storage.
+    const existing = await dbQuery.query(
+      `SELECT photo_url FROM ${dbSchema}.user_profile WHERE uid = $1 LIMIT 1`,
+      [uid]
+    );
+    const photoUrl: string | null = existing.rows[0]?.photo_url ?? null;
+    // Clear the DB record first — UI can update immediately.
+    await dbQuery.query(
+      `INSERT INTO ${dbSchema}.user_profile (uid, photo_url, updated_at)
+       VALUES ($1, NULL, NOW())
+       ON CONFLICT (uid) DO UPDATE SET photo_url = NULL, updated_at = NOW()`,
+      [uid]
+    );
+    // Best-effort: delete the object from Firebase Storage.
+    if (photoUrl && photoUrl.includes('firebasestorage.googleapis.com')) {
+      try {
+        const match = photoUrl.match(/\/o\/([^?]+)/);
+        if (match) {
+          const filePath = decodeURIComponent(match[1]);
+          const bucket = (await import('../middleware/firebaseApp')).firebaseAdmin.storage().bucket();
+          await bucket.file(filePath).delete().catch(() => {/* file may not exist */});
+        }
+      } catch {
+        /* non-fatal — DB record is already cleared */
+      }
+    }
+    return res.status(200).json({ status: "success", data: null });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
 // ─── Payout Settings (MongoDB — worker_payout_methods) ───────────────────────
 
 const PAYOUT_TYPE_LABELS: Record<string, string> = {
