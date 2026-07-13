@@ -522,8 +522,9 @@ export const createOffering = async (
     const res = await dbQuery.query(
       `INSERT INTO ${dbSchema}.provider_catalog_offerings
         (catalog_key, name, short_description, provider_description, icon_key,
-         banner_path, display_order, is_builtin, status, provider_web_visible, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, false, 'draft', true, $8, $8)
+         banner_path, display_order, is_builtin, status, provider_web_visible,
+         legacy_provider_mobile_visible, created_by, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, false, 'draft', true, false, $8, $8)
        RETURNING *`,
       [
         data.catalogKey,
@@ -567,6 +568,7 @@ export const updateOffering = async (
     displayOrder?: number;
     providerWebVisible?: boolean;
     customerWebVisible?: boolean;
+    legacyProviderMobileVisible?: boolean;
     version: number;
   },
   adminUid: string
@@ -583,17 +585,18 @@ export const updateOffering = async (
 
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.provider_catalog_offerings SET
-       name                 = COALESCE($1, name),
-       short_description    = COALESCE($2, short_description),
-       provider_description = COALESCE($3, provider_description),
-       icon_key             = COALESCE($4, icon_key),
-       banner_path          = COALESCE($5, banner_path),
-       display_order        = COALESCE($6, display_order),
-       provider_web_visible = COALESCE($7, provider_web_visible),
-       customer_web_visible = COALESCE($8, customer_web_visible),
-       updated_by           = $9,
-       updated_at           = NOW(),
-       version              = version + 1
+       name                           = COALESCE($1, name),
+       short_description              = COALESCE($2, short_description),
+       provider_description           = COALESCE($3, provider_description),
+       icon_key                       = COALESCE($4, icon_key),
+       banner_path                    = COALESCE($5, banner_path),
+       display_order                  = COALESCE($6, display_order),
+       provider_web_visible           = COALESCE($7, provider_web_visible),
+       customer_web_visible           = COALESCE($8, customer_web_visible),
+       legacy_provider_mobile_visible = COALESCE($11, legacy_provider_mobile_visible),
+       updated_by                     = $9,
+       updated_at                     = NOW(),
+       version                        = version + 1
      WHERE id = $10
      RETURNING *`,
     [
@@ -607,6 +610,7 @@ export const updateOffering = async (
       data.customerWebVisible ?? null,
       adminUid,
       offeringId,
+      data.legacyProviderMobileVisible !== undefined ? data.legacyProviderMobileVisible : null,
     ]
   );
   const result = toCamel(res.rows[0]);
