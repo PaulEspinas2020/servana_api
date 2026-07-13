@@ -437,7 +437,7 @@ export const verifyProviderRequirement = async (req: Request, res: Response) => 
     const id = Number(req.params.id);
     if (!id) return fail(res, 400, 'Invalid requirement id');
     const { internalNote } = req.body;
-    const result = await svc.verifyProviderRequirement(id, adminUid(req), internalNote ? String(internalNote) : undefined);
+    const result = await svc.verifyProviderRequirement(id, adminUid(req), uid, internalNote ? String(internalNote) : undefined);
 
     auditFire({
       action: 'provider_document_verified',
@@ -471,7 +471,7 @@ export const rejectProviderRequirement = async (req: Request, res: Response) => 
       return fail(res, 400, 'providerMessage is required to reject a document');
     }
     const result = await svc.rejectProviderRequirement(
-      id, adminUid(req),
+      id, adminUid(req), uid,
       reasonCode ? String(reasonCode) : 'unspecified',
       String(providerMessage),
       internalNote ? String(internalNote) : undefined,

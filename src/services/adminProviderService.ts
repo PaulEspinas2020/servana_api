@@ -492,8 +492,16 @@ export const deleteProviderRequirement = async (workerUid: string, id: number) =
 export const verifyProviderRequirement = async (
   requirementId: number,
   actorUid: string,
+  workerUid: string,
   internalNote?: string,
 ) => {
+  const owned = await dbQuery.query(
+    `SELECT id FROM ${dbSchema}.worker_requirements WHERE id = $1 AND worker_uid = $2 LIMIT 1`,
+    [requirementId, workerUid]
+  );
+  if (!owned.rowCount) {
+    throw Object.assign(new Error('Requirement not found for this provider'), { statusCode: 404 });
+  }
   return onboardingService.decideRequirement(requirementId, 'approved', actorUid, {
     internalRationale: internalNote,
   });
@@ -502,12 +510,20 @@ export const verifyProviderRequirement = async (
 export const rejectProviderRequirement = async (
   requirementId: number,
   actorUid: string,
+  workerUid: string,
   reasonCode: string,
   providerMessage: string,
   internalNote?: string,
 ) => {
   if (!providerMessage || !providerMessage.trim()) {
     throw Object.assign(new Error('providerMessage is required to reject a document'), { statusCode: 400 });
+  }
+  const owned = await dbQuery.query(
+    `SELECT id FROM ${dbSchema}.worker_requirements WHERE id = $1 AND worker_uid = $2 LIMIT 1`,
+    [requirementId, workerUid]
+  );
+  if (!owned.rowCount) {
+    throw Object.assign(new Error('Requirement not found for this provider'), { statusCode: 404 });
   }
   return onboardingService.decideRequirement(requirementId, 'rejected', actorUid, {
     reasonCode,
