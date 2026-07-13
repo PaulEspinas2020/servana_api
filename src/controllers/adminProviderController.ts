@@ -918,7 +918,7 @@ export const removeProviderService = async (req: Request, res: Response) => {
       action: 'PROVIDER.SERVICE.REMOVED',
       actionCategory: 'provider',
       actorUid: adminUid(req),
-      entityType: 'provider_service',
+      entityType: 'service',
       entityId: String(serviceId),
       relatedEntities: [{ entityType: 'provider', entityId: uid }],
       after: { serviceId, serviceName: result.serviceName, removed: true },
