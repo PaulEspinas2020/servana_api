@@ -439,6 +439,7 @@ export const getAdminOffering = async (offeringId: number): Promise<any | null> 
             banner_path, display_order, is_builtin, status,
             provider_web_visible, customer_web_visible,
             legacy_provider_mobile_visible AS is_mobile_protected,
+            legacy_customer_mobile_visible,
             version, created_at, updated_at
      FROM ${dbSchema}.provider_catalog_offerings WHERE id = $1`,
     [offeringId]
@@ -484,6 +485,7 @@ export const getAdminOffering = async (offeringId: number): Promise<any | null> 
   return {
     ...offer,
     isMobileProtected: Boolean(offerRes.rows[0].is_mobile_protected),
+    legacyCustomerMobileVisible: Boolean(offerRes.rows[0].legacy_customer_mobile_visible),
     mappings: mappingsRes.rows.map((m: any) => {
       const stats = statsMap.get(Number(m.mapping_id));
       return {
