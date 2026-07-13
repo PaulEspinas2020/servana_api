@@ -52,6 +52,7 @@ router.get('/admin/providers/:uid/service-area',                   ...adminOnly,
 router.put('/admin/providers/:uid/service-area',                   ...adminOnly, requirePermission('provider_service_area.edit'), ctrl.saveProviderServiceAreaAdmin);
 router.patch('/admin/providers/:uid/account-status',   ...adminOnly, requirePermission('providers.status.change'), ctrl.updateProviderAccountStatus);
 router.patch('/admin/providers/:uid/archive',          ...adminOnly, requirePermission('providers.archive'), ctrl.setProviderArchive);
+router.post('/admin/providers/:uid/availability/force-offline', ...adminOnly, requirePermission('providers.availability.force_offline'), ctrl.forceProviderOffline);
 
 // ── Profile Edit ──────────────────────────────────────────────────────────────
 router.patch('/admin/providers/:uid/profile',          ...adminOnly, requirePermission('providers.profile.edit'), ctrl.updateProviderProfile);

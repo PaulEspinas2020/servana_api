@@ -12,6 +12,7 @@ import * as onboardingService from "../services/providerOnboardingService";
 import * as availEngine from "../services/providerAvailabilityEngine";
 import * as areaEngine from "../services/providerServiceAreaEngine";
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
+import * as availabilityService from "../services/providerOperationalAvailabilityService";
 
 const dbSchema = db.schema;
 
@@ -125,47 +126,37 @@ export const getLocationStatus = async (req: Request, res: Response) => {
 
 export const goOnline = async (req: Request, res: Response) => {
   try {
-    const uid = req.user?.uid;
-    const { latitude = 0, longitude = 0 } = req.body;
-    const now = new Date();
+    const uid = req.user && req.user.uid ? req.user.uid : null;
+    if (!uid) { return res.status(401).json({ status: "failed", message: "Unauthorized" }); }
 
-    const collection = (await mongoDb).collection("worker_locations");
-    const existing = await collection.findOne({ uid }, { projection: { loc: 1 } });
+    const lat = req.body && req.body.latitude !== undefined ? Number(req.body.latitude) : 0;
+    const lng = req.body && req.body.longitude !== undefined ? Number(req.body.longitude) : 0;
 
-    await collection.updateOne(
-      { uid },
-      {
-        $set: {
-          uid,
-          is_online: true,
-          loc: existing?.loc ?? { type: "Point", coordinates: [longitude, latitude] },
-          updatedAt: now,
-        },
-      },
-      { upsert: true }
+    await availabilityService.setOnline(
+      uid,
+      'provider_explicit',
+      uid,
+      'provider',
+      null,
+      lat !== 0 || lng !== 0 ? { latitude: lat, longitude: lng } : null,
     );
 
-    return res.status(200).json({ status: "success", data: toOnlineStatusDto(true, now) });
+    return res.status(200).json({ status: "success", data: toOnlineStatusDto(true, new Date()) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: error && error.message ? error.message : "Server error" });
   }
 };
 
 export const goOffline = async (req: Request, res: Response) => {
   try {
-    const uid = req.user?.uid;
-    const now = new Date();
+    const uid = req.user && req.user.uid ? req.user.uid : null;
+    if (!uid) { return res.status(401).json({ status: "failed", message: "Unauthorized" }); }
 
-    const collection = (await mongoDb).collection("worker_locations");
-    await collection.updateOne(
-      { uid },
-      { $set: { is_online: false, updatedAt: now } },
-      { upsert: true }
-    );
+    await availabilityService.setOffline(uid, 'provider_explicit', uid, 'provider', null);
 
-    return res.status(200).json({ status: "success", data: toOnlineStatusDto(false, now) });
+    return res.status(200).json({ status: "success", data: toOnlineStatusDto(false, new Date()) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: error && error.message ? error.message : "Server error" });
   }
 };
 

@@ -7,6 +7,7 @@ import * as availEngine from '../services/providerAvailabilityEngine';
 import * as areaEngine  from '../services/providerServiceAreaEngine';
 import * as eligEngine  from '../services/providerEligibilityEngine';
 import * as autoOnlineEngine from '../services/providerAutoOnlineEngine';
+import * as availabilityService from '../services/providerOperationalAvailabilityService';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -961,6 +962,52 @@ export const saveProviderServiceAreaAdmin = async (req: Request, res: Response) 
     return ok(res, { uid, saved: true, version: result.version, updatedAt: result.updatedAt });
   } catch (err: any) {
     return fail(res, err?.statusCode ?? 500, err?.message ?? 'Failed to save service area');
+  }
+};
+
+// ── Operational Availability: Admin Force-Offline ─────────────────────────────
+
+export const forceProviderOffline = async (req: Request, res: Response) => {
+  try {
+    const providerUid = String(req.params.uid);
+    const reason: string | undefined = req.body?.reason;
+
+    if (!reason || !reason.trim()) {
+      return fail(res, 400, 'A reason is required to force a provider offline.');
+    }
+
+    // Verify provider exists.
+    const identity = await svc.getProviderIdentity(providerUid);
+    if (!identity) {
+      return fail(res, 404, 'Provider not found.');
+    }
+
+    const actor = adminUid(req);
+
+    await availabilityService.setOffline(
+      providerUid,
+      'admin_forced_offline',
+      actor,
+      'admin',
+      reason.trim(),
+    );
+
+    auditFire({
+      action: 'provider_forced_offline',
+      actionCategory: 'provider',
+      outcome: 'success',
+      actorUid: actor,
+      entityType: 'provider',
+      entityId: providerUid,
+      after: { availabilityStatus: 'offline', reason: reason.trim() },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
+    return ok(res, { uid: providerUid, availabilityStatus: 'offline', forcedAt: new Date().toISOString() });
+  } catch (err: any) {
+    return fail(res, err?.statusCode ?? 500, err?.message ?? 'Failed to force provider offline');
   }
 };
 

@@ -21,6 +21,7 @@ import { db } from '../config';
 import mongoDb from '../db/mongodbQuery';
 import * as availEngine from './providerAvailabilityEngine';
 import * as areaEngine from './providerServiceAreaEngine';
+import * as availabilityService from './providerOperationalAvailabilityService';
 
 const s = db.schema;
 
@@ -552,30 +553,26 @@ export const enableAutoOnlineOverride = async (
   await evaluateProvider(providerUid, 'admin', adminUid);
 };
 
-// ── Sync online status (MongoDB) ──────────────────────────────────────────────
+// ── Sync online status ────────────────────────────────────────────────────────
 
 export const syncOnlineStatus = async (providerUid: string, online: boolean): Promise<void> => {
-  const col = (await mongoDb).collection('worker_locations');
   if (online) {
+    // Delegate to canonical service — writes is_online + auto_online flags + PG metadata + audit.
+    await availabilityService.setOnline(
+      providerUid, 'auto_online', null, 'system', 'auto_online_all_time_all_area', null
+    );
+
+    // Also stamp location_confidence via $setOnInsert for first-time docs.
+    const col = (await mongoDb).collection('worker_locations');
     await col.updateOne(
       { uid: providerUid },
-      {
-        $set: {
-          uid: providerUid,
-          is_online: true,
-          auto_online: true,
-          auto_online_reason: 'auto_online_all_time_all_area',
-          updatedAt: new Date(),
-        },
-        $setOnInsert: {
-          // Use Manila center as default location — preserved if real coords exist
-          loc: { type: 'Point', coordinates: [120.9842195, 14.5994643] },
-          location_confidence: 'auto_online_default',
-        },
-      },
+      { $setOnInsert: { location_confidence: 'auto_online_default' } },
       { upsert: true }
     );
   } else {
+    // Revocation only clears the auto_online flag — it does NOT set is_online=false.
+    // A provider's explicit online intent survives auto-online revocation.
+    const col = (await mongoDb).collection('worker_locations');
     await col.updateOne(
       { uid: providerUid },
       { $set: { auto_online: false, updatedAt: new Date() } }

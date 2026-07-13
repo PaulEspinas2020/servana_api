@@ -270,7 +270,7 @@ export const getProviderMetrics = async () => {
 // ── Provider 360 Detail ───────────────────────────────────────────────────────
 
 export const getProviderIdentity = async (uid: string) => {
-  const [credRes, profileRes, addrRes, locationDoc] = await Promise.all([
+  const [credRes, profileRes, addrRes, locationDoc, availPgRes] = await Promise.all([
     dbQuery.query(
       `SELECT uid, email, first_name, last_name, phone_number, role,
               account_status, is_archive, is_email_verified, created_date
@@ -294,6 +294,12 @@ export const getProviderIdentity = async (uid: string) => {
         return null;
       }
     })(),
+    dbQuery.query(
+      `SELECT availability_source, changed_by_uid, changed_by_role, changed_at, reason
+       FROM ${dbSchema}.provider_operational_availability
+       WHERE provider_uid = $1`,
+      [uid]
+    ).catch(() => ({ rows: [] as any[] })),
   ]);
 
   if (!credRes.rowCount) return null;
@@ -301,6 +307,7 @@ export const getProviderIdentity = async (uid: string) => {
   const cred = credRes.rows[0];
   const profile = profileRes.rows[0] ?? {};
   const addr = addrRes.rows[0] ?? {};
+  const avail = availPgRes.rows.length > 0 ? availPgRes.rows[0] : null;
 
   return {
     uid: cred.uid,
@@ -329,6 +336,11 @@ export const getProviderIdentity = async (uid: string) => {
       : null,
     onlineStatus: locationDoc?.is_online ? 'online' : 'offline',
     lastSeenAt: locationDoc?.updatedAt ?? null,
+    availabilitySource: avail ? avail.availability_source : null,
+    availabilityChangedAt: avail ? avail.changed_at : null,
+    availabilityChangedByUid: avail ? avail.changed_by_uid : null,
+    availabilityChangedByRole: avail ? avail.changed_by_role : null,
+    availabilityReason: avail ? avail.reason : null,
   };
 };
 
