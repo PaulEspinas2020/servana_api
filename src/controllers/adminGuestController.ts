@@ -70,6 +70,19 @@ export const listGuests = async (req: Request, res: Response) => {
   }
 };
 
+// GET /admin/customers/clients/:identityId
+export const getClientDetail = async (req: Request, res: Response) => {
+  try {
+    const { identityId } = req.params as { identityId: string };
+    if (!identityId) return adminBadRequest(res, 'identityId is required');
+    const detail = await svc.getClientDetail(identityId);
+    if (!detail) return adminNotFound(res, 'Client customer');
+    return res.json({ status: 'success', data: detail });
+  } catch (err: any) {
+    return adminServerError(res, err);
+  }
+};
+
 // GET /admin/customers/guests/:guestId
 export const getGuestDetail = async (req: Request, res: Response) => {
   try {

@@ -588,6 +588,59 @@ export async function listAllCustomers(params: ListAllCustomersParams): Promise<
   };
 }
 
+// ── Client detail (registered client, role=3) ────────────────────────────────
+
+export async function getClientDetail(identityId: string): Promise<any | null> {
+  const res = await dbQuery.query(
+    `WITH booking_stats AS (
+       SELECT
+         user_id,
+         COUNT(b.id)                                          AS booking_count,
+         MAX(b.schedule)                                      AS last_at,
+         COUNT(b.id) FILTER (WHERE b.schedule > NOW())       AS upcoming_count,
+         COALESCE(SUM(b.final_price), 0)                     AS total_spend
+       FROM ${s}.bookings b
+       WHERE b.user_id = $1
+       GROUP BY b.user_id
+     )
+     SELECT
+       uc.uid,
+       uc.first_name,
+       uc.last_name,
+       uc.email,
+       uc.phone_number   AS phone,
+       uc.created_at,
+       COALESCE(bs.booking_count, 0)   AS booking_count,
+       bs.last_at                       AS last_booking_at,
+       COALESCE(bs.upcoming_count, 0)  AS upcoming_booking_count,
+       COALESCE(bs.total_spend, 0)     AS total_spend
+     FROM ${s}.user_credentials uc
+     LEFT JOIN booking_stats bs ON bs.user_id = uc.uid
+     WHERE uc.uid = $1 AND uc.role::int = 3
+     LIMIT 1`,
+    [identityId]
+  );
+
+  if (!res.rowCount) return null;
+  const row = res.rows[0];
+  return {
+    identityId:           row.uid,
+    identityType:         'client',
+    firstName:            row.first_name,
+    lastName:             row.last_name,
+    displayName:          ((row.first_name || '') + ' ' + (row.last_name || '')).trim(),
+    phone:                row.phone || null,
+    email:                row.email || null,
+    createdAt:            row.created_at,
+    bookingSummary: {
+      count:      Number(row.booking_count),
+      lastAt:     row.last_booking_at || null,
+      upcoming:   Number(row.upcoming_booking_count),
+      totalSpend: Number(row.total_spend),
+    },
+  };
+}
+
 // ── Customer metrics (combined clients + guests) ───────────────────────────────
 
 export async function getCustomerMetrics(): Promise<{

@@ -13,6 +13,9 @@ const adminOnly = [verifyAuth, verifyRoles([1])];
 router.get('/admin/customers',         ...adminOnly, requirePermission('customers.read'),         ctrl.listAllCustomers);
 router.get('/admin/customers/metrics', ...adminOnly, requirePermission('customers.read'),         ctrl.getCustomerMetrics);
 
+// Client-specific endpoints
+router.get('/admin/customers/clients/:identityId', ...adminOnly, requirePermission('customers.read'), ctrl.getClientDetail);
+
 // Guest-specific endpoints
 router.get('/admin/customers/guests',                   ...adminOnly, requirePermission('customers.read_guests'),         ctrl.listGuests);
 router.get('/admin/customers/guests/:guestId',          ...adminOnly, requirePermission('customers.read_guests'),         ctrl.getGuestDetail);
