@@ -297,9 +297,16 @@ export async function resolveAddress(
     addressOne = name + (addressOne ? ", " + addressOne : "");
   }
 
+  // PH city/municipality resolution fallback chain:
+  // 1. locality                  — NCR cities (Quezon City, Makati, Pasig…)
+  // 2. administrative_area_level_3 — provincial municipalities (Taguig, Carmona…)
+  // 3. sublocality_level_1       — barangay/district when city component missing (BGC…)
+  // 4. administrative_area_level_2 — province or Metro Manila as last resort
   var postTown = extractAddressComponent(components, [
     "locality",
     "administrative_area_level_3",
+    "sublocality_level_1",
+    "administrative_area_level_2",
   ]);
   var province = extractAddressComponent(components, [
     "administrative_area_level_1",

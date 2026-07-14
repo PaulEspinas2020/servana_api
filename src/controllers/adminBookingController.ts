@@ -418,7 +418,9 @@ export const createAdminBooking = async (req: Request, res: Response) => {
     if (!serviceOptionId)                  return adminBadRequest(res, 'serviceOptionId is required');
     if (!scheduledAt)                      return adminBadRequest(res, 'scheduledAt is required');
     if (!addressLine?.trim())              return adminBadRequest(res, 'addressLine is required');
-    if (!city?.trim())                     return adminBadRequest(res, 'city is required');
+    // city (post_town) is best-effort — Google Places may not return locality for all PH addresses;
+    // store empty string rather than blocking the booking entirely
+    const effectiveCity: string = city?.trim() || '';
     if (lat == null || lon == null)        return adminBadRequest(res, 'lat and lon are required');
     const latN = Number(lat), lonN = Number(lon);
     if (isNaN(latN) || latN < -90  || latN > 90)  return adminBadRequest(res, 'lat must be between -90 and 90');
@@ -436,7 +438,7 @@ export const createAdminBooking = async (req: Request, res: Response) => {
       serviceOptionId: Number(serviceOptionId),
       addonOptionIds: Array.isArray(addonOptionIds) ? addonOptionIds.map(Number) : [],
       scheduledAt,
-      addressLine, city,
+      addressLine, city: effectiveCity,
       lat: Number(lat), lon: Number(lon),
       providerUid,
       paymentMethod,
