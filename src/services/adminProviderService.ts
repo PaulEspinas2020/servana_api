@@ -97,7 +97,8 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
     where.push(
       `(LOWER(COALESCE(uc.first_name,'') || ' ' || COALESCE(uc.last_name,'')) LIKE $${p} ESCAPE '\\' ` +
       `OR LOWER(COALESCE(uc.email,'')) LIKE $${p} ESCAPE '\\' ` +
-      `OR COALESCE(uc.phone_number,'') LIKE $${p} ESCAPE '\\')`
+      `OR COALESCE(uc.phone_number,'') LIKE $${p} ESCAPE '\\' ` +
+      `OR LOWER(uc.uid) LIKE $${p} ESCAPE '\\')`
     );
   }
 
