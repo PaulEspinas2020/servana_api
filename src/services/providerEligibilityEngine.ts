@@ -133,7 +133,8 @@ export const evaluateProviderForSlot = async (
   const account = accountRes.rows[0];
 
   if (account.account_status !== 'active') {
-    reasons.push({ code: 'ACCOUNT_INACTIVE', severity: 'blocker', message: `Provider account status is "${account.account_status}"` });
+    const displayStatus = account.account_status ?? 'not yet activated';
+    reasons.push({ code: 'ACCOUNT_INACTIVE', severity: 'blocker', message: `Provider account status is "${displayStatus}"` });
   } else {
     checks.accountActive = true;
   }

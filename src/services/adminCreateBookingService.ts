@@ -321,13 +321,15 @@ export const listCandidatesForSlot = async (slot: {
   cityId: string | null;
   branchId: string | null;
 }): Promise<any[]> => {
-  // Fetch all active non-archived role 2/4 providers (max 20 for performance)
+  // Fetch all non-archived role 2/4 providers (max 20).
+  // account_status filter is intentionally omitted here — the eligibility engine
+  // flags non-active providers as ACCOUNT_INACTIVE (blocker) so admins can see
+  // WHY a provider is unavailable rather than getting a silent empty list.
   const providersRes = await dbQuery.query(
     `SELECT uid, first_name, last_name, email, phone_number,
             account_status, is_archive
      FROM ${s}.user_credentials
      WHERE role::int IN (2, 4)
-       AND account_status = 'active'
        AND (is_archive IS NULL OR is_archive = false)
      LIMIT 20`,
     []
