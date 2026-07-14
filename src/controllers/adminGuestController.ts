@@ -9,12 +9,18 @@ import {
 
 const actorUid = (req: any): string => req.user && req.user.uid ? req.user.uid : '';
 
+const VALID_IDENTITY_TYPES = new Set(['all', 'client', 'guest']);
+
 // GET /admin/customers
 export const listAllCustomers = async (req: Request, res: Response) => {
   try {
     const { search, identityType, page, limit } = req.query as any;
+    if (identityType && !VALID_IDENTITY_TYPES.has(identityType)) {
+      return adminBadRequest(res, 'identityType must be one of: all, client, guest');
+    }
+    const safeSearch = search ? String(search).trim().slice(0, 200) : undefined;
     const result = await svc.listAllCustomers({
-      search:       search || undefined,
+      search:       safeSearch || undefined,
       identityType: identityType || 'all',
       page:         page  ? Number(page)  : 1,
       limit:        limit ? Number(limit) : 25,
@@ -48,8 +54,9 @@ export const getCustomerMetrics = async (_req: Request, res: Response) => {
 export const listGuests = async (req: Request, res: Response) => {
   try {
     const { search, sourceChannel, linkedStatus, page, limit } = req.query as any;
+    const safeSearch = search ? String(search).trim().slice(0, 200) : undefined;
     const result = await svc.listGuests({
-      search:       search || undefined,
+      search:       safeSearch || undefined,
       sourceChannel: sourceChannel || undefined,
       linkedStatus: linkedStatus || 'all',
       page:         page  ? Number(page)  : 1,

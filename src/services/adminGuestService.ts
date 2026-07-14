@@ -49,9 +49,10 @@ export async function listGuests(params: ListGuestsParams): Promise<{
   let p = 1;
 
   if (params.search && params.search.trim()) {
-    const q = '%' + params.search.trim() + '%';
+    const safe = params.search.trim().slice(0, 200).replace(/[%_]/g, '\\$&');
+    const q = `%${safe}%`;
     wheres.push(
-      `(gc.first_name ILIKE $${p} OR gc.last_name ILIKE $${p} OR gc.email ILIKE $${p} OR gc.phone_normalized ILIKE $${p} OR (gc.first_name || ' ' || gc.last_name) ILIKE $${p})`
+      `(gc.first_name ILIKE $${p} ESCAPE '\\' OR gc.last_name ILIKE $${p} ESCAPE '\\' OR gc.email ILIKE $${p} ESCAPE '\\' OR gc.phone_normalized ILIKE $${p} ESCAPE '\\' OR (gc.first_name || ' ' || gc.last_name) ILIKE $${p} ESCAPE '\\')`
     );
     queryParams.push(q);
     p++;
@@ -452,7 +453,8 @@ export async function listAllCustomers(params: ListAllCustomersParams): Promise<
   const limit = Math.min(100, Math.max(1, params.limit || 25));
   const offset = (page - 1) * limit;
 
-  const searchTerm = params.search ? '%' + params.search.trim() + '%' : null;
+  const rawSearch = params.search ? params.search.trim().slice(0, 200) : null;
+  const searchTerm = rawSearch ? '%' + rawSearch.replace(/[%_]/g, '\\$&') + '%' : null;
   const identityType = params.identityType || 'all';
 
   // Build discriminated UNION query.
@@ -469,10 +471,10 @@ export async function listAllCustomers(params: ListAllCustomersParams): Promise<
   }
 
   const clientSearchWhere = searchTerm
-    ? `AND (uc.first_name ILIKE $1 OR uc.last_name ILIKE $1 OR uc.email ILIKE $1 OR uc.phone_number ILIKE $1 OR (uc.first_name || ' ' || uc.last_name) ILIKE $1)`
+    ? `AND (uc.first_name ILIKE $1 ESCAPE '\\' OR uc.last_name ILIKE $1 ESCAPE '\\' OR uc.email ILIKE $1 ESCAPE '\\' OR uc.phone_number ILIKE $1 ESCAPE '\\' OR (uc.first_name || ' ' || uc.last_name) ILIKE $1 ESCAPE '\\')`
     : '';
   const guestSearchWhere = searchTerm
-    ? `AND (gc.first_name ILIKE $1 OR gc.last_name ILIKE $1 OR gc.email ILIKE $1 OR gc.phone_normalized ILIKE $1 OR (gc.first_name || ' ' || gc.last_name) ILIKE $1)`
+    ? `AND (gc.first_name ILIKE $1 ESCAPE '\\' OR gc.last_name ILIKE $1 ESCAPE '\\' OR gc.email ILIKE $1 ESCAPE '\\' OR gc.phone_normalized ILIKE $1 ESCAPE '\\' OR (gc.first_name || ' ' || gc.last_name) ILIKE $1 ESCAPE '\\')`
     : '';
 
   // 13 columns per branch — must match exactly for UNION ALL:
