@@ -63,10 +63,14 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
   where.push(`uc.role::int IN (2, 4)`);
 
   if (search) {
-    params.push(`%${search.toLowerCase()}%`);
+    // Escape SQL LIKE wildcards so user input is treated as literal text
+    const safe = search.toLowerCase().replace(/[%_]/g, '\\$&');
+    params.push(`%${safe}%`);
     const p = params.length;
     where.push(
-      `(LOWER(uc.first_name || ' ' || uc.last_name) LIKE $${p} OR LOWER(uc.email) LIKE $${p} OR uc.phone_number LIKE $${p})`
+      `(LOWER(COALESCE(uc.first_name,'') || ' ' || COALESCE(uc.last_name,'')) LIKE $${p} ESCAPE '\\' ` +
+      `OR LOWER(COALESCE(uc.email,'')) LIKE $${p} ESCAPE '\\' ` +
+      `OR COALESCE(uc.phone_number,'') LIKE $${p} ESCAPE '\\')`
     );
   }
 

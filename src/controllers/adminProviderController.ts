@@ -32,7 +32,7 @@ const adminUid = (req: Request): string => req.user?.uid ?? '';
 
 export const listProviders = async (req: Request, res: Response) => {
   try {
-    const { search, role, account_status, is_archive, sort_by, sort_dir,
+    const { role, account_status, is_archive, sort_by, sort_dir,
             has_documents, has_pending_apps, has_active_services, has_availability, has_service_area,
             has_auto_online, has_bookable } = req.query;
     const page = parseIntQ(req.query.page, 1);
@@ -40,8 +40,12 @@ export const listProviders = async (req: Request, res: Response) => {
 
     const parseBool = (v: any) => v === undefined ? undefined : v === 'true';
 
+    // Normalize search: trim whitespace, collapse internal spaces, cap length
+    const rawSearch = req.query.search as string | undefined;
+    const search = rawSearch ? String(rawSearch).trim().replace(/\s{2,}/g, ' ').slice(0, 200) || undefined : undefined;
+
     const result = await svc.listProviders({
-      search: search as string | undefined,
+      search,
       role: role !== undefined ? Number(role) : undefined,
       accountStatus: account_status as string | undefined,
       isArchive: is_archive !== undefined ? is_archive === 'true' : undefined,
