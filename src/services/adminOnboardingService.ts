@@ -1005,7 +1005,7 @@ export const finalApproveProvider = async (
   try {
     // Activate provider account
     await dbQuery.query(
-      `UPDATE ${dbSchema}.user_credentials SET account_status = 'active', updated_at = NOW() WHERE uid = $1`,
+      `UPDATE ${dbSchema}.user_credentials SET account_status = 'active' WHERE uid = $1`,
       [c.provider_uid]
     );
     // Transition case to approved
@@ -1059,7 +1059,7 @@ export const finalRejectProvider = async (
   await dbQuery.query('BEGIN');
   try {
     await dbQuery.query(
-      `UPDATE ${dbSchema}.user_credentials SET account_status = 'rejected', updated_at = NOW() WHERE uid = $1`,
+      `UPDATE ${dbSchema}.user_credentials SET account_status = 'rejected' WHERE uid = $1`,
       [c.provider_uid]
     );
     await transitionCase(caseId, 'rejected', expectedVersion, adminUid, reasonCode, providerMessage);

@@ -301,6 +301,9 @@ export const finalApproveProvider = async (req: Request, res: Response) => {
     if (expected_version === undefined || expected_version === null) {
       return fail(res, 400, 'expected_version is required');
     }
+    if (internal_note && String(internal_note).length > 1000) {
+      return fail(res, 400, 'internal_note must be 1000 characters or fewer');
+    }
     const result = await svc.finalApproveProvider(
       caseId,
       Number(expected_version),
