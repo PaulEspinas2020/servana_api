@@ -455,15 +455,14 @@ export async function listAllCustomers(params: ListAllCustomersParams): Promise<
   const searchTerm = params.search ? '%' + params.search.trim() + '%' : null;
   const identityType = params.identityType || 'all';
 
-  // Build the UNION query
-  // Clients come from user_credentials (role=3)
-  // Guests come from guest_customers
-  // Booking stats aggregated via CTE for each side
+  // Build discriminated UNION query.
+  // Both branches must select the same columns in the same order for UNION ALL.
+  // Client-specific fields (customer_uid) are NULL in the guest branch and vice-versa.
+  // Booking stats aggregated via CTE — no N+1.
 
   const rows: unknown[] = [];
   let paramIndex = 1;
 
-  // We pass search param once; it is referenced by index
   if (searchTerm) {
     rows.push(searchTerm);
     paramIndex++;
@@ -476,82 +475,94 @@ export async function listAllCustomers(params: ListAllCustomersParams): Promise<
     ? `AND (gc.first_name ILIKE $1 OR gc.last_name ILIKE $1 OR gc.email ILIKE $1 OR gc.phone_normalized ILIKE $1 OR (gc.first_name || ' ' || gc.last_name) ILIKE $1)`
     : '';
 
+  // 13 columns per branch — must match exactly for UNION ALL:
+  // identity_type, identity_id, customer_uid, guest_customer_id,
+  // display_name, phone, email, source_channel, linked_client_uid,
+  // booking_count, last_booking_at, total_spend, created_at
+
+  const clientBranch = `
+    SELECT
+      'client'::text                                                              AS identity_type,
+      uc.uid                                                                      AS identity_id,
+      uc.uid                                                                      AS customer_uid,
+      NULL::text                                                                  AS guest_customer_id,
+      COALESCE(uc.first_name, '') || ' ' || COALESCE(uc.last_name, '')          AS display_name,
+      uc.phone_number                                                             AS phone,
+      uc.email,
+      NULL::text                                                                  AS source_channel,
+      NULL::text                                                                  AS linked_client_uid,
+      COALESCE(cbs.booking_count, 0)                                             AS booking_count,
+      cbs.last_booking_at,
+      COALESCE(cbs.total_spend, 0)                                               AS total_spend,
+      uc.created_at
+    FROM ${s}.user_credentials uc
+    LEFT JOIN client_booking_stats cbs ON cbs.user_id = uc.uid
+    WHERE uc.role::int = 3 ${clientSearchWhere}
+  `;
+
+  const guestBranch = `
+    SELECT
+      'guest'::text                                                               AS identity_type,
+      gc.guest_customer_id::text                                                  AS identity_id,
+      NULL::text                                                                  AS customer_uid,
+      gc.guest_customer_id::text                                                  AS guest_customer_id,
+      COALESCE(gc.first_name, '') || ' ' || COALESCE(gc.last_name, '')          AS display_name,
+      gc.phone_normalized                                                         AS phone,
+      gc.email,
+      gc.source_channel,
+      gc.linked_customer_uid                                                      AS linked_client_uid,
+      COALESCE(gbs.booking_count, 0)                                             AS booking_count,
+      gbs.last_booking_at,
+      COALESCE(gbs.total_spend, 0)                                               AS total_spend,
+      gc.created_at
+    FROM ${s}.guest_customers gc
+    LEFT JOIN guest_booking_stats gbs ON gbs.guest_customer_id = gc.guest_customer_id
+    WHERE 1=1 ${guestSearchWhere}
+  `;
+
   let unionQuery: string;
 
   if (identityType === 'client') {
     unionQuery = `
       WITH client_booking_stats AS (
-        SELECT user_id, COUNT(b.id) AS booking_count, MAX(b.schedule) AS last_booking_at
+        SELECT user_id,
+               COUNT(b.id)                   AS booking_count,
+               MAX(b.schedule)               AS last_booking_at,
+               COALESCE(SUM(b.final_price), 0) AS total_spend
         FROM ${s}.bookings b WHERE b.user_id IS NOT NULL GROUP BY b.user_id
       )
-      SELECT
-        'client'                                      AS identity_type,
-        uc.uid                                        AS identity_id,
-        uc.first_name || ' ' || uc.last_name         AS display_name,
-        uc.phone_number                               AS phone,
-        uc.email,
-        COALESCE(cbs.booking_count, 0)               AS booking_count,
-        cbs.last_booking_at,
-        uc.created_at
-      FROM ${s}.user_credentials uc
-      LEFT JOIN client_booking_stats cbs ON cbs.user_id = uc.uid
-      WHERE uc.role::int = 3 ${clientSearchWhere}
+      ${clientBranch}
     `;
   } else if (identityType === 'guest') {
     unionQuery = `
       WITH guest_booking_stats AS (
-        SELECT guest_customer_id, COUNT(b.id) AS booking_count, MAX(b.schedule) AS last_booking_at
+        SELECT guest_customer_id,
+               COUNT(b.id)                   AS booking_count,
+               MAX(b.schedule)               AS last_booking_at,
+               COALESCE(SUM(b.final_price), 0) AS total_spend
         FROM ${s}.bookings b WHERE b.guest_customer_id IS NOT NULL GROUP BY b.guest_customer_id
       )
-      SELECT
-        'guest'                                       AS identity_type,
-        gc.guest_customer_id::text                   AS identity_id,
-        gc.first_name || ' ' || gc.last_name         AS display_name,
-        gc.phone_normalized                           AS phone,
-        gc.email,
-        COALESCE(gbs.booking_count, 0)               AS booking_count,
-        gbs.last_booking_at,
-        gc.created_at
-      FROM ${s}.guest_customers gc
-      LEFT JOIN guest_booking_stats gbs ON gbs.guest_customer_id = gc.guest_customer_id
-      WHERE 1=1 ${guestSearchWhere}
+      ${guestBranch}
     `;
   } else {
-    // UNION of both
     unionQuery = `
       WITH client_booking_stats AS (
-        SELECT user_id, COUNT(b.id) AS booking_count, MAX(b.schedule) AS last_booking_at
+        SELECT user_id,
+               COUNT(b.id)                   AS booking_count,
+               MAX(b.schedule)               AS last_booking_at,
+               COALESCE(SUM(b.final_price), 0) AS total_spend
         FROM ${s}.bookings b WHERE b.user_id IS NOT NULL GROUP BY b.user_id
       ),
       guest_booking_stats AS (
-        SELECT guest_customer_id, COUNT(b.id) AS booking_count, MAX(b.schedule) AS last_booking_at
+        SELECT guest_customer_id,
+               COUNT(b.id)                   AS booking_count,
+               MAX(b.schedule)               AS last_booking_at,
+               COALESCE(SUM(b.final_price), 0) AS total_spend
         FROM ${s}.bookings b WHERE b.guest_customer_id IS NOT NULL GROUP BY b.guest_customer_id
       )
-      SELECT
-        'client'                                      AS identity_type,
-        uc.uid                                        AS identity_id,
-        uc.first_name || ' ' || uc.last_name         AS display_name,
-        uc.phone_number                               AS phone,
-        uc.email,
-        COALESCE(cbs.booking_count, 0)               AS booking_count,
-        cbs.last_booking_at,
-        uc.created_at
-      FROM ${s}.user_credentials uc
-      LEFT JOIN client_booking_stats cbs ON cbs.user_id = uc.uid
-      WHERE uc.role::int = 3 ${clientSearchWhere}
+      ${clientBranch}
       UNION ALL
-      SELECT
-        'guest'                                       AS identity_type,
-        gc.guest_customer_id::text                   AS identity_id,
-        gc.first_name || ' ' || gc.last_name         AS display_name,
-        gc.phone_normalized                           AS phone,
-        gc.email,
-        COALESCE(gbs.booking_count, 0)               AS booking_count,
-        gbs.last_booking_at,
-        gc.created_at
-      FROM ${s}.guest_customers gc
-      LEFT JOIN guest_booking_stats gbs ON gbs.guest_customer_id = gc.guest_customer_id
-      WHERE 1=1 ${guestSearchWhere}
+      ${guestBranch}
     `;
   }
 
@@ -572,16 +583,23 @@ export async function listAllCustomers(params: ListAllCustomersParams): Promise<
   );
 
   return {
-    data: dataRes.rows.map((r: any) => ({
-      identityType:   r.identity_type,
-      identityId:     r.identity_id,
-      displayName:    (r.display_name || '').trim(),
-      phone:          r.phone || null,
-      email:          r.email || null,
-      bookingCount:   Number(r.booking_count),
-      lastBookingAt:  r.last_booking_at || null,
-      createdAt:      r.created_at,
-    })),
+    data: dataRes.rows.map((r: any) => {
+      const base = {
+        identityType:  r.identity_type,
+        identityId:    r.identity_id,
+        displayName:   (r.display_name || '').trim(),
+        phone:         r.phone || null,
+        email:         r.email || null,
+        bookingCount:  Number(r.booking_count || 0),
+        lastBookingAt: r.last_booking_at || null,
+        totalSpend:    Number(r.total_spend || 0),
+        createdAt:     r.created_at,
+      };
+      if (r.identity_type === 'client') {
+        return { ...base, customerUid: r.customer_uid, guestCustomerId: null, sourceChannel: null, linkedClientUid: null };
+      }
+      return { ...base, customerUid: null, guestCustomerId: r.guest_customer_id, sourceChannel: r.source_channel || null, linkedClientUid: r.linked_client_uid || null };
+    }),
     total,
     page,
     limit,
