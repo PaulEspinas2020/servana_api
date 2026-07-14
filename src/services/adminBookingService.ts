@@ -245,7 +245,8 @@ export const getAdminBookings = async (
     params.push(filter.toDate); pi++;
   }
   if (filter.isUnassigned === true) {
-    conditions.push(`b.worker_uid IS NULL`);
+    // Match the canonical ops_status='awaiting_assignment' predicate exactly
+    conditions.push(`(b.worker_uid IS NULL OR b.worker_uid = '') AND b.status IN ('CONFIRMED', 'PAID')`);
   }
   if (filter.isLate === true) {
     conditions.push(`b.schedule < NOW() AND b.status NOT IN ('COMPLETED','CANCELLED','CANCELED')`);

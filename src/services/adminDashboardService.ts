@@ -582,7 +582,7 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
       description: `${n(r.unassigned_paid)} paid booking(s) need a provider assigned`,
       severity: 'urgent',
       count: n(r.unassigned_paid),
-      route: '/portal/job-orders?operationsStatus=awaiting_assignment',
+      route: '/portal/job-orders?view=unassigned_paid',
     });
   }
   if (n(r.gcash_awaiting) > 0) {
@@ -604,7 +604,7 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
       description: `${n(r.late_jobs)} job(s) are past their scheduled time`,
       severity: 'high',
       count: n(r.late_jobs),
-      route: '/portal/job-orders?operationsStatus=in_progress',
+      route: '/portal/job-orders?view=overdue',
     });
   }
   if (n(r.disputes) > 0) {
