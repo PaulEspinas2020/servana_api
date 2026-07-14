@@ -788,8 +788,7 @@ export async function setInternalFixer(
   requestId: string | null
 ): Promise<void> {
   const res = await dbQuery.query(
-    `UPDATE ${s}.user_credentials SET is_internal_fixer=$2, updated_at=NOW()
-     WHERE uid=$1 RETURNING uid`,
+    `UPDATE ${s}.user_credentials SET is_internal_fixer=$2 WHERE uid=$1 RETURNING uid`,
     [providerUid, isInternalFixer]
   );
   if (!res.rows.length) {
