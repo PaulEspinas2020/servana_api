@@ -13,6 +13,7 @@ import * as availEngine from "../services/providerAvailabilityEngine";
 import * as areaEngine from "../services/providerServiceAreaEngine";
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 import * as availabilityService from "../services/providerOperationalAvailabilityService";
+import { touchProviderActivity } from "../services/adminProviderService";
 
 const dbSchema = db.schema;
 
@@ -1747,5 +1748,94 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
     return res.status(200).json({ status: "success", data: { saved: true } });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+  }
+};
+
+// ─── Job cards — web portal (UID from Firebase token, not URL param) ──────────
+
+export const getWorkerJobCards = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const jobs = await technicianService.getJobCardsByWorker(uid);
+    const formatted = jobs.map((job: any) => ({
+      bookingId:   job.booking_id,
+      status:      job.status,
+      scheduleAt:  job.schedule,
+      customer:    { uid: job.customer_id, name: `${job.first_name} ${job.last_name}`, phone: job.phone_number },
+      address:     { addressOne: job.address_one, addressTwo: job.address_two, city: job.post_town, zipCode: job.zip_code, country: job.country, label: job.label },
+      service:     { name: job.service_name, type: job.service_type },
+      addOns:      job.pricing_breakdown,
+      workerStatus: job.worker_status,
+      assignedAt:  job.assigned_at,
+      startedAt:   job.started_at,
+      completedAt: job.completed_at,
+    }));
+    return res.json(formatted);
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to fetch job cards" });
+  }
+};
+
+// ─── Booking lifecycle — web portal (UID from Firebase token; BOLA enforced in service via SQL WHERE) ──
+
+export const acceptBooking = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId) return res.status(400).json({ success: false, message: "bookingId is required" });
+    const result = await technicianService.acceptJob(bookingId, uid);
+    touchProviderActivity(uid).catch(() => {});
+    return res.json({ success: true, message: "Job accepted", data: result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to accept job" });
+  }
+};
+
+export const declineBooking = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId) return res.status(400).json({ success: false, message: "bookingId is required" });
+    const result = await technicianService.declineJob(bookingId, uid);
+    return res.json({
+      success: true,
+      message: result.reassignment?.assigned
+        ? "Job declined — a new worker has been assigned"
+        : "Job declined — no available worker found, booking returned to queue",
+      data: result,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to decline job" });
+  }
+};
+
+export const startBooking = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId) return res.status(400).json({ success: false, message: "bookingId is required" });
+    const workerCode = req.query.workerCode as string | undefined;
+    const result = await technicianService.startJob(bookingId, uid, workerCode);
+    return res.json({ success: true, message: "Job started", data: result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to start job" });
+  }
+};
+
+export const completeBooking = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId) return res.status(400).json({ success: false, message: "bookingId is required" });
+    const result = await technicianService.completeJob(bookingId, uid);
+    touchProviderActivity(uid).catch(() => {});
+    return res.json({ success: true, message: "Job completed successfully", data: result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to complete job" });
   }
 };

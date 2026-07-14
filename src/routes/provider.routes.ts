@@ -122,6 +122,18 @@ router.delete("/worker/service-applications/:applicationId", verifyAuth, provide
 // FCM token — saved after login so push notifications reach this device
 router.post("/provider/fcm-token", verifyAuth, provider.saveProviderFcmToken);
 
+// ─── Job cards (auth-scoped; UID resolved from Firebase token, never from URL) ─
+// These are the web-portal equivalents of the mobile /workers/:uid/job-cards routes.
+// Mobile routes remain unchanged — this adds auth-required parity endpoints for web.
+router.get("/worker/job-cards", verifyAuth, provider.getWorkerJobCards);
+
+// ─── Booking lifecycle (auth-scoped; BOLA enforced in service via SQL WHERE worker_uid = token.uid) ──
+// Web portal equivalents of the unauthenticated /workers/bookings/:id/* mobile routes.
+router.put("/worker/bookings/:bookingId/accept", verifyAuth, provider.acceptBooking);
+router.put("/worker/bookings/:bookingId/decline", verifyAuth, provider.declineBooking);
+router.put("/worker/bookings/:bookingId/start", verifyAuth, provider.startBooking);
+router.put("/worker/bookings/:bookingId/complete", verifyAuth, provider.completeBooking);
+
 // ─── Admin diagnostics (role=1 only) ─────────────────────────────────────────
 router.get("/admin/provider/reconciliation", verifyAuth, verifyRoles([1]), provider.getProviderReconciliationReport);
 
