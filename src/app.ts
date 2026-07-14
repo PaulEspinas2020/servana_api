@@ -152,6 +152,18 @@ import { ensureAdminCreateBookingSchema } from "./services/adminCreateBookingSer
   }
 })();
 
+import adminBookingDraftRoutes from "./routes/adminBookingDraft.routes";
+app.use("/api", cors(corsOptionsDelegate), adminBookingDraftRoutes);
+
+import { ensureAdminBookingDraftSchema } from "./services/adminBookingDraftService";
+(async () => {
+  try {
+    await ensureAdminBookingDraftSchema();
+  } catch (err) {
+    console.error("[admin-booking-draft] schema error:", err);
+  }
+})();
+
 import adminDashboardRoutes from "./routes/adminDashboard.routes";
 app.use("/api", cors(corsOptionsDelegate), adminDashboardRoutes);
 
