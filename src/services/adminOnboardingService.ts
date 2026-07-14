@@ -981,7 +981,7 @@ export const finalApproveProvider = async (
   caseId: string,
   expectedVersion: number,
   adminUid: string,
-  providerMessage?: string
+  internalNote?: string
 ) => {
   await ensureOnboardingSchema();
 
@@ -992,7 +992,7 @@ export const finalApproveProvider = async (
   if (!caseRes.rowCount) throw Object.assign(new Error('Case not found'), { statusCode: 404 });
   const c = caseRes.rows[0];
 
-  // Recalculate readiness — must be ready
+  // Recalculate readiness immediately before committing — must be ready
   const readiness = await calculateReadiness(c.provider_uid);
   if (!readiness.isReady) {
     throw Object.assign(
@@ -1003,26 +1003,34 @@ export const finalApproveProvider = async (
 
   await dbQuery.query('BEGIN');
   try {
-    // Update account_status to active
+    // Activate provider account
     await dbQuery.query(
       `UPDATE ${dbSchema}.user_credentials SET account_status = 'active', updated_at = NOW() WHERE uid = $1`,
       [c.provider_uid]
     );
-    // Transition case
-    await transitionCase(caseId, 'approved', expectedVersion, adminUid, undefined, providerMessage);
+    // Transition case to approved
+    await transitionCase(caseId, 'approved', expectedVersion, adminUid);
+    // Persist internal admin note if provided (never shown to provider)
+    if (internalNote && String(internalNote).trim()) {
+      await dbQuery.query(
+        `INSERT INTO ${dbSchema}.provider_onboarding_notes (case_id, author_uid, note_type, body, is_provider_visible)
+         VALUES ($1, $2, 'internal', $3, false)`,
+        [caseId, adminUid, String(internalNote).trim()]
+      );
+    }
     await dbQuery.query('COMMIT');
   } catch (err) {
     await dbQuery.query('ROLLBACK');
     throw err;
   }
 
-  // Notify provider
+  // Notify provider — failure is non-fatal (approval already committed)
   try {
     await notificationService.createNotification(c.provider_uid, {
       type: 'account_activated',
       severity: 'info',
       title: 'Account Activated',
-      safeBody: providerMessage ?? 'Your Servana provider account has been activated. You can now start accepting jobs.',
+      safeBody: 'Your Servana provider account has been activated. You can now start accepting jobs.',
     });
   } catch { /* non-fatal */ }
 

@@ -297,7 +297,7 @@ export const requestResubmission = async (req: Request, res: Response) => {
 export const finalApproveProvider = async (req: Request, res: Response) => {
   try {
     const caseId = String(req.params.caseId);
-    const { expected_version, provider_message } = req.body as Record<string, any>;
+    const { expected_version, internal_note } = req.body as Record<string, any>;
     if (expected_version === undefined || expected_version === null) {
       return fail(res, 400, 'expected_version is required');
     }
@@ -305,7 +305,7 @@ export const finalApproveProvider = async (req: Request, res: Response) => {
       caseId,
       Number(expected_version),
       actorUid(req),
-      provider_message,
+      internal_note,
     );
 
     await writeSuccess({
@@ -314,7 +314,7 @@ export const finalApproveProvider = async (req: Request, res: Response) => {
       actorUid: actorUid(req),
       entityType: 'onboarding_case',
       entityId: caseId,
-      after: { status: 'approved', providerMessage: provider_message ?? null },
+      after: { status: 'approved', hasInternalNote: !!(internal_note && String(internal_note).trim()) },
       requestId: (req as any).id ?? null,
       ipAddress: req.ip ?? null,
       userAgent: req.headers['user-agent'] ?? null,
