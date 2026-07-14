@@ -1839,3 +1839,53 @@ export const completeBooking = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: error.message || "Failed to complete job" });
   }
 };
+
+// ─── Location update (auth-scoped; uid from Firebase token, not request body) ─
+// Web-portal equivalent of the unauthenticated POST /workers/location mobile route.
+// Mobile route remains unchanged — this additive endpoint enforces token-based identity.
+export const updateWorkerLocation = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const { latitude, longitude, isOnline } = req.body;
+    if (latitude === undefined || longitude === undefined) {
+      return res.status(400).json({ success: false, message: "latitude and longitude are required" });
+    }
+    if (isOnline === undefined) {
+      return res.status(400).json({ success: false, message: "isOnline is required" });
+    }
+    const worker = await technicianService.getWorkerByUid(uid);
+    if (!worker) return res.status(404).json({ success: false, message: "Worker not found" });
+    await technicianService.upsertWorkerLocation({ uid, latitude: Number(latitude), longitude: Number(longitude), is_online: Boolean(isOnline) });
+    return res.json({ success: true, message: "Worker location updated successfully" });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to update location" });
+  }
+};
+
+// ─── Worker services (auth-scoped; BOLA enforced; uid from Firebase token) ────
+// Web-portal equivalents of the unauthenticated /workers/:uid/services mobile routes.
+export const getWorkerServices = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const services = await technicianService.getServicesByEmployee(uid);
+    return res.json({ success: true, services });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to fetch services" });
+  }
+};
+
+export const removeWorkerService = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const serviceId = Number(req.params.serviceId);
+    if (!serviceId) return res.status(400).json({ success: false, message: "serviceId is required" });
+    const result = await technicianService.removeServiceFromEmployee(uid, serviceId);
+    autoOnlineEngine.evaluateProvider(uid, 'system', null).catch(() => {});
+    return res.json({ success: true, removed: result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to remove service" });
+  }
+};

@@ -134,6 +134,13 @@ router.put("/worker/bookings/:bookingId/decline", verifyAuth, provider.declineBo
 router.put("/worker/bookings/:bookingId/start", verifyAuth, provider.startBooking);
 router.put("/worker/bookings/:bookingId/complete", verifyAuth, provider.completeBooking);
 
+// ─── Location update (auth-scoped; uid from Firebase token, not request body) ─
+router.post("/worker/location", verifyAuth, provider.updateWorkerLocation);
+
+// ─── Worker services (auth-scoped; uid from Firebase token, not URL param) ────
+router.get("/worker/services", verifyAuth, provider.getWorkerServices);
+router.delete("/worker/services/:serviceId", verifyAuth, provider.removeWorkerService);
+
 // ─── Admin diagnostics (role=1 only) ─────────────────────────────────────────
 router.get("/admin/provider/reconciliation", verifyAuth, verifyRoles([1]), provider.getProviderReconciliationReport);
 
