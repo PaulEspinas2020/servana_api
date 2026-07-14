@@ -513,9 +513,11 @@ export const getAdminBookingDetail = async (bookingId: number): Promise<any | nu
 
   const [bwRes, addonsRes, escalationRes] = await Promise.all([
     dbQuery.query(`
-      SELECT bw.*, wu.first_name || ' ' || wu.last_name AS worker_name, wu.phone_number AS worker_phone
+      SELECT bw.*, wu.first_name || ' ' || wu.last_name AS worker_name, wu.phone_number AS worker_phone,
+             up.photo_url AS worker_photo_url
       FROM ${dbSchema}.booking_workers bw
       LEFT JOIN ${dbSchema}.user_credentials wu ON wu.uid = bw.worker_uid
+      LEFT JOIN ${dbSchema}.user_profile up ON up.uid = bw.worker_uid
       WHERE bw.booking_id = $1
       ORDER BY bw.assigned_at DESC NULLS LAST
       LIMIT 1
@@ -554,6 +556,7 @@ export const getAdminBookingDetail = async (bookingId: number): Promise<any | nu
       providerUid: assignment.worker_uid,
       name: (assignment.worker_name ?? '').trim() || null,
       phone: assignment.worker_phone ?? null,
+      photoUrl: assignment.worker_photo_url ?? null,
       assignmentStatus: assignment.status,
       assignedAt: assignment.assigned_at ?? null,
       startedAt: assignment.started_at ?? null,
