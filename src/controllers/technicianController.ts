@@ -4,6 +4,7 @@ import { toCamel } from "../helpers/idGenerator";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import { logProviderClientActivity } from "../services/adminMobileAttributionService";
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
+import { touchProviderActivity } from "../services/adminProviderService";
 
 export const listByRole = async (req: Request, res: Response) => {
   try {
@@ -504,6 +505,8 @@ export const acceptJob = async (req: Request, res: Response) => {
 
     const result = await technician.acceptJob(bookingId, workerUid);
 
+    touchProviderActivity(workerUid).catch(() => {});
+
     return res.json({
       success: true,
       message: "Job accepted",
@@ -558,6 +561,8 @@ export const completeJob = async (req: Request, res: Response) => {
     }
 
     const result = await technician.completeJob(bookingId, workerUid);
+
+    touchProviderActivity(workerUid).catch(() => {});
 
     return res.json({
       success: true,

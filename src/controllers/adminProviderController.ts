@@ -44,6 +44,13 @@ export const listProviders = async (req: Request, res: Response) => {
     const rawSearch = req.query.search as string | undefined;
     const search = rawSearch ? String(rawSearch).trim().replace(/\s{2,}/g, ' ').slice(0, 200) || undefined : undefined;
 
+    const VALID_SORT_BY = ['name', 'created_date', 'account_status', 'last_active_at'] as const;
+    type ValidSortBy = typeof VALID_SORT_BY[number];
+    const safeSortBy: ValidSortBy = VALID_SORT_BY.includes(sort_by as ValidSortBy)
+      ? (sort_by as ValidSortBy)
+      : 'created_date';
+    const safeSortDir: 'asc' | 'desc' = sort_dir === 'asc' ? 'asc' : 'desc';
+
     const result = await svc.listProviders({
       search,
       role: role !== undefined ? Number(role) : undefined,
@@ -58,8 +65,8 @@ export const listProviders = async (req: Request, res: Response) => {
       hasBookable:       parseBool(has_bookable),
       page,
       limit,
-      sortBy: (sort_by as any) ?? 'created_date',
-      sortDir: (sort_dir as any) ?? 'desc',
+      sortBy:  safeSortBy,
+      sortDir: safeSortDir,
     });
 
     const rows = result.rows.map((r: any) => ({
@@ -74,6 +81,7 @@ export const listProviders = async (req: Request, res: Response) => {
       isArchive:       r.is_archive        ?? false,
       isEmailVerified: r.is_email_verified ?? false,
       createdDate:     r.created_date      ?? null,
+      lastActivityAt:  r.last_activity_at  ?? null,
       photoUrl:        r.photo_url         ?? null,
       // Consolidated summaries — backend resolves, frontend displays
       documentSummary: { total: Number(r.doc_total ?? 0) },

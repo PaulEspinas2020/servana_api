@@ -32,11 +32,38 @@ export interface ProviderListFilter {
   hasBookable?: boolean;       // true = bookable via auto-online
   page?: number;
   limit?: number;
-  sortBy?: 'name' | 'created_date' | 'account_status';
+  sortBy?: 'name' | 'created_date' | 'account_status' | 'last_active_at';
   sortDir?: 'asc' | 'desc';
 }
 
+// ── Provider activity tracking ────────────────────────────────────────────────
+
+let _activityColReady = false;
+const ensureLastActivityColumn = async (): Promise<void> => {
+  if (_activityColReady) return;
+  await dbQuery.query(
+    `ALTER TABLE ${db.schema}.user_credentials ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ`,
+    []
+  );
+  _activityColReady = true;
+};
+
+export const touchProviderActivity = async (workerUid: string): Promise<void> => {
+  if (!workerUid) return;
+  try {
+    await ensureLastActivityColumn();
+    await dbQuery.query(
+      `UPDATE ${db.schema}.user_credentials SET last_activity_at = NOW() WHERE uid = $1`,
+      [workerUid]
+    );
+  } catch {
+    // Non-blocking — swallow silently so callers never throw
+  }
+};
+
 export const listProviders = async (filter: ProviderListFilter = {}) => {
+  await ensureLastActivityColumn();
+
   const {
     search,
     role,
@@ -111,6 +138,7 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
     name: `uc.first_name`,
     created_date: `uc.created_date`,
     account_status: `uc.account_status`,
+    last_active_at: `uc.last_activity_at`,
   };
   const col = sortColumn[sortBy] ?? `uc.created_date`;
   const dir = sortDir === 'asc' ? 'ASC' : 'DESC';
@@ -134,6 +162,7 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
          uc.is_archive,
          uc.is_email_verified,
          uc.created_date,
+         uc.last_activity_at,
          up.photo_url,
          -- Document summary (resolved by backend)
          COALESCE((SELECT COUNT(*)::int FROM ${s}.worker_requirements wr2 WHERE wr2.worker_uid = uc.uid), 0) AS doc_total,
@@ -151,7 +180,7 @@ export const listProviders = async (filter: ProviderListFilter = {}) => {
        LEFT JOIN ${s}.user_profile up ON up.uid = uc.uid
        LEFT JOIN ${s}.provider_auto_online_state paos ON paos.provider_uid = uc.uid
        ${whereClause}
-       ORDER BY ${col} ${dir}
+       ORDER BY ${col} ${dir} NULLS LAST, uc.uid ASC
        LIMIT $${limitP} OFFSET $${offsetP}`,
       params
     ),

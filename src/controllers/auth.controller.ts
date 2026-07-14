@@ -4,6 +4,7 @@ import * as authService from "../services/auth.service";
 import * as firebaseFunction from "../services/firebaseFunctions.service";
 import { upsertSourceAttribution } from "../services/providerOnboardingService";
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
+import { touchProviderActivity } from "../services/adminProviderService";
 
 const signin = async (req: Request, res: Response) => {
     const { email, password, fcmToken } = req.body;
@@ -89,6 +90,11 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
     // Non-blocking attribution: only record when sourceClient is explicitly sent
     if (sourceClient && result?.data?.uid) {
       upsertSourceAttribution(result.data.uid, sourceClient, false).catch(() => {});
+    }
+
+    // Non-blocking last-activity update for provider activity tracking in admin portal
+    if (result?.data?.uid) {
+      touchProviderActivity(result.data.uid).catch(() => {});
     }
 
     return res.status(200).json(result);
