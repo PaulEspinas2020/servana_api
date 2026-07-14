@@ -521,7 +521,7 @@ export const getCaseDetail = async (caseIdOrProviderUid: string) => {
   }
   if (!c) throw Object.assign(new Error('Case not found'), { statusCode: 404 });
 
-  const [provRes, reqsRes, appsRes, svcCountRes] = await Promise.all([
+  const [provRes, reqsRes, appsRes, svcCountRes, histRes] = await Promise.all([
     dbQuery.query(
       `SELECT uc.uid, uc.first_name, uc.last_name, uc.email, uc.phone_number,
               uc.role, uc.account_status, uc.is_archive, uc.is_email_verified, uc.created_date,
@@ -539,12 +539,13 @@ export const getCaseDetail = async (caseIdOrProviderUid: string) => {
               latest_dec.id AS decision_id,
               latest_dec.reason_code,
               latest_dec.provider_message,
-              latest_dec.decided_at
+              latest_dec.decided_at,
+              latest_dec.reviewer_uid AS decision_reviewer_uid
        FROM ${dbSchema}.worker_requirements wr
        LEFT JOIN ${dbSchema}.provider_requirement_definitions prd
          ON prd.code = wr.requirement_type
        LEFT JOIN LATERAL (
-         SELECT id, decision, reason_code, provider_message, decided_at
+         SELECT id, decision, reason_code, provider_message, decided_at, reviewer_uid
          FROM ${dbSchema}.provider_requirement_decisions prd2
          WHERE prd2.worker_requirement_id = wr.id AND NOT prd2.is_superseded
          ORDER BY prd2.decided_at DESC LIMIT 1
@@ -566,12 +567,29 @@ export const getCaseDetail = async (caseIdOrProviderUid: string) => {
       `SELECT COUNT(*) FROM ${dbSchema}.employee_services WHERE employee_uid = $1`,
       [c.provider_uid]
     ),
+    // Full decision history for all requirements — grouped in JS after fetch
+    dbQuery.query(
+      `SELECT worker_requirement_id, id, decision, reason_code, provider_message,
+              decided_at, reviewer_uid, is_superseded
+       FROM ${dbSchema}.provider_requirement_decisions
+       WHERE provider_uid = $1
+       ORDER BY worker_requirement_id, decided_at DESC`,
+      [c.provider_uid]
+    ).catch(() => ({ rows: [] as any[] })),
   ]);
 
   const prov = provRes.rows[0];
   if (!prov) throw Object.assign(new Error('Provider not found'), { statusCode: 404 });
 
   const activeServiceCount = Number(svcCountRes.rows[0]?.count ?? 0);
+
+  // Group decision history by requirement ID
+  const histMap = new Map<number, any[]>();
+  for (const h of (histRes as any).rows ?? []) {
+    const list = histMap.get(h.worker_requirement_id) ?? [];
+    list.push(h);
+    histMap.set(h.worker_requirement_id, list);
+  }
 
   return {
     case: {
@@ -605,25 +623,36 @@ export const getCaseDetail = async (caseIdOrProviderUid: string) => {
       createdAt: prov.created_date ?? null,
     },
 
-    requirements: reqsRes.rows.map((r: any) => ({
-      id: r.id,
-      requirementType: r.requirement_type ?? null,
-      fileName: r.file_name ?? null,
-      fileUrl: r.file_url ?? null,
-      uploadedAt: r.uploaded_at ?? null,
-      classification: (r.requirement_type ? 'canonically_typed' : 'legacy_null_type') as 'canonically_typed' | 'legacy_null_type',
-      currentDecision: r.current_decision ?? 'pending_review',
-      latestDecision: r.decision_id ? {
-        id: r.decision_id,
-        decision: r.current_decision,
-        reasonCode: r.reason_code ?? null,
-        providerMessage: r.provider_message ?? null,
-        reviewerUid: '',
-        decidedAt: r.decided_at,
-        isSuperseded: false,
-      } : null,
-      decisionHistory: [],
-    })),
+    requirements: reqsRes.rows.map((r: any) => {
+      const fullHistory: any[] = histMap.get(Number(r.id)) ?? [];
+      return {
+        id: r.id,
+        requirementType: r.requirement_type ?? null,
+        fileName: r.file_name ?? null,
+        fileUrl: r.file_url ?? null,
+        uploadedAt: r.uploaded_at ?? null,
+        classification: (r.requirement_type ? 'canonically_typed' : 'legacy_null_type') as 'canonically_typed' | 'legacy_null_type',
+        currentDecision: r.current_decision ?? 'pending_review',
+        latestDecision: r.decision_id ? {
+          id: r.decision_id,
+          decision: r.current_decision,
+          reasonCode: r.reason_code ?? null,
+          providerMessage: r.provider_message ?? null,
+          reviewerUid: r.decision_reviewer_uid ?? '',
+          decidedAt: r.decided_at,
+          isSuperseded: false,
+        } : null,
+        decisionHistory: fullHistory.map((h: any) => ({
+          id: h.id,
+          decision: h.decision,
+          reasonCode: h.reason_code ?? null,
+          providerMessage: h.provider_message ?? null,
+          reviewerUid: h.reviewer_uid ?? '',
+          decidedAt: h.decided_at,
+          isSuperseded: h.is_superseded,
+        })),
+      };
+    }),
 
     services: appsRes.rows.map((r: any) => ({
       id: r.id,
