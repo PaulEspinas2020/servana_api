@@ -234,6 +234,7 @@ export async function deleteNotificationByKey(workerUid: string, key: string) {
 // ─── Create notification + real-time push ────────────────────────────────────
 
 export interface NotificationInput {
+  notificationKey?: string;  // deterministic key for idempotency; omit for auto UUID
   type?: string;
   severity?: string;
   title: string;
@@ -248,31 +249,56 @@ export interface NotificationInput {
 
 /**
  * Insert a notification for a provider and immediately push it via Socket.IO.
- * Callers (booking, payment, additional-work flows) use this instead of
- * inserting directly into the table.
+ * When `data.notificationKey` is supplied the INSERT uses ON CONFLICT DO NOTHING.
+ * Returns null if the key already existed (idempotent — notification was previously
+ * sent); returns the notification row on first insert.
  */
-export async function createNotification(workerUid: string, data: NotificationInput) {
+export async function createNotification(
+  workerUid: string,
+  data: NotificationInput,
+): Promise<ReturnType<typeof mapNotificationRow> | null> {
   await ensureTables();
-  const { rows } = await dbQuery.query(
-    `INSERT INTO ${dbSchema}.provider_notifications
-       (worker_uid, type, severity, title, safe_body, safe_context_label, route,
-        can_mark_read, can_dismiss, can_open_detail, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-     RETURNING *`,
-    [
-      workerUid,
-      data.type || "system",
-      data.severity || "info",
-      data.title,
-      data.safeBody,
-      data.safeContextLabel || null,
-      data.route ? JSON.stringify(data.route) : null,
-      data.canMarkRead !== false,
-      data.canDismiss !== false,
-      !!data.canOpenDetail,
-      data.expiresAt || null,
-    ],
-  );
+
+  const params: any[] = [
+    workerUid,
+    data.type || "system",
+    data.severity || "info",
+    data.title,
+    data.safeBody,
+    data.safeContextLabel || null,
+    data.route ? JSON.stringify(data.route) : null,
+    data.canMarkRead !== false,
+    data.canDismiss !== false,
+    !!data.canOpenDetail,
+    data.expiresAt || null,
+  ];
+
+  let rows: any[];
+
+  if (data.notificationKey) {
+    const result = await dbQuery.query(
+      `INSERT INTO ${dbSchema}.provider_notifications
+         (notification_key, worker_uid, type, severity, title, safe_body, safe_context_label,
+          route, can_mark_read, can_dismiss, can_open_detail, expires_at)
+       VALUES ($12, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (notification_key) DO NOTHING
+       RETURNING *`,
+      [...params, data.notificationKey.substring(0, 64)],
+    );
+    if ((result.rowCount ?? 0) === 0) return null;  // idempotent: already sent
+    rows = result.rows;
+  } else {
+    const result = await dbQuery.query(
+      `INSERT INTO ${dbSchema}.provider_notifications
+         (worker_uid, type, severity, title, safe_body, safe_context_label, route,
+          can_mark_read, can_dismiss, can_open_detail, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING *`,
+      params,
+    );
+    rows = result.rows;
+  }
+
   const notification = mapNotificationRow(rows[0]);
   // Push real-time — no-op when socket server is not initialised (e.g. during tests)
   emitToProvider(workerUid, "notification", notification);

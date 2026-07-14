@@ -853,28 +853,55 @@ export const decideRequirement = async (
   });
 
   // Send provider notification for decisions
+  let providerNotified = false;
   if (decision !== 'escalated') {
-    const msgMap: Record<string, { title: string; body: string }> = {
-      approved: { title: 'Document Approved', body: `Your ${docLabel} has been approved.` },
-      rejected: { title: 'Document Not Accepted', body: opts.providerMessage ?? `Your ${docLabel} was not accepted. Please check your portal for details.` },
-      needs_resubmission: { title: 'Action Required: Resubmit Document', body: opts.providerMessage ?? `Please resubmit your ${docLabel}.` },
+    const msgMap: Record<string, { title: string; body: string; type: string; severity: string }> = {
+      approved: {
+        title: 'Document Approved',
+        body: `Your ${docLabel} has been approved.`,
+        type: 'verification',
+        severity: 'success',
+      },
+      rejected: {
+        title: 'Document Not Accepted',
+        body: opts.providerMessage ?? `Your ${docLabel} was not accepted. Please check your portal for details.`,
+        type: 'verification',
+        severity: 'warning',
+      },
+      needs_resubmission: {
+        title: 'Action Required: Resubmit Document',
+        body: opts.providerMessage ?? `Please resubmit your ${docLabel}.`,
+        type: 'requirement_review',
+        severity: 'warning',
+      },
     };
     const msg = msgMap[decision];
     if (msg) {
       try {
-        await notificationService.createNotification(req.worker_uid, {
-          type: 'requirement_decision',
-          severity: decision === 'approved' ? 'info' : 'warning',
+        const notification = await notificationService.createNotification(req.worker_uid, {
+          notificationKey: `req-dec:${requirementId}:${decision}:v1`,
+          type: msg.type,
+          severity: msg.severity,
           title: msg.title,
           safeBody: msg.body,
+          safeContextLabel: 'Requirements',
+          route: {
+            routeLabel: 'View Requirements',
+            commandsRoute: ['/provider/requirements'],
+            requiresAccessCheck: false,
+            contextType: 'requirement',
+          },
+          canMarkRead: true,
+          canDismiss: decision === 'approved',
         });
+        providerNotified = notification !== null;
       } catch {
         // Notification failure must not fail the decision
       }
     }
   }
 
-  return decRes.rows[0];
+  return { ...decRes.rows[0], providerNotified };
 };
 
 // ── Readiness calculation ─────────────────────────────────────────────────────
