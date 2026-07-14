@@ -224,6 +224,13 @@ export const seedReasonCodes = async () => {
     { code: 'final_blockers_remain', domain: 'final_onboarding', decisions: ['rejected'], label: 'Blocking Items Remain', title: 'Your application has incomplete items', body: 'There are still outstanding items that need to be resolved before your account can be activated. Please check your portal for specific requirements.', correction: 'Complete all required steps shown in your portal.', sensitive: false },
     { code: 'final_policy_decision', domain: 'final_onboarding', decisions: ['rejected'], label: 'Policy Decision', title: 'Application not approved at this time', body: 'After review, we are unable to approve your application at this time.', correction: 'You may reapply in the future. Contact support for details.', sensitive: true },
     { code: 'final_identity_unresolved', domain: 'final_onboarding', decisions: ['rejected','escalated'], label: 'Identity Issue', title: 'Identity verification is pending', body: 'We need to verify additional identity information before your account can be activated.', correction: 'Contact support for guidance.', sensitive: true },
+    { code: 'final_document_incomplete', domain: 'final_onboarding', decisions: ['rejected'], label: 'Documents Incomplete', title: 'Required documents are missing or incomplete', body: 'One or more required documents were not submitted, are expired, or could not be verified. All required documents must be complete before your account can be activated.', correction: 'Resubmit all required documents. Contact support if you need assistance.', sensitive: false },
+    { code: 'final_document_fraudulent', domain: 'final_onboarding', decisions: ['rejected'], label: 'Document Integrity Issue', title: 'Document verification failed', body: 'We were unable to verify the authenticity of one or more submitted documents. We take document integrity seriously and cannot proceed with this application.', correction: 'Contact support if you believe this is an error.', sensitive: true },
+    { code: 'final_service_not_approved', domain: 'final_onboarding', decisions: ['rejected'], label: 'No Approved Services', title: 'No approved service application on record', body: 'Your account does not have any approved service applications. At least one active service is required to complete onboarding.', correction: 'Submit a service application and ensure it is approved before final review.', sensitive: false },
+    { code: 'final_background_check_failed', domain: 'final_onboarding', decisions: ['rejected'], label: 'Background Check Failed', title: 'Background verification was not successful', body: 'We could not complete background verification for your application. This is required before account activation.', correction: 'Contact support for guidance on next steps.', sensitive: true },
+    { code: 'final_duplicate_account', domain: 'final_onboarding', decisions: ['rejected'], label: 'Duplicate Account', title: 'Duplicate account detected', body: 'Our records indicate an existing account associated with this identity. Only one active provider account is permitted per person.', correction: 'Contact support if you believe this is an error.', sensitive: true },
+    { code: 'final_geographic_restriction', domain: 'final_onboarding', decisions: ['rejected'], label: 'Geographic Restriction', title: 'Service area not currently supported', body: 'Your location is outside our current service area. We are unable to activate accounts in this area at this time.', correction: 'Check our website for service area updates. Contact support if your area becomes available.', sensitive: false },
+    { code: 'final_eligibility_criteria', domain: 'final_onboarding', decisions: ['rejected'], label: 'Eligibility Not Met', title: 'Eligibility requirements not met', body: 'After reviewing your application, your profile does not meet the minimum eligibility requirements for a provider account at this time.', correction: 'Review our provider requirements and contact support if your situation changes.', sensitive: false },
   ];
 
   for (const c of codes) {
@@ -514,11 +521,11 @@ export const getCaseDetail = async (caseIdOrProviderUid: string) => {
   }
   if (!c) throw Object.assign(new Error('Case not found'), { statusCode: 404 });
 
-  const [provRes, reqsRes, appsRes, decRes] = await Promise.all([
+  const [provRes, reqsRes, appsRes, svcCountRes] = await Promise.all([
     dbQuery.query(
       `SELECT uc.uid, uc.first_name, uc.last_name, uc.email, uc.phone_number,
               uc.role, uc.account_status, uc.is_archive, uc.is_email_verified, uc.created_date,
-              up.photo_url, up.birthdate, up.gender
+              up.photo_url
        FROM ${dbSchema}.user_credentials uc
        LEFT JOIN ${dbSchema}.user_profile up ON up.uid = uc.uid
        WHERE uc.uid = $1 LIMIT 1`,
@@ -537,7 +544,8 @@ export const getCaseDetail = async (caseIdOrProviderUid: string) => {
        LEFT JOIN ${dbSchema}.provider_requirement_definitions prd
          ON prd.code = wr.requirement_type
        LEFT JOIN LATERAL (
-         SELECT * FROM ${dbSchema}.provider_requirement_decisions prd2
+         SELECT id, decision, reason_code, provider_message, decided_at
+         FROM ${dbSchema}.provider_requirement_decisions prd2
          WHERE prd2.worker_requirement_id = wr.id AND NOT prd2.is_superseded
          ORDER BY prd2.decided_at DESC LIMIT 1
        ) latest_dec ON true
@@ -546,8 +554,7 @@ export const getCaseDetail = async (caseIdOrProviderUid: string) => {
       [c.provider_uid]
     ),
     dbQuery.query(
-      `SELECT wsa.id, wsa.service_id, wsa.status, wsa.submitted_at, wsa.version,
-              wsa.reviewed_at, wsa.reviewed_by, wsa.review_reason,
+      `SELECT wsa.id, wsa.service_id, wsa.status, wsa.submitted_at,
               '' AS category, s.name AS service_name
        FROM ${dbSchema}.worker_service_applications wsa
        LEFT JOIN ${dbSchema}.services s ON s.id = wsa.service_id
@@ -556,9 +563,7 @@ export const getCaseDetail = async (caseIdOrProviderUid: string) => {
       [c.provider_uid]
     ),
     dbQuery.query(
-      `SELECT decision, COUNT(*) FROM ${dbSchema}.provider_requirement_decisions
-       WHERE provider_uid = $1 AND NOT is_superseded
-       GROUP BY decision`,
+      `SELECT COUNT(*) FROM ${dbSchema}.employee_services WHERE employee_uid = $1`,
       [c.provider_uid]
     ),
   ]);
@@ -566,78 +571,69 @@ export const getCaseDetail = async (caseIdOrProviderUid: string) => {
   const prov = provRes.rows[0];
   if (!prov) throw Object.assign(new Error('Provider not found'), { statusCode: 404 });
 
-  const decisionCounts: Record<string, number> = {};
-  for (const r of decRes.rows) decisionCounts[r.decision] = Number(r.count);
+  const activeServiceCount = Number(svcCountRes.rows[0]?.count ?? 0);
 
   return {
-    caseId: c.id,
-    onboardingStatus: c.onboarding_status,
-    priority: c.priority,
-    assignedReviewer: c.assigned_reviewer ?? null,
-    assignedTeam: c.assigned_team ?? null,
-    waitingParty: c.waiting_party ?? null,
-    submittedAt: c.submitted_at ?? null,
-    firstReviewDueAt: c.first_review_due_at ?? null,
-    decisionDueAt: c.decision_due_at ?? null,
-    lastActivityAt: c.last_activity_at,
-    completedAt: c.completed_at ?? null,
-    version: c.version,
+    case: {
+      id: c.id,
+      providerUid: c.provider_uid,
+      onboardingStatus: c.onboarding_status,
+      priority: c.priority,
+      assignedReviewer: c.assigned_reviewer ?? null,
+      assignedTeam: c.assigned_team ?? null,
+      waitingParty: c.waiting_party ?? null,
+      submittedAt: c.submitted_at ?? null,
+      firstReviewDueAt: c.first_review_due_at ?? null,
+      decisionDueAt: c.decision_due_at ?? null,
+      lastActivityAt: c.last_activity_at,
+      completedAt: c.completed_at ?? null,
+      reopenedAt: c.reopened_at ?? null,
+      internalNote: c.internal_note ?? null,
+      version: c.version,
+    },
 
     provider: {
       uid: prov.uid,
-      firstName: prov.first_name,
-      lastName: prov.last_name,
       fullName: `${prov.first_name ?? ''} ${prov.last_name ?? ''}`.trim() || prov.email,
       email: prov.email,
       phoneNumber: prov.phone_number ?? null,
+      photoUrl: prov.photo_url ?? null,
       role: prov.role,
       accountStatus: prov.account_status ?? 'pending',
-      isArchive: prov.is_archive,
       isEmailVerified: prov.is_email_verified,
-      createdDate: prov.created_date,
-      photoUrl: prov.photo_url ?? null,
-      birthdate: prov.birthdate ?? null,
-      gender: prov.gender ?? null,
+      isArchive: prov.is_archive,
+      createdAt: prov.created_date ?? null,
     },
 
     requirements: reqsRes.rows.map((r: any) => ({
       id: r.id,
-      fileName: r.file_name,
-      fileUrl: r.file_url,
-      uploadedAt: r.uploaded_at,
       requirementType: r.requirement_type ?? null,
-      classifiedAs: r.requirement_type ? 'canonically_typed' : 'legacy_null_type',
-      definitionCode: r.def_code ?? null,
-      definitionTitle: r.def_title ?? null,
-      definitionCategory: r.def_category ?? null,
-      providerFacingTitle: r.provider_facing_title ?? null,
+      fileName: r.file_name ?? null,
+      fileUrl: r.file_url ?? null,
+      uploadedAt: r.uploaded_at ?? null,
+      classification: (r.requirement_type ? 'canonically_typed' : 'legacy_null_type') as 'canonically_typed' | 'legacy_null_type',
       currentDecision: r.current_decision ?? 'pending_review',
-      decisionId: r.decision_id ?? null,
-      reasonCode: r.reason_code ?? null,
-      providerMessage: r.provider_message ?? null,
-      decidedAt: r.decided_at ?? null,
+      latestDecision: r.decision_id ? {
+        id: r.decision_id,
+        decision: r.current_decision,
+        reasonCode: r.reason_code ?? null,
+        providerMessage: r.provider_message ?? null,
+        reviewerUid: '',
+        decidedAt: r.decided_at,
+        isSuperseded: false,
+      } : null,
+      decisionHistory: [],
     })),
 
-    serviceApplications: appsRes.rows.map((r: any) => ({
+    services: appsRes.rows.map((r: any) => ({
       id: r.id,
-      serviceId: r.service_id,
-      category: r.category ?? '',
+      categoryName: r.category ?? '',
       serviceName: r.service_name ?? '',
       status: r.status,
-      submittedAt: r.submitted_at,
-      reviewedAt: r.reviewed_at ?? null,
-      reviewedBy: r.reviewed_by ?? null,
-      reviewReason: r.review_reason ?? null,
-      version: r.version,
     })),
 
-    decisionSummary: {
-      approved: decisionCounts['approved'] ?? 0,
-      rejected: decisionCounts['rejected'] ?? 0,
-      needsResubmission: decisionCounts['needs_resubmission'] ?? 0,
-      escalated: decisionCounts['escalated'] ?? 0,
-      pendingReview: reqsRes.rows.filter((r: any) => !r.decision_id).length,
-    },
+    activeServices: activeServiceCount,
+    pendingApplications: appsRes.rows.filter((r: any) => r.status === 'pending_review').length,
   };
 };
 
@@ -964,6 +960,12 @@ export const calculateReadiness = async (providerUid: string) => {
     blockingCount,
     warningCount: blockers.filter(b => b.severity === 'warning').length,
     blockers,
+    checks: {
+      emailVerified: prov?.is_email_verified ?? false,
+      allRequirementsApproved:
+        reqs.length > 0 && reqs.every((r: any) => r.current_decision === 'approved'),
+      hasActiveService: activeServices > 0,
+    },
     summary: {
       emailVerified: prov?.is_email_verified ?? false,
       requirementsUploaded: reqs.length,
@@ -1234,7 +1236,20 @@ export const getReasonCodes = async (domain?: string) => {
   }));
 };
 
-// ── Case status move (exposed for request-information) ─────────────────────────
+// ── Case status move (exposed for controller) ──────────────────────────────────
 
-export const moveCase = transitionCase;
+export const moveCase = async (
+  caseId: string,
+  newStatus: string,
+  expectedVersion: number,
+  actorUid: string,
+  reason?: string,
+  internalNote?: string,
+) => {
+  const result = await transitionCase(caseId, newStatus, expectedVersion, actorUid, reason);
+  if (internalNote && String(internalNote).trim()) {
+    await addNote(caseId, actorUid, String(internalNote).trim(), 'internal');
+  }
+  return result;
+};
 export { writeTimeline };

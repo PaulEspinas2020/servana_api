@@ -146,16 +146,20 @@ export const setPriority = async (req: Request, res: Response) => {
 export const moveCase = async (req: Request, res: Response) => {
   try {
     const caseId = String(req.params.caseId);
-    const { to_status, expected_version, reason } = req.body as {
+    const { to_status, expected_version, reason, internal_note } = req.body as {
       to_status: string;
       expected_version: number;
       reason?: string;
+      internal_note?: string;
     };
     if (!to_status) return fail(res, 400, 'to_status is required');
     if (expected_version === undefined || expected_version === null) {
       return fail(res, 400, 'expected_version is required');
     }
-    const result = await svc.moveCase(caseId, to_status, expected_version, actorUid(req), reason);
+    if (internal_note && String(internal_note).length > 500) {
+      return fail(res, 400, 'internal_note must be 500 characters or fewer');
+    }
+    const result = await svc.moveCase(caseId, to_status, expected_version, actorUid(req), reason, internal_note);
 
     auditFire({
       action: 'onboarding_case_moved',
@@ -164,7 +168,7 @@ export const moveCase = async (req: Request, res: Response) => {
       actorUid: actorUid(req),
       entityType: 'onboarding_case',
       entityId: caseId,
-      after: { status: to_status },
+      after: { status: to_status, hasInternalNote: !!(internal_note && String(internal_note).trim()) },
       reason: reason ?? null,
       requestId: (req as any).id ?? null,
       ipAddress: req.ip ?? null,
@@ -186,7 +190,7 @@ export const getCaseReadiness = async (req: Request, res: Response) => {
     const caseId = String(req.params.caseId);
     // calculateReadiness accepts a providerUid, not a case UUID — resolve it
     const caseRes = await svc.getCaseDetail(caseId);
-    const providerUid = (caseRes as any)?.providerUid ?? caseId;
+    const providerUid = (caseRes as any)?.case?.providerUid ?? caseId;
     const readiness = await svc.calculateReadiness(providerUid);
     return ok(res, readiness);
   } catch (err: any) {
