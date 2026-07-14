@@ -1233,6 +1233,7 @@ export const getReasonCodes = async (domain?: string) => {
     requiresEscalation: r.requires_escalation,
     providerMayResubmit: r.provider_may_resubmit,
     isSensitive: r.is_sensitive,
+    isActive: r.is_active,
   }));
 };
 
