@@ -31,6 +31,13 @@ router.post(
   ctrl.createOffering
 );
 
+// Cross-offering specific-services list (no path param — must be before /:serviceOptionId)
+router.get(
+  "/admin/provider-catalog/specific-services",
+  verifyAuth, verifyRoles([1]), requirePermission('services.view'),
+  ctrl.listAllSpecificServicesAdmin
+);
+
 // Specific-service routes BEFORE :offeringId to avoid route shadowing
 router.get(
   "/admin/provider-catalog/specific-services/:serviceOptionId",

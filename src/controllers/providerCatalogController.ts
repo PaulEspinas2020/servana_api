@@ -113,6 +113,26 @@ export const updateOfferingStatus = async (req: Request, res: Response) => {
   }
 };
 
+// ─── Admin — Cross-Offering Specific Services List ────────────────────────────
+
+// GET /admin/provider-catalog/specific-services
+export const listAllSpecificServicesAdmin = async (req: Request, res: Response) => {
+  try {
+    const data = await svc.listAllSpecificServices({
+      search:     req.query.search     as string | undefined,
+      offeringId: req.query.offeringId ? Number(req.query.offeringId) : undefined,
+      isActive:   req.query.isActive   as string | undefined,
+      sortBy:     req.query.sortBy     as string | undefined,
+      sortOrder:  req.query.sortOrder  as string | undefined,
+      page:       req.query.page       ? Number(req.query.page)  : undefined,
+      limit:      req.query.limit      ? Number(req.query.limit) : undefined,
+    });
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
+  }
+};
+
 // ─── Admin — Specific Services ────────────────────────────────────────────────
 
 // GET /admin/provider-catalog/offerings/:offeringId/specific-services

@@ -89,6 +89,13 @@ export const initProviderCatalogSchema = async (): Promise<void> => {
     ALTER TABLE ${dbSchema}.user_credentials
     ADD COLUMN IF NOT EXISTS account_status TEXT NOT NULL DEFAULT 'pending'
   `, []);
+
+  // 7. updated_at on service_options — tracks when a specific service was last modified
+  //    (DEFAULT NOW() fills existing rows with the migration timestamp, which is accurate enough)
+  await dbQuery.query(`
+    ALTER TABLE ${dbSchema}.service_options
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  `, []);
 };
 
 // ─── Seed ────────────────────────────────────────────────────────────────────
@@ -654,6 +661,109 @@ export const updateOfferingStatus = async (
   return result;
 };
 
+// ─── Admin — Cross-Offering Specific Services List ────────────────────────────
+
+export const listAllSpecificServices = async (params: {
+  search?: string;
+  offeringId?: number;
+  isActive?: string;     // 'true' | 'false' | omitted = all
+  sortBy?: string;       // 'name' | 'catalog' | 'price' | 'updatedAt'
+  sortOrder?: string;    // 'asc' | 'desc'
+  page?: number;
+  limit?: number;
+}): Promise<{ items: any[]; total: number; page: number; limit: number; totalPages: number }> => {
+  const limit  = Math.min(Math.max(Number(params.limit)  || 25, 1), 100);
+  const page   = Math.max(Number(params.page)   || 1, 1);
+  const offset = (page - 1) * limit;
+
+  const conditions: string[] = [`so.option_type = 'MAIN'`];
+  const queryParams: any[]   = [];
+  let i = 1;
+
+  if (params.search) {
+    conditions.push(`(LOWER(so.level_3) LIKE $${i} OR LOWER(so.level_2) LIKE $${i} OR LOWER(pco.name) LIKE $${i})`);
+    queryParams.push(`%${params.search.toLowerCase().trim()}%`);
+    i++;
+  }
+
+  if (params.offeringId) {
+    conditions.push(`pcom.offering_id = $${i}`);
+    queryParams.push(Number(params.offeringId));
+    i++;
+  }
+
+  if (params.isActive === 'true') {
+    conditions.push(`COALESCE(so.is_active, true) = true`);
+  } else if (params.isActive === 'false') {
+    conditions.push(`COALESCE(so.is_active, true) = false`);
+  }
+
+  const validSort: Record<string, string> = {
+    name:      'so.level_3',
+    catalog:   'pco.name',
+    price:     'so.base_price',
+    updatedAt: 'so.updated_at',
+    level2:    'so.level_2',
+  };
+  const sortField = validSort[params.sortBy ?? ''] ?? 'so.level_3';
+  const sortDir   = params.sortOrder === 'desc' ? 'DESC' : 'ASC';
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const sql = `
+    SELECT
+      so.id          AS service_option_id,
+      so.service_id,
+      so.level_2,
+      so.level_3     AS name,
+      so.unit,
+      so.base_price,
+      COALESCE(so.is_active, true) AS is_active,
+      so.updated_at,
+      pco.id         AS offering_id,
+      pco.name       AS offering_name,
+      pco.catalog_key,
+      pco.icon_key,
+      pco.status     AS offering_status,
+      COUNT(*) OVER() AS total_count
+    FROM ${dbSchema}.service_options so
+    INNER JOIN ${dbSchema}.provider_catalog_offering_mappings pcom
+      ON pcom.service_id = so.service_id
+     AND pcom.level_2    = so.level_2
+     AND pcom.is_active  = true
+    INNER JOIN ${dbSchema}.provider_catalog_offerings pco
+      ON pco.id = pcom.offering_id
+    ${where}
+    ORDER BY ${sortField} ${sortDir}, so.level_3 ASC, so.id ASC
+    LIMIT $${i} OFFSET $${i + 1}
+  `;
+
+  queryParams.push(limit, offset);
+  const res = await dbQuery.query(sql, queryParams);
+
+  const total = res.rows.length > 0 ? Number(res.rows[0].total_count) : 0;
+
+  const items = res.rows.map((r: any) => ({
+    serviceOptionId: Number(r.service_option_id),
+    serviceId:       Number(r.service_id),
+    name:            r.name as string,
+    level2:          r.level_2 as string,
+    unit:            r.unit as string,
+    basePrice:       Number(r.base_price),
+    isActive:        r.is_active == null ? true : Boolean(r.is_active),
+    updatedAt:       r.updated_at ? new Date(r.updated_at).toISOString() : null,
+    offering: {
+      offeringId:  Number(r.offering_id),
+      name:        r.offering_name as string,
+      catalogKey:  r.catalog_key  as string,
+      iconKey:     r.icon_key     as string | null,
+      status:      r.offering_status as string,
+    },
+  }));
+
+  return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
+};
+
 // ─── Admin — Specific Services CRUD ──────────────────────────────────────────
 
 export const listSpecificServicesForOffering = async (offeringId: number): Promise<any[]> => {
@@ -852,7 +962,8 @@ export const updateSpecificService = async (
     `UPDATE ${dbSchema}.service_options SET
        level_3    = COALESCE($1, level_3),
        unit       = COALESCE($2, unit),
-       base_price = COALESCE($3, base_price)
+       base_price = COALESCE($3, base_price),
+       updated_at = NOW()
      WHERE id = $4`,
     [data.level3 ?? null, data.unit ?? null, data.basePrice ?? null, serviceOptionId]
   );
@@ -886,7 +997,7 @@ export const updateSpecificServiceStatus = async (
   adminUid: string = 'system'
 ): Promise<any> => {
   const res = await dbQuery.query(
-    `UPDATE ${dbSchema}.service_options SET is_active = $1 WHERE id = $2 AND option_type = 'MAIN' RETURNING id`,
+    `UPDATE ${dbSchema}.service_options SET is_active = $1, updated_at = NOW() WHERE id = $2 AND option_type = 'MAIN' RETURNING id`,
     [isActive, serviceOptionId]
   );
   if (res.rows.length === 0) throw new Error('Specific service not found');
