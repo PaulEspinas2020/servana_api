@@ -439,6 +439,7 @@ export const listOnlineWorkersByService = async (serviceId: number) => {
     SELECT employee_uid
     FROM ${dbSchema}.employee_services
     WHERE service_id = $1
+      AND COALESCE(status, 'active') = 'active'
     `,
     [serviceId]
   );
@@ -1267,6 +1268,30 @@ export const completeJob = async (bookingId: number, workerUid: string) => {
 // Employee ↔ Services
 // ---------------------------------------------------------------------------
 
+let _esColumnsReady: Promise<void> | null = null;
+
+const ensureEmployeeServicesColumns = (): Promise<void> => {
+  if (_esColumnsReady) return _esColumnsReady;
+  _esColumnsReady = (async () => {
+    await dbQuery.query(`ALTER TABLE ${dbSchema}.employee_services ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`);
+    await dbQuery.query(`ALTER TABLE ${dbSchema}.employee_services ADD COLUMN IF NOT EXISTS pause_reason TEXT`);
+    await dbQuery.query(`ALTER TABLE ${dbSchema}.employee_services ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+    await dbQuery.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'employee_services_status_check'
+        ) THEN
+          ALTER TABLE ${dbSchema}.employee_services
+          ADD CONSTRAINT employee_services_status_check
+          CHECK (status IN ('active', 'paused'));
+        END IF;
+      END $$
+    `);
+  })().catch((err) => { _esColumnsReady = null; throw err; });
+  return _esColumnsReady;
+};
+
 export const assignServicesToEmployee = async (employeeUid: string, serviceIds: number[]) => {
   if (!serviceIds.length) throw new Error("serviceIds must not be empty");
 
@@ -1303,9 +1328,11 @@ export const removeServiceFromEmployee = async (employeeUid: string, serviceId: 
 };
 
 export const getServicesByEmployee = async (employeeUid: string) => {
+  await ensureEmployeeServicesColumns();
   const res = await dbQuery.query(
     `
-    SELECT s.id, s.name, s.category, es.created_at AS assigned_at
+    SELECT s.id, s.name, s.category, es.created_at AS assigned_at,
+           COALESCE(es.status, 'active') AS status, es.pause_reason
     FROM ${dbSchema}.employee_services es
     JOIN ${dbSchema}.services s ON s.id = es.service_id
     WHERE es.employee_uid = $1
@@ -1315,6 +1342,54 @@ export const getServicesByEmployee = async (employeeUid: string) => {
   );
 
   return res.rows;
+};
+
+export const pauseService = async (workerUid: string, serviceId: number, reason?: string) => {
+  await ensureEmployeeServicesColumns();
+  const res = await dbQuery.query(
+    `UPDATE ${dbSchema}.employee_services
+     SET status = 'paused', pause_reason = $3, updated_at = NOW()
+     WHERE employee_uid = $1 AND service_id = $2 AND COALESCE(status, 'active') = 'active'
+     RETURNING *`,
+    [workerUid, serviceId, reason ?? null],
+  );
+  if (res.rowCount) return res.rows[0];
+
+  const check = await dbQuery.query(
+    `SELECT COALESCE(status, 'active') AS status FROM ${dbSchema}.employee_services
+     WHERE employee_uid = $1 AND service_id = $2 LIMIT 1`,
+    [workerUid, serviceId],
+  );
+  if (!check.rowCount) {
+    const err: any = new Error('Service not assigned to this worker.');
+    err.code = 'SERVICE_NOT_FOUND'; err.statusCode = 404; throw err;
+  }
+  const err: any = new Error('Service is already paused.');
+  err.code = 'SERVICE_ALREADY_PAUSED'; err.statusCode = 409; throw err;
+};
+
+export const reactivateService = async (workerUid: string, serviceId: number) => {
+  await ensureEmployeeServicesColumns();
+  const res = await dbQuery.query(
+    `UPDATE ${dbSchema}.employee_services
+     SET status = 'active', pause_reason = NULL, updated_at = NOW()
+     WHERE employee_uid = $1 AND service_id = $2 AND COALESCE(status, 'active') = 'paused'
+     RETURNING *`,
+    [workerUid, serviceId],
+  );
+  if (res.rowCount) return res.rows[0];
+
+  const check = await dbQuery.query(
+    `SELECT COALESCE(status, 'active') AS status FROM ${dbSchema}.employee_services
+     WHERE employee_uid = $1 AND service_id = $2 LIMIT 1`,
+    [workerUid, serviceId],
+  );
+  if (!check.rowCount) {
+    const err: any = new Error('Service not assigned to this worker.');
+    err.code = 'SERVICE_NOT_FOUND'; err.statusCode = 404; throw err;
+  }
+  const err: any = new Error('Service is not paused.');
+  err.code = 'SERVICE_NOT_PAUSED'; err.statusCode = 409; throw err;
 };
 
 export const getWorkersByService = async (serviceId: number) => {

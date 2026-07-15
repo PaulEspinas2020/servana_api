@@ -1731,6 +1731,65 @@ export const cancelServiceApplication = async (req: Request, res: Response) => {
   }
 };
 
+export const resubmitServiceApplication = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const { applicationId } = req.params as { applicationId: string };
+    if (!applicationId) return res.status(400).json({ success: false, message: "applicationId is required" });
+
+    const app = await serviceApplicationService.resubmitApplication(applicationId, uid);
+    return res.json({ success: true, application: toApplicationDto(app) });
+  } catch (error: any) {
+    const status = error.statusCode ?? 500;
+    return res.status(status).json({
+      success: false,
+      code: error.code ?? "INTERNAL_ERROR",
+      message: error.message || "Failed to resubmit application",
+    });
+  }
+};
+
+export const pauseWorkerService = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const serviceId = Number(req.params.serviceId);
+    if (!Number.isInteger(serviceId) || serviceId <= 0) {
+      return res.status(400).json({ success: false, message: "serviceId must be a positive integer" });
+    }
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() || undefined : undefined;
+
+    const row = await technicianService.pauseService(uid, serviceId, reason);
+    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
+    return res.json({ success: true, service: { serviceId: Number(row.service_id), status: row.status, pauseReason: row.pause_reason ?? null } });
+  } catch (error: any) {
+    const status = error.statusCode ?? 500;
+    return res.status(status).json({ success: false, code: error.code ?? "INTERNAL_ERROR", message: error.message || "Failed to pause service" });
+  }
+};
+
+export const reactivateWorkerService = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const serviceId = Number(req.params.serviceId);
+    if (!Number.isInteger(serviceId) || serviceId <= 0) {
+      return res.status(400).json({ success: false, message: "serviceId must be a positive integer" });
+    }
+
+    const row = await technicianService.reactivateService(uid, serviceId);
+    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
+    return res.json({ success: true, service: { serviceId: Number(row.service_id), status: row.status, pauseReason: null } });
+  } catch (error: any) {
+    const status = error.statusCode ?? 500;
+    return res.status(status).json({ success: false, code: error.code ?? "INTERNAL_ERROR", message: error.message || "Failed to reactivate service" });
+  }
+};
+
 // ─── FCM Token ────────────────────────────────────────────────────────────────
 
 export const saveProviderFcmToken = async (req: Request, res: Response) => {

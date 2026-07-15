@@ -117,7 +117,12 @@ router.post("/provider/safety/check-in", verifyAuth, provider.recordSafetyCheckI
 // ─── Service application lifecycle (provider web portal — separate from employee_services) ──
 router.get("/worker/service-applications", verifyAuth, provider.getServiceApplications);
 router.post("/worker/service-applications", verifyAuth, provider.submitServiceApplication);
+router.post("/worker/service-applications/:applicationId/resubmit", verifyAuth, provider.resubmitServiceApplication);
 router.delete("/worker/service-applications/:applicationId", verifyAuth, provider.cancelServiceApplication);
+
+// ─── Active service pause / reactivate (employee_services status) ─────────────
+router.patch("/worker/services/:serviceId/pause",       verifyAuth, provider.pauseWorkerService);
+router.patch("/worker/services/:serviceId/reactivate",  verifyAuth, provider.reactivateWorkerService);
 
 // FCM token — saved after login so push notifications reach this device
 router.post("/provider/fcm-token", verifyAuth, provider.saveProviderFcmToken);

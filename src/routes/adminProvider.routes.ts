@@ -13,9 +13,10 @@ router.get('/admin/providers/metrics', ...adminOnly, requirePermission('provider
 router.get('/admin/providers',         ...adminOnly, requirePermission('providers.view'), ctrl.listProviders);
 
 // ── Service Applications (global view) ───────────────────────────────────────
-router.get('/admin/providers/service-applications',            ...adminOnly, requirePermission('providers.view'), ctrl.listAllServiceApplications);
-router.patch('/admin/providers/service-applications/:id/approve', ...adminOnly, requirePermission('providers.status.change'), ctrl.approveServiceApplication);
-router.patch('/admin/providers/service-applications/:id/reject',  ...adminOnly, requirePermission('providers.status.change'), ctrl.rejectServiceApplication);
+router.get('/admin/providers/service-applications',                         ...adminOnly, requirePermission('providers.view'),          ctrl.listAllServiceApplications);
+router.patch('/admin/providers/service-applications/:id/approve',           ...adminOnly, requirePermission('providers.status.change'), ctrl.approveServiceApplication);
+router.patch('/admin/providers/service-applications/:id/reject',            ...adminOnly, requirePermission('providers.status.change'), ctrl.rejectServiceApplication);
+router.patch('/admin/providers/service-applications/:id/flag-action-required', ...adminOnly, requirePermission('providers.status.change'), ctrl.flagServiceApplicationActionRequired);
 
 // ── Canonical requirement definitions (policy registry) ──────────────────────
 // NOTE: must stay ABOVE /:uid routes

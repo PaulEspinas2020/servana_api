@@ -134,6 +134,189 @@ export const submitApplication = async (workerUid: string, serviceId: number) =>
   }
 };
 
+/** Resubmit an action_required application — resets to pending_review. */
+export const resubmitApplication = async (applicationId: string, workerUid: string) => {
+  await ensureTable();
+  const res = await dbQuery.query(
+    `UPDATE ${dbSchema}.worker_service_applications
+     SET status       = 'pending_review',
+         review_reason = NULL,
+         reviewed_at  = NULL,
+         reviewed_by  = NULL,
+         updated_at   = NOW(),
+         version      = version + 1
+     WHERE id = $1
+       AND worker_uid = $2
+       AND status = 'action_required'
+     RETURNING ${APPLICATION_FIELDS}`,
+    [applicationId, workerUid],
+  );
+  if (res.rowCount) return res.rows[0];
+
+  const check = await dbQuery.query(
+    `SELECT status FROM ${dbSchema}.worker_service_applications
+     WHERE id = $1 AND worker_uid = $2 LIMIT 1`,
+    [applicationId, workerUid],
+  );
+  if (!check.rowCount) {
+    const err: any = new Error('Application not found.');
+    err.code = 'SERVICE_APPLICATION_NOT_FOUND'; err.statusCode = 404; throw err;
+  }
+  const err: any = new Error('Only action_required applications can be resubmitted.');
+  err.code = 'SERVICE_APPLICATION_STATE_CONFLICT'; err.statusCode = 409; throw err;
+};
+
+/**
+ * Admin: approve an application — writes to employee_services and marks approved.
+ * Safe to retry: employee_services insert is idempotent.
+ */
+export const approveApplication = async (applicationId: string, adminUid: string) => {
+  await ensureTable();
+  const appRes = await dbQuery.query(
+    `SELECT ${APPLICATION_FIELDS}
+     FROM ${dbSchema}.worker_service_applications
+     WHERE id = $1 AND status IN ('pending_review', 'action_required') LIMIT 1`,
+    [applicationId],
+  );
+  if (!appRes.rowCount) {
+    const err: any = new Error('Application not found or not in a reviewable state.');
+    err.code = 'SERVICE_APPLICATION_NOT_FOUND'; err.statusCode = 404; throw err;
+  }
+  const app = appRes.rows[0];
+
+  // Write to employee_services first (idempotent), then mark approved.
+  await dbQuery.query(
+    `INSERT INTO ${dbSchema}.employee_services (employee_uid, service_id)
+     VALUES ($1, $2) ON CONFLICT (employee_uid, service_id) DO NOTHING`,
+    [app.worker_uid, app.service_id],
+  );
+  const res = await dbQuery.query(
+    `UPDATE ${dbSchema}.worker_service_applications
+     SET status      = 'approved',
+         approved_at = NOW(),
+         reviewed_at = NOW(),
+         reviewed_by = $2,
+         updated_at  = NOW(),
+         version     = version + 1
+     WHERE id = $1
+     RETURNING ${APPLICATION_FIELDS}`,
+    [applicationId, adminUid],
+  );
+  return res.rows[0];
+};
+
+/** Admin: reject an application with a mandatory review reason. */
+export const rejectApplication = async (applicationId: string, adminUid: string, reason: string) => {
+  await ensureTable();
+  const res = await dbQuery.query(
+    `UPDATE ${dbSchema}.worker_service_applications
+     SET status       = 'rejected',
+         review_reason = $3,
+         reviewed_at  = NOW(),
+         reviewed_by  = $2,
+         updated_at   = NOW(),
+         version      = version + 1
+     WHERE id = $1
+       AND status IN ('pending_review', 'action_required')
+     RETURNING ${APPLICATION_FIELDS}`,
+    [applicationId, adminUid, reason],
+  );
+  if (res.rowCount) return res.rows[0];
+  const err: any = new Error('Application not found or not in a reviewable state.');
+  err.code = 'SERVICE_APPLICATION_NOT_FOUND'; err.statusCode = 404; throw err;
+};
+
+/**
+ * Admin: flag an application as action_required with a mandatory reason.
+ * The provider will be prompted to correct and resubmit.
+ */
+export const flagApplicationActionRequired = async (applicationId: string, adminUid: string, reason: string) => {
+  await ensureTable();
+  const res = await dbQuery.query(
+    `UPDATE ${dbSchema}.worker_service_applications
+     SET status       = 'action_required',
+         review_reason = $3,
+         reviewed_at  = NOW(),
+         reviewed_by  = $2,
+         updated_at   = NOW(),
+         version      = version + 1
+     WHERE id = $1
+       AND status = 'pending_review'
+     RETURNING ${APPLICATION_FIELDS}`,
+    [applicationId, adminUid, reason],
+  );
+  if (res.rowCount) return res.rows[0];
+  const err: any = new Error('Application not found or not pending review.');
+  err.code = 'SERVICE_APPLICATION_NOT_FOUND'; err.statusCode = 404; throw err;
+};
+
+/** Admin: list all applications with optional filters and pagination. */
+export const listApplicationsAdmin = async (params: {
+  status?: string; search?: string;
+  sortBy?: 'submittedAt' | 'updatedAt' | 'status'; sortOrder?: 'asc' | 'desc';
+  page?: number; limit?: number;
+}) => {
+  await ensureTable();
+  const page  = Math.max(1, params.page ?? 1);
+  const limit = Math.min(100, Math.max(1, params.limit ?? 25));
+  const offset = (page - 1) * limit;
+
+  const VALID_SORT: Record<string, string> = {
+    submittedAt: 'wsa.submitted_at',
+    updatedAt:   'wsa.updated_at',
+    status:      'wsa.status',
+  };
+  const sortField = VALID_SORT[params.sortBy ?? 'submittedAt'] ?? 'wsa.submitted_at';
+  const sortDir   = params.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+  const conditions: string[] = [];
+  const bindValues: any[] = [];
+  let idx = 1;
+
+  if (params.status) {
+    conditions.push(`wsa.status = $${idx++}`);
+    bindValues.push(params.status);
+  }
+  if (params.search) {
+    conditions.push(`(uc.first_name ILIKE $${idx} OR uc.last_name ILIKE $${idx} OR uc.email ILIKE $${idx} OR s.name ILIKE $${idx})`);
+    bindValues.push(`%${params.search}%`);
+    idx++;
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const res = await dbQuery.query(
+    `SELECT
+       wsa.id, wsa.worker_uid, wsa.service_id, wsa.status,
+       wsa.submitted_at, wsa.updated_at, wsa.review_reason, wsa.version,
+       wsa.approved_at, wsa.cancelled_at, wsa.reviewed_at, wsa.reviewed_by,
+       uc.first_name, uc.last_name, uc.email,
+       s.name AS service_name, s.category AS service_category,
+       COUNT(*) OVER() AS total_count
+     FROM ${dbSchema}.worker_service_applications wsa
+     LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = wsa.worker_uid
+     LEFT JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+     ${where}
+     ORDER BY ${sortField} ${sortDir}, wsa.id ASC
+     LIMIT $${idx} OFFSET $${idx + 1}`,
+    [...bindValues, limit, offset],
+  );
+
+  const total = Number(res.rows[0]?.total_count ?? 0);
+  return {
+    items: res.rows.map((r: any) => ({
+      id: r.id, workerUid: r.worker_uid, serviceId: Number(r.service_id),
+      status: r.status, submittedAt: r.submitted_at, updatedAt: r.updated_at,
+      reviewReason: r.review_reason ?? null, version: Number(r.version),
+      approvedAt: r.approved_at ?? null, cancelledAt: r.cancelled_at ?? null,
+      reviewedAt: r.reviewed_at ?? null, reviewedBy: r.reviewed_by ?? null,
+      provider: { uid: r.worker_uid, firstName: r.first_name ?? null, lastName: r.last_name ?? null, email: r.email ?? null },
+      service: { id: Number(r.service_id), name: r.service_name ?? null, category: r.service_category ?? null },
+    })),
+    total, page, limit, totalPages: Math.ceil(total / limit),
+  };
+};
+
 /** Atomically cancel an application — only works for pending/action_required. */
 export const cancelApplication = async (applicationId: string, workerUid: string) => {
   await ensureTable();

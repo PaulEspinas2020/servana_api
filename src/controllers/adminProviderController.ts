@@ -362,6 +362,39 @@ export const rejectServiceApplication = async (req: Request, res: Response) => {
   }
 };
 
+export const flagServiceApplicationActionRequired = async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const { reason } = req.body ?? {};
+    const admin = adminUid(req);
+
+    if (!reason || !String(reason).trim()) {
+      return fail(res, 400, 'reason is required when flagging action required');
+    }
+
+    const app = await appSvc.flagApplicationActionRequired(id, admin, String(reason).trim());
+
+    auditFire({
+      action: 'provider_application_flagged_action_required',
+      actionCategory: 'provider',
+      outcome: 'success',
+      actorUid: admin,
+      entityType: 'provider_application',
+      entityId: id,
+      relatedEntities: [{ entityType: 'provider', entityId: app.worker_uid }],
+      after: { status: 'action_required', reason: reason.trim() },
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+
+    return ok(res, { id, status: 'action_required' });
+  } catch (err: any) {
+    const code = err?.statusCode ?? 500;
+    return fail(res, code, err?.message ?? 'Failed to flag application');
+  }
+};
+
 // ── Catalog Capabilities ──────────────────────────────────────────────────────
 
 export const getProviderCatalogCapabilities = async (req: Request, res: Response) => {
