@@ -330,8 +330,10 @@ export const getBookingsByUserId = async (userId: string) => {
       br.name AS branch_name,
       br.address AS branch_address,
       br.city AS branch_city,
-      ua.address_one AS address,
-      ua.post_town AS post_town,
+      -- Admin-created bookings store address in service_address JSONB; COALESCE
+      -- ensures customer mobile always receives a readable address line.
+      COALESCE(ua.address_one, b.service_address->>'addressLine') AS address,
+      COALESCE(ua.post_town,   b.service_address->>'city')        AS post_town,
       ua.country AS country,
       ua.zip_code AS zip_code,
       bw.status AS worker_status,

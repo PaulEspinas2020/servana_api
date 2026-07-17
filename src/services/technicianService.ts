@@ -738,14 +738,19 @@ export const getJobCardsByWorker = async (workerId: string) => {
       b.status,
       b.schedule,
 
+      -- Customer: for admin-created guest bookings user_id is NULL; LEFT JOIN
+      -- still works, customer fields will be null and the mobile app must handle that.
       u.uid AS customer_id,
       u.first_name,
       u.last_name,
       u.phone_number,
 
-      ua.address_one,
+      -- Address: admin-created bookings store address in service_address JSONB
+      -- rather than a user_address row.  COALESCE falls back to the JSONB so the
+      -- provider mobile app always receives a readable address.
+      COALESCE(ua.address_one,  b.service_address->>'addressLine') AS address_one,
       ua.address_two,
-      ua.post_town,
+      COALESCE(ua.post_town,    b.service_address->>'city')        AS post_town,
       ua.zip_code,
       ua.country,
       ua.label,
