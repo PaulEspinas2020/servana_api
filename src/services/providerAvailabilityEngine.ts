@@ -441,13 +441,23 @@ export const explainAvailability = async (
          AND start_date <= $2::date AND end_date >= $3::date`,
       [providerUid, bookingStart.toISOString().slice(0, 10), bookingStart.toISOString().slice(0, 10)]
     ),
-    // Booking conflict: another ACTIVE booking within ±2-hour window
+    // Booking conflict: active booking within ±2-hour window.
+    // Admin-created bookings set worker_uid on the bookings row AND write a
+    // booking_workers row — union both so admin bookings are caught too.
     dbQuery.query(
       `SELECT id FROM ${s}.bookings
        WHERE worker_uid = $1
          AND status NOT IN ('CANCELLED', 'COMPLETED')
          AND schedule BETWEEN $2::timestamptz - INTERVAL '2 hours'
-                          AND $3::timestamptz + INTERVAL '2 hours'`,
+                          AND $3::timestamptz + INTERVAL '2 hours'
+       UNION
+       SELECT b.id FROM ${s}.bookings b
+       JOIN ${s}.booking_workers bw ON bw.booking_id = b.id
+       WHERE bw.worker_uid = $1
+         AND b.status NOT IN ('CANCELLED', 'COMPLETED')
+         AND b.schedule BETWEEN $2::timestamptz - INTERVAL '2 hours'
+                            AND $3::timestamptz + INTERVAL '2 hours'
+       LIMIT 1`,
       [providerUid, startAt, startAt]
     ),
   ]);
@@ -476,8 +486,8 @@ export const explainAvailability = async (
   if (!rawSchedule || !Array.isArray(rawSchedule) || rawSchedule.length === 0) {
     reasons.push({
       code: 'NO_AVAILABILITY_SET',
-      severity: 'warning',
-      message: 'Provider has no weekly schedule — availability unknown',
+      severity: 'blocker',
+      message: 'Provider has no weekly schedule configured — cannot confirm availability',
     });
   } else {
     const daySlots = (rawSchedule as any[]).filter(

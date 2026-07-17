@@ -385,6 +385,7 @@ export const getSlotCandidates = async (req: Request, res: Response) => {
   try {
     const { startAt, endAt, serviceId, cityId, branchId } = req.query as any;
     if (!startAt) return adminBadRequest(res, 'startAt is required');
+    if (isNaN(Date.parse(startAt))) return adminBadRequest(res, 'startAt must be a valid ISO 8601 date-time');
     const derivedEnd = endAt ?? new Date(new Date(startAt).getTime() + 2 * 60 * 60 * 1000).toISOString();
     const candidates = await createSvc.listCandidatesForSlot({
       startAt,
@@ -414,9 +415,11 @@ export const createAdminBooking = async (req: Request, res: Response) => {
     } = body;
 
     if (!idempotencyKey?.trim())           return adminBadRequest(res, 'idempotencyKey is required');
+    if (idempotencyKey.trim().length > 64) return adminBadRequest(res, 'idempotencyKey must be ≤ 64 characters');
     if (!['guest','client'].includes(customerType)) return adminBadRequest(res, 'customerType must be guest or client');
     if (!serviceOptionId)                  return adminBadRequest(res, 'serviceOptionId is required');
     if (!scheduledAt)                      return adminBadRequest(res, 'scheduledAt is required');
+    if (isNaN(Date.parse(scheduledAt)))    return adminBadRequest(res, 'scheduledAt must be a valid ISO 8601 date-time');
     if (!addressLine?.trim())              return adminBadRequest(res, 'addressLine is required');
     // city (post_town) is best-effort — Google Places may not return locality for all PH addresses;
     // store empty string rather than blocking the booking entirely
@@ -436,7 +439,9 @@ export const createAdminBooking = async (req: Request, res: Response) => {
       guest: customerType === 'guest' ? guest : undefined,
       customerUid: customerType === 'client' ? customerUid : undefined,
       serviceOptionId: Number(serviceOptionId),
-      addonOptionIds: Array.isArray(addonOptionIds) ? addonOptionIds.map(Number) : [],
+      addonOptionIds: Array.isArray(addonOptionIds)
+        ? addonOptionIds.map(Number).filter(n => Number.isInteger(n) && n > 0)
+        : [],
       scheduledAt,
       addressLine, city: effectiveCity,
       lat: Number(lat), lon: Number(lon),

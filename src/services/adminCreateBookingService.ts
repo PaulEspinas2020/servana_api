@@ -15,6 +15,7 @@ import { db } from '../config';
 import { randomUUID } from 'crypto';
 import { uploadFileToStorage } from '../helpers/firebaseStorageUploader';
 import { evaluateProviderForSlot } from './providerEligibilityEngine';
+import { generateOTP } from '../helpers/otp';
 
 const s = db.schema;
 
@@ -201,6 +202,14 @@ export const ensureAdminCreateBookingSchema = async (): Promise<void> => {
       []
     );
   } catch { /* already present */ }
+
+  // booking_workers.admin_actor_uid — which admin created the assignment
+  try {
+    await dbQuery.query(
+      `ALTER TABLE ${s}.booking_workers ADD COLUMN IF NOT EXISTS admin_actor_uid VARCHAR(256)`,
+      []
+    );
+  } catch { /* already present */ }
 };
 
 // ── Phone normalization ───────────────────────────────────────────────────────
@@ -331,7 +340,8 @@ export const listCandidatesForSlot = async (slot: {
      FROM ${s}.user_credentials
      WHERE role::int IN (2, 4)
        AND (is_archive IS NULL OR is_archive = false)
-     LIMIT 20`,
+     ORDER BY account_status = 'active' DESC, created_at ASC
+     LIMIT 50`,
     []
   );
 
@@ -540,6 +550,12 @@ export const adminCreateBooking = async (
   // ── Normalize guest phone if applicable ──────────────────────────────────
   const guestPhoneNormalized = guest ? normalizePhilippinePhone(guest.phone) : null;
 
+  // ── Worker code for job start verification ────────────────────────────────
+  // The mobile startJob endpoint validates b.worker_code; without it the job
+  // can never be started.  Generate before the transaction so it is stable
+  // on any retry after a network failure.
+  const workerCode = generateOTP();
+
   // ─── TRANSACTION ─────────────────────────────────────────────────────────
   const client = await pool.connect();
   let bookingId: number;
@@ -547,6 +563,26 @@ export const adminCreateBooking = async (
 
   try {
     await client.query('BEGIN');
+
+    // 0. Serialise concurrent requests with the same idempotency key.
+    // pg_advisory_xact_lock is scoped to the transaction — auto-released on COMMIT/ROLLBACK.
+    // Two concurrent requests with the same key queue here; the second re-reads the row
+    // already committed by the first and returns early.
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext($1 || ':' || $2)::bigint)`,
+      [idempotencyKey, adminActorUid]
+    );
+    const existingInTx = await client.query(
+      `SELECT booking_id FROM ${s}.booking_create_idempotency
+       WHERE idempotency_key = $1 AND admin_actor_uid = $2
+       LIMIT 1`,
+      [idempotencyKey, adminActorUid]
+    );
+    if (existingInTx.rows.length > 0) {
+      await client.query('COMMIT');
+      client.release();
+      return { bookingId: existingInTx.rows[0].booking_id, guestCustomerId: null };
+    }
 
     // 1. Create/fetch guest customer
     if (customerType === 'guest' && guest) {
@@ -583,12 +619,17 @@ export const adminCreateBooking = async (
     }
 
     // 2. Insert booking
+    // worker_uid is set here (same field the mobile job-cards query filters on:
+    //   WHERE b.worker_uid = $1)  — without it the provider's job list is blind
+    //   to this booking.  worker_code is required by the mobile startJob endpoint.
     const bookingRes = await client.query(
       `INSERT INTO ${s}.bookings
          (user_id, guest_customer_id, service_option_id, schedule,
           payment_method, otp_code, status, quoted_price, final_price,
-          pricing_breakdown, service_address, admin_created, admin_created_by)
-       VALUES ($1, $2, $3, $4, $5, NULL, 'CONFIRMED', $6, $7, $8, $9, true, $10)
+          pricing_breakdown, service_address, admin_created, admin_created_by,
+          worker_uid, worker_code)
+       VALUES ($1, $2, $3, $4, $5, NULL, 'CONFIRMED', $6, $7, $8, $9, true, $10,
+               $11, $12)
        RETURNING id`,
       [
         customerType === 'client' ? customerUid : null,
@@ -601,6 +642,8 @@ export const adminCreateBooking = async (
         JSON.stringify(pricingBreakdown),
         JSON.stringify(serviceAddress),
         adminActorUid,
+        providerUid,   // $11 — sets bookings.worker_uid so mobile job-cards can find it
+        workerCode,    // $12 — sets bookings.worker_code so mobile startJob can verify
       ]
     );
     bookingId = bookingRes.rows[0].id;
@@ -697,6 +740,21 @@ export const adminCreateBooking = async (
       paymentStatus,
     })]
   ).catch((e: any) => { console.error('[admin-create-booking] audit write failed:', e?.message); });
+
+  // Provider real-time notification — lets the mobile app know it has a new job
+  // without requiring a manual poll.  Fire-and-forget; non-fatal on failure.
+  import('./notification.service').then(({ createNotification }) => {
+    const code = `SVN-${String(bookingId).padStart(6, '0')}`;
+    return createNotification(providerUid, {
+      type: 'assigned_job',
+      severity: 'info',
+      title: 'New Job Assigned',
+      safeBody: `You have been assigned to booking ${code} by admin. Please check your upcoming jobs.`,
+      safeContextLabel: code,
+      route: { page: 'jobs', bookingId: String(bookingId) },
+      canOpenDetail: true,
+    });
+  }).catch((e: any) => { console.error('[admin-create-booking] provider notification failed:', e?.message); });
 
   return { bookingId, guestCustomerId };
 };

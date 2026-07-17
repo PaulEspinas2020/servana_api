@@ -6,6 +6,10 @@ export const isProduction = process.env.NODE_ENV == "production";
 export const port = process.env.PORT;
 export const secret = process.env.SECRET
 export const tempId = process.env.TEMP_ID
+
+if (isProduction && tempId) {
+  throw new Error('SECURITY: TEMP_ID must not be set in production — it bypasses all authentication');
+}
 export const db = {
     user: process.env.DB_USER,
     host: process.env.DB_HOST,

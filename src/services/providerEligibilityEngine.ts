@@ -121,12 +121,12 @@ export const evaluateProviderForSlot = async (
   const accountRes = await dbQuery.query(
     `SELECT account_status, is_archive
      FROM ${s}.user_credentials
-     WHERE uid = $1`,
+     WHERE uid = $1 AND role::int IN (2, 4)`,
     [providerUid]
   );
 
   if (!accountRes.rows.length) {
-    reasons.push({ code: 'ACCOUNT_INACTIVE', severity: 'blocker', message: 'Provider account not found' });
+    reasons.push({ code: 'ACCOUNT_INACTIVE', severity: 'blocker', message: 'Provider account not found or UID does not belong to a provider role' });
     return { providerUid, eligible: false, score: 0, reasons, checks };
   }
 
