@@ -282,10 +282,10 @@ export const getBookableServicesForAdmin = async (): Promise<any[]> => {
   );
 
   const optionsRes = await dbQuery.query(
-    `SELECT so.id, so.service_id, so.level_2, so.level_3,
+    `SELECT so.id, so.service_id, so.level_1, so.level_2, so.level_3,
             so.base_price, so.option_type, so.parent_option_id
      FROM ${s}.service_options so
-     ORDER BY so.service_id, so.option_type, so.level_2, so.level_3`,
+     ORDER BY so.service_id, so.option_type, so.level_1, so.level_2, so.level_3`,
     []
   );
 
@@ -297,13 +297,14 @@ export const getBookableServicesForAdmin = async (): Promise<any[]> => {
       addonsByParent[opt.parent_option_id] = addonsByParent[opt.parent_option_id] ?? [];
       addonsByParent[opt.parent_option_id].push({
         optionId: opt.id,
-        name: opt.level_3 ?? opt.level_2 ?? 'Add-on',
+        name: opt.level_3 ?? opt.level_2 ?? opt.level_1 ?? 'Add-on',
         basePrice: opt.base_price ? Number(opt.base_price) : 0,
       });
     } else if (opt.option_type === 'MAIN') {
       mainsByService[opt.service_id] = mainsByService[opt.service_id] ?? [];
       mainsByService[opt.service_id].push({
         optionId: opt.id,
+        level1: opt.level_1 ?? null,
         level2: opt.level_2 ?? null,
         level3: opt.level_3 ?? null,
         basePrice: opt.base_price ? Number(opt.base_price) : 0,
