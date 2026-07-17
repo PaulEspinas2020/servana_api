@@ -1484,7 +1484,10 @@ export const getWorkerBookingHistory = async (workerUid: string) => {
       bw.assigned_at,
       bw.started_at,
       bw.completed_at,
-      uc.first_name || ' ' || uc.last_name AS customer_name,
+      COALESCE(
+        NULLIF(TRIM(COALESCE(uc.first_name,'') || ' ' || COALESCE(uc.last_name,'')), ''),
+        TRIM(COALESCE(gc.first_name,'') || ' ' || COALESCE(gc.last_name,''))
+      )                   AS customer_name,
       p.status            AS payment_status,
       p.method            AS payment_provider,
       p.paid_at
@@ -1493,8 +1496,10 @@ export const getWorkerBookingHistory = async (workerUid: string) => {
       ON b.id = bw.booking_id
     JOIN ${dbSchema}.service_options so
       ON so.id = b.service_option_id
-    JOIN ${dbSchema}.user_credentials uc
+    LEFT JOIN ${dbSchema}.user_credentials uc
       ON uc.uid = b.user_id
+    LEFT JOIN ${dbSchema}.guest_customers gc
+      ON gc.guest_customer_id = b.guest_customer_id
     LEFT JOIN ${dbSchema}.payments p
       ON p.booking_id = b.id AND p.additional_request_id IS NULL
     WHERE bw.worker_uid = $1

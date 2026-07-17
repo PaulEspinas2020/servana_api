@@ -297,8 +297,8 @@ export const getAdminBookings = async (
         CASE WHEN b.guest_customer_id IS NOT NULL THEN 'guest' ELSE 'client' END AS customer_type,
         COALESCE(cu.uid, b.guest_customer_id::text)  AS customer_uid,
         COALESCE(
-          COALESCE(cu.first_name,'') || ' ' || COALESCE(cu.last_name,''),
-          COALESCE(gc.first_name,'') || ' ' || COALESCE(gc.last_name,'')
+          NULLIF(TRIM(COALESCE(cu.first_name,'') || ' ' || COALESCE(cu.last_name,'')), ''),
+          TRIM(COALESCE(gc.first_name,'') || ' ' || COALESCE(gc.last_name,''))
         )                                            AS customer_name,
         COALESCE(cu.phone_number, gc.phone_normalized) AS customer_phone,
         COALESCE(cu.email, gc.email)                 AS customer_email,
@@ -308,8 +308,8 @@ export const getAdminBookings = async (
         so.id                                        AS service_option_id,
         s.name                                       AS service_name,
         so.level_3                                   AS specific_service_name,
-        ua.address_one                               AS address_line,
-        ua.post_town                                 AS city,
+        COALESCE(ua.address_one, b.service_address->>'addressLine') AS address_line,
+        COALESCE(ua.post_town,   b.service_address->>'city')        AS city,
         br.id                                        AS branch_id,
         br.name                                      AS branch_name,
         br.city                                      AS branch_city,
@@ -491,12 +491,12 @@ export const getAdminBookingDetail = async (bookingId: number): Promise<any | nu
       br.name   AS branch_name,
       br.address AS branch_address,
       br.city   AS branch_city,
-      ua.address_one AS address_line,
-      ua.post_town,
+      COALESCE(ua.address_one, b.service_address->>'addressLine')        AS address_line,
+      COALESCE(ua.post_town,   b.service_address->>'city')               AS post_town,
       ua.country,
       ua.zip_code,
-      ua.lat,
-      ua.lon
+      COALESCE(ua.lat, (b.service_address->>'lat')::numeric)             AS lat,
+      COALESCE(ua.lon, (b.service_address->>'lon')::numeric)             AS lon
     FROM ${dbSchema}.bookings b
     LEFT JOIN ${dbSchema}.user_credentials cu ON cu.uid = b.user_id
     LEFT JOIN ${dbSchema}.guest_customers  gc ON gc.guest_customer_id = b.guest_customer_id
