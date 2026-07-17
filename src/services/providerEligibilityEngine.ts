@@ -125,7 +125,7 @@ export const evaluateProviderForSlot = async (
     [providerUid]
   );
 
-  if (!accountRes.rowCount) {
+  if (!accountRes.rows.length) {
     reasons.push({ code: 'ACCOUNT_INACTIVE', severity: 'blocker', message: 'Provider account not found' });
     return { providerUid, eligible: false, score: 0, reasons, checks };
   }
@@ -154,7 +154,7 @@ export const evaluateProviderForSlot = async (
        LIMIT 1`,
       [providerUid, slot.serviceId]
     );
-    if (!serviceRes.rowCount) {
+    if (!serviceRes.rows.length) {
       reasons.push({
         code: 'NO_ACTIVE_SERVICE',
         severity: 'blocker',

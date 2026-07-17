@@ -335,7 +335,7 @@ export const listCandidatesForSlot = async (slot: {
     []
   );
 
-  if (!providersRes.rowCount) return [];
+  if (!providersRes.rows.length) return [];
 
   const results = await Promise.all(
     providersRes.rows.map(async (p: any) => {
