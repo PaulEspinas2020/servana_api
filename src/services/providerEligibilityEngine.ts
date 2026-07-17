@@ -155,11 +155,22 @@ export const evaluateProviderForSlot = async (
       [providerUid, slot.serviceId]
     );
     if (!serviceRes.rows.length) {
-      reasons.push({
-        code: 'NO_ACTIVE_SERVICE',
-        severity: 'blocker',
-        message: `Provider does not have service ${slot.serviceId} active`,
-      });
+      // Check application status so admin gets an actionable reason
+      const appRes = await dbQuery.query(
+        `SELECT status FROM ${s}.worker_service_applications
+         WHERE worker_uid = $1 AND service_id = $2
+         ORDER BY created_at DESC LIMIT 1`,
+        [providerUid, slot.serviceId]
+      );
+      const appStatus: string | null = appRes.rows[0]?.status ?? null;
+      const msg = appStatus === 'pending' || appStatus === 'resubmitted'
+        ? `Provider's application for service ${slot.serviceId} is pending review`
+        : appStatus === 'flag_action_required'
+        ? `Provider's application for service ${slot.serviceId} requires action before approval`
+        : appStatus === 'rejected'
+        ? `Provider's application for service ${slot.serviceId} was rejected`
+        : `Provider has not applied for service ${slot.serviceId}`;
+      reasons.push({ code: 'NO_ACTIVE_SERVICE', severity: 'blocker', message: msg });
     } else {
       checks.hasActiveService = true;
     }
