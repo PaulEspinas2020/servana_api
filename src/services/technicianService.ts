@@ -1039,6 +1039,7 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
     SELECT
       b.schedule,
       b.user_address_id,
+      b.service_address,
       ua.location_id,
       so.service_id
     FROM ${dbSchema}.bookings b
@@ -1081,11 +1082,18 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
   if (row.location_id) {
     const { getLatLonByLocationId } = await import("./address.service");
     const [lon, lat] = await getLatLonByLocationId(String(row.location_id));
-
     reassignment = await assignNearestWorker(
       bookingId,
       Number(lat),
       Number(lon),
+      row.service_id ? Number(row.service_id) : null
+    );
+  } else if (row.service_address && row.service_address.lat && row.service_address.lon) {
+    // Admin-created booking: no location_id, fall back to JSONB lat/lon
+    reassignment = await assignNearestWorker(
+      bookingId,
+      Number(row.service_address.lat),
+      Number(row.service_address.lon),
       row.service_id ? Number(row.service_id) : null
     );
   }

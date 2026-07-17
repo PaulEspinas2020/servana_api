@@ -32,7 +32,7 @@ const corsOptionsDelegate = function (req: any, callback: any) {
 
 const port = process.env.PORT;
 app.disable("x-powered-by");
-app.set("trust proxy", true);
+app.set("trust proxy", 1); // trust first hop (Nginx on same server) only — prevents IP spoofing
 app.use(cors(corsOptionsDelegate))
 app.use(cookieParser());
 

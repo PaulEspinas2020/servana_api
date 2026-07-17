@@ -4,6 +4,24 @@ import { emitToProvider } from "../provider.realtime";
 import { logCommunicationEvent } from "./adminCommunicationService";
 const dbSchema = db.schema;
 
+async function sendFcmPushToWorker(workerUid: string, title: string, body: string): Promise<void> {
+  const { rows } = await dbQuery.query(
+    `SELECT fcm_token FROM ${dbSchema}.user_credentials WHERE uid = $1 LIMIT 1`,
+    [workerUid],
+  );
+  const token: string | undefined = rows[0]?.fcm_token;
+  if (!token) return;
+
+  const { getMessaging } = await import('firebase-admin/messaging');
+  const { firebaseAdmin } = await import('../middleware/firebaseApp');
+  await getMessaging(firebaseAdmin).send({
+    token,
+    notification: { title, body },
+    android: { priority: 'high' },
+    apns: { payload: { aps: { contentAvailable: true } } },
+  });
+}
+
 // ─── Lazy table init ──────────────────────────────────────────────────────────
 // Tables are created on first use and the promise is reused for all subsequent calls.
 
@@ -70,6 +88,12 @@ async function initTables(): Promise<void> {
       promotions       BOOLEAN NOT NULL DEFAULT false,
       updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    -- Defensive: ensure UNIQUE constraint exists even if table was created before it was added
+    DO $safe_unique$ BEGIN
+      ALTER TABLE ${dbSchema}.provider_notifications ADD UNIQUE (notification_key);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $safe_unique$;
 
     CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_support_ticket_replies (
       id          BIGSERIAL PRIMARY KEY,
@@ -302,6 +326,8 @@ export async function createNotification(
   const notification = mapNotificationRow(rows[0]);
   // Push real-time — no-op when socket server is not initialised (e.g. during tests)
   emitToProvider(workerUid, "notification", notification);
+  // FCM push for background/offline devices
+  sendFcmPushToWorker(workerUid, data.title, data.safeBody).catch(() => {});
   // Fire-and-forget admin log
   logCommunicationEvent({
     channel: 'socket',
