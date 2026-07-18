@@ -363,3 +363,20 @@ describe('job-card — instructions surface to provider (STITCH-003)', () => {
     expect(fn).toContain('delivery_instructions');
   });
 });
+
+describe('adminCreateBooking — fallback path: controller forwards instructions (STITCH-005)', () => {
+  it('createAdminBooking destructures instructions from req.body', () => {
+    const fnIdx = ctrlSrc.indexOf('createAdminBooking');
+    const fn = ctrlSrc.slice(fnIdx, fnIdx + 800);
+    expect(fn).toContain('instructions');
+  });
+
+  it('createAdminBooking passes instructions to adminCreateBooking service call', () => {
+    const fnIdx = ctrlSrc.indexOf('createAdminBooking');
+    const fn = ctrlSrc.slice(fnIdx, fnIdx + 3500);
+    // Must contain the forwarding expression in the service call
+    expect(fn).toContain('instructions:');
+    // Must use nullish coalescing so undefined becomes null (not forwarded as undefined)
+    expect(fn).toContain('instructions ?? null');
+  });
+});
