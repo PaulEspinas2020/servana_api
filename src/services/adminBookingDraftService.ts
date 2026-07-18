@@ -606,6 +606,7 @@ export const convertDraft = async (
       city:            addr.postTown ?? '',
       lat:             addr.lat,
       lon:             addr.lon,
+      instructions:    addr.instructions ?? null,
       providerUid:     draft.selectedProviderUid!,
       paymentMethod:   draft.paymentMethod as any,
       paymentStatus:   (draft.paymentStatusChoice ?? 'PAY_LATER') as any,

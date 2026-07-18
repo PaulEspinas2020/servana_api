@@ -383,16 +383,19 @@ export const getBookableServices = async (_req: Request, res: Response) => {
 
 export const getSlotCandidates = async (req: Request, res: Response) => {
   try {
-    const { startAt, endAt, serviceId, cityId, branchId } = req.query as any;
+    const { startAt, endAt, serviceId, cityId, branchId, serviceOptionId } = req.query as any;
     if (!startAt) return adminBadRequest(res, 'startAt is required');
     if (isNaN(Date.parse(startAt))) return adminBadRequest(res, 'startAt must be a valid ISO 8601 date-time');
+    // derivedEnd is the fallback when no serviceOptionId is given; listCandidatesForSlot
+    // overrides it with the real duration when serviceOptionId is known.
     const derivedEnd = endAt ?? new Date(new Date(startAt).getTime() + 2 * 60 * 60 * 1000).toISOString();
     const candidates = await createSvc.listCandidatesForSlot({
       startAt,
-      endAt: derivedEnd,
-      serviceId: serviceId ?? null,
-      cityId:    cityId   ?? null,
-      branchId:  branchId ?? null,
+      endAt:           derivedEnd,
+      serviceId:       serviceId       ?? null,
+      cityId:          cityId          ?? null,
+      branchId:        branchId        ?? null,
+      serviceOptionId: serviceOptionId ?? null,
     });
     return res.json({ status: 'success', data: candidates });
   } catch (err: any) {

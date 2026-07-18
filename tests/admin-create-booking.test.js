@@ -285,3 +285,58 @@ describe('adminCreateBooking — app.ts wiring', () => {
     expect(appSrc).toContain('ensureAdminCreateBookingSchema');
   });
 });
+
+describe('listCandidatesForSlot — STITCH/SWEEP contracts', () => {
+  it('accepts serviceOptionId to compute accurate endAt from duration_mins', () => {
+    expect(svcSrc).toContain('serviceOptionId');
+    expect(svcSrc).toContain('duration_mins');
+    // The function must look up duration_mins when serviceOptionId is provided
+    const fnIdx = svcSrc.indexOf('listCandidatesForSlot');
+    const fn = svcSrc.slice(fnIdx, fnIdx + 1500);
+    expect(fn).toContain('serviceOptionId');
+    expect(fn).toContain('duration_mins');
+  });
+
+  it('fetches photo_url for provider avatars', () => {
+    const fnIdx = svcSrc.indexOf('listCandidatesForSlot');
+    const fn = svcSrc.slice(fnIdx, fnIdx + 4000);
+    expect(fn).toContain('photo_url');
+    expect(fn).toContain('avatarUrl');
+  });
+
+  it('batch-fetches active services for all providers', () => {
+    const fnIdx = svcSrc.indexOf('listCandidatesForSlot');
+    const fn = svcSrc.slice(fnIdx, fnIdx + 4000);
+    expect(fn).toContain('employee_services');
+    expect(fn).toContain('activeServicesByUid');
+    expect(fn).toContain('activeServices:');
+  });
+
+  it('controller forwards serviceOptionId to listCandidatesForSlot', () => {
+    const fnIdx = ctrlSrc.indexOf('getSlotCandidates');
+    const fn = ctrlSrc.slice(fnIdx, fnIdx + 600);
+    expect(fn).toContain('serviceOptionId');
+  });
+});
+
+describe('adminCreateBooking — instructions field', () => {
+  it('AdminCreateBookingParams accepts optional instructions field', () => {
+    // The interface must declare instructions as optional
+    expect(svcSrc).toContain('instructions?: string | null');
+  });
+
+  it('service_address JSONB includes instructions when provided', () => {
+    const fnIdx = svcSrc.indexOf('serviceAddress');
+    const fn = svcSrc.slice(fnIdx, fnIdx + 300);
+    expect(fn).toContain('instructions');
+  });
+
+  it('convertDraft forwards instructions from addressPayload', () => {
+    const draftSrc = require('fs').readFileSync(
+      require('path').join(__dirname, '../src/services/adminBookingDraftService.ts'), 'utf-8'
+    );
+    // Search whole file — instructions is forwarded inside convertDraft's adminCreateBooking call
+    expect(draftSrc).toContain('addr.instructions');
+    expect(draftSrc).toContain('instructions:');
+  });
+});

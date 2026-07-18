@@ -49,6 +49,7 @@ export interface AdminCreateBookingParams {
   city: string;
   lat: number;
   lon: number;
+  instructions?: string | null;
   // provider
   providerUid: string;
   // payment
@@ -338,14 +339,30 @@ export const listCandidatesForSlot = async (slot: {
   serviceId: string | null;
   cityId: string | null;
   branchId: string | null;
+  serviceOptionId?: string | null;
 }): Promise<any[]> => {
-  // Fetch all non-archived role 2/4 providers (max 20).
+  // When serviceOptionId is provided, look up duration_mins for an accurate conflict window.
+  // The controller default (startAt+2h) is only used when no option is known.
+  let endAt = slot.endAt;
+  if (slot.serviceOptionId) {
+    const durRes = await dbQuery.query(
+      `SELECT COALESCE(duration_mins, 120) AS duration_mins
+       FROM ${s}.service_options WHERE id = $1`,
+      [Number(slot.serviceOptionId)]
+    );
+    if (durRes.rows.length) {
+      const durationMins = Number(durRes.rows[0].duration_mins);
+      endAt = new Date(new Date(slot.startAt).getTime() + durationMins * 60 * 1000).toISOString();
+    }
+  }
+
+  // Fetch all non-archived role 2/4 providers (max 50).
   // account_status filter is intentionally omitted here — the eligibility engine
   // flags non-active providers as ACCOUNT_INACTIVE (blocker) so admins can see
   // WHY a provider is unavailable rather than getting a silent empty list.
   const providersRes = await dbQuery.query(
     `SELECT uid, first_name, last_name, email, phone_number,
-            account_status, is_archive
+            account_status, is_archive, photo_url
      FROM ${s}.user_credentials
      WHERE role::int IN (2, 4)
        AND (is_archive IS NULL OR is_archive = false)
@@ -356,11 +373,28 @@ export const listCandidatesForSlot = async (slot: {
 
   if (!providersRes.rows.length) return [];
 
+  // Batch-fetch active services for all candidates in one query
+  const providerUids = providersRes.rows.map((p: any) => p.uid);
+  const activeSvcRes = await dbQuery.query(
+    `SELECT es.employee_uid, s.name AS service_name
+     FROM ${s}.employee_services es
+     JOIN ${s}.services s ON s.id = es.service_id
+     WHERE es.employee_uid = ANY($1)`,
+    [providerUids]
+  );
+  const activeServicesByUid: Record<string, string[]> = {};
+  for (const row of activeSvcRes.rows) {
+    if (!activeServicesByUid[row.employee_uid]) activeServicesByUid[row.employee_uid] = [];
+    activeServicesByUid[row.employee_uid].push(row.service_name);
+  }
+
+  const slotWithDuration = { ...slot, endAt };
+
   const results = await Promise.all(
     providersRes.rows.map(async (p: any) => {
       let eligibility: any;
       try {
-        eligibility = await evaluateProviderForSlot(p.uid, slot);
+        eligibility = await evaluateProviderForSlot(p.uid, slotWithDuration);
       } catch {
         eligibility = { providerUid: p.uid, eligible: false, score: 0, reasons: [], checks: {} };
       }
@@ -371,8 +405,8 @@ export const listCandidatesForSlot = async (slot: {
           name: `${p.first_name ?? ''} ${p.last_name ?? ''}`.trim(),
           email: p.email ?? null,
           phone: p.phone_number ?? null,
-          avatarUrl: null,
-          activeServices: [],
+          avatarUrl: p.photo_url ?? null,
+          activeServices: activeServicesByUid[p.uid] ?? [],
         },
       };
     })
@@ -455,7 +489,7 @@ export const adminCreateBooking = async (
     guest, customerUid,
     serviceOptionId, addonOptionIds,
     scheduledAt,
-    addressLine, city, lat, lon,
+    addressLine, city, lat, lon, instructions,
     providerUid,
     paymentMethod, paymentStatus,
     paymentEvidence,
@@ -555,7 +589,8 @@ export const adminCreateBooking = async (
 
   // ── Address payload ───────────────────────────────────────────────────────
   const locationId = `loc_${lat.toFixed(6)}_${lon.toFixed(6)}`;
-  const serviceAddress = { addressLine, city, lat, lon, locationId };
+  const serviceAddress: Record<string, any> = { addressLine, city, lat, lon, locationId };
+  if (instructions) serviceAddress['instructions'] = instructions;
 
   // ── Normalize guest phone if applicable ──────────────────────────────────
   const guestPhoneNormalized = guest ? normalizePhilippinePhone(guest.phone) : null;
