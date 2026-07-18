@@ -210,6 +210,14 @@ export const ensureAdminCreateBookingSchema = async (): Promise<void> => {
       []
     );
   } catch { /* already present */ }
+
+  // service_options.duration_mins — actual service duration; used for endAt calculation
+  try {
+    await dbQuery.query(
+      `ALTER TABLE ${s}.service_options ADD COLUMN IF NOT EXISTS duration_mins INT NOT NULL DEFAULT 120`,
+      []
+    );
+  } catch { /* already present */ }
 };
 
 // ── Phone normalization ───────────────────────────────────────────────────────
@@ -485,7 +493,8 @@ export const adminCreateBooking = async (
 
   // ── Pre-flight: verify service option exists ──────────────────────────────
   const svcRes = await dbQuery.query(
-    `SELECT so.id, so.base_price, so.service_id, s.name AS service_name
+    `SELECT so.id, so.base_price, so.service_id, s.name AS service_name,
+            COALESCE(so.duration_mins, 120) AS duration_mins
      FROM ${s}.service_options so
      JOIN ${s}.services s ON s.id = so.service_id
      WHERE so.id = $1 AND so.option_type = 'MAIN'`,
@@ -497,7 +506,7 @@ export const adminCreateBooking = async (
   const svcRow = svcRes.rows[0];
 
   // ── Pre-flight: provider eligibility recheck ──────────────────────────────
-  const endAt = new Date(new Date(scheduledAt).getTime() + 2 * 60 * 60 * 1000).toISOString();
+  const endAt = new Date(new Date(scheduledAt).getTime() + Number(svcRow.duration_mins) * 60 * 1000).toISOString();
   const eligibility = await evaluateProviderForSlot(providerUid, {
     startAt:   scheduledAt,
     endAt,

@@ -70,7 +70,7 @@ export const evaluateProviderForBooking = async (
   // Fetch booking details — service_id is on service_options, not bookings directly
   const bookingRes = await dbQuery.query(
     `SELECT b.id, b.schedule, b.branch_id, b.worker_uid, b.status,
-            so.service_id
+            so.service_id, COALESCE(so.duration_mins, 120) AS duration_mins
      FROM ${s}.bookings b
      LEFT JOIN ${s}.service_options so ON so.id = b.service_option_id
      WHERE b.id = $1`,
@@ -85,7 +85,7 @@ export const evaluateProviderForBooking = async (
 
   const booking = bookingRes.rows[0];
   const startAt = booking.schedule;
-  const endAt   = new Date(new Date(startAt).getTime() + 2 * 60 * 60 * 1000).toISOString();
+  const endAt   = new Date(new Date(startAt).getTime() + Number(booking.duration_mins) * 60 * 1000).toISOString();
 
   return evaluateProviderForSlot(providerUid, {
     startAt,
@@ -230,7 +230,8 @@ export const listAssignmentCandidates = async (
 ): Promise<AssignmentCandidate[]> => {
   // Fetch booking
   const bookingRes = await dbQuery.query(
-    `SELECT b.id, b.schedule, b.branch_id, b.status, so.service_id
+    `SELECT b.id, b.schedule, b.branch_id, b.status, so.service_id,
+            COALESCE(so.duration_mins, 120) AS duration_mins
      FROM ${s}.bookings b
      LEFT JOIN ${s}.service_options so ON so.id = b.service_option_id
      WHERE b.id = $1`,
@@ -243,7 +244,7 @@ export const listAssignmentCandidates = async (
   }
   const booking = bookingRes.rows[0];
   const startAt = booking.schedule;
-  const endAt   = new Date(new Date(startAt).getTime() + 2 * 60 * 60 * 1000).toISOString();
+  const endAt   = new Date(new Date(startAt).getTime() + Number(booking.duration_mins) * 60 * 1000).toISOString();
 
   // All active non-archived providers
   const providersRes = await dbQuery.query(

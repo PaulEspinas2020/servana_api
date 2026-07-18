@@ -349,7 +349,16 @@ export const getBookingsByUserId = async (userId: string) => {
       ON ua.address_id = b.user_address_id
     LEFT JOIN ${dbSchema}.booking_workers bw
       ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','DECLINED')
-    WHERE b.user_id = $1
+    WHERE (
+      b.user_id = $1
+      OR b.guest_customer_id IN (
+        SELECT gc.guest_customer_id
+        FROM ${dbSchema}.guest_customers gc
+        JOIN ${dbSchema}.user_credentials uc ON uc.uid = $1
+        WHERE gc.phone_number IS NOT NULL
+          AND gc.phone_number = uc.phone_number
+      )
+    )
     ORDER BY b.created_at DESC
     `,
     [userId]

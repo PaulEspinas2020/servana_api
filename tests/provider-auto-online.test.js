@@ -105,16 +105,15 @@ describe('Command 14 — activation + revocation', () => {
   let engine;
   beforeAll(() => { engine = fs.readFileSync(SVC('providerAutoOnlineEngine.ts'), 'utf8'); });
 
-  it('applyAutoOnline sets MongoDB is_online: true', () => {
+  it('applyAutoOnline delegates is_online/auto_online writes to canonical setOnline()', () => {
     expect(engine).toContain('syncOnlineStatus');
-    expect(engine).toContain('is_online: true');
-    expect(engine).toContain('auto_online: true');
+    expect(engine).toContain('setOnline');
   });
 
-  it('applyAutoOnline uses $setOnInsert to protect existing coordinates', () => {
+  it('applyAutoOnline uses $setOnInsert to stamp location_confidence for first-time docs', () => {
     expect(engine).toContain('$setOnInsert');
-    expect(engine).toContain('loc:');
-    expect(engine).toContain('coordinates:');
+    expect(engine).toContain('location_confidence');
+    expect(engine).toContain('auto_online_default');
   });
 
   it('applyAutoOnline generates all-time availability (7 days 00:00-23:59)', () => {

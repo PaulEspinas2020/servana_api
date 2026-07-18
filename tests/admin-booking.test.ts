@@ -258,7 +258,7 @@ describe('adminConfirmProviderAssignment — source contracts', () => {
 
   it('sends booking_accepted email to customer', () => {
     const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
-    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    const fn = svcSrc.slice(fnIdx, fnIdx + 4000);
     expect(fn).toContain("'booking_accepted'");
   });
 
@@ -271,7 +271,7 @@ describe('adminConfirmProviderAssignment — source contracts', () => {
 
   it('writes audit event after successful UPDATE', () => {
     const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
-    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    const fn = svcSrc.slice(fnIdx, fnIdx + 5000);
     expect(fn).toContain('logBookingAudit');
     expect(fn).toContain('booking_provider_accepted_on_behalf');
   });

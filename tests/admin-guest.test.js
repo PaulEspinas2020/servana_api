@@ -367,8 +367,9 @@ describe('listAllCustomers — UNION ALL structure', () => {
     expect(svc).toContain('FROM ${s}.guest_customers gc');
   });
 
-  test("identity_type distinguishes 'client' from 'guest'", () => {
-    expect(svc).toContain("'client'                                      AS identity_type");
-    expect(svc).toContain("'guest'                                       AS identity_type");
+  test("identity_type distinguishes 'client' from 'guest' (::text cast)", () => {
+    expect(svc).toContain("'client'::text");
+    expect(svc).toContain("'guest'::text");
+    expect(svc).toContain("AS identity_type");
   });
 });

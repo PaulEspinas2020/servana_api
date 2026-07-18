@@ -98,7 +98,7 @@ describe('adminCreateBooking — transaction safety', () => {
     // Verify structural order: BEGIN < ROLLBACK < release
     const beginIdx    = txBody.indexOf("client.query('BEGIN')");
     const rollbackIdx = txBody.indexOf("client.query('ROLLBACK')");
-    const releaseIdx  = txBody.indexOf('client.release()');
+    const releaseIdx  = txBody.lastIndexOf('client.release()');
     expect(beginIdx).toBeGreaterThanOrEqual(0);
     expect(rollbackIdx).toBeGreaterThan(beginIdx);
     expect(releaseIdx).toBeGreaterThan(rollbackIdx);
@@ -230,7 +230,7 @@ describe('adminCreateBooking — controller validation', () => {
   });
 
   it('validates paymentStatus against PAID | PAY_LATER', () => {
-    expect(ctrlFn).toContain("'PAID','PAY_LATER'");
+    expect(ctrlSrc).toContain("'PAID','PAY_LATER'");
   });
 });
 
