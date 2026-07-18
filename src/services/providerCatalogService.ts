@@ -854,16 +854,54 @@ export const createSpecificService = async (
     throw new Error('basePrice must be a non-negative finite number');
   }
 
-  // Verify offering exists and the requested level_2 is one of its controlled mappings
+  // Verify offering exists and the requested level_2 is one of its controlled mappings.
+  // If not, auto-create the mapping using the offering's builtin service family (or first available).
   const mappingRes = await dbQuery.query(
     `SELECT m.service_id FROM ${dbSchema}.provider_catalog_offering_mappings m
      WHERE m.offering_id = $1 AND m.level_2 = $2 AND m.is_active = true`,
     [offeringId, data.level2]
   );
-  if (mappingRes.rows.length === 0) {
-    throw new Error(`level_2 '${data.level2}' is not a valid Option Group for this offering`);
+
+  let serviceId: number;
+  if (mappingRes.rows.length > 0) {
+    serviceId = Number(mappingRes.rows[0].service_id);
+  } else {
+    // Auto-create mapping: resolve service_id from the offering's builtin seed, or fallback
+    const offeringRow = await dbQuery.query(
+      `SELECT catalog_key FROM ${dbSchema}.provider_catalog_offerings WHERE id = $1`,
+      [offeringId]
+    );
+    if (offeringRow.rows.length === 0) throw new Error('Offering not found');
+
+    const catalogKey = offeringRow.rows[0].catalog_key as string;
+    const builtinSeed = BUILTIN_OFFERINGS.find(o => o.catalogKey === catalogKey);
+    const familyName  = builtinSeed?.mappings[0]?.serviceFamilyName ?? null;
+
+    let resolvedServiceId: number | null = null;
+    if (familyName) {
+      const famRes = await dbQuery.query(
+        `SELECT id FROM ${dbSchema}.services WHERE LOWER(name) = LOWER($1) LIMIT 1`,
+        [familyName]
+      );
+      if (famRes.rows.length > 0) resolvedServiceId = Number(famRes.rows[0].id);
+    }
+    if (!resolvedServiceId) {
+      const anyRes = await dbQuery.query(
+        `SELECT id FROM ${dbSchema}.services ORDER BY id LIMIT 1`, []
+      );
+      if (anyRes.rows.length > 0) resolvedServiceId = Number(anyRes.rows[0].id);
+    }
+    if (!resolvedServiceId) throw new Error('No service families exist. Seed the database first.');
+
+    await dbQuery.query(
+      `INSERT INTO ${dbSchema}.provider_catalog_offering_mappings
+        (offering_id, service_id, level_2, display_order, is_active)
+       VALUES ($1, $2, $3, 0, true)
+       ON CONFLICT (offering_id, service_id, level_2) DO UPDATE SET is_active = true`,
+      [offeringId, resolvedServiceId, data.level2]
+    );
+    serviceId = resolvedServiceId;
   }
-  const serviceId = Number(mappingRes.rows[0].service_id);
 
   // Insert service_options row (MAIN)
   const optRes = await dbQuery.query(
