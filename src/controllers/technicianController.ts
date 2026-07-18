@@ -223,6 +223,7 @@ export const getJobCards = async (req: Request, res: Response) => {
             zipCode: job.zip_code,
             country: job.country,
             label: job.label,
+            instructions: job.delivery_instructions ?? null,
           },
 
           service: {

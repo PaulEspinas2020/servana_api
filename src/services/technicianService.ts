@@ -754,6 +754,7 @@ export const getJobCardsByWorker = async (workerId: string) => {
       ua.zip_code,
       ua.country,
       ua.label,
+      b.service_address->>'instructions' AS delivery_instructions,
 
       s.level_2 AS service_name,
       s.level_3 AS service_type,

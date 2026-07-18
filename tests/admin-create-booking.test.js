@@ -340,3 +340,26 @@ describe('adminCreateBooking — instructions field', () => {
     expect(draftSrc).toContain('instructions:');
   });
 });
+
+describe('job-card — instructions surface to provider (STITCH-003)', () => {
+  const techSvcSrc = require('fs').readFileSync(
+    require('path').join(__dirname, '../src/services/technicianService.ts'), 'utf-8'
+  );
+  const techCtrlSrc = require('fs').readFileSync(
+    require('path').join(__dirname, '../src/controllers/technicianController.ts'), 'utf-8'
+  );
+
+  it('getJobCardsByWorker SELECT includes delivery_instructions from service_address JSONB', () => {
+    const fnIdx = techSvcSrc.indexOf('getJobCardsByWorker');
+    const fn = techSvcSrc.slice(fnIdx, fnIdx + 2000);
+    expect(fn).toContain("service_address->>'instructions'");
+    expect(fn).toContain('delivery_instructions');
+  });
+
+  it('getJobCards controller maps delivery_instructions into address.instructions', () => {
+    const fnIdx = techCtrlSrc.indexOf('getJobCards');
+    const fn = techCtrlSrc.slice(fnIdx, fnIdx + 1200);
+    expect(fn).toContain('instructions:');
+    expect(fn).toContain('delivery_instructions');
+  });
+});
