@@ -187,7 +187,8 @@ const toJobDto = (r: any) => ({
 
 const JOB_SELECT = (statusFilter: string) => `
   SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
-         ua.address_one, ua.post_town,
+         COALESCE(ua.address_one, b.service_address->>'addressLine') AS address_one,
+         COALESCE(ua.post_town,   b.service_address->>'city')        AS post_town,
          s.level_1 AS category_name, s.level_2 AS service_name,
          u.first_name AS customer_first, u.last_name AS customer_last,
          p.status AS payment_status

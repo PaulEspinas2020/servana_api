@@ -633,7 +633,8 @@ export const getProviderJobs = async (uid: string, filter: ProviderJobsFilter = 
               b.transpo_fee, b.quoted_price, b.created_at,
               so.level_2 AS service_name,
               s.name AS category_name,
-              ua.address_one, ua.post_town,
+              COALESCE(ua.address_one, b.service_address->>'addressLine') AS address_one,
+              COALESCE(ua.post_town,   b.service_address->>'city')        AS post_town,
               uc.first_name AS customer_first, uc.last_name AS customer_last
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
