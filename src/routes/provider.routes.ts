@@ -130,6 +130,8 @@ router.post("/provider/fcm-token", verifyAuth, provider.saveProviderFcmToken);
 // ─── Job cards (auth-scoped; UID resolved from Firebase token, never from URL) ─
 // These are the web-portal equivalents of the mobile /workers/:uid/job-cards routes.
 // Mobile routes remain unchanged — this adds auth-required parity endpoints for web.
+// Single-card route must be registered before the list route (more specific first).
+router.get("/worker/job-cards/:bookingId", verifyAuth, provider.getWorkerJobCard);
 router.get("/worker/job-cards", verifyAuth, provider.getWorkerJobCards);
 
 // ─── Booking lifecycle (auth-scoped; BOLA enforced in service via SQL WHERE worker_uid = token.uid) ──

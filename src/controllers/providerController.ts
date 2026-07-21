@@ -1813,27 +1813,50 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
 
 // ─── Job cards — web portal (UID from Firebase token, not URL param) ──────────
 
+// Shared formatter to avoid duplication between list and single-card endpoints
+function formatJobCard(job: any) {
+  return {
+    bookingId:    job.booking_id,
+    status:       job.status,
+    scheduleAt:   job.schedule,
+    customer:     { uid: job.customer_id, name: `${job.first_name} ${job.last_name}`, phone: job.phone_number },
+    address:      { addressOne: job.address_one, addressTwo: job.address_two, city: job.post_town, zipCode: job.zip_code, country: job.country, label: job.label },
+    service:      { name: job.service_name, type: job.service_type },
+    addOns:       job.pricing_breakdown,
+    workerStatus: job.worker_status,
+    assignedAt:   job.assigned_at,
+    startedAt:    job.started_at,
+    completedAt:  job.completed_at,
+  };
+}
+
 export const getWorkerJobCards = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
     const jobs = await technicianService.getJobCardsByWorker(uid);
-    const formatted = jobs.map((job: any) => ({
-      bookingId:   job.booking_id,
-      status:      job.status,
-      scheduleAt:  job.schedule,
-      customer:    { uid: job.customer_id, name: `${job.first_name} ${job.last_name}`, phone: job.phone_number },
-      address:     { addressOne: job.address_one, addressTwo: job.address_two, city: job.post_town, zipCode: job.zip_code, country: job.country, label: job.label },
-      service:     { name: job.service_name, type: job.service_type },
-      addOns:      job.pricing_breakdown,
-      workerStatus: job.worker_status,
-      assignedAt:  job.assigned_at,
-      startedAt:   job.started_at,
-      completedAt: job.completed_at,
-    }));
-    return res.json(formatted);
+    return res.json(jobs.map(formatJobCard));
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to fetch job cards" });
+  }
+};
+
+// ─── Single job card by bookingId (AR-P1-02) ─────────────────────────────────
+// Avoids full-list client-side filter in the live-job screen.
+export const getWorkerJobCard = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
+    const jobs = await technicianService.getJobCardsByWorker(uid);
+    const job = jobs.find((j: any) => j.booking_id === bookingId);
+    if (!job) return res.status(404).json({ success: false, message: "Job not found" });
+    return res.json(formatJobCard(job));
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to fetch job" });
   }
 };
 
