@@ -1949,3 +1949,101 @@ export const removeWorkerService = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: error.message || "Failed to remove service" });
   }
 };
+
+// ─── Authenticated booking detail — LEAK-BE-P0-01 web-portal equivalent ────────
+// Web portal uses Firebase JWT; uid from token enforces BOLA ownership.
+// Mobile uses GET /bookings/:id (no auth) — that route is a protected contract, left unchanged.
+export const getProviderBookingDetail = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const bookingId = Number(req.params.id);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ status: "failed", message: "Invalid booking ID" });
+    }
+    const result = await dbQuery.query(
+      `SELECT b.*, p.status AS payment_status, p.method AS payment_method_used,
+              p.reference_no, p.proof_url,
+              COALESCE(ua.address_one, b.service_address->>'addressLine') AS address,
+              COALESCE(ua.post_town, b.service_address->>'city') AS post_town,
+              ua.country, ua.zip_code,
+              bw.status AS worker_status,
+              bw.assigned_at, bw.started_at, bw.completed_at
+       FROM ${dbSchema}.bookings b
+       LEFT JOIN ${dbSchema}.payments p ON p.booking_id = b.id
+       LEFT JOIN ${dbSchema}.user_address ua ON ua.address_id = b.user_address_id
+       LEFT JOIN ${dbSchema}.booking_workers bw ON bw.booking_id = b.id
+         AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','DECLINED')
+       WHERE b.id = $1 AND b.worker_uid = $2`,
+      [bookingId, uid]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ status: "failed", message: "Booking not found" });
+    }
+    const addons = await dbQuery.query(
+      `SELECT ba.id, ba.addon_option_id, ba.qty, ba.unit_price, so.level_3 AS addon_name
+       FROM ${dbSchema}.booking_addons ba
+       JOIN ${dbSchema}.service_options so ON so.id = ba.addon_option_id
+       WHERE ba.booking_id = $1 ORDER BY ba.id ASC`,
+      [bookingId]
+    );
+    return res.status(200).json({ success: true, data: { ...result.rows[0], addons: addons.rows } });
+  } catch (err: any) {
+    return res.status(500).json({ status: "failed", message: err?.message || "Failed to fetch booking" });
+  }
+};
+
+// ─── Authenticated booking tracking — LEAK-BE-P0-05 web-portal equivalent ───────
+// Web portal uses Firebase JWT; uid from token enforces BOLA ownership.
+// Mobile uses GET /bookings/:id/tracking (no auth) — that route is a protected contract, left unchanged.
+export const getProviderBookingTracking = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const bookingId = Number(req.params.id);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ status: "failed", message: "Invalid booking ID" });
+    }
+    const ownerCheck = await dbQuery.query(
+      `SELECT id FROM ${dbSchema}.bookings WHERE id = $1 AND worker_uid = $2`,
+      [bookingId, uid]
+    );
+    if (!ownerCheck.rowCount) {
+      return res.status(404).json({ status: "failed", message: "Booking not found" });
+    }
+    const tracking = await dbQuery.query(
+      `SELECT status, note, created_at
+       FROM ${dbSchema}.booking_tracking
+       WHERE booking_id = $1
+       ORDER BY created_at ASC`,
+      [bookingId]
+    );
+    return res.status(200).json({ success: true, data: tracking.rows });
+  } catch (err: any) {
+    return res.status(500).json({ status: "failed", message: err?.message || "Failed to fetch tracking" });
+  }
+};
+
+// ─── Additional requests for authenticated worker — ST-P1-01 ──────────────────
+// Returns all additional work requests across all bookings assigned to this provider.
+// Shape matches BackendAdditionalWork so adaptAdditionalWorkList() works client-side.
+export const getAdditionalRequests = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const result = await dbQuery.query(
+      `SELECT bar.id, bar.booking_id, bar.status,
+              bar.total_amount AS amount,
+              bar.created_at, bar.updated_at, bar.decided_at
+       FROM ${dbSchema}.booking_additional_requests bar
+       JOIN ${dbSchema}.bookings b ON b.id = bar.booking_id
+       WHERE b.worker_uid = $1
+       ORDER BY bar.created_at DESC
+       LIMIT 50`,
+      [uid]
+    );
+    return res.status(200).json({ success: true, data: result.rows });
+  } catch (err: any) {
+    return res.status(500).json({ status: "failed", message: err?.message || "Failed to fetch additional requests" });
+  }
+};

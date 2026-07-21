@@ -149,4 +149,16 @@ router.delete("/worker/services/:serviceId", verifyAuth, provider.removeWorkerSe
 // ─── Admin diagnostics (role=1 only) ─────────────────────────────────────────
 router.get("/admin/provider/reconciliation", verifyAuth, verifyRoles([1]), provider.getProviderReconciliationReport);
 
+// ─── Authenticated booking detail + tracking (LEAK-BE-P0-01 / P0-05 web-portal equivalents) ──
+// These are NEW authenticated endpoints for the provider web portal.
+// The unauthenticated mobile routes GET /bookings/:id and GET /bookings/:id/tracking
+// in booking.routes.ts are protected mobile contracts — left completely unchanged.
+router.get("/provider/bookings/:id", verifyAuth, provider.getProviderBookingDetail);
+router.get("/provider/jobs/:id/tracking", verifyAuth, provider.getProviderBookingTracking);
+
+// ─── Additional work list for authenticated worker (ST-P1-01) ────────────────
+// Returns all additional requests across the worker's assigned bookings.
+// The per-booking endpoint GET /additional/booking/:bookingId (no auth) remains unchanged.
+router.get("/provider/additional-requests", verifyAuth, provider.getAdditionalRequests);
+
 export default router;
