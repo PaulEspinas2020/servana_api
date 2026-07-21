@@ -344,8 +344,13 @@ const addEmployees = async (employees: EmployeeInput[]) => {
             return { email, success: false, error: "User already exists" };
         }
 
+        // Role=1 (admin) users are invited by other admins, not through public
+        // self-registration. Their email is implicitly trusted, so mark it
+        // verified at creation time so they can sign in immediately.
+        const isAdmin = role === 1;
         const firebaseUser = await firebaseFunction.registerNewUserInFirebase({
             email, password, firstName, lastName, role,
+            ...(isAdmin && { emailVerified: true }),
         });
 
         if (!firebaseUser) {
@@ -360,7 +365,7 @@ const addEmployees = async (employees: EmployeeInput[]) => {
             lastName,
             role,
             phoneNumber: null,
-            isEmailVerified: false,
+            isEmailVerified: isAdmin,
             isPhoneVerified: false,
         });
 

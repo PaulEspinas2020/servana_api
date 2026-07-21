@@ -108,7 +108,7 @@ const getUserCredentialsByEmail = async (email: string, withPassword = false) =>
     try {
         const { rows } = await dbQuery.query(searchQuery, [email]);
 
-        if (!rows && rows.length == 0) {
+        if (!rows || rows.length === 0) {
             return null;
         }
         const dbResponse = formatUserCredentials(rows[0]);
@@ -135,7 +135,7 @@ const getUserCredentialsByID = async (uid: string, withPassword = false) => {
     try {
         const { rows } = await dbQuery.query(searchQuery, [uid]);
 
-        if (!rows && rows.length == 0) {
+        if (!rows || rows.length === 0) {
             return null;
         }
         const dbResponse = formatUserCredentials(rows[0]);
