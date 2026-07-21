@@ -15,6 +15,7 @@ const app = express();
 const router = express.Router();
 const whitelist = [
   "http://localhost:4200",
+  "http://localhost:4201",
   "https://provider.servana.com.ph",
   "https://admin.servana.com.ph",
   "https://www.servana.com.ph",

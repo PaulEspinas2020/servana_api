@@ -231,6 +231,51 @@ export const PARITY_REGISTRY: ParityGroup[] = [
     aliases: ['requirement_type'],
     note: 'worker_requirements.requirement_type — toCamel: requirementType',
   },
+  {
+    canonical: 'accountStatus',
+    aliases: ['account_status'],
+    note: 'user_credentials.account_status — providerController/adminProviderService: accountStatus (camelCase)',
+  },
+  {
+    canonical: 'onboardingStatus',
+    aliases: ['onboarding_status'],
+    note: 'worker-level onboarding state — toCamel: onboardingStatus',
+  },
+  {
+    canonical: 'workerCode',
+    aliases: ['worker_code'],
+    note: 'bookings.worker_code — join code used to link booking to provider job card; toCamel: workerCode',
+  },
+  {
+    canonical: 'completedJobsCount',
+    aliases: ['completed_jobs_count', 'completedJobs', 'completed_jobs'],
+    note: 'aggregate count of provider completed jobs — web portal: completedJobsCount; mobile: completedJobs',
+  },
+  {
+    canonical: 'serviceCategories',
+    aliases: ['service_categories'],
+    note: 'array of service category labels a provider offers — provider profile response: serviceCategories',
+  },
+  {
+    canonical: 'serviceAreaLabel',
+    aliases: ['service_area_label'],
+    note: 'human-readable label of the provider service area (e.g. "Metro Manila") — provider profile: serviceAreaLabel',
+  },
+  {
+    canonical: 'providerShareAmount',
+    aliases: ['provider_share_amount', 'workerShare', 'worker_share'],
+    note: 'provider earnings after Servana commission (default 80%) — payout detail: providerShareAmount; mobile: workerShare',
+  },
+  {
+    canonical: 'providerPayoutStatus',
+    aliases: ['provider_payout_status', 'payoutStatus', 'payout_status'],
+    note: 'status of the provider payout for a booking — booking detail: providerPayoutStatus; payout service: payoutStatus',
+  },
+  {
+    canonical: 'hasAdditionalWork',
+    aliases: ['has_additional_work'],
+    note: 'boolean — provider has pending additional-work requests for a booking; job card: hasAdditionalWork',
+  },
 ];
 
 // ── Internal lookup maps ──────────────────────────────────────────────────────
