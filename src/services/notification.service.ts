@@ -80,14 +80,23 @@ async function initTables(): Promise<void> {
       ON ${dbSchema}.provider_support_tickets (worker_uid, created_at DESC);
 
     CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_notification_preferences (
-      worker_uid       VARCHAR(128) PRIMARY KEY,
-      job_assigned     BOOLEAN NOT NULL DEFAULT true,
-      job_reminder     BOOLEAN NOT NULL DEFAULT false,
-      payment_received BOOLEAN NOT NULL DEFAULT true,
-      new_message      BOOLEAN NOT NULL DEFAULT true,
-      promotions       BOOLEAN NOT NULL DEFAULT false,
-      updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      worker_uid         VARCHAR(128) PRIMARY KEY,
+      job_assigned       BOOLEAN NOT NULL DEFAULT true,
+      job_reminder       BOOLEAN NOT NULL DEFAULT false,
+      payment_received   BOOLEAN NOT NULL DEFAULT true,
+      new_message        BOOLEAN NOT NULL DEFAULT true,
+      promotions         BOOLEAN NOT NULL DEFAULT false,
+      requirement_review BOOLEAN NOT NULL DEFAULT true,
+      support            BOOLEAN NOT NULL DEFAULT true,
+      account_security   BOOLEAN NOT NULL DEFAULT true,
+      system             BOOLEAN NOT NULL DEFAULT true,
+      updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    -- Additive columns for tables that may already exist without them (ST-P1-06)
+    ALTER TABLE ${dbSchema}.provider_notification_preferences ADD COLUMN IF NOT EXISTS requirement_review BOOLEAN NOT NULL DEFAULT true;
+    ALTER TABLE ${dbSchema}.provider_notification_preferences ADD COLUMN IF NOT EXISTS support            BOOLEAN NOT NULL DEFAULT true;
+    ALTER TABLE ${dbSchema}.provider_notification_preferences ADD COLUMN IF NOT EXISTS account_security   BOOLEAN NOT NULL DEFAULT true;
+    ALTER TABLE ${dbSchema}.provider_notification_preferences ADD COLUMN IF NOT EXISTS system             BOOLEAN NOT NULL DEFAULT true;
 
     -- Defensive: ensure UNIQUE constraint exists even if table was created before it was added
     DO $safe_unique$ BEGIN
@@ -398,11 +407,15 @@ export async function createSupportTicketRecord(
 // ─── Notification preferences operations ─────────────────────────────────────
 
 const DEFAULT_PREFS = {
-  jobAssigned: true,
-  jobReminder: false,
-  paymentReceived: true,
-  newMessage: true,
-  promotions: false,
+  jobAssigned:       true,
+  jobReminder:       false,
+  paymentReceived:   true,
+  newMessage:        true,
+  promotions:        false,
+  requirementReview: true,
+  support:           true,
+  accountSecurity:   true,
+  system:            true,
 };
 
 export async function getNotificationPrefs(workerUid: string) {
@@ -414,11 +427,15 @@ export async function getNotificationPrefs(workerUid: string) {
   if (rows.length === 0) return { ...DEFAULT_PREFS };
   const r = rows[0];
   return {
-    jobAssigned:     r.job_assigned,
-    jobReminder:     r.job_reminder,
-    paymentReceived: r.payment_received,
-    newMessage:      r.new_message,
-    promotions:      r.promotions,
+    jobAssigned:       r.job_assigned,
+    jobReminder:       r.job_reminder,
+    paymentReceived:   r.payment_received,
+    newMessage:        r.new_message,
+    promotions:        r.promotions,
+    requirementReview: r.requirement_review ?? true,
+    support:           r.support           ?? true,
+    accountSecurity:   r.account_security  ?? true,
+    system:            r.system            ?? true,
   };
 }
 
@@ -427,15 +444,20 @@ export async function saveNotificationPrefs(workerUid: string, prefs: Partial<ty
   const merged = { ...DEFAULT_PREFS, ...prefs };
   await dbQuery.query(
     `INSERT INTO ${dbSchema}.provider_notification_preferences
-       (worker_uid, job_assigned, job_reminder, payment_received, new_message, promotions, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       (worker_uid, job_assigned, job_reminder, payment_received, new_message, promotions,
+        requirement_review, support, account_security, system, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
      ON CONFLICT (worker_uid) DO UPDATE SET
-       job_assigned     = EXCLUDED.job_assigned,
-       job_reminder     = EXCLUDED.job_reminder,
-       payment_received = EXCLUDED.payment_received,
-       new_message      = EXCLUDED.new_message,
-       promotions       = EXCLUDED.promotions,
-       updated_at       = NOW()`,
+       job_assigned       = EXCLUDED.job_assigned,
+       job_reminder       = EXCLUDED.job_reminder,
+       payment_received   = EXCLUDED.payment_received,
+       new_message        = EXCLUDED.new_message,
+       promotions         = EXCLUDED.promotions,
+       requirement_review = EXCLUDED.requirement_review,
+       support            = EXCLUDED.support,
+       account_security   = EXCLUDED.account_security,
+       system             = EXCLUDED.system,
+       updated_at         = NOW()`,
     [
       workerUid,
       merged.jobAssigned,
@@ -443,6 +465,10 @@ export async function saveNotificationPrefs(workerUid: string, prefs: Partial<ty
       merged.paymentReceived,
       merged.newMessage,
       merged.promotions,
+      merged.requirementReview,
+      merged.support,
+      merged.accountSecurity,
+      merged.system,
     ],
   );
   return merged;
