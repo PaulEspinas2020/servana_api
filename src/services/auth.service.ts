@@ -31,7 +31,16 @@ const loggedInUser = async (email: string, password: string) => {
         }
 
         if (!firebaseAuthentication.emailVerified) {
-            throw Error("Please Verify Email with the link sent to your registered email address.");
+            // Admin users (role=1) are invited by other admins, not self-registered.
+            // Auto-verify on first login so they can sign in immediately without
+            // waiting for an email link they were never sent.
+            const dbUserForRoleCheck = await userService.getUserByEmail(email);
+            if (dbUserForRoleCheck && Number(dbUserForRoleCheck.role) === 1) {
+                await firebaseFunction.updateFirebaseEmailVerified(firebaseAuthentication.uid, true);
+                await userService.updateEmailVerifiedByUid(firebaseAuthentication.uid, true);
+            } else {
+                throw Error("Please Verify Email with the link sent to your registered email address.");
+            }
         }
 
         credentials = await loginUserInDBAndFirebase(email, password);
