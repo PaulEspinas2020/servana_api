@@ -16,9 +16,14 @@ const signin = async (req: Request, res: Response) => {
             await authService.updateFcmToken(dbResponse.id, fcmToken);
         }
 
-        successMessage.data = dbResponse;
-        res.status(status.success).send(successMessage);
+        // Inline the response to avoid the module-level successMessage singleton
+        // which is a race condition under concurrent requests (Request A sets data,
+        // Request B overwrites it before A's res.send fires).
+        return res.status(200).json({ status: 'success', data: dbResponse });
     } catch (error: any) {
+        if ((error as any)?.statusCode === 401 || error?.message === 'Invalid email or password.') {
+            return res.status(401).json({ status: 'error', message: 'Invalid email or password.' });
+        }
         return res.status(500).json({ status: "failed", message: error?.message || String(error) });
     }
 };

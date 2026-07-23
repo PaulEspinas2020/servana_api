@@ -27,7 +27,7 @@ const loggedInUser = async (email: string, password: string) => {
 
         const firebaseAuthentication = await firebaseFunction.checkUserIfExistInFirebase(email);
         if (!firebaseAuthentication) {
-            throw Error("User does not exist. Please Register.");
+            throw Object.assign(new Error('Invalid email or password.'), { statusCode: 401 });
         }
 
         if (!firebaseAuthentication.emailVerified) {
@@ -232,11 +232,11 @@ const loginUserInDBAndFirebase = async (email: string, password: string) => {
     try {
         const dbCredentials = await userService.getUserCredentialsByEmail(email, true);
         if (!dbCredentials) {
-            throw Error("User does not exist");
+            throw Object.assign(new Error('Invalid email or password.'), { statusCode: 401 });
         }
 
         if (!comparePassword(dbCredentials?.password, password)) {
-            throw Error("Please enter a valid Password");
+            throw Object.assign(new Error('Invalid email or password.'), { statusCode: 401 });
         }
 
         const firebaseUser = await firebaseFunction.signInUserAndGetTokeninFirebase(email, password);

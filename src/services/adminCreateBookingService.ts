@@ -545,6 +545,9 @@ export const adminCreateBooking = async (
     startAt:   scheduledAt,
     endAt,
     serviceId: String(svcRow.service_id),
+    // TODO: pass cityId when available in payload for full service-area enforcement
+    // AdminCreateBookingParams currently carries `city` (text name), not a cityId integer.
+    // Add cityId to the params interface and wire it here once the frontend sends it.
     cityId:    null,
     branchId:  null,
   });

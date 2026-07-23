@@ -52,6 +52,10 @@ const validateFirebaseIdToken = async (req: Request, res: Response, next: NextFu
       });
     }
   } else {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('FATAL: TEMP_ID must not be set in production. Exiting.');
+      process.exit(1);
+    }
     req['user'] = { uid: tempId };
     next();
   }
