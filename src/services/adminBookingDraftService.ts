@@ -222,7 +222,7 @@ export function calcDraftCompletion(draft: AdminBookingDraft): number {
   if (draft.scheduleAt && draft.addressPayload?.formattedAddress)         done++;
   if (draft.selectedProviderUid)                                           done++;
   if (draft.paymentMethod)                                                 done++;
-  if (draft.paymentMethod)                                                 done++; // step 7 = review (unlocked when step 6 done)
+  if (draft.status !== 'editing')                                          done++; // step 7 = review step reached (status advanced past editing)
   return Math.round((done / total) * 100);
 }
 
@@ -607,6 +607,7 @@ export const convertDraft = async (
       lat:             addr.lat,
       lon:             addr.lon,
       instructions:    addr.instructions ?? null,
+      locationId:      addr.servanaLocationId ? Number(addr.servanaLocationId) : null,
       providerUid:     draft.selectedProviderUid!,
       paymentMethod:   draft.paymentMethod as any,
       paymentStatus:   (draft.paymentStatusChoice ?? 'PAY_LATER') as any,

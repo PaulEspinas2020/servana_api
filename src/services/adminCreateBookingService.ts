@@ -50,6 +50,8 @@ export interface AdminCreateBookingParams {
   lat: number;
   lon: number;
   instructions?: string | null;
+  // address location id (optional — used to resolve cityId for service-area enforcement)
+  locationId?: number | null;
   // provider
   providerUid: string;
   // payment
@@ -490,6 +492,7 @@ export const adminCreateBooking = async (
     serviceOptionId, addonOptionIds,
     scheduledAt,
     addressLine, city, lat, lon, instructions,
+    locationId: serviceLocationId,
     providerUid,
     paymentMethod, paymentStatus,
     paymentEvidence,
@@ -541,14 +544,32 @@ export const adminCreateBooking = async (
 
   // ── Pre-flight: provider eligibility recheck ──────────────────────────────
   const endAt = new Date(new Date(scheduledAt).getTime() + Number(svcRow.duration_mins) * 60 * 1000).toISOString();
+
+  // Resolve cityId from serviceLocationId for service-area enforcement (S-05)
+  let resolvedCityId: string | null = null;
+  if (serviceLocationId) {
+    const locRes = await dbQuery.query(
+      `SELECT city_id FROM ${s}.locations WHERE id = $1 LIMIT 1`,
+      [serviceLocationId]
+    );
+    if (locRes.rowCount && locRes.rows[0].city_id != null) {
+      resolvedCityId = String(locRes.rows[0].city_id);
+    }
+  }
+  if (resolvedCityId === null) {
+    // TODO(S-05): cityId still null — caller should pass locationId so city-based
+    // service-area enforcement is enforced at booking creation time.
+    console.warn('[adminCreateBooking] evaluateProviderForSlot called with cityId=null; service-area check is incomplete', {
+      providerUid,
+      serviceLocationId: serviceLocationId ?? null,
+    });
+  }
+
   const eligibility = await evaluateProviderForSlot(providerUid, {
     startAt:   scheduledAt,
     endAt,
     serviceId: String(svcRow.service_id),
-    // TODO: pass cityId when available in payload for full service-area enforcement
-    // AdminCreateBookingParams currently carries `city` (text name), not a cityId integer.
-    // Add cityId to the params interface and wire it here once the frontend sends it.
-    cityId:    null,
+    cityId:    resolvedCityId,
     branchId:  null,
   });
   if (!eligibility.eligible) {
