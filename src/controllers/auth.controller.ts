@@ -24,7 +24,11 @@ const signin = async (req: Request, res: Response) => {
         if ((error as any)?.statusCode === 401 || error?.message === 'Invalid email or password.') {
             return res.status(401).json({ status: 'error', message: 'Invalid email or password.' });
         }
-        return res.status(500).json({ status: "failed", message: error?.message || String(error) });
+        const msg = typeof error === 'string' ? error : error?.message;
+        if (msg && (msg.includes('valid Email') || msg.includes('valid Password') || msg.includes('valid email'))) {
+            return res.status(400).json({ status: 'error', message: 'Please enter a valid email and password.' });
+        }
+        return res.status(500).json({ status: "failed", message: msg || String(error) });
     }
 };
 
