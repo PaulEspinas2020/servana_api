@@ -152,6 +152,7 @@ export const validateWeeklySchedule = (slots: WeeklyScheduleSlot[]): string[] =>
   return errors;
 };
 
+
 // ── Read ──────────────────────────────────────────────────────────────────────
 
 export const getAvailabilityProfile = async (providerUid: string): Promise<ProviderAvailabilityProfile> => {
