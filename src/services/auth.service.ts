@@ -39,7 +39,10 @@ const loggedInUser = async (email: string, password: string) => {
                 await firebaseFunction.updateFirebaseEmailVerified(firebaseAuthentication.uid, true);
                 await userService.updateEmailVerifiedByUid(firebaseAuthentication.uid, true);
             } else {
-                throw Error("Please Verify Email with the link sent to your registered email address.");
+                throw Object.assign(
+                    new Error("Email not verified. Please check your inbox for a verification link."),
+                    { statusCode: 403 }
+                );
             }
         }
 
