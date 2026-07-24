@@ -276,11 +276,10 @@ export const getEarnings = async (req: Request, res: Response) => {
 
     const result = await dbQuery.query(
       `SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
-              s.level_2 AS service_name,
+              so.level_2 AS service_name,
               p.status AS payment_status
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-       LEFT JOIN ${dbSchema}.services s ON s.id = so.service_id
        LEFT JOIN ${dbSchema}.payments p ON p.booking_id = b.id
        WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
        ${dateFilter}
@@ -364,10 +363,9 @@ export const getLedger = async (req: Request, res: Response) => {
 
     const result = await dbQuery.query(
       `SELECT b.id, b.schedule, b.final_price, b.payment_method, b.status,
-              s.level_2 AS service_name
+              so.level_2 AS service_name
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-       LEFT JOIN ${dbSchema}.services s ON s.id = so.service_id
        WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
        ORDER BY b.schedule DESC
        LIMIT 50`,
