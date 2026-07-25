@@ -5,6 +5,7 @@ import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import { logProviderClientActivity } from "../services/adminMobileAttributionService";
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 import { touchProviderActivity } from "../services/adminProviderService";
+import mongoDb from "../db/mongodbQuery";
 
 export const listByRole = async (req: Request, res: Response) => {
   try {
@@ -402,9 +403,22 @@ export const upsertBankAccount = async (req: Request, res: Response) => {
       accountName,
     });
 
+    // Mirror to MongoDB so provider portal reads consistent payout method display data
+    try {
+      const col = (await mongoDb).collection("worker_payout_methods");
+      const maskedIdentifier = "•••• " + String(accountNumber).slice(-4);
+      await col.updateOne(
+        { uid },
+        { $set: { uid, type: bankCode.toLowerCase(), accountName, maskedIdentifier, status: "pending", updatedAt: new Date() } },
+        { upsert: true }
+      );
+    } catch (mongoErr: any) {
+      console.error(`[upsertBankAccount] MongoDB sync failed for uid=${uid}:`, mongoErr.message);
+    }
+
     return res.json({ status: "success", data: toCamel(account) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error.message });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 

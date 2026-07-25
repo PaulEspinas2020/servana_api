@@ -9,6 +9,7 @@ import * as notificationService from "../services/notification.service";
 import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
 import * as serviceApplicationService from "../services/serviceApplicationService";
 import * as onboardingService from "../services/providerOnboardingService";
+import * as disbursementService from "../services/disbursement.service";
 import * as availEngine from "../services/providerAvailabilityEngine";
 import * as areaEngine from "../services/providerServiceAreaEngine";
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
@@ -261,6 +262,14 @@ export const getDashboard = async (req: Request, res: Response) => {
 
 // ─── Earnings ─────────────────────────────────────────────────────────────────
 
+const normalizePayoutStatus = (raw: string | null | undefined): string => {
+  if (!raw) return "pending";
+  const s = raw.toLowerCase();
+  if (s === "released") return "disbursed";
+  if (s === "failed")   return "failed_or_on_hold";
+  return s;
+};
+
 export const getEarnings = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
@@ -270,6 +279,9 @@ export const getEarnings = async (req: Request, res: Response) => {
     const params: any[] = [uid];
 
     if (startDate && endDate) {
+      if (isNaN(Date.parse(startDate as string)) || isNaN(Date.parse(endDate as string))) {
+        return res.status(400).json({ status: "failed", message: "Invalid date range" });
+      }
       params.push(startDate, endDate);
       dateFilter = `AND b.schedule >= $2 AND b.schedule <= $3`;
     }
@@ -277,8 +289,10 @@ export const getEarnings = async (req: Request, res: Response) => {
     const result = await dbQuery.query(
       `SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
               so.level_2 AS service_name,
-              p.status  AS payment_status,
-              d.status  AS payout_status
+              p.status   AS payment_status,
+              d.status   AS payout_status,
+              d.released_at,
+              d.worker_share
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
        LEFT JOIN ${dbSchema}.payments p ON p.booking_id = b.id
@@ -291,6 +305,9 @@ export const getEarnings = async (req: Request, res: Response) => {
 
     const data = result.rows.map((r: any) => {
       const gross = Number(r.final_price || 0);
+      const workerShare = r.worker_share != null
+        ? Math.round(Number(r.worker_share) * 100) / 100
+        : Math.round(gross * 0.8 * 100) / 100;
       return {
         id: String(r.id),
         bookingId: String(r.id),
@@ -299,11 +316,12 @@ export const getEarnings = async (req: Request, res: Response) => {
         completedAt: r.schedule,
         scheduledAt: r.schedule,
         bookingAmount: gross,
-        providerShareAmount: Math.round(gross * 0.8 * 100) / 100,
+        providerShareAmount: workerShare,
         providerSharePercent: 80,
         clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
         bookingStatus: r.status ? r.status.toLowerCase() : "completed",
-        providerPayoutStatus: r.payout_status ? r.payout_status.toLowerCase() : "pending",
+        providerPayoutStatus: normalizePayoutStatus(r.payout_status),
+        disbursedAt: r.released_at || null,
         paymentMethod: (r.payment_method || "cash").toLowerCase(),
         currency: "PHP",
       };
@@ -352,7 +370,7 @@ export const getEarningById = async (req: Request, res: Response) => {
       providerSharePercent: 80,
       clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
       bookingStatus:       r.status ? r.status.toLowerCase() : "completed",
-      providerPayoutStatus: r.payout_status ? r.payout_status.toLowerCase() : "pending",
+      providerPayoutStatus: normalizePayoutStatus(r.payout_status),
       disbursedAt:         r.released_at || null,
       paymentMethod:       (r.payment_method || "cash").toLowerCase(),
       currency:            "PHP",
@@ -379,23 +397,27 @@ export const getEarningsSummary = async (req: Request, res: Response) => {
     const result = await dbQuery.query(
       `SELECT
          COUNT(*) AS total_jobs,
-         COALESCE(SUM(final_price), 0) AS total_earned
+         COALESCE(SUM(b.final_price), 0) AS total_gross,
+         COALESCE(SUM(CASE WHEN d.status = 'RELEASED' THEN d.worker_share ELSE 0 END), 0) AS total_paid,
+         COALESCE(SUM(CASE WHEN d.status IN ('PENDING','FAILED') OR d.id IS NULL
+                           THEN b.final_price * 0.8 ELSE 0 END), 0) AS total_pending
        FROM ${dbSchema}.bookings b
+       LEFT JOIN ${dbSchema}.disbursements d ON d.booking_id = b.id AND d.worker_uid = $1
        WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
        ${dateFilter}`,
       params
     );
 
     const s = result.rows[0] || {};
-    const gross = Number(s.total_earned ?? 0);
-    const share = Math.round(gross * 0.8 * 100) / 100;
+    const totalPaid    = Math.round(Number(s.total_paid    ?? 0) * 100) / 100;
+    const totalPending = Math.round(Number(s.total_pending ?? 0) * 100) / 100;
 
     return res.status(200).json({
       status: "success",
       data: {
-        totalEarned: share,
-        totalPaid: share,
-        totalPending: 0,
+        totalEarned:  Math.round(Number(s.total_gross ?? 0) * 0.8 * 100) / 100,
+        totalPaid,
+        totalPending,
         totalRefunded: 0,
         periodLabel: startDate ? "Custom range" : "All time",
         currency: "PHP",
@@ -451,8 +473,13 @@ export const getLedger = async (req: Request, res: Response) => {
 };
 
 export const getPayouts = async (req: Request, res: Response) => {
-  // Payout disbursement records — not yet in DB schema, return empty
-  return res.status(200).json({ status: "success", data: [] });
+  try {
+    const uid = req.user?.uid;
+    const rows = await disbursementService.listDisbursements({ workerUid: uid });
+    return res.status(200).json({ status: "success", data: rows });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: "Server error" });
+  }
 };
 
 // ─── Review Status ────────────────────────────────────────────────────────────

@@ -40,6 +40,11 @@ export const createDisbursement = async (bookingId: number) => {
     return null;
   }
 
+  if (!final_price || Number(final_price) <= 0) {
+    console.warn(`createDisbursement: booking ${bookingId} has no final_price — skipping`);
+    return null;
+  }
+
   const { totalAmount, servanaShare, workerShare } = computeSplit(Number(final_price));
 
   const res = await dbQuery.query(
