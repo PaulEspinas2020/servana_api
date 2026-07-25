@@ -143,7 +143,7 @@ const registerUser = async (user: UserCredentialsReq) => {
 
         return {
             dbRegister,
-            verify,
+            // verify intentionally excluded from response — link travels via email only
             verificationType: "link",
             message: "User created successfully. Verification link sent to email.",
         };
@@ -204,12 +204,10 @@ const resendEmailOtp = async (payload: { email: string }) => {
     try {
         const dbUser = await userService.getUserByEmail(email);
 
-        if (!dbUser) {
-            throw "User not found";
-        }
-
-        if (dbUser.isEmailVerified) {
-            throw "Email is already verified";
+        // Return same response regardless of whether account exists or is already verified
+        // to prevent account enumeration via different error messages.
+        if (!dbUser || dbUser.isEmailVerified) {
+            return { message: "If this account exists and is unverified, an OTP has been sent.", verificationType: "otp" };
         }
 
         const otpCode = generateOTP();
@@ -246,7 +244,7 @@ const loginUserInDBAndFirebase = async (email: string, password: string) => {
         delete dbCredentials.password;
         const credentials = {
             token: firebaseUser.token,
-            refreshToken: firebaseUser.refreshToken,
+            // refreshToken intentionally excluded — long-lived credential not needed by web clients
             ...dbCredentials,
             id: firebaseUser.uid,
         };
@@ -277,7 +275,8 @@ const getAndSendEmailVerificationLink = async (email: string, firstName = null) 
         email,
     });
 
-    return verify;
+    // Link travels via email only — never returned in the API response
+    return { message: "Verification link sent." };
 };
 
 const changeArchiveStatus = async (userId: string, archiveStatus: boolean) => {
@@ -569,10 +568,10 @@ const forgotPassword = async (email: string) => {
     return { message: "If an account with that email exists, a password reset link has been sent." };
 };
 
-const resetPassword = async (payload: { email: string; newPassword: string }) => {
-    const { email, newPassword } = payload;
+const resetPassword = async (payload: { oobCode: string; newPassword: string }) => {
+    const { oobCode, newPassword } = payload;
 
-    if (!email || !newPassword) {
+    if (!oobCode || !newPassword) {
         throw "Missing required parameters";
     }
 
@@ -580,18 +579,15 @@ const resetPassword = async (payload: { email: string; newPassword: string }) =>
         throw "Password does not meet requirements";
     }
 
+    // Verify the oobCode with Firebase (single-use; consumed by this call).
+    // Returns the email address associated with the reset link.
+    const email = await firebaseFunction.resetPasswordWithCode(oobCode, newPassword);
+
+    // Sync the hashed password in DB so email+password signin stays consistent with Firebase.
     const firebaseUser = await firebaseFunction.getFirebaseUserByEmail(email);
-    if (!firebaseUser) {
-        throw "User not found";
-    }
-
-    await firebaseFunction.updateFirebasePassword(firebaseUser.uid, newPassword);
-
-    const updateQuery = `UPDATE ${dbSchema}.user_credentials SET password = $1 WHERE uid = $2 RETURNING *`;
-    const { rows } = await dbQuery.query(updateQuery, [hashPassword(newPassword), firebaseUser.uid]);
-
-    if (!rows.length) {
-        throw "User not found in database";
+    if (firebaseUser) {
+        const updateQuery = `UPDATE ${dbSchema}.user_credentials SET password = $1 WHERE uid = $2`;
+        await dbQuery.query(updateQuery, [hashPassword(newPassword), firebaseUser.uid]);
     }
 
     return { message: "Password reset successfully." };

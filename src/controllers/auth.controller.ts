@@ -38,10 +38,21 @@ const signin = async (req: Request, res: Response) => {
 const signup = async (req: Request, res: Response) => {
     try {
         const dbResponse = await authService.registerUser(req.body);
-        successMessage.data = dbResponse;
-        res.status(status.success).send(successMessage);
+        // Inline response — avoid singleton successMessage race condition under concurrent requests.
+        // Only forward known safe string error messages; never expose Error objects (may contain Firebase internals).
+        return res.status(200).json({
+            status: 'success',
+            data: {
+                success: true,
+                userId: (dbResponse as any).dbRegister?.uid || null,
+                message: (dbResponse as any).message,
+            },
+        });
     } catch (error: any) {
-        return res.status(500).json({ status: "failed", message: error?.message || String(error) });
+        const safeMsg = typeof error === 'string'
+            ? error
+            : 'Registration failed. Please try again.';
+        return res.status(400).json({ status: 'error', message: safeMsg });
     }
 };
 
@@ -79,13 +90,19 @@ const resendEmailOtpController = async (req: Request, res: Response) => {
 
 const resendVerification = async (req: Request, res: Response) => {
     const email = req.query.email as string;
+    if (!email) {
+        return res.status(400).json({ status: 'error', message: 'Email is required' });
+    }
 
     try {
-        const dbResponse = await authService.getAndSendEmailVerificationLink(email);
-        successMessage.data = dbResponse;
-        res.status(status.success).send(successMessage);
+        await authService.getAndSendEmailVerificationLink(email);
+        // Always return the same response — never confirm whether account exists.
+        return res.status(200).json({
+            status: 'success',
+            message: 'If this account exists, a verification link has been sent.',
+        });
     } catch (error: any) {
-        return res.status(500).json({ status: "failed", message: error?.message || String(error) });
+        return res.status(500).json({ status: 'error', message: 'Unable to send verification link. Please try again.' });
     }
 };
 
@@ -114,7 +131,7 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
     const isDisabled = error?.message?.includes("disabled");
     return res.status(isDisabled ? 403 : 401).json({
       status: "failed",
-      message: error?.message || "Authentication failed",
+      message: isDisabled ? "This account has been disabled. Please contact support." : "Authentication failed.",
     });
   }
 };
@@ -211,14 +228,18 @@ export const forgotPasswordController = async (req: Request, res: Response) => {
 
 export const resetPasswordController = async (req: Request, res: Response) => {
     try {
-        const { email, newPassword } = req.body;
+        const { oobCode, newPassword } = req.body;
 
-        const result = await authService.resetPassword({ email, newPassword });
+        if (!oobCode || !newPassword) {
+            return res.status(400).json({ status: 'error', message: 'oobCode and newPassword are required' });
+        }
+
+        const result = await authService.resetPassword({ oobCode, newPassword });
         return res.status(200).json({ status: "success", ...result });
     } catch (error: any) {
         return res.status(400).json({
-            status: "failed",
-            message: error?.message || error || "Failed to reset password",
+            status: 'error',
+            message: 'Password reset failed. The link may have expired. Please request a new one.',
         });
     }
 };
