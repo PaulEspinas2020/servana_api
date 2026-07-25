@@ -373,6 +373,65 @@ describe('job-card — instructions surface to provider (STITCH-003)', () => {
   });
 });
 
+describe('adminBookingDraftService — DRAFT-002: customerName storage (2026-07-25)', () => {
+  const draftSrc = require('fs').readFileSync(
+    require('path').join(__dirname, '../src/services/adminBookingDraftService.ts'), 'utf-8'
+  );
+
+  it('ensureAdminBookingDraftSchema adds customer_name column via additive ALTER TABLE', () => {
+    expect(draftSrc).toContain('ADD COLUMN IF NOT EXISTS customer_name VARCHAR(256)');
+  });
+
+  it('DraftPatchSections includes customerName field', () => {
+    const ifaceIdx = draftSrc.indexOf('interface DraftPatchSections');
+    const iface = draftSrc.slice(ifaceIdx, ifaceIdx + 600);
+    expect(iface).toContain('customerName?: string | null');
+  });
+
+  it('AdminBookingDraft type includes customerName field', () => {
+    const ifaceIdx = draftSrc.indexOf('interface AdminBookingDraft');
+    const iface = draftSrc.slice(ifaceIdx, ifaceIdx + 600);
+    expect(iface).toContain('customerName: string | null');
+  });
+
+  it('mapRow extracts customer_name into customerName', () => {
+    expect(draftSrc).toContain("customerName:          r.customer_name ?? null");
+  });
+
+  it('patchDraft stores customerName via maybe() helper', () => {
+    const patchIdx = draftSrc.indexOf('export const patchDraft');
+    const patchFn  = draftSrc.slice(patchIdx, patchIdx + 6000);
+    expect(patchFn).toContain("maybe('customer_name', data.customerName)");
+  });
+
+  it('listDrafts SELECT includes customer_name column', () => {
+    expect(draftSrc).toContain('customer_name, guest_payload');
+  });
+});
+
+describe('LEAK-M001: providerController.ts — no raw DB error messages exposed (2026-07-25)', () => {
+  const ctrlSrc = require('fs').readFileSync(
+    require('path').join(__dirname, '../src/controllers/providerController.ts'), 'utf-8'
+  );
+
+  it('does not forward error.message in pure 500 catch blocks for job-card operations', () => {
+    // All "Failed to X" patterns in pure res.status(500) blocks must be replaced
+    const pureFailedPattern = /res\.status\(500\)\.json\(\{[^}]*message: error\.message \|\| "Failed to/;
+    expect(pureFailedPattern.test(ctrlSrc)).toBe(false);
+  });
+
+  it('does not forward error.message in the requirement deletion catch block', () => {
+    expect(ctrlSrc).not.toContain('message: error?.message || "Requirement not found"');
+  });
+
+  it('structured-error blocks with statusCode still forward controlled messages', () => {
+    // pauseService / reactivateService / service applications use error.statusCode ?? 500
+    // and forward error.message — safe because these are from our own service layer
+    expect(ctrlSrc).toContain('message: error.message || "Failed to pause service"');
+    expect(ctrlSrc).toContain('message: error.message || "Failed to cancel application"');
+  });
+});
+
 describe('adminBookingDraftService — DRAFT BOOKINGS audit fixes (2026-07-25)', () => {
   const draftSrc = require('fs').readFileSync(
     require('path').join(__dirname, '../src/services/adminBookingDraftService.ts'), 'utf-8'

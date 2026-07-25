@@ -1,4 +1,4 @@
-import { Request, Response } from "express";
+﻿import { Request, Response } from "express";
 import { db } from "../config";
 import dbQuery from "../db/dbQuery";
 import * as technicianService from "../services/technicianService";
@@ -103,7 +103,7 @@ export const getMe = async (req: Request, res: Response) => {
 
     return res.status(200).json({ status: "success", data: user });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -121,7 +121,7 @@ export const getLocationStatus = async (req: Request, res: Response) => {
     const doc = await collection.findOne({ uid }, { projection: { is_online: 1, updatedAt: 1 } });
     return res.status(200).json({ status: "success", data: toOnlineStatusDto(doc?.is_online ?? false, doc?.updatedAt) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -144,7 +144,7 @@ export const goOnline = async (req: Request, res: Response) => {
 
     return res.status(200).json({ status: "success", data: toOnlineStatusDto(true, new Date()) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error && error.message ? error.message : "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -157,7 +157,7 @@ export const goOffline = async (req: Request, res: Response) => {
 
     return res.status(200).json({ status: "success", data: toOnlineStatusDto(false, new Date()) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error && error.message ? error.message : "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -255,7 +255,7 @@ export const getDashboard = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -309,7 +309,7 @@ export const getEarnings = async (req: Request, res: Response) => {
 
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -353,7 +353,7 @@ export const getEarningsSummary = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -396,7 +396,7 @@ export const getLedger = async (req: Request, res: Response) => {
 
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -449,7 +449,7 @@ export const getReviewStatus = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -474,7 +474,7 @@ export const submitForReview = async (req: Request, res: Response) => {
       data: { reviewStatus: "under_review", message: "Submitted for review." },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -491,7 +491,7 @@ export const getWorkerAvailability = async (req: Request, res: Response) => {
       data: { schedule, timezone: profile.timezone, updatedAt: profile.updatedAt },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -508,7 +508,7 @@ export const saveWorkerAvailability = async (req: Request, res: Response) => {
     return res.status(200).json({ status: "success", data: { success: true, updatedAt: result.updatedAt } });
   } catch (error: any) {
     const code = error?.statusCode ?? 500;
-    return res.status(code).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(code).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -519,7 +519,7 @@ export const getWorkerTimeOff = async (req: Request, res: Response) => {
     const timeOff = await availEngine.listTimeOff(uid);
     return res.status(200).json({ status: "success", data: { timeOff: bridgeToWebTimeOff(timeOff) } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -546,7 +546,7 @@ export const createWorkerTimeOff = async (req: Request, res: Response) => {
     return res.status(201).json({ status: "success", data: dto });
   } catch (error: any) {
     const code = error?.statusCode ?? 500;
-    return res.status(code).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(code).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -563,8 +563,8 @@ export const deleteWorkerTimeOff = async (req: Request, res: Response) => {
     await availEngine.cancelTimeOff(uid, numericId, uid);
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (error: any) {
-    const code = error?.statusCode ?? (error?.message?.includes("not found") ? 404 : 500);
-    return res.status(code).json({ status: "failed", message: error?.message || "Server error" });
+    const code = error?.statusCode ?? 500;
+    return res.status(code).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -603,7 +603,7 @@ export const uploadWorkerRequirement = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -614,7 +614,7 @@ export const getWorkerRequirementsOwn = async (req: Request, res: Response) => {
     const requirements = await technicianService.getWorkerRequirements(uid);
     return res.status(200).json({ status: "success", data: requirements });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -628,7 +628,7 @@ export const deleteWorkerRequirementOwn = async (req: Request, res: Response) =>
     autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Requirement not found" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -642,7 +642,7 @@ export const getOnboardingState = async (req: Request, res: Response) => {
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
     const code = (error as any).statusCode;
-    return res.status(code ?? 500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(code ?? 500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -655,7 +655,7 @@ export const submitOnboarding = async (req: Request, res: Response) => {
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
     const code = (error as any).statusCode;
-    return res.status(code ?? 500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(code ?? 500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -669,7 +669,7 @@ export const saveOnboardingStep = async (req: Request, res: Response) => {
     return res.status(200).json({ status: "success", data: { success: true, ...data } });
   } catch (error: any) {
     const code = (error as any).statusCode;
-    return res.status(code ?? 500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(code ?? 500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -678,7 +678,7 @@ export const getProviderReconciliationReport = async (req: Request, res: Respons
     const data = await onboardingService.getReconciliationReport();
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -713,7 +713,7 @@ export const workerAdditionalDecision = async (req: Request, res: Response) => {
 
     return res.status(200).json({ status: "success", data: { success: true, decision } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -741,7 +741,7 @@ export const withdrawAdditionalWork = async (req: Request, res: Response) => {
     }
     return res.status(200).json({ status: "success", data: { success: true, status: result.rows[0].status } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -777,7 +777,7 @@ export const confirmProceedAdditionalWork = async (req: Request, res: Response) 
 
     return res.status(200).json({ status: "success", data: { success: true, status: result.rows[0].status } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -823,7 +823,7 @@ export const getProviderProfile = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -848,7 +848,7 @@ export const saveServicePreference = async (req: Request, res: Response) => {
 
     return res.status(200).json({ status: "success", data: { service_category: safeCategory } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -876,7 +876,7 @@ export const getProviderSecurity = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1156,7 +1156,7 @@ export const submitSafetyIncident = async (req: Request, res: Response) => {
       data: { caseKey: incidentId, providerSafeReference: ref, state: 'submitted' },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1172,7 +1172,7 @@ export const getSafetyIncidents = async (req: Request, res: Response) => {
       .toArray();
     return res.status(200).json({ status: "success", data: docs.map(toSafetyCaseSummary) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1194,7 +1194,7 @@ export const changeProviderPassword = async (req: Request, res: Response) => {
     await revokeTokenInFirebase(uid);
     return res.status(200).json({ status: "success", data: null, message: "Password updated. Please sign in again." });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1206,7 +1206,7 @@ export const revokeProviderSession = async (req: Request, res: Response) => {
     await revokeTokenInFirebase(uid);
     return res.status(200).json({ status: "success", data: null, message: "Session revoked." });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1217,7 +1217,7 @@ export const revokeAllProviderSessions = async (req: Request, res: Response) => 
     await revokeTokenInFirebase(uid);
     return res.status(200).json({ status: "success", data: null, message: "All other sessions revoked." });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1233,7 +1233,7 @@ export const getWorkerServiceArea = async (req: Request, res: Response) => {
       data: { cityIds: profile.cityIds, label: profile.label ?? '', updatedAt: profile.updatedAt },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1249,7 +1249,7 @@ export const saveWorkerServiceArea = async (req: Request, res: Response) => {
     return res.status(200).json({ status: "success", data: { success: true, updatedAt: result.updatedAt } });
   } catch (error: any) {
     const code = error?.statusCode ?? 500;
-    return res.status(code).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(code).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1313,7 +1313,7 @@ export const uploadWorkerProfilePhoto = async (req: Request, res: Response) => {
     return res.status(200).json({ status: "success", data: { safeUrl, uploadedAt } });
   } catch (error: any) {
     console.error("[uploadWorkerProfilePhoto] 500:", error?.message ?? error);
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1350,7 +1350,7 @@ export const deleteWorkerProfilePhoto = async (req: Request, res: Response) => {
     }
     return res.status(200).json({ status: "success", data: null });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1394,7 +1394,7 @@ export const getProviderPayoutSummary = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1443,7 +1443,7 @@ export const registerProviderPayout = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1477,7 +1477,7 @@ export const getProviderPrivacy = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1498,7 +1498,7 @@ export const requestProviderDataExport = async (req: Request, res: Response) => 
       message: "Export request submitted. You will be notified when your data is ready.",
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1520,7 +1520,7 @@ export const requestProviderDeactivation = async (req: Request, res: Response) =
       message: "Deactivation request submitted. Our team will review and contact you.",
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1555,7 +1555,7 @@ export const requestProviderDeletion = async (req: Request, res: Response) => {
       message: "Deletion request submitted. Your account will be permanently deleted within 30 days.",
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1570,7 +1570,7 @@ export const getSupportTicketDetail = async (req: Request, res: Response) => {
     if (!ticket) return res.status(404).json({ status: "failed", message: "Ticket not found" });
     return res.status(200).json({ status: "success", data: ticket });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1590,7 +1590,7 @@ export const addSupportTicketReply = async (req: Request, res: Response) => {
     }
     return res.status(200).json({ status: "success", data: result });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1603,7 +1603,7 @@ export const closeSupportTicket = async (req: Request, res: Response) => {
     if (!result) return res.status(404).json({ status: "failed", message: "Ticket not found or cannot be closed in its current state" });
     return res.status(200).json({ status: "success", data: result });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1616,7 +1616,7 @@ export const reopenSupportTicket = async (req: Request, res: Response) => {
     if (!result) return res.status(404).json({ status: "failed", message: "Ticket not found or not eligible for reopen" });
     return res.status(200).json({ status: "success", data: result });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1627,7 +1627,7 @@ export const getSupportUnreadCount = async (req: Request, res: Response) => {
     const count = await notificationService.countUnreadSupportReplies(uid);
     return res.status(200).json({ status: "success", data: { count } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1654,7 +1654,7 @@ export const recordSafetyCheckIn = async (req: Request, res: Response) => {
     await col.insertOne({ uid, bookingId: String(bookingId), stage: String(stage), checkedInAt });
     return res.status(201).json({ status: "success", data: { success: true, stage, checkedInAt } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1681,7 +1681,7 @@ export const getServiceApplications = async (req: Request, res: Response) => {
     const applications = await serviceApplicationService.getApplicationsByWorker(uid);
     return res.json({ success: true, applications: applications.map(toApplicationDto) });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message || "Failed to fetch applications" });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
@@ -1805,7 +1805,7 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
     );
     return res.status(200).json({ status: "success", data: { saved: true } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1835,7 +1835,7 @@ export const getWorkerJobCards = async (req: Request, res: Response) => {
     const jobs = await technicianService.getJobCardsByWorker(uid);
     return res.json(jobs.map(formatJobCard));
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message || "Failed to fetch job cards" });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
@@ -1854,7 +1854,7 @@ export const getWorkerJobCard = async (req: Request, res: Response) => {
     if (!job) return res.status(404).json({ success: false, message: "Job not found" });
     return res.json(formatJobCard(job));
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message || "Failed to fetch job" });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
@@ -1870,7 +1870,7 @@ export const acceptBooking = async (req: Request, res: Response) => {
     touchProviderActivity(uid).catch(() => {});
     return res.json({ success: true, message: "Job accepted", data: result });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message || "Failed to accept job" });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
@@ -1889,7 +1889,7 @@ export const declineBooking = async (req: Request, res: Response) => {
       data: result,
     });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message || "Failed to decline job" });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
@@ -1903,7 +1903,7 @@ export const startBooking = async (req: Request, res: Response) => {
     const result = await technicianService.startJob(bookingId, uid, workerCode);
     return res.json({ success: true, message: "Job started", data: result });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message || "Failed to start job" });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
@@ -1917,7 +1917,7 @@ export const completeBooking = async (req: Request, res: Response) => {
     touchProviderActivity(uid).catch(() => {});
     return res.json({ success: true, message: "Job completed successfully", data: result });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message || "Failed to complete job" });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
@@ -1940,7 +1940,7 @@ export const updateWorkerLocation = async (req: Request, res: Response) => {
     await technicianService.upsertWorkerLocation({ uid, latitude: Number(latitude), longitude: Number(longitude), is_online: Boolean(isOnline) });
     return res.json({ success: true, message: "Worker location updated successfully" });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message || "Failed to update location" });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
@@ -1953,7 +1953,7 @@ export const getWorkerServices = async (req: Request, res: Response) => {
     const services = await technicianService.getServicesByEmployee(uid);
     return res.json({ success: true, services });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message || "Failed to fetch services" });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
@@ -1967,7 +1967,7 @@ export const removeWorkerService = async (req: Request, res: Response) => {
     autoOnlineEngine.evaluateProvider(uid, 'system', null).catch(() => {});
     return res.json({ success: true, removed: result });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message || "Failed to remove service" });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 

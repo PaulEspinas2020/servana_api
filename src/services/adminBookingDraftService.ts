@@ -74,6 +74,7 @@ export interface AdminBookingDraft {
   currentStep: number;
   customerType: 'guest' | 'client' | null;
   customerUid: string | null;
+  customerName: string | null;
   guestPayload: DraftGuestPayload | null;
   serviceOptionId: number | null;
   addonOptionIds: number[];
@@ -101,6 +102,7 @@ export interface DraftPatchSections {
   step?: number;
   customerType?: 'guest' | 'client';
   customerUid?: string | null;
+  customerName?: string | null;
   guestPayload?: DraftGuestPayload | null;
   serviceOptionId?: number | null;
   addonOptionIds?: number[];
@@ -173,6 +175,12 @@ export const ensureAdminBookingDraftSchema = async (): Promise<void> => {
     CREATE INDEX IF NOT EXISTS idx_abd_expires
     ON ${s}.admin_booking_drafts (expires_at) WHERE status IN ('editing','ready_for_review')
   `, []);
+
+  // Additive migration — safe to run on every start
+  await dbQuery.query(`
+    ALTER TABLE ${s}.admin_booking_drafts
+    ADD COLUMN IF NOT EXISTS customer_name VARCHAR(256)
+  `, []);
 };
 
 // ── Row mapper ────────────────────────────────────────────────────────────────
@@ -186,6 +194,7 @@ function mapRow(r: any): AdminBookingDraft {
     currentStep:           r.current_step,
     customerType:          r.customer_type ?? null,
     customerUid:           r.customer_uid ?? null,
+    customerName:          r.customer_name ?? null,
     guestPayload:          r.guest_payload ?? null,
     serviceOptionId:       r.service_option_id != null ? Number(r.service_option_id) : null,
     addonOptionIds:        (r.addon_option_ids ?? []).map(Number),
@@ -306,6 +315,7 @@ export const patchDraft = async (
   if (data.step !== undefined)                maybe('current_step', data.step);
   if (data.customerType !== undefined)        maybe('customer_type', data.customerType);
   if (data.customerUid !== undefined)         maybe('customer_uid', data.customerUid);
+  if (data.customerName !== undefined)        maybe('customer_name', data.customerName);
   if (data.guestPayload !== undefined)        maybe('guest_payload', data.guestPayload ? JSON.stringify(data.guestPayload) : null);
   if (data.serviceOptionId !== undefined)     maybe('service_option_id', data.serviceOptionId);
   if (data.addonOptionIds !== undefined)      maybe('addon_option_ids', data.addonOptionIds);
@@ -421,7 +431,7 @@ export const listDrafts = async (
     dbQuery.query(
       `SELECT
          draft_id, status, current_step,
-         customer_type, customer_uid, guest_payload,
+         customer_type, customer_uid, customer_name, guest_payload,
          service_option_id, schedule_at, address_payload,
          selected_provider_uid, provider_snapshot,
          payment_method, payment_status_choice,
