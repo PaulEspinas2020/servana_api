@@ -436,7 +436,7 @@ export async function ensurePermissionSchema(): Promise<void> {
            'active',
            'system'
     FROM ${s}.user_credentials uc
-    WHERE uc.role = 1
+    WHERE uc.role = '1'
     ON CONFLICT (admin_uid) DO NOTHING
   `);
 
