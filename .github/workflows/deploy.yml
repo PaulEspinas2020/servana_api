@@ -46,6 +46,19 @@ jobs:
             echo "Migration 002-massage-specific-services: already applied, skipping"
           fi
 
+          DONE_FILE="$DONE_DIR/003-nail-services.done"
+          if [ ! -f "$DONE_FILE" ]; then
+            echo "Running migration 003-nail-services..."
+            if PGPASSWORD='servana@2026' psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/003-nail-services.sql; then
+              touch "$DONE_FILE"
+              echo "Migration 003-nail-services: DONE"
+            else
+              echo "Migration 003-nail-services: FAILED (check for existing nail bookings or schema issues)"
+            fi
+          else
+            echo "Migration 003-nail-services: already applied, skipping"
+          fi
+
       - name: Use Node.js 24
         uses: actions/setup-node@v4
         with:
