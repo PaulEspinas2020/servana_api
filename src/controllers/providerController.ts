@@ -349,7 +349,7 @@ export const getEarningById = async (req: Request, res: Response) => {
       providerShareAmount: Math.round(gross * 0.8 * 100) / 100,
       providerSharePercent: 80,
       clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
-      bookingStatus:       "completed",
+      bookingStatus:       r.status ? r.status.toLowerCase() : "completed",
       providerPayoutStatus: r.payout_status ? r.payout_status.toLowerCase() : "pending",
       disbursedAt:         r.released_at || null,
       paymentMethod:       (r.payment_method || "cash").toLowerCase(),
@@ -1440,9 +1440,10 @@ const PAYMONGO_BANK_CODE: Record<string, string> = {
   ps_bank:       'PS_BANK',
 };
 
-const PH_MOBILE_RE = /^(09\d{9}|(\+63)9\d{9})$/;
-const BANK_ACCT_RE = /^\d{8,16}$/;
-const ACCT_NAME_RE = /^[A-Za-zÀ-ÖØ-öø-ÿ .'\-]{2,100}$/;
+const EWALLET_TYPES  = new Set<string>(['gcash', 'maya']);
+const PH_MOBILE_RE   = /^(09\d{9}|(\+63)9\d{9})$/;
+const BANK_ACCT_RE   = /^\d{8,16}$/;
+const ACCT_NAME_RE   = /^[A-Za-zÀ-ÖØ-öø-ÿ .'\-]{2,100}$/;
 const PAYOUT_STATUS_LABELS: Record<string, string> = {
   verified: 'Verified', unverified: 'Unverified', pending: 'Pending review',
   failed: 'Verification failed', missing: 'Not set up',
@@ -1507,7 +1508,7 @@ export const registerProviderPayout = async (req: Request, res: Response) => {
       return res.status(400).json({ status: "failed", message: "Account name must be 2–100 characters (letters and spaces only)." });
     }
 
-    const isEwallet = type === 'gcash' || type === 'maya';
+    const isEwallet = EWALLET_TYPES.has(type);
     if (isEwallet) {
       if (!PH_MOBILE_RE.test(trimmedNumber)) {
         return res.status(400).json({ status: "failed", message: "Enter a valid Philippine mobile number (e.g. 09171234567)." });
@@ -1533,13 +1534,19 @@ export const registerProviderPayout = async (req: Request, res: Response) => {
       accountName:   trimmedName,
     });
 
-    // Store display record in MongoDB (masked, for provider UI)
-    const col = (await mongoDb).collection("worker_payout_methods");
-    await col.updateOne(
-      { uid },
-      { $set: { uid, type, accountName: trimmedName, maskedIdentifier, status: 'pending', updatedAt: new Date() } },
-      { upsert: true }
-    );
+    // Store display record in MongoDB (masked, for provider UI).
+    // If MongoDB write fails, best-effort rollback of the PG record to avoid split state.
+    try {
+      const col = (await mongoDb).collection("worker_payout_methods");
+      await col.updateOne(
+        { uid },
+        { $set: { uid, type, accountName: trimmedName, maskedIdentifier, status: 'pending', updatedAt: new Date() } },
+        { upsert: true }
+      );
+    } catch (mongoErr: any) {
+      await technicianService.deleteWorkerBankAccount(uid).catch(() => {});
+      throw mongoErr;
+    }
 
     return res.status(200).json({
       status: "success",
