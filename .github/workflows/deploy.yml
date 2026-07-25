@@ -12,18 +12,18 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          clean: true
 
       - name: Copy secrets
         run: |
           cp /home/github-runner/env/servana_api.env .env
           chmod 600 .env
+          cp /home/github-runner/env/servana-serviceAccountKey.json servana-serviceAccountKey.json
+          chmod 600 servana-serviceAccountKey.json
 
-      - name: Use Node.js 20
+      - name: Use Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: "npm"
 
       - name: Install dependencies
@@ -34,10 +34,9 @@ jobs:
 
       - name: Restart PM2
         run: |
-          PM2_BIN=$(which pm2 2>/dev/null || echo /usr/local/bin/pm2)
-          sudo "$PM2_BIN" delete servana-prod 2>/dev/null; true
-          sudo "$PM2_BIN" start "$(pwd)/dist/app.js" --name servana-prod
-          sudo "$PM2_BIN" save
+          sudo /usr/bin/pm2 delete servana-prod 2>/dev/null || true
+          sudo /usr/bin/pm2 start "$(pwd)/dist/app.js" --name servana-prod
+          sudo /usr/bin/pm2 save
 
       - name: Reload NGINX
         run: sudo systemctl reload nginx
