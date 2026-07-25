@@ -44,15 +44,15 @@ const ensureGuestCustomersTable = async (): Promise<void> => {
   await dbQuery.query(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_gc_phone_unique ON ${s}.guest_customers (phone_normalized)`,
     []
-  ).catch(() => {});
+  ).catch((err: any) => console.warn('[guestBootstrap] idx_gc_phone_unique:', err.message));
   await dbQuery.query(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_gc_uuid ON ${s}.guest_customers (guest_customer_id)`,
     []
-  ).catch(() => {});
+  ).catch((err: any) => console.warn('[guestBootstrap] idx_gc_uuid:', err.message));
   await dbQuery.query(
     `ALTER TABLE ${s}.guest_customers ADD COLUMN IF NOT EXISTS source_channel VARCHAR(50)`,
     []
-  ).catch(() => {});
+  ).catch((err: any) => console.warn('[guestBootstrap] source_channel:', err.message));
   _guestTableReady = true;
 };
 

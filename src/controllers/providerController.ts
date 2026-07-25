@@ -277,10 +277,12 @@ export const getEarnings = async (req: Request, res: Response) => {
     const result = await dbQuery.query(
       `SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
               so.level_2 AS service_name,
-              p.status AS payment_status
+              p.status  AS payment_status,
+              d.status  AS payout_status
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
        LEFT JOIN ${dbSchema}.payments p ON p.booking_id = b.id
+       LEFT JOIN ${dbSchema}.disbursements d ON d.booking_id = b.id AND d.worker_uid = $1
        WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
        ${dateFilter}
        ORDER BY b.schedule DESC`,
@@ -300,8 +302,8 @@ export const getEarnings = async (req: Request, res: Response) => {
         providerShareAmount: Math.round(gross * 0.8 * 100) / 100,
         providerSharePercent: 80,
         clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
-        bookingStatus: "completed",
-        providerPayoutStatus: "disbursed",
+        bookingStatus: r.status ? r.status.toLowerCase() : "completed",
+        providerPayoutStatus: r.payout_status ? r.payout_status.toLowerCase() : "pending",
         paymentMethod: (r.payment_method || "cash").toLowerCase(),
         currency: "PHP",
       };

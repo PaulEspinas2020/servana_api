@@ -90,7 +90,7 @@ const releaseDisbursement = async (disbursement: any) => {
             account_number: bank.account_number,
             account_name:   bank.account_name,
             narration:      `Servana payout booking #${disbursement.booking_id}`,
-            reference_id:   `DISB-${disbursement.booking_id}`,
+            reference_id:   `DISB-${disbursement.booking_id}-${disbursement.id}-${Date.now()}`,
           },
         },
       },
@@ -178,7 +178,7 @@ export const retryFailedDisbursements = async () => {
      AND bw.worker_uid = d.worker_uid
     WHERE d.status = 'FAILED'
       AND d.updated_at < NOW() - INTERVAL '6 hours'
-      AND d.updated_at >= NOW() - INTERVAL '7 days'
+      AND d.created_at >= NOW() - INTERVAL '30 days'
     `,
     []
   );
@@ -188,12 +188,16 @@ export const retryFailedDisbursements = async () => {
   console.log(`[disbursement] Retrying ${res.rowCount} failed disbursement(s)…`);
 
   for (const row of res.rows) {
-    // Reset to PENDING so releaseDisbursement can proceed
-    await dbQuery.query(
-      `UPDATE ${dbSchema}.disbursements SET status = 'PENDING', payout_error = NULL, updated_at = NOW() WHERE id = $1`,
-      [row.id]
-    );
-    await releaseDisbursement({ ...row, status: "PENDING" });
+    try {
+      // Reset to PENDING so releaseDisbursement can proceed
+      await dbQuery.query(
+        `UPDATE ${dbSchema}.disbursements SET status = 'PENDING', payout_error = NULL, updated_at = NOW() WHERE id = $1`,
+        [row.id]
+      );
+      await releaseDisbursement({ ...row, status: "PENDING" });
+    } catch (err: any) {
+      console.error(`[disbursement] retry row ${row.id} aborted:`, err.message);
+    }
   }
 };
 
