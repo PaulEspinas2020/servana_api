@@ -11,7 +11,7 @@ const router = Router();
 // Admin-only: returns ALL bookings with no user filter; role guard prevents
 // provider/customer tokens from enumerating all customer data.
 router.get("/bookings/all", verifyAuth, verifyRoles([1]), bookingController.listAllBookings);
-router.get("/dashboard/summary", verifyAuth, bookingController.getAnalytics);
+router.get("/dashboard/summary", verifyAuth, verifyRoles([1]), bookingController.getAnalytics);
 // verifyAuthOptional: unauthenticated mobile calls pass through; authenticated browser sessions
 // must own the userId in the path (enforced in the controller).
 router.get("/users/:userId/bookings", verifyAuthOptional, bookingController.listUserBookings);
