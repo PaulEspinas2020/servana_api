@@ -607,7 +607,7 @@ export const convertDraft = async (
       lat:             addr.lat,
       lon:             addr.lon,
       instructions:    addr.instructions ?? null,
-      locationId:      addr.servanaLocationId ? Number(addr.servanaLocationId) : null,
+      locationId:      addr.servanaLocationId ? (Number.isFinite(Number(addr.servanaLocationId)) ? Number(addr.servanaLocationId) : null) : null,
       providerUid:     draft.selectedProviderUid!,
       paymentMethod:   draft.paymentMethod as any,
       paymentStatus:   (draft.paymentStatusChoice ?? 'PAY_LATER') as any,
