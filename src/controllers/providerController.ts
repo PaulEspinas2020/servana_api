@@ -345,7 +345,8 @@ export const getEarningById = async (req: Request, res: Response) => {
               so.level_2 AS service_name,
               p.status   AS payment_status,
               d.status   AS payout_status,
-              d.released_at
+              d.released_at,
+              d.worker_share
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
        LEFT JOIN ${dbSchema}.payments        p  ON p.booking_id = b.id
@@ -358,6 +359,9 @@ export const getEarningById = async (req: Request, res: Response) => {
     }
     const r = result.rows[0];
     const gross = Number(r.final_price || 0);
+    const workerShareDetail = r.worker_share != null
+      ? Math.round(Number(r.worker_share) * 100) / 100
+      : Math.round(gross * 0.8 * 100) / 100;
     const data = {
       id:                  String(r.id),
       bookingId:           String(r.id),
@@ -366,7 +370,7 @@ export const getEarningById = async (req: Request, res: Response) => {
       completedAt:         r.schedule,
       scheduledAt:         r.schedule,
       bookingAmount:       gross,
-      providerShareAmount: Math.round(gross * 0.8 * 100) / 100,
+      providerShareAmount: workerShareDetail,
       providerSharePercent: 80,
       clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
       bookingStatus:       r.status ? r.status.toLowerCase() : "completed",
@@ -390,6 +394,9 @@ export const getEarningsSummary = async (req: Request, res: Response) => {
     const params: any[] = [uid];
 
     if (startDate && endDate) {
+      if (isNaN(Date.parse(startDate as string)) || isNaN(Date.parse(endDate as string))) {
+        return res.status(400).json({ status: "failed", message: "Invalid date range" });
+      }
       params.push(startDate, endDate);
       dateFilter = `AND b.schedule >= $2 AND b.schedule <= $3`;
     }
@@ -472,11 +479,36 @@ export const getLedger = async (req: Request, res: Response) => {
   }
 };
 
+const _mapPayoutStatus = (raw: string): string => {
+  const s = (raw || "").toUpperCase();
+  if (s === "RELEASED")   return "paid";
+  if (s === "FAILED")     return "failed";
+  if (s === "PROCESSING") return "pending";
+  return "pending";
+};
+
 export const getPayouts = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     const rows = await disbursementService.listDisbursements({ workerUid: uid });
-    return res.status(200).json({ status: "success", data: rows });
+    // Map to ProviderPayoutDto shape; exclude internal fields (servana_share, payout_error)
+    const data = rows.map((r: any) => ({
+      id:                String(r.id),
+      amountMinor:       Math.round(Number(r.worker_share || 0) * 100),
+      currency:          "PHP",
+      status:            _mapPayoutStatus(r.status),
+      payoutMethodSummary: null,
+      initiatedAt:       r.created_at    ? new Date(r.created_at).toISOString()    : null,
+      expectedArrivalAt: r.release_after ? new Date(r.release_after).toISOString() : null,
+      completedAt:       r.released_at   ? new Date(r.released_at).toISOString()   : null,
+      failedAt:          null,
+      failureMessage:    null,
+      transactionCount:  1,
+      reference:         r.paymongo_payout_id ?? null,
+      events:            [],
+      includedTransactionSummaries: [],
+    }));
+    return res.status(200).json({ status: "success", data });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
   }

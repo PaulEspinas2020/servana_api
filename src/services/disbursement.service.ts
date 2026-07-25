@@ -66,16 +66,23 @@ export const createDisbursement = async (bookingId: number) => {
 // ---------------------------------------------------------------------------
 
 const releaseDisbursement = async (disbursement: any) => {
+  // Atomically claim the row — prevents double-payout if scheduler + manual retry run concurrently
+  const claim = await dbQuery.query(
+    `UPDATE ${dbSchema}.disbursements SET status = 'PROCESSING', updated_at = NOW()
+     WHERE id = $1 AND status = 'PENDING' RETURNING id`,
+    [disbursement.id]
+  );
+  if (!claim.rowCount) {
+    console.warn(`[disbursement] Row ${disbursement.id} already claimed (not PENDING) — skipping`);
+    return;
+  }
+
   const bank = await getWorkerBankAccount(disbursement.worker_uid);
 
   if (!bank) {
     const msg = `Worker ${disbursement.worker_uid} has no registered bank account`;
     await dbQuery.query(
-      `
-      UPDATE ${dbSchema}.disbursements
-      SET status = 'FAILED', payout_error = $2, updated_at = NOW()
-      WHERE id = $1
-      `,
+      `UPDATE ${dbSchema}.disbursements SET status = 'FAILED', payout_error = $2, updated_at = NOW() WHERE id = $1`,
       [disbursement.id, msg]
     );
     console.warn(`[disbursement] ${msg}`);
@@ -165,7 +172,11 @@ export const processPendingDisbursements = async () => {
   console.log(`[disbursement] Processing ${res.rowCount} disbursement(s)…`);
 
   for (const row of res.rows) {
-    await releaseDisbursement(row);
+    try {
+      await releaseDisbursement(row);
+    } catch (err: any) {
+      console.error(`[disbursement] processPending row ${row.id} threw:`, err.message);
+    }
   }
 };
 
@@ -183,7 +194,7 @@ export const retryFailedDisbursements = async () => {
      AND bw.worker_uid = d.worker_uid
     WHERE d.status = 'FAILED'
       AND d.updated_at < NOW() - INTERVAL '6 hours'
-      AND d.created_at >= NOW() - INTERVAL '30 days'
+      AND d.created_at >= NOW() - INTERVAL '7 days'
     `,
     []
   );
@@ -222,10 +233,13 @@ export const manualRetry = async (disbursementId: number) => {
 
   if (row.status === "RELEASED") throw new Error("Disbursement is already released");
 
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.disbursements SET status = 'PENDING', payout_error = NULL, updated_at = NOW() WHERE id = $1`,
+  // Guard against concurrent in-flight retries — only reset if not already PENDING/PROCESSING/RELEASED
+  const reset = await dbQuery.query(
+    `UPDATE ${dbSchema}.disbursements SET status = 'PENDING', payout_error = NULL, updated_at = NOW()
+     WHERE id = $1 AND status NOT IN ('PENDING','PROCESSING','RELEASED') RETURNING *`,
     [disbursementId]
   );
+  if (!reset.rowCount) throw new Error("Disbursement already in-flight or released");
 
   await releaseDisbursement({ ...row, status: "PENDING" });
 

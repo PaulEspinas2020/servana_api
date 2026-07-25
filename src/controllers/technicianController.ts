@@ -433,7 +433,7 @@ export const getBankAccount = async (req: Request, res: Response) => {
 
     return res.json({ status: "success", data: toCamel(account) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error.message });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -443,7 +443,7 @@ export const deleteBankAccount = async (req: Request, res: Response) => {
     const account = await technician.deleteWorkerBankAccount(uid);
     return res.json({ status: "success", data: toCamel(account) });
   } catch (error: any) {
-    return res.status(400).json({ status: "failed", message: error.message });
+    return res.status(400).json({ status: "failed", message: "Failed to delete bank account" });
   }
 };
 
