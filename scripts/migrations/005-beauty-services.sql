@@ -16,6 +16,18 @@
 
 BEGIN;
 
+-- Pre-flight: ensure aesthetics-beauty offering exists (created by seedBuiltInOfferings at app boot)
+-- On a fresh DB, migrations run before seed — the subquery would silently insert 0 rows without this guard
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM servana.provider_catalog_offerings WHERE catalog_key = 'aesthetics-beauty'
+  ) THEN
+    RAISE EXCEPTION 'aesthetics-beauty offering not found — run app once to seed catalog before this migration';
+  END IF;
+END;
+$$;
+
 -- Guard: abort if any existing beauty options have active bookings
 DO $$
 BEGIN
@@ -56,6 +68,16 @@ WHERE service_option_id IN (
 -- Delete MAIN rows
 DELETE FROM servana.service_options
 WHERE service_id = 2 AND level_2 IN ('Facial', 'Beauty Drip', 'Beauty Drip Add Ons') AND option_type = 'MAIN';
+
+-- ─── Update aesthetics-beauty catalog description to include Beauty Drip ──────
+-- seedBuiltInOfferings never updates existing rows, so this UPDATE is the only way
+-- to keep the description accurate on production
+UPDATE servana.provider_catalog_offerings
+SET short_description   = 'Facial, skin treatments, and Beauty Drip IV therapy.',
+    provider_description = 'Facial care, waxing, and Beauty Drip IV therapy delivered at home.',
+    updated_at           = NOW(),
+    version              = version + 1
+WHERE catalog_key = 'aesthetics-beauty';
 
 -- ─── Add new catalog offering mappings for Beauty Drip sub-categories ────────
 -- Resolves offering_id from catalog_key 'aesthetics-beauty' at runtime

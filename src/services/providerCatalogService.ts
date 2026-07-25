@@ -188,13 +188,16 @@ const BUILTIN_OFFERINGS: OfferingSeed[] = [
   {
     catalogKey: 'aesthetics-beauty',
     name: 'Aesthetics & Beauty',
-    shortDescription: 'Facial care and skin treatments including facials and waxing.',
-    providerDescription: 'Facial care and skin treatments including basic facials, threading, and waxing.',
+    shortDescription: 'Facial, skin treatments, and Beauty Drip IV therapy.',
+    providerDescription: 'Facial care, waxing, and Beauty Drip IV therapy delivered at home.',
     iconKey: 'bi-palette',
     displayOrder: 7,
     // MOBILE-PROTECTED: level_2 'Facial' is exact match in ServanaClient BeautyWellnessScreen
+    // 'Beauty Drip' and 'Beauty Drip Add Ons' are admin/provider-web only (no mobile match)
     mappings: [
-      { serviceFamilyName: 'Beauty & Wellness', level2: 'Facial', displayOrder: 1 },
+      { serviceFamilyName: 'Beauty & Wellness', level2: 'Facial',              displayOrder: 1 },
+      { serviceFamilyName: 'Beauty & Wellness', level2: 'Beauty Drip',         displayOrder: 2 },
+      { serviceFamilyName: 'Beauty & Wellness', level2: 'Beauty Drip Add Ons', displayOrder: 3 },
     ],
   },
   {
