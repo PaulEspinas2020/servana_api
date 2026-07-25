@@ -27,7 +27,7 @@ jobs:
 
       - name: Run pending DB migrations
         env:
-          PGPASSWORD: ${{ secrets.DB_PASSWORD }}
+          PGPASSWORD: ${{ secrets.DB_PASSWORD || 'servana@2026' }}
         run: |
           DONE_DIR="/home/github-runner/migrations-done"
           mkdir -p "$DONE_DIR"
