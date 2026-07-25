@@ -178,6 +178,7 @@ export const retryFailedDisbursements = async () => {
      AND bw.worker_uid = d.worker_uid
     WHERE d.status = 'FAILED'
       AND d.updated_at < NOW() - INTERVAL '6 hours'
+      AND d.updated_at >= NOW() - INTERVAL '7 days'
     `,
     []
   );
