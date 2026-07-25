@@ -402,6 +402,17 @@ export async function getConversations(req: Request, res: Response) {
   }
 }
 
+// ── CSV helper ────────────────────────────────────────────────────────────────
+
+function csvField(val: unknown): string {
+  const s = val == null ? '' : String(val).replace(/\r?\n/g, ' ');
+  // Quote fields containing commas, double-quotes, or formula-injection chars
+  if (/[,"]/.test(s) || /^[=+\-@\t]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
 // ── POST /admin/communications/export ────────────────────────────────────────
 
 export async function exportEvents(req: Request, res: Response) {
@@ -434,9 +445,10 @@ export async function exportEvents(req: Request, res: Response) {
     const header = 'event_key,channel,direction,status,severity,category,recipient_email,entity_type,entity_id,template_name,subject,created_at';
     const rows = result.items.map((e: any) =>
       [
-        e.eventKey, e.channel, e.direction, e.status, e.severity,
-        e.category || '', e.recipientEmail || '', e.entityType || '', e.entityId || '',
-        e.templateName || '', (e.subject || '').replace(/,/g, ';'), e.createdAt,
+        csvField(e.eventKey), csvField(e.channel), csvField(e.direction),
+        csvField(e.status), csvField(e.severity), csvField(e.category),
+        csvField(e.recipientEmail), csvField(e.entityType), csvField(e.entityId),
+        csvField(e.templateName), csvField(e.subject), csvField(e.createdAt),
       ].join(','),
     );
     const csv = [header, ...rows].join('\n');

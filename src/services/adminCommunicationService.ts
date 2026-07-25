@@ -146,6 +146,20 @@ async function initSchema(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_ant_channel
       ON ${dbSchema}.admin_notification_templates (channel, is_active);
+
+    CREATE TABLE IF NOT EXISTS ${dbSchema}.chat_message_reports (
+      id              SERIAL      PRIMARY KEY,
+      reporter_uid    TEXT        NOT NULL,
+      message_id      INT         NOT NULL,
+      conversation_id INT         NOT NULL,
+      category        TEXT        NOT NULL,
+      description     TEXT,
+      status          TEXT        NOT NULL DEFAULT 'pending',
+      resolved_by     TEXT,
+      resolved_at     TIMESTAMPTZ,
+      resolution_note TEXT,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
   `);
 }
 
@@ -646,7 +660,8 @@ export async function getAdminConversationMessages(conversationId: number, limit
       params
     );
     const capped = Math.min(limit, 100);
-    const messages = rows.map((r: any) => ({
+    // Fetched DESC for keyset pagination; reverse to display oldest-first in chat transcript
+    const messages = rows.reverse().map((r: any) => ({
       id:           r.id,
       conversationId,
       senderUid:    r.sender_uid,
@@ -662,7 +677,7 @@ export async function getAdminConversationMessages(conversationId: number, limit
       attachments:  Array.isArray(r.attachments) ? r.attachments : [],
     }));
     const hasMore = rows.length === capped;
-    const oldestId = rows.length ? rows[rows.length - 1].id : null;
+    const oldestId = messages.length ? messages[0].id : null;
     return { messages, hasMore, oldestId };
   } catch {
     return { messages: [], nextCursor: null };
@@ -686,21 +701,7 @@ export async function sendAdminMessage(
 
 export async function listMessageReports(limit = 50) {
   try {
-    await dbQuery.query(
-      `CREATE TABLE IF NOT EXISTS ${dbSchema}.chat_message_reports (
-         id             SERIAL PRIMARY KEY,
-         reporter_uid   TEXT NOT NULL,
-         message_id     INT  NOT NULL,
-         conversation_id INT NOT NULL,
-         category       TEXT NOT NULL,
-         description    TEXT,
-         status         TEXT NOT NULL DEFAULT 'pending',
-         resolved_by    TEXT,
-         resolved_at    TIMESTAMPTZ,
-         resolution_note TEXT,
-         created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
-       )`, []
-    );
+    await ensureCommunicationSchema();
     const { rows } = await dbQuery.query(
       `SELECT r.*, m.body AS message_body, m.sender_uid, m.conversation_id,
               uc_rep.first_name || ' ' || uc_rep.last_name AS reporter_name
@@ -734,17 +735,7 @@ export async function resolveMessageReport(
   action: 'dismiss' | 'redact' | 'warn',
   note?: string
 ) {
-  // Ensure the status column exists (lazy migration)
-  try {
-    await dbQuery.query(
-      `ALTER TABLE ${dbSchema}.chat_message_reports
-       ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending',
-       ADD COLUMN IF NOT EXISTS resolved_by TEXT,
-       ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ,
-       ADD COLUMN IF NOT EXISTS resolution_note TEXT`, []
-    );
-  } catch { /* column may already exist */ }
-
+  await ensureCommunicationSchema();
   const { rows } = await dbQuery.query(
     `UPDATE ${dbSchema}.chat_message_reports
      SET status = $1, resolved_by = $2, resolved_at = NOW(), resolution_note = $3
