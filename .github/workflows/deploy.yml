@@ -29,17 +29,21 @@ jobs:
         run: |
           DONE_DIR="/home/github-runner/migrations-done"
           mkdir -p "$DONE_DIR"
-          DONE_FILE="$DONE_DIR/001-massage-services.done"
+
+          # 001 was superseded by 002 — mark done so it never runs again
+          touch "$DONE_DIR/001-massage-services.done"
+
+          DONE_FILE="$DONE_DIR/002-massage-specific-services.done"
           if [ ! -f "$DONE_FILE" ]; then
-            echo "Running migration 001-massage-services..."
-            if PGPASSWORD='servana@2026' psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/001-massage-services.sql; then
+            echo "Running migration 002-massage-specific-services..."
+            if PGPASSWORD='servana@2026' psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/002-massage-specific-services.sql; then
               touch "$DONE_FILE"
-              echo "Migration 001-massage-services: DONE"
+              echo "Migration 002-massage-specific-services: DONE"
             else
-              echo "Migration 001-massage-services: FAILED (check for existing bookings or schema issues)"
+              echo "Migration 002-massage-specific-services: FAILED (check for existing bookings or schema issues)"
             fi
           else
-            echo "Migration 001-massage-services: already applied, skipping"
+            echo "Migration 002-massage-specific-services: already applied, skipping"
           fi
 
       - name: Use Node.js 24
