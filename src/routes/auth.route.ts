@@ -43,7 +43,7 @@ router.post("/auth/signup", authController.signup);
 router.post("/auth/verify-email-otp", authController.verifyEmailOtpController);
 router.post("/auth/resend-email-otp", otpLimiter, authController.resendEmailOtpController);
 router.post("/auth/signin", signInLimiter, authController.signin);
-router.get("/auth/resendverification", authController.resendVerification);
+router.get("/auth/resendverification", otpLimiter, authController.resendVerification);
 router.post("/auth/firebase-login", authController.firebaseAuthLoginController);
 router.post("/auth/provider/register", authController.providerRegisterController);
 router.post("/auth/add-employees", verifyAuth, verifyRoles([1]), authController.addEmployeesController);

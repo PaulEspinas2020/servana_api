@@ -94,16 +94,17 @@ const resendVerification = async (req: Request, res: Response) => {
         return res.status(400).json({ status: 'error', message: 'Email is required' });
     }
 
+    // Swallow all errors — the response is always neutral to prevent account-existence enumeration.
     try {
         await authService.getAndSendEmailVerificationLink(email);
-        // Always return the same response — never confirm whether account exists.
-        return res.status(200).json({
-            status: 'success',
-            message: 'If this account exists, a verification link has been sent.',
-        });
     } catch (error: any) {
-        return res.status(500).json({ status: 'error', message: 'Unable to send verification link. Please try again.' });
+        console.error('resendVerification: failed', { email: email?.slice(0, 3) + '***', err: error?.message || error });
     }
+
+    return res.status(200).json({
+        status: 'success',
+        message: 'If this account exists, a verification link has been sent.',
+    });
 };
 
 export const firebaseAuthLoginController = async (req: Request, res: Response) => {

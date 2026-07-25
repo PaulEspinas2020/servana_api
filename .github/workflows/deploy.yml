@@ -26,6 +26,8 @@ jobs:
           chmod 600 servana-serviceAccountKey.json
 
       - name: Run pending DB migrations
+        env:
+          PGPASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
           DONE_DIR="/home/github-runner/migrations-done"
           mkdir -p "$DONE_DIR"
@@ -36,11 +38,12 @@ jobs:
           DONE_FILE="$DONE_DIR/002-massage-specific-services.done"
           if [ ! -f "$DONE_FILE" ]; then
             echo "Running migration 002-massage-specific-services..."
-            if PGPASSWORD='servana@2026' psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/002-massage-specific-services.sql; then
+            if psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/002-massage-specific-services.sql; then
               touch "$DONE_FILE"
               echo "Migration 002-massage-specific-services: DONE"
             else
-              echo "Migration 002-massage-specific-services: FAILED (check for existing bookings or schema issues)"
+              echo "Migration 002-massage-specific-services: FAILED"
+              exit 1
             fi
           else
             echo "Migration 002-massage-specific-services: already applied, skipping"
@@ -49,11 +52,12 @@ jobs:
           DONE_FILE="$DONE_DIR/003-nail-services.done"
           if [ ! -f "$DONE_FILE" ]; then
             echo "Running migration 003-nail-services..."
-            if PGPASSWORD='servana@2026' psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/003-nail-services.sql; then
+            if psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/003-nail-services.sql; then
               touch "$DONE_FILE"
               echo "Migration 003-nail-services: DONE"
             else
-              echo "Migration 003-nail-services: FAILED (check for existing nail bookings or schema issues)"
+              echo "Migration 003-nail-services: FAILED"
+              exit 1
             fi
           else
             echo "Migration 003-nail-services: already applied, skipping"
