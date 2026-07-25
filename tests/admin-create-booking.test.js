@@ -373,6 +373,41 @@ describe('job-card — instructions surface to provider (STITCH-003)', () => {
   });
 });
 
+describe('adminBookingDraftService — DRAFT BOOKINGS audit fixes (2026-07-25)', () => {
+  const draftSrc = require('fs').readFileSync(
+    require('path').join(__dirname, '../src/services/adminBookingDraftService.ts'), 'utf-8'
+  );
+
+  it('getDraft enforces expiry — transitions expired mutable drafts to status=expired', () => {
+    // Must check expires_at against current time for editing/ready_for_review drafts
+    const getDraftFn = draftSrc.match(/export const getDraft[\s\S]{0,1200}/)?.[0] ?? '';
+    expect(getDraftFn).toContain('expiresAt');
+    expect(getDraftFn).toContain('DRAFT_EXPIRED');
+    expect(getDraftFn).toContain("status = 'expired'");
+  });
+
+  it('getDraft throws 410 DRAFT_EXPIRED for expired mutable drafts', () => {
+    const getDraftFn = draftSrc.match(/export const getDraft[\s\S]{0,1200}/)?.[0] ?? '';
+    expect(getDraftFn).toContain('statusCode: 410');
+    expect(getDraftFn).toContain("code: 'DRAFT_EXPIRED'");
+  });
+
+  it('patchDraft RETURNING clause includes status for accurate audit logging', () => {
+    // Full-file search — patchDraft spans ~90 lines; slice by index is more reliable
+    const patchIdx = draftSrc.indexOf('export const patchDraft');
+    const patchFn  = patchIdx >= 0 ? draftSrc.slice(patchIdx, patchIdx + 6000) : '';
+    expect(patchFn).toContain('RETURNING version, updated_at, status');
+  });
+
+  it('patchDraft audit call uses actual returned status, not hardcoded editing', () => {
+    const patchIdx = draftSrc.indexOf('export const patchDraft');
+    const patchFn  = patchIdx >= 0 ? draftSrc.slice(patchIdx, patchIdx + 6000) : '';
+    // row.status from RETURNING clause — not hardcoded 'editing'
+    expect(patchFn).toContain('ADMIN.BOOKING_DRAFT.UPDATED');
+    expect(patchFn).not.toContain("null, 'editing', 'ADMIN.BOOKING_DRAFT.UPDATED'");
+  });
+});
+
 describe('adminCreateBooking — fallback path: controller forwards instructions (STITCH-005)', () => {
   it('createAdminBooking destructures instructions from req.body', () => {
     const fnIdx = ctrlSrc.indexOf('createAdminBooking');

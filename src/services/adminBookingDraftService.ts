@@ -260,6 +260,17 @@ export const getDraft = async (
 
   const draft = mapRow(res.rows[0]);
 
+  // Enforce expiry — transition mutable drafts to 'expired' if past their expires_at
+  if ((draft.status === 'editing' || draft.status === 'ready_for_review') &&
+      new Date(draft.expiresAt) < new Date()) {
+    dbQuery.query(
+      `UPDATE ${s}.admin_booking_drafts SET status = 'expired', updated_at = NOW()
+       WHERE draft_id = $1 AND status IN ('editing','ready_for_review')`,
+      [draftId]
+    ).catch(() => {});
+    throw Object.assign(new Error('Draft has expired'), { statusCode: 410, code: 'DRAFT_EXPIRED' });
+  }
+
   // Touch last_opened_at (non-blocking)
   dbQuery.query(
     `UPDATE ${s}.admin_booking_drafts SET last_opened_at = NOW()
@@ -333,7 +344,7 @@ export const patchDraft = async (
       AND created_by_admin_uid = $1
       AND status IN ('editing','ready_for_review')
       ${whereExtra}
-    RETURNING version, updated_at
+    RETURNING version, updated_at, status
   `;
 
   const res = await dbQuery.query(sql, values);
@@ -361,7 +372,7 @@ export const patchDraft = async (
   }
 
   const row = res.rows[0];
-  _auditDraft(draftId, adminUid, null, 'editing', 'ADMIN.BOOKING_DRAFT.UPDATED').catch(() => {});
+  _auditDraft(draftId, adminUid, null, row.status, 'ADMIN.BOOKING_DRAFT.UPDATED').catch(() => {});
 
   return { version: row.version, updatedAt: new Date(row.updated_at).toISOString() };
 };
