@@ -313,6 +313,54 @@ export const getEarnings = async (req: Request, res: Response) => {
   }
 };
 
+export const getEarningById = async (req: Request, res: Response) => {
+  try {
+    const uid  = req.user?.uid;
+    const id   = Number(req.params.id);
+    if (!uid || !Number.isFinite(id)) {
+      return res.status(400).json({ status: "failed", message: "Invalid request" });
+    }
+    const result = await dbQuery.query(
+      `SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
+              so.level_2 AS service_name,
+              p.status   AS payment_status,
+              d.status   AS payout_status,
+              d.released_at
+       FROM ${dbSchema}.bookings b
+       LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+       LEFT JOIN ${dbSchema}.payments        p  ON p.booking_id = b.id
+       LEFT JOIN ${dbSchema}.disbursements   d  ON d.booking_id = b.id AND d.worker_uid = $1
+       WHERE b.id = $2 AND b.worker_uid = $1`,
+      [uid, id]
+    );
+    if (!result.rowCount) {
+      return res.status(404).json({ status: "failed", message: "Earning not found" });
+    }
+    const r = result.rows[0];
+    const gross = Number(r.final_price || 0);
+    const data = {
+      id:                  String(r.id),
+      bookingId:           String(r.id),
+      bookingCode:         bookingCode(r.id),
+      serviceName:         r.service_name || "",
+      completedAt:         r.schedule,
+      scheduledAt:         r.schedule,
+      bookingAmount:       gross,
+      providerShareAmount: Math.round(gross * 0.8 * 100) / 100,
+      providerSharePercent: 80,
+      clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
+      bookingStatus:       "completed",
+      providerPayoutStatus: r.payout_status ? r.payout_status.toLowerCase() : "pending",
+      disbursedAt:         r.released_at || null,
+      paymentMethod:       (r.payment_method || "cash").toLowerCase(),
+      currency:            "PHP",
+    };
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: "Server error" });
+  }
+};
+
 export const getEarningsSummary = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
@@ -1356,11 +1404,45 @@ export const deleteWorkerProfilePhoto = async (req: Request, res: Response) => {
 
 // ─── Payout Settings (MongoDB — worker_payout_methods) ───────────────────────
 
+// PayMongo bank_code → display label mapping (all supported channels)
 const PAYOUT_TYPE_LABELS: Record<string, string> = {
-  gcash: 'GCash', maya: 'Maya', bdo: 'BDO Unibank',
-  bpi: 'Bank of the Philippine Islands', unionbank: 'UnionBank',
-  landbank: 'Landbank of the Philippines', other: 'Other',
+  gcash:         'GCash',
+  maya:          'Maya (PayMaya)',
+  bdo:           'BDO Unibank',
+  bpi:           'BPI',
+  unionbank:     'UnionBank',
+  landbank:      'Landbank of the Philippines',
+  metrobank:     'Metrobank',
+  pnb:           'Philippine National Bank',
+  rcbc:          'RCBC',
+  china_bank:    'China Banking Corporation',
+  security_bank: 'Security Bank',
+  maybank:       'Maybank Philippines',
+  ew_bank:       'EastWest Bank',
+  ps_bank:       'PSBank',
 };
+
+// Map FE type key → PayMongo bank_code for Disbursements API
+const PAYMONGO_BANK_CODE: Record<string, string> = {
+  gcash:         'GCASH',
+  maya:          'PAYMAYA',
+  bdo:           'BDO',
+  bpi:           'BPI',
+  unionbank:     'UNIONBANK',
+  landbank:      'LANDBANK',
+  metrobank:     'METROBANK',
+  pnb:           'PNB',
+  rcbc:          'RCBC',
+  china_bank:    'CHINA_BANK',
+  security_bank: 'SECURITY_BANK',
+  maybank:       'MAYBANK',
+  ew_bank:       'EW_BANK',
+  ps_bank:       'PS_BANK',
+};
+
+const PH_MOBILE_RE = /^(09\d{9}|(\+63)9\d{9})$/;
+const BANK_ACCT_RE = /^\d{8,16}$/;
+const ACCT_NAME_RE = /^[A-Za-zÀ-ÖØ-öø-ÿ .'\-]{2,100}$/;
 const PAYOUT_STATUS_LABELS: Record<string, string> = {
   verified: 'Verified', unverified: 'Unverified', pending: 'Pending review',
   failed: 'Verification failed', missing: 'Not set up',
@@ -1384,13 +1466,14 @@ export const getProviderPayoutSummary = async (req: Request, res: Response) => {
     return res.status(200).json({
       status: "success",
       data: {
-        hasPayoutMethod: true,
-        type: doc.type,
-        typeLabel: PAYOUT_TYPE_LABELS[doc.type] || doc.type,
+        hasPayoutMethod:  true,
+        type:             doc.type,
+        typeLabel:        PAYOUT_TYPE_LABELS[doc.type] || doc.type,
+        accountName:      doc.accountName || null,
         maskedIdentifier: doc.maskedIdentifier || null,
-        status: doc.status || 'pending',
-        statusLabel: PAYOUT_STATUS_LABELS[doc.status] || 'Pending review',
-        lastUpdated: doc.updatedAt || null,
+        status:           doc.status || 'pending',
+        statusLabel:      PAYOUT_STATUS_LABELS[doc.status] || 'Pending review',
+        lastUpdated:      doc.updatedAt || null,
       },
     });
   } catch (error: any) {
@@ -1411,22 +1494,50 @@ export const registerProviderPayout = async (req: Request, res: Response) => {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
 
-    const { type, identifier } = req.body;
-    const VALID_TYPES = ['gcash', 'maya', 'bdo', 'bpi', 'unionbank', 'landbank', 'other'];
-    if (!type || !VALID_TYPES.includes(type)) {
-      return res.status(400).json({ status: "failed", message: "Invalid payout type" });
-    }
-    if (!identifier || String(identifier).trim().length < 4) {
-      return res.status(400).json({ status: "failed", message: "Account number must be at least 4 characters" });
+    const { type, accountNumber, accountName } = req.body;
+
+    if (!type || !PAYMONGO_BANK_CODE[type]) {
+      return res.status(400).json({ status: "failed", message: "Invalid payout type. Choose a supported bank or e-wallet." });
     }
 
-    const trimmed = String(identifier).trim();
-    const maskedIdentifier = '•••• ' + trimmed.slice(-4);
+    const trimmedName   = String(accountName   ?? '').trim();
+    const trimmedNumber = String(accountNumber ?? '').trim();
 
+    if (!ACCT_NAME_RE.test(trimmedName)) {
+      return res.status(400).json({ status: "failed", message: "Account name must be 2–100 characters (letters and spaces only)." });
+    }
+
+    const isEwallet = type === 'gcash' || type === 'maya';
+    if (isEwallet) {
+      if (!PH_MOBILE_RE.test(trimmedNumber)) {
+        return res.status(400).json({ status: "failed", message: "Enter a valid Philippine mobile number (e.g. 09171234567)." });
+      }
+    } else {
+      if (!BANK_ACCT_RE.test(trimmedNumber)) {
+        return res.status(400).json({ status: "failed", message: "Account number must be 8–16 digits." });
+      }
+    }
+
+    // Normalize mobile: +639XXXXXXXXX → 09XXXXXXXXX for consistent storage
+    const normalizedNumber = trimmedNumber.startsWith('+63')
+      ? '0' + trimmedNumber.slice(3)
+      : trimmedNumber;
+
+    const bankCode = PAYMONGO_BANK_CODE[type];
+    const maskedIdentifier = '•••• ' + normalizedNumber.slice(-4);
+
+    // Store full PayMongo-ready details in PostgreSQL (used by disbursement engine)
+    await technicianService.upsertWorkerBankAccount(uid, {
+      bankCode,
+      accountNumber: normalizedNumber,
+      accountName:   trimmedName,
+    });
+
+    // Store display record in MongoDB (masked, for provider UI)
     const col = (await mongoDb).collection("worker_payout_methods");
     await col.updateOne(
       { uid },
-      { $set: { uid, type, maskedIdentifier, status: 'pending', updatedAt: new Date() } },
+      { $set: { uid, type, accountName: trimmedName, maskedIdentifier, status: 'pending', updatedAt: new Date() } },
       { upsert: true }
     );
 
@@ -1435,11 +1546,12 @@ export const registerProviderPayout = async (req: Request, res: Response) => {
       data: {
         hasPayoutMethod: true,
         type,
-        typeLabel: PAYOUT_TYPE_LABELS[type] || type,
+        typeLabel:        PAYOUT_TYPE_LABELS[type] || type,
+        accountName:      trimmedName,
         maskedIdentifier,
-        status: 'pending',
-        statusLabel: 'Pending review',
-        lastUpdated: new Date().toISOString(),
+        status:           'pending',
+        statusLabel:      'Pending review',
+        lastUpdated:      new Date().toISOString(),
       },
     });
   } catch (error: any) {

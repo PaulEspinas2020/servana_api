@@ -20,6 +20,7 @@ router.get("/provider/dashboard", verifyAuth, provider.getDashboard);
 // Earnings
 router.get("/provider/earnings", verifyAuth, provider.getEarnings);
 router.get("/provider/earnings/summary", verifyAuth, provider.getEarningsSummary);
+router.get("/provider/earnings/:id", verifyAuth, provider.getEarningById);
 router.get("/provider/ledger", verifyAuth, provider.getLedger);
 router.get("/provider/payouts", verifyAuth, provider.getPayouts);
 

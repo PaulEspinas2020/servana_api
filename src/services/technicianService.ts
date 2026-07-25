@@ -1432,10 +1432,24 @@ export const getWorkersByService = async (serviceId: number) => {
 // Worker Bank Account CRUD
 // ---------------------------------------------------------------------------
 
+const ensureWorkerBankAccountsTable = async () => {
+  await dbQuery.query(
+    `CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_bank_accounts (
+       worker_uid     TEXT PRIMARY KEY,
+       bank_code      TEXT NOT NULL,
+       account_number TEXT NOT NULL,
+       account_name   TEXT NOT NULL,
+       updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    []
+  );
+};
+
 export const upsertWorkerBankAccount = async (
   workerUid: string,
   payload: { bankCode: string; accountNumber: string; accountName: string }
 ) => {
+  await ensureWorkerBankAccountsTable();
   const res = await dbQuery.query(
     `
     INSERT INTO ${dbSchema}.worker_bank_accounts
@@ -1455,6 +1469,7 @@ export const upsertWorkerBankAccount = async (
 };
 
 export const getWorkerBankAccount = async (workerUid: string) => {
+  await ensureWorkerBankAccountsTable();
   const res = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.worker_bank_accounts WHERE worker_uid = $1`,
     [workerUid]
@@ -1464,6 +1479,7 @@ export const getWorkerBankAccount = async (workerUid: string) => {
 };
 
 export const deleteWorkerBankAccount = async (workerUid: string) => {
+  await ensureWorkerBankAccountsTable();
   const res = await dbQuery.query(
     `DELETE FROM ${dbSchema}.worker_bank_accounts WHERE worker_uid = $1 RETURNING *`,
     [workerUid]

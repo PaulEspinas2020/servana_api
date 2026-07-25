@@ -1,6 +1,7 @@
 import { db } from "../config";
 import dbQuery from "../db/dbQuery";
 import axios from "axios";
+import { getWorkerBankAccount } from "./technicianService";
 
 const dbSchema = db.schema;
 
@@ -60,12 +61,9 @@ export const createDisbursement = async (bookingId: number) => {
 // ---------------------------------------------------------------------------
 
 const releaseDisbursement = async (disbursement: any) => {
-  const bankRes = await dbQuery.query(
-    `SELECT * FROM ${dbSchema}.worker_bank_accounts WHERE worker_uid = $1`,
-    [disbursement.worker_uid]
-  );
+  const bank = await getWorkerBankAccount(disbursement.worker_uid);
 
-  if (!bankRes.rowCount) {
+  if (!bank) {
     const msg = `Worker ${disbursement.worker_uid} has no registered bank account`;
     await dbQuery.query(
       `
@@ -78,8 +76,6 @@ const releaseDisbursement = async (disbursement: any) => {
     console.warn(`[disbursement] ${msg}`);
     return;
   }
-
-  const bank = bankRes.rows[0];
   const amountCentavos = Math.round(Number(disbursement.worker_share) * 100);
 
   try {
