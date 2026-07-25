@@ -77,6 +77,20 @@ jobs:
             echo "Migration 004-hair-barber-services: already applied, skipping"
           fi
 
+          DONE_FILE="$DONE_DIR/005-beauty-services.done"
+          if [ ! -f "$DONE_FILE" ]; then
+            echo "Running migration 005-beauty-services..."
+            if psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/005-beauty-services.sql; then
+              touch "$DONE_FILE"
+              echo "Migration 005-beauty-services: DONE"
+            else
+              echo "Migration 005-beauty-services: FAILED"
+              exit 1
+            fi
+          else
+            echo "Migration 005-beauty-services: already applied, skipping"
+          fi
+
       - name: Use Node.js 24
         uses: actions/setup-node@v4
         with:
