@@ -25,6 +25,23 @@ jobs:
           cp /home/github-runner/env/servana-serviceAccountKey.json servana-serviceAccountKey.json
           chmod 600 servana-serviceAccountKey.json
 
+      - name: Run pending DB migrations
+        run: |
+          DONE_DIR="/home/github-runner/migrations-done"
+          mkdir -p "$DONE_DIR"
+          DONE_FILE="$DONE_DIR/001-massage-services.done"
+          if [ ! -f "$DONE_FILE" ]; then
+            echo "Running migration 001-massage-services..."
+            if PGPASSWORD='servana@2026' psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/001-massage-services.sql; then
+              touch "$DONE_FILE"
+              echo "Migration 001-massage-services: DONE"
+            else
+              echo "Migration 001-massage-services: FAILED (check for existing bookings or schema issues)"
+            fi
+          else
+            echo "Migration 001-massage-services: already applied, skipping"
+          fi
+
       - name: Use Node.js 24
         uses: actions/setup-node@v4
         with:
