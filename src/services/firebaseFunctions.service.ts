@@ -142,7 +142,8 @@ const sendEmailVerificationFirebase = async (email: string) => {
     try {
         const link = await defaultAuthAdmin.generateEmailVerificationLink(email);
         return link;
-    } catch {
+    } catch (err: any) {
+        console.error('sendEmailVerificationFirebase failed:', err?.code || err?.message || err);
         throw "Failed to generate verification link";
     }
 };
@@ -204,12 +205,8 @@ const deleteFirebaseUser = async (uid: string) => {
 };
 
 const generatePasswordResetLink = async (email: string, continueUrl?: string): Promise<string> => {
-    try {
-        const actionCodeSettings = continueUrl ? { url: continueUrl } : undefined;
-        return await defaultAuthAdmin.generatePasswordResetLink(email, actionCodeSettings);
-    } catch (error) {
-        throw error;
-    }
+    const actionCodeSettings = continueUrl ? { url: continueUrl } : undefined;
+    return defaultAuthAdmin.generatePasswordResetLink(email, actionCodeSettings);
 };
 
 const updateFirebasePassword = async (uid: string, newPassword: string): Promise<void> => {

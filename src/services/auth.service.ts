@@ -201,29 +201,30 @@ const resendEmailOtp = async (payload: { email: string }) => {
         throw "Missing required parameters";
     }
 
+    // Always return the same response — never reveal account existence or send status.
+    const NEUTRAL = { message: "If this account exists and is unverified, an OTP has been sent.", verificationType: "otp" };
+
     try {
         const dbUser = await userService.getUserByEmail(email);
 
-        // Return same response regardless of whether account exists or is already verified
-        // to prevent account enumeration via different error messages.
         if (!dbUser || dbUser.isEmailVerified) {
-            return { message: "If this account exists and is unverified, an OTP has been sent.", verificationType: "otp" };
+            return NEUTRAL;
         }
 
-        const otpCode = generateOTP();
+        try {
+            const otpCode = generateOTP();
+            await userService.storeEmailOtp(email, otpCode);
+            await send(email, "verify_email_otp", {
+                otp_code: otpCode,
+                first_name: dbUser.firstName,
+                email,
+            });
+        } catch (sendErr: any) {
+            // DB / email failure must not reveal itself — log for ops, return neutral to caller.
+            console.error('resendEmailOtp: OTP send failed', { email: email?.slice(0, 3) + '***', err: sendErr?.message || sendErr });
+        }
 
-        await userService.storeEmailOtp(email, otpCode);
-
-        await send(email, "verify_email_otp", {
-            otp_code: otpCode,
-            first_name: dbUser.firstName,
-            email,
-        });
-
-        return {
-            message: "If this account exists and is unverified, an OTP has been sent.",
-            verificationType: "otp",
-        };
+        return NEUTRAL;
     } catch (error) {
         throw error;
     }

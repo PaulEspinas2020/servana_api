@@ -208,6 +208,9 @@ const PLATFORM_RESET_URLS: Record<string, string> = {
     provider: process.env.PROVIDER_RESET_URL || "https://servana.com.ph/provider/reset-password",
 };
 
+// Only these platform values may override the reset URL — guards against prototype pollution.
+const ALLOWED_PLATFORMS = new Set(['provider']);
+
 export const forgotPasswordController = async (req: Request, res: Response) => {
     try {
         const { email, platform } = req.body;
@@ -216,13 +219,19 @@ export const forgotPasswordController = async (req: Request, res: Response) => {
             return res.status(400).json({ status: "error", message: "Email is required" });
         }
 
-        const continueUrl = PLATFORM_RESET_URLS[platform] ?? PLATFORM_RESET_URLS.provider;
+        // Only 'provider' callers get a platform-specific continueUrl.
+        // All others (client app, admin) receive undefined so Firebase uses its own default page.
+        const continueUrl = (typeof platform === 'string' && ALLOWED_PLATFORMS.has(platform))
+            ? PLATFORM_RESET_URLS[platform]
+            : undefined;
+
         const result = await authService.forgotPassword(email, continueUrl);
         return res.status(200).json({ status: "success", ...result });
     } catch (error: any) {
-        return res.status(500).json({
+        const isClientError = typeof error === 'string' && error.toLowerCase().includes('valid email');
+        return res.status(isClientError ? 400 : 500).json({
             status: "error",
-            message: "Unable to process your request. Please try again.",
+            message: isClientError ? error : "Unable to process your request. Please try again.",
         });
     }
 };
