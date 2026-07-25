@@ -13,7 +13,6 @@
 import dbQuery from '../db/dbQuery';
 import { db } from '../config';
 import { auditFire } from './adminAuditService';
-import { toCamel } from '../helpers/idGenerator';
 
 const s = db.schema;
 
@@ -220,7 +219,7 @@ export async function getGuestDetail(guestCustomerId: string): Promise<any | nul
     firstName:             row.first_name,
     lastName:              row.last_name,
     displayName:           (row.first_name + ' ' + row.last_name).trim(),
-    phoneNormalized:       row.phone_normalized,
+    phoneDisplay:          row.phone_normalized,
     email:                 row.email || null,
     sourceChannel:         row.source_channel || null,
     sourceDetails:         row.source_details || null,
@@ -229,9 +228,13 @@ export async function getGuestDetail(guestCustomerId: string): Promise<any | nul
     linkedAt:              row.linked_at || null,
     linkedByAdminUid:      row.linked_by_admin_uid || null,
     linkReason:            row.link_reason || null,
-    createdByAdminUid:     row.created_by_admin_uid,
+    createdByAdminUid:     row.created_by_admin_uid || null,
     createdAt:             row.created_at,
     updatedAt:             row.updated_at || null,
+    bookingCount:          Number(row.booking_count),
+    lastBookingAt:         row.last_booking_at || null,
+    upcomingBookingCount:  Number(row.upcoming_booking_count),
+    totalSpend:            Number(row.total_spend),
     bookingSummary: {
       count:        Number(row.booking_count),
       lastAt:       row.last_booking_at || null,

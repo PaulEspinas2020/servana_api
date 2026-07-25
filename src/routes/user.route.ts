@@ -5,9 +5,9 @@ import verifyAuth from '../middleware/verifyAuth';
 import verifyRoles from '../middleware/verifyRoles';
 import verifyAuthOptional from '../middleware/verifyAuthOptional';
 
-router.get("/user/registereduser", verifyAuth, userController.userList);
+router.get("/user/registereduser", verifyAuth, verifyRoles([1]), userController.userList);
 
-router.get("/user/alluseraddresses", verifyAuth, userController.getAllAddressesOfUser);
+router.get("/user/alluseraddresses", verifyAuth, verifyRoles([1]), userController.getAllAddressesOfUser);
 // verifyAuthOptional: mobile may call without token; when JWT is present, controller scopes to JWT uid
 router.get("/user/:userId/addresses", verifyAuthOptional, userController.getAddressesByUserId);
 router.post("/user/adduseraddress", verifyAuth, userController.addUserAddress);
