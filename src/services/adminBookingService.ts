@@ -495,8 +495,8 @@ export const getAdminBookingDetail = async (bookingId: number): Promise<any | nu
       COALESCE(ua.post_town,   b.service_address->>'city')               AS post_town,
       ua.country,
       ua.zip_code,
-      COALESCE(ua.lat, (b.service_address->>'lat')::numeric)             AS lat,
-      COALESCE(ua.lon, (b.service_address->>'lon')::numeric)             AS lon
+      (b.service_address->>'lat')::numeric                               AS lat,
+      (b.service_address->>'lon')::numeric                               AS lon
     FROM ${dbSchema}.bookings b
     LEFT JOIN ${dbSchema}.user_credentials cu ON cu.uid = b.user_id
     LEFT JOIN ${dbSchema}.guest_customers  gc ON gc.guest_customer_id = b.guest_customer_id
