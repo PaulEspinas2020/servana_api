@@ -119,6 +119,20 @@ jobs:
             echo "Migration 007-aircon-cleaning-services: already applied, skipping"
           fi
 
+          DONE_FILE="$DONE_DIR/008-aircon-installation-repair-services.done"
+          if [ ! -f "$DONE_FILE" ]; then
+            echo "Running migration 008-aircon-installation-repair-services..."
+            if psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/008-aircon-installation-repair-services.sql; then
+              touch "$DONE_FILE"
+              echo "Migration 008-aircon-installation-repair-services: DONE"
+            else
+              echo "Migration 008-aircon-installation-repair-services: FAILED"
+              exit 1
+            fi
+          else
+            echo "Migration 008-aircon-installation-repair-services: already applied, skipping"
+          fi
+
       - name: Use Node.js 24
         uses: actions/setup-node@v4
         with:
