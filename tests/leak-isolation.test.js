@@ -194,3 +194,45 @@ describe("LEAK-FIX: paymentController.ts webhook has a single response path", ()
 //   - Non-admin PUT /user/archive → 403
 //   - Authenticated provider PUT /workers/:uid_b/availability → 403
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// ALIGN/REPEAT: /user/alluseraddresses role scoping — service layer, not route guard
+// ---------------------------------------------------------------------------
+
+describe("ALIGN: /user/alluseraddresses scopes by role in service layer, not route guard", () => {
+  const routeSrc = fs.readFileSync(SRC("routes", "user.route.ts"), "utf8");
+  const svcSrc   = fs.readFileSync(SRC("services", "address.service.ts"), "utf8");
+
+  it("route does NOT apply verifyRoles([1]) to /user/alluseraddresses", () => {
+    // verifyRoles([1]) was removed from alluseraddresses because ServanaClient (role 3)
+    // calls this endpoint to list its own addresses. The service layer already scopes:
+    // admin → all customer addresses; role 2/3 → only their own.
+    const allAddrLine = routeSrc.match(/\/user\/alluseraddresses[^\n]*/)?.[0] ?? "";
+    expect(allAddrLine).not.toContain("verifyRoles([1])");
+  });
+
+  it("route still requires verifyAuth on /user/alluseraddresses", () => {
+    const allAddrLine = routeSrc.match(/\/user\/alluseraddresses[^\n]*/)?.[0] ?? "";
+    expect(allAddrLine).toContain("verifyAuth");
+  });
+
+  it("address.service.ts getAllAddressesOfUser scopes by role in service layer", () => {
+    // Wider window — the function body spans ~30 lines
+    const fn = svcSrc.match(/getAllAddressesOfUser[\s\S]{0,1200}/)?.[0] ?? "";
+    expect(fn).toContain("role === '1'");
+    expect(fn).toContain("role === '3'");
+    expect(fn).toContain("params = [userId]");
+  });
+
+  it("/user/:userId/addresses uses verifyAuthOptional for mobile parity", () => {
+    const uidAddrLine = routeSrc.match(/\/user\/:userId\/addresses[^\n]*/)?.[0] ?? "";
+    expect(uidAddrLine).toContain("verifyAuthOptional");
+  });
+
+  it("getAddressesByUserId controller enforces ownership when caller is authenticated", () => {
+    const ctrlSrc = fs.readFileSync(SRC("controllers", "user.controller.ts"), "utf8");
+    const fn = ctrlSrc.match(/getAddressesByUserId[\s\S]{0,400}/)?.[0] ?? "";
+    expect(fn).toContain("req.user && req.user.uid !== userId");
+    expect(fn).toContain("403");
+  });
+});

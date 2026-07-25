@@ -7,7 +7,10 @@ import verifyAuthOptional from '../middleware/verifyAuthOptional';
 
 router.get("/user/registereduser", verifyAuth, verifyRoles([1]), userController.userList);
 
-router.get("/user/alluseraddresses", verifyAuth, verifyRoles([1]), userController.getAllAddressesOfUser);
+// verifyAuth (no role guard): service layer scopes by role — admin gets all customer
+// addresses, role 2/3 gets only their own. verifyRoles([1]) was incorrect here because
+// ServanaClient (role 3) calls this endpoint to list the customer's own addresses.
+router.get("/user/alluseraddresses", verifyAuth, userController.getAllAddressesOfUser);
 // verifyAuthOptional: mobile may call without token; when JWT is present, controller scopes to JWT uid
 router.get("/user/:userId/addresses", verifyAuthOptional, userController.getAddressesByUserId);
 router.post("/user/adduseraddress", verifyAuth, userController.addUserAddress);

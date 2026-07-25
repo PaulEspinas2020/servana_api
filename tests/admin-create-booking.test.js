@@ -339,6 +339,15 @@ describe('adminCreateBooking — instructions field', () => {
     expect(draftSrc).toContain('addr.instructions');
     expect(draftSrc).toContain('instructions:');
   });
+
+  it('convertDraft uses Number.isFinite guard for servanaLocationId (NaN guard)', () => {
+    const draftSrc = require('fs').readFileSync(
+      require('path').join(__dirname, '../src/services/adminBookingDraftService.ts'), 'utf-8'
+    );
+    // NaN guard: Number(non-numeric string) = NaN which would corrupt locationId.
+    // The fix: Number.isFinite() rejects NaN/Infinity and falls back to null.
+    expect(draftSrc).toContain('Number.isFinite(Number(addr.servanaLocationId))');
+  });
 });
 
 describe('job-card — instructions surface to provider (STITCH-003)', () => {
