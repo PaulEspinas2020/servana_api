@@ -176,8 +176,8 @@ const BUILTIN_OFFERINGS: OfferingSeed[] = [
   {
     catalogKey: 'hair-services',
     name: 'Hair Services',
-    shortDescription: "Women's hair styling and treatment services.",
-    providerDescription: "Women's hair styling, treatment, and care services delivered at home.",
+    shortDescription: 'Professional haircut, styling, and grooming services.',
+    providerDescription: 'Professional haircut, styling, grooming, and treatment services delivered at home for all hair types.',
     iconKey: 'bi-brush',
     displayOrder: 6,
     // MOBILE-PROTECTED: level_2 'Hair' matches /hair/i in ServanaClient HairNailsScreen

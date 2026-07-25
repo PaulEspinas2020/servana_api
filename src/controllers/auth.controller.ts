@@ -94,11 +94,17 @@ const resendVerification = async (req: Request, res: Response) => {
         return res.status(400).json({ status: 'error', message: 'Email is required' });
     }
 
-    // Swallow all errors — the response is always neutral to prevent account-existence enumeration.
+    // Fixed response time floor collapses fast (user-not-found) vs slow (send-email) paths.
+    const MIN_RESPONSE_MS = 600;
+    const start = Date.now();
     try {
         await authService.getAndSendEmailVerificationLink(email);
     } catch (error: any) {
         console.error('resendVerification: failed', { email: email?.slice(0, 3) + '***', err: error?.message || error });
+    }
+    const elapsed = Date.now() - start;
+    if (elapsed < MIN_RESPONSE_MS) {
+        await new Promise(r => setTimeout(r, MIN_RESPONSE_MS - elapsed));
     }
 
     return res.status(200).json({
