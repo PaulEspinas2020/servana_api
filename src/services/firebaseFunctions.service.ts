@@ -142,8 +142,8 @@ const sendEmailVerificationFirebase = async (email: string) => {
     try {
         const link = await defaultAuthAdmin.generateEmailVerificationLink(email);
         return link;
-    } catch (err) {
-        throw "Email " + err;
+    } catch {
+        throw "Failed to generate verification link";
     }
 };
 
@@ -203,9 +203,10 @@ const deleteFirebaseUser = async (uid: string) => {
     return await defaultAuthAdmin.deleteUser(uid);
 };
 
-const generatePasswordResetLink = async (email: string): Promise<string> => {
+const generatePasswordResetLink = async (email: string, continueUrl?: string): Promise<string> => {
     try {
-        return await defaultAuthAdmin.generatePasswordResetLink(email);
+        const actionCodeSettings = continueUrl ? { url: continueUrl } : undefined;
+        return await defaultAuthAdmin.generatePasswordResetLink(email, actionCodeSettings);
     } catch (error) {
         throw error;
     }

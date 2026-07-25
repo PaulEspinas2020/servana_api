@@ -166,7 +166,7 @@ export const providerRegisterController = async (req: Request, res: Response) =>
     const isDisabled = error?.message?.includes("disabled");
     return res.status(isDisabled ? 403 : 400).json({
       status: "failed",
-      message: error?.message || "Registration failed",
+      message: isDisabled ? "This account has been disabled. Please contact support." : "Registration failed. Please try again.",
     });
   }
 };
@@ -210,18 +210,19 @@ const PLATFORM_RESET_URLS: Record<string, string> = {
 
 export const forgotPasswordController = async (req: Request, res: Response) => {
     try {
-        const { email } = req.body;
+        const { email, platform } = req.body;
 
         if (!email) {
-            return res.status(400).json({ status: "failed", message: "Email is required" });
+            return res.status(400).json({ status: "error", message: "Email is required" });
         }
 
-        const result = await authService.forgotPassword(email);
+        const continueUrl = PLATFORM_RESET_URLS[platform] ?? PLATFORM_RESET_URLS.provider;
+        const result = await authService.forgotPassword(email, continueUrl);
         return res.status(200).json({ status: "success", ...result });
     } catch (error: any) {
-        return res.status(400).json({
-            status: "failed",
-            message: error?.message || error || "Failed to send password reset email",
+        return res.status(500).json({
+            status: "error",
+            message: "Unable to process your request. Please try again.",
         });
     }
 };

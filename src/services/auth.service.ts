@@ -221,7 +221,7 @@ const resendEmailOtp = async (payload: { email: string }) => {
         });
 
         return {
-            message: "OTP resent successfully.",
+            message: "If this account exists and is unverified, an OTP has been sent.",
             verificationType: "otp",
         };
     } catch (error) {
@@ -544,7 +544,7 @@ const updateEmployee = async (uid: string, updates: EmployeeUpdateInput) => {
     return { uid, message: "Employee updated successfully." };
 };
 
-const forgotPassword = async (email: string) => {
+const forgotPassword = async (email: string, continueUrl?: string) => {
     if (!isValidEmail(email)) {
         throw "Please enter a valid email address";
     }
@@ -554,7 +554,7 @@ const forgotPassword = async (email: string) => {
         return { message: "If an account with that email exists, a password reset link has been sent." };
     }
 
-    const resetLink = await firebaseFunction.generatePasswordResetLink(email);
+    const resetLink = await firebaseFunction.generatePasswordResetLink(email, continueUrl);
 
     const dbUser = await userService.getUserByEmail(email);
     const firstName = dbUser?.firstName || "";
@@ -584,10 +584,16 @@ const resetPassword = async (payload: { oobCode: string; newPassword: string }) 
     const email = await firebaseFunction.resetPasswordWithCode(oobCode, newPassword);
 
     // Sync the hashed password in DB so email+password signin stays consistent with Firebase.
-    const firebaseUser = await firebaseFunction.getFirebaseUserByEmail(email);
-    if (firebaseUser) {
-        const updateQuery = `UPDATE ${dbSchema}.user_credentials SET password = $1 WHERE uid = $2`;
-        await dbQuery.query(updateQuery, [hashPassword(newPassword), firebaseUser.uid]);
+    // Non-fatal: oobCode is already consumed so we cannot retry — log and continue.
+    // Firebase auth still works even if this sync fails.
+    try {
+        const firebaseUser = await firebaseFunction.getFirebaseUserByEmail(email);
+        if (firebaseUser) {
+            const updateQuery = `UPDATE ${dbSchema}.user_credentials SET password = $1 WHERE uid = $2`;
+            await dbQuery.query(updateQuery, [hashPassword(newPassword), firebaseUser.uid]);
+        }
+    } catch (syncErr: any) {
+        console.error('resetPassword: DB hash sync failed after Firebase reset', { email: email?.slice(0, 3) + '***', syncErr: syncErr?.message || syncErr });
     }
 
     return { message: "Password reset successfully." };
