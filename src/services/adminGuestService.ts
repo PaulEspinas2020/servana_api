@@ -259,7 +259,6 @@ export async function getGuestBookings(guestCustomerId: string): Promise<any[]> 
        b.admin_created_by,
        b.service_address,
        b.created_at,
-       so.level_1,
        so.level_2,
        so.level_3,
        svc.name          AS service_name
@@ -282,7 +281,7 @@ export async function getGuestBookings(guestCustomerId: string): Promise<any[]> 
     adminCreatedBy:  r.admin_created_by || null,
     serviceAddress:  r.service_address || null,
     serviceName:     r.service_name || null,
-    serviceDetail: [r.level_1, r.level_2, r.level_3].filter(Boolean).join(' / ') || null,
+    serviceDetail: [r.level_2, r.level_3].filter(Boolean).join(' / ') || null,
     createdAt:       r.created_at,
   }));
 }
