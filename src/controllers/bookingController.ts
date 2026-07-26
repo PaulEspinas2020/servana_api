@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import * as bookingService from "../services/bookingService";
 import { formatBooking, formatBookings } from "../services/bookingService";
+import { createCustomerNotification } from "../services/notification.service";
 export const createBooking = async (req: any, res: any) => {
   try {
     const userId = req.query.userId as string;
@@ -8,6 +9,21 @@ export const createBooking = async (req: any, res: any) => {
       userId,
       req.body
     );
+
+    // Non-blocking: notify the customer that their booking was received
+    if (userId && booking) {
+      const bookingId = (booking as any)?.id ?? (booking as any)?.bookingId ?? '';
+      createCustomerNotification(userId, {
+        type: 'booking_created',
+        severity: 'info',
+        title: 'Booking received',
+        safeBody: `Your booking has been placed. We'll notify you when a provider is assigned.`,
+        route: bookingId
+          ? { routeKey: 'BOOKING_DETAILS', resourceId: String(bookingId) }
+          : null,
+        canOpenDetail: !!bookingId,
+      }).catch(() => {});
+    }
 
     res.json({ success: true, booking });
   } catch (e: any) {

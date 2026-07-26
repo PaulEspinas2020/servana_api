@@ -4,6 +4,7 @@ import * as userService from "../services/user.service";
 import * as authService from "../services/auth.service";
 import * as addressService from "../services/address.service";
 import { createLogEntry } from "../services/log.service";
+import * as notificationService from "../services/notification.service";
 
 const userList = async (req: Request, res: Response) => {
     const { isArchived } = req.query;
@@ -176,6 +177,96 @@ const getAddressesByUserId = async (req: Request, res: Response) => {
     } catch (error) {
         errorMessage.error = "ERROR: " + error;
         res.status(status.error).send(errorMessage);
+    }
+};
+
+// ─── FCM token management ─────────────────────────────────────────────────────
+
+export const registerFcmToken = async (req: Request, res: Response) => {
+    const uid: string = (req as any).user?.uid;
+    const token = ((req.body?.token ?? '') as string).trim();
+    if (!token) {
+        return res.status(400).json({ status: 'error', message: 'token is required' });
+    }
+    try {
+        await authService.updateFcmToken(uid, token);
+        return res.status(200).json({ status: 'success', data: { registered: true } });
+    } catch (_) {
+        return res.status(500).json({ status: 'error', message: 'Failed to register token' });
+    }
+};
+
+export const clearCustomerFcmToken = async (req: Request, res: Response) => {
+    const uid: string = (req as any).user?.uid;
+    try {
+        await notificationService.clearFcmToken(uid);
+    } catch (_) {
+        // Best-effort — always succeed so logout is not blocked
+    }
+    return res.status(200).json({ status: 'success', data: { cleared: true } });
+};
+
+// ─── Customer notifications ───────────────────────────────────────────────────
+
+export const listCustomerNotificationsHandler = async (req: Request, res: Response) => {
+    const uid: string = (req as any).user?.uid;
+    const filter = req.query.filter as string | undefined;
+    try {
+        const notifications = await notificationService.listCustomerNotifications(uid, filter);
+        return res.status(200).json({ status: 'success', data: { notifications } });
+    } catch (_) {
+        return res.status(500).json({ status: 'error', message: 'Failed to load notifications' });
+    }
+};
+
+export const countCustomerUnreadHandler = async (req: Request, res: Response) => {
+    const uid: string = (req as any).user?.uid;
+    try {
+        const count = await notificationService.countCustomerUnreadNotifications(uid);
+        return res.status(200).json({ status: 'success', data: { count } });
+    } catch (_) {
+        return res.status(500).json({ status: 'error', message: 'Failed to count notifications' });
+    }
+};
+
+export const markCustomerNotificationReadHandler = async (req: Request, res: Response) => {
+    const uid: string = (req as any).user?.uid;
+    const key = req.params.key as string;
+    if (!key) {
+        return res.status(400).json({ status: 'error', message: 'key is required' });
+    }
+    try {
+        const result = await notificationService.markCustomerNotificationReadByKey(uid, key);
+        return res.status(200).json({ status: 'success', data: result });
+    } catch (_) {
+        return res.status(500).json({ status: 'error', message: 'Failed to mark read' });
+    }
+};
+
+export const markAllCustomerNotificationsReadHandler = async (req: Request, res: Response) => {
+    const uid: string = (req as any).user?.uid;
+    try {
+        await notificationService.markAllCustomerNotificationsRead(uid);
+        return res.status(200).json({ status: 'success', data: { marked: true } });
+    } catch (_) {
+        return res.status(500).json({ status: 'error', message: 'Failed to mark all read' });
+    }
+};
+
+export const deleteCustomerNotificationHandler = async (req: Request, res: Response) => {
+    const uid: string = (req as any).user?.uid;
+    const key = req.params.key as string;
+    if (!key) {
+        return res.status(400).json({ status: 'error', message: 'key is required' });
+    }
+    try {
+        const result = await notificationService.deleteCustomerNotificationByKey(uid, key);
+        return res.status(result.found ? 200 : 404).json({
+            status: result.found ? 'success' : 'error',
+            data: result,
+        });
+    } catch (_) {
+        return res.status(500).json({ status: 'error', message: 'Failed to delete notification' });
     }
 };
 

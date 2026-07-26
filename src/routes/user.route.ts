@@ -26,4 +26,17 @@ router.delete("/user/deleteaddress", verifyAuth, userController.deleteAddress);
 // by keeping the route as-is but adding the role guard so only admin can call it.
 router.put("/user/archive", verifyAuth, verifyRoles([1]), userController.archiveUser);
 
+// ─── FCM token management ────────────────────────────────────────────────────
+router.post("/user/fcm-token", verifyAuth, userController.registerFcmToken);
+router.delete("/user/fcm-token", verifyAuth, userController.clearCustomerFcmToken);
+
+// ─── Customer notifications ──────────────────────────────────────────────────
+// Named routes BEFORE wildcard param routes to prevent Express matching e.g.
+// "unread-count" as a notification key.
+router.get("/user/notifications/unread-count", verifyAuth, userController.countCustomerUnreadHandler);
+router.post("/user/notifications/mark-all-read", verifyAuth, userController.markAllCustomerNotificationsReadHandler);
+router.get("/user/notifications", verifyAuth, userController.listCustomerNotificationsHandler);
+router.patch("/user/notifications/:key/read", verifyAuth, userController.markCustomerNotificationReadHandler);
+router.delete("/user/notifications/:key", verifyAuth, userController.deleteCustomerNotificationHandler);
+
 export default router;

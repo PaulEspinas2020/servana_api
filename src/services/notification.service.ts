@@ -568,3 +568,239 @@ export async function countUnreadSupportReplies(workerUid: string): Promise<numb
   );
   return parseInt(rows[0]?.cnt ?? '0', 10);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CUSTOMER NOTIFICATIONS — separate table scoped to user_uid (not worker_uid)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Customer FCM push ────────────────────────────────────────────────────────
+
+async function sendFcmPushToCustomer(
+  userUid: string,
+  title: string,
+  body: string,
+  data?: Record<string, string>,
+): Promise<void> {
+  const { rows } = await dbQuery.query(
+    `SELECT fcm_token FROM ${dbSchema}.user_credentials WHERE uid = $1 LIMIT 1`,
+    [userUid],
+  );
+  const token: string | undefined = rows[0]?.fcm_token;
+  if (!token) return;
+
+  const { getMessaging } = await import('firebase-admin/messaging');
+  const { firebaseAdmin } = await import('../middleware/firebaseApp');
+  await getMessaging(firebaseAdmin).send({
+    token,
+    notification: { title, body },
+    data: data ?? {},
+    android: { priority: 'high' },
+    apns: { payload: { aps: { contentAvailable: true } } },
+  });
+}
+
+// ─── Customer table init ──────────────────────────────────────────────────────
+
+let customerTablesReady: Promise<void> | null = null;
+
+async function initCustomerTables(): Promise<void> {
+  await dbQuery.query(`
+    CREATE TABLE IF NOT EXISTS ${dbSchema}.customer_notifications (
+      id               BIGSERIAL PRIMARY KEY,
+      notification_key VARCHAR(64)  UNIQUE NOT NULL DEFAULT gen_random_uuid()::varchar,
+      user_uid         VARCHAR(128) NOT NULL,
+      type             VARCHAR(64)  NOT NULL DEFAULT 'system',
+      status           VARCHAR(32)  NOT NULL DEFAULT 'unread',
+      severity         VARCHAR(32)  NOT NULL DEFAULT 'info',
+      title            VARCHAR(255) NOT NULL,
+      safe_body        TEXT         NOT NULL,
+      safe_context_label VARCHAR(255),
+      route            JSONB,
+      can_mark_read    BOOLEAN      NOT NULL DEFAULT true,
+      can_dismiss      BOOLEAN      NOT NULL DEFAULT true,
+      can_open_detail  BOOLEAN      NOT NULL DEFAULT false,
+      read_at          TIMESTAMPTZ,
+      expires_at       TIMESTAMPTZ,
+      created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_cn_user_uid
+      ON ${dbSchema}.customer_notifications (user_uid, created_at DESC);
+    DO $safe_unique_cn$ BEGIN
+      ALTER TABLE ${dbSchema}.customer_notifications ADD UNIQUE (notification_key);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $safe_unique_cn$;
+  `);
+}
+
+function ensureCustomerTables(): Promise<void> {
+  if (!customerTablesReady) customerTablesReady = initCustomerTables();
+  return customerTablesReady;
+}
+
+// ─── Customer row mapper ──────────────────────────────────────────────────────
+
+function mapCustomerNotificationRow(row: any) {
+  return {
+    notificationKey:  row.notification_key,
+    type:             row.type,
+    status:           row.status,
+    severity:         row.severity,
+    title:            row.title,
+    safeBody:         row.safe_body,
+    safeContextLabel: row.safe_context_label ?? null,
+    createdAt:        row.created_at ?? null,
+    readAt:           row.read_at ?? null,
+    expiresAt:        row.expires_at ?? null,
+    route:            row.route ?? null,
+    canMarkRead:      row.can_mark_read && row.status === 'unread',
+    canDismiss:       row.can_dismiss,
+    canOpenDetail:    row.can_open_detail,
+  };
+}
+
+// ─── FCM token management ─────────────────────────────────────────────────────
+
+export async function clearFcmToken(uid: string): Promise<void> {
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.user_credentials SET fcm_token = NULL WHERE uid = $1`,
+    [uid],
+  );
+}
+
+// ─── Customer notification CRUD ───────────────────────────────────────────────
+
+export async function listCustomerNotifications(userUid: string, filter?: string) {
+  await ensureCustomerTables();
+  const base = `user_uid = $1 AND (expires_at IS NULL OR expires_at > NOW())`;
+  let sql = `WHERE ${base}`;
+  const params: any[] = [userUid];
+  if (filter === 'unread') {
+    sql = `WHERE ${base} AND status = 'unread'`;
+  }
+  const { rows } = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.customer_notifications ${sql} ORDER BY created_at DESC LIMIT 100`,
+    params,
+  );
+  return rows.map(mapCustomerNotificationRow);
+}
+
+export async function countCustomerUnreadNotifications(userUid: string): Promise<number> {
+  await ensureCustomerTables();
+  const { rows } = await dbQuery.query(
+    `SELECT COUNT(*) AS cnt FROM ${dbSchema}.customer_notifications
+     WHERE user_uid = $1 AND status = 'unread' AND (expires_at IS NULL OR expires_at > NOW())`,
+    [userUid],
+  );
+  return parseInt(rows[0]?.cnt ?? '0', 10);
+}
+
+export async function markCustomerNotificationReadByKey(userUid: string, key: string) {
+  await ensureCustomerTables();
+  const { rowCount } = await dbQuery.query(
+    `UPDATE ${dbSchema}.customer_notifications
+     SET status = 'read', read_at = NOW()
+     WHERE notification_key = $1 AND user_uid = $2 AND status = 'unread'`,
+    [key, userUid],
+  );
+  return { found: (rowCount ?? 0) > 0 };
+}
+
+export async function markAllCustomerNotificationsRead(userUid: string) {
+  await ensureCustomerTables();
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.customer_notifications
+     SET status = 'read', read_at = NOW()
+     WHERE user_uid = $1 AND status = 'unread'`,
+    [userUid],
+  );
+}
+
+export async function deleteCustomerNotificationByKey(userUid: string, key: string) {
+  await ensureCustomerTables();
+  const { rowCount } = await dbQuery.query(
+    `DELETE FROM ${dbSchema}.customer_notifications
+     WHERE notification_key = $1 AND user_uid = $2`,
+    [key, userUid],
+  );
+  return { found: (rowCount ?? 0) > 0 };
+}
+
+// ─── Customer notification creation (with FCM push) ──────────────────────────
+
+export interface CustomerNotificationInput {
+  notificationKey?: string;
+  type?: string;
+  severity?: string;
+  title: string;
+  safeBody: string;
+  safeContextLabel?: string | null;
+  route?: object | null;
+  canMarkRead?: boolean;
+  canDismiss?: boolean;
+  canOpenDetail?: boolean;
+  expiresAt?: Date | null;
+}
+
+export async function createCustomerNotification(
+  userUid: string,
+  data: CustomerNotificationInput,
+): Promise<ReturnType<typeof mapCustomerNotificationRow> | null> {
+  await ensureCustomerTables();
+
+  const params: any[] = [
+    userUid,
+    data.type || 'system',
+    data.severity || 'info',
+    data.title,
+    data.safeBody,
+    data.safeContextLabel || null,
+    data.route ? JSON.stringify(data.route) : null,
+    data.canMarkRead !== false,
+    data.canDismiss !== false,
+    !!data.canOpenDetail,
+    data.expiresAt || null,
+  ];
+
+  let rows: any[];
+
+  if (data.notificationKey) {
+    const result = await dbQuery.query(
+      `INSERT INTO ${dbSchema}.customer_notifications
+         (notification_key, user_uid, type, severity, title, safe_body, safe_context_label,
+          route, can_mark_read, can_dismiss, can_open_detail, expires_at)
+       VALUES ($12, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (notification_key) DO NOTHING
+       RETURNING *`,
+      [...params, data.notificationKey.substring(0, 64)],
+    );
+    if ((result.rowCount ?? 0) === 0) return null;
+    rows = result.rows;
+  } else {
+    const result = await dbQuery.query(
+      `INSERT INTO ${dbSchema}.customer_notifications
+         (user_uid, type, severity, title, safe_body, safe_context_label, route,
+          can_mark_read, can_dismiss, can_open_detail, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING *`,
+      params,
+    );
+    rows = result.rows;
+  }
+
+  const notification = mapCustomerNotificationRow(rows[0]);
+
+  // FCM push — safe routing metadata only, no sensitive data
+  const fcmData: Record<string, string> = {
+    notificationKey: notification.notificationKey,
+    type: notification.type,
+    schemaVersion: '1',
+  };
+  if (notification.route) {
+    const route = notification.route as any;
+    if (route.routeKey) fcmData.routeKey = String(route.routeKey);
+    if (route.resourceId) fcmData.resourceId = String(route.resourceId);
+  }
+  sendFcmPushToCustomer(userUid, data.title, data.safeBody, fcmData).catch(() => {});
+
+  return notification;
+}

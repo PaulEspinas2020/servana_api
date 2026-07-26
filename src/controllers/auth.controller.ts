@@ -5,6 +5,7 @@ import * as firebaseFunction from "../services/firebaseFunctions.service";
 import { upsertSourceAttribution } from "../services/providerOnboardingService";
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 import { touchProviderActivity } from "../services/adminProviderService";
+import { clearFcmToken } from "../services/notification.service";
 
 const signin = async (req: Request, res: Response) => {
     const { email, password, fcmToken } = req.body;
@@ -283,11 +284,11 @@ export const logoutController = async (req: Request, res: Response) => {
         if (!uid) {
             return res.status(401).json({ status: "failed", message: "Unauthorized" });
         }
-        try {
-            await firebaseFunction.revokeTokenInFirebase(uid);
-        } catch (_revokeErr) {
-            // Non-fatal
-        }
+        // Non-blocking: revoke Firebase token and deactivate device FCM token
+        Promise.allSettled([
+            firebaseFunction.revokeTokenInFirebase(uid),
+            clearFcmToken(uid),
+        ]).catch(() => {});
         return res.status(200).json({ status: "success", data: { message: "Logged out." } });
     } catch (error: any) {
         return res.status(500).json({ status: "failed", message: error?.message || "Logout failed" });
