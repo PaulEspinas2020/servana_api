@@ -291,9 +291,23 @@ const updateUserProfile = async (profileUpdateReq: ProfileUpdateReq) => {
             RETURNING *`;
 
     const { birthdate, photoUrl, photoFile, gender, id, phoneNumber } = profileUpdateReq;
-    // first_name / last_name come from the provider portal PUT /user/updateprofile body
-    const firstName: string | undefined = (profileUpdateReq as any).first_name;
-    const lastName: string | undefined = (profileUpdateReq as any).last_name;
+    // ServanaClient sends `mobileNumber`; provider portal sends `phoneNumber`. Normalize to one value.
+    // Guard: only call updateUserPhoneNumber when a phone was explicitly provided to avoid NULL wipe.
+    const resolvedPhone = phoneNumber !== undefined
+        ? phoneNumber
+        : (profileUpdateReq as any).mobileNumber as string | undefined;
+    // first_name / last_name come from the provider portal body.
+    // ServanaClient sends `fullname` (combined string) — split it when the named fields are absent.
+    let firstName: string | undefined = (profileUpdateReq as any).first_name;
+    let lastName: string | undefined = (profileUpdateReq as any).last_name;
+    if (firstName === undefined && lastName === undefined) {
+        const fullname: string | undefined = (profileUpdateReq as any).fullname;
+        if (fullname) {
+            const spaceIdx = fullname.indexOf(' ');
+            firstName = spaceIdx > 0 ? fullname.slice(0, spaceIdx).trim() : fullname.trim();
+            lastName  = spaceIdx > 0 ? fullname.slice(spaceIdx + 1).trim() : undefined;
+        }
+    }
 
     try {
         if (photoFile && photoFile != "") {
@@ -304,7 +318,10 @@ const updateUserProfile = async (profileUpdateReq: ProfileUpdateReq) => {
 
         const { rows } = await dbQuery.query(upsertQuery, [birthdate, gender, rawUrl, id]);
 
-        await updateUserPhoneNumber(phoneNumber, id);
+        // Only update phone when explicitly provided — prevents NULL wipe on name-only saves.
+        if (resolvedPhone !== undefined) {
+            await updateUserPhoneNumber(resolvedPhone, id);
+        }
 
         // Update name fields in user_credentials when provided
         if (id && (firstName || lastName)) {

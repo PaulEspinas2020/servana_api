@@ -73,6 +73,10 @@ declare global {
         photoFile?: string;
         gender?: string;
         phoneNumber?: string;
+        mobileNumber?: string;   // ServanaClient alias for phoneNumber
+        first_name?: string;     // provider portal direct field
+        last_name?: string;      // provider portal direct field
+        fullname?: string;       // ServanaClient combined name — split on write
     }
 
     interface QuoteRequest {

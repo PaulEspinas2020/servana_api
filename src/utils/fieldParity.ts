@@ -55,8 +55,8 @@ export const PARITY_REGISTRY: ParityGroup[] = [
   // ── Contact ──────────────────────────────────────────────────────────────────
   {
     canonical: 'phoneNumber',
-    aliases: ['phone', 'phone_number'],
-    note: 'DB: phone_number  |  backend response: phoneNumber  |  mobile/web portal: phone',
+    aliases: ['phone', 'phone_number', 'mobileNumber'],
+    note: 'DB: phone_number  |  backend response: phoneNumber  |  mobile/web portal: phone  |  ServanaClient session: mobileNumber',
   },
 
   // ── User flags ───────────────────────────────────────────────────────────────
