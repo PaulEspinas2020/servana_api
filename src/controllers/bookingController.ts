@@ -147,3 +147,28 @@ export const getAnalytics = async (_req: Request, res: Response) => {
     });
   }
 };
+
+// BACKEND_GAP-C15-001: customer self-cancellation (previously admin-only)
+export const cancelBooking = async (req: Request, res: Response) => {
+  try {
+    const bookingId = Number(req.params.id);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: 'Invalid booking id' });
+    }
+
+    const { reason, reasonCode } = req.body;
+    if (!reason?.trim()) {
+      return res.status(400).json({ success: false, message: 'reason is required' });
+    }
+
+    const customerUid = (req as any).user?.uid ?? null;
+    const booking = await bookingService.customerCancelBooking(
+      bookingId, reason, customerUid, reasonCode,
+    );
+
+    return res.json({ success: true, booking: formatBooking(booking) });
+  } catch (e: any) {
+    const status = e.statusCode === 403 ? 403 : 400;
+    return res.status(status).json({ success: false, message: e.message || 'Cancellation failed' });
+  }
+};

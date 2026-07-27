@@ -512,3 +512,70 @@ export const formatBooking = (raw: any): Record<string, unknown> => {
 
 export const formatBookings = (rows: any[]): Record<string, unknown>[] =>
   rows.map(formatBooking);
+
+// ─── Customer Self-Cancel (BACKEND_GAP-C15-001 implementation) ────────────────
+
+const NON_CANCELLABLE_STATUSES = new Set([
+  'CANCELLED', 'CANCELED', 'COMPLETED', 'IN_PROGRESS',
+  'EN_ROUTE', 'ARRIVED', 'AWAITING_COMPLETION',
+  'REVIEWED', 'REFUNDED', 'EXPIRED', 'FAILED',
+]);
+
+/**
+ * Allows a customer to cancel their own booking.
+ *
+ * Ownership: if customerUid is provided, the booking must belong to that customer.
+ * State guard: terminal and in-progress states cannot be cancelled.
+ */
+export const customerCancelBooking = async (
+  bookingId: number,
+  reason: string,
+  customerUid: string | null,
+  reasonCode?: string,
+): Promise<any> => {
+  if (!reason?.trim()) throw new Error('Reason is required');
+
+  const bkRes = await dbQuery.query(
+    `SELECT id, status, user_id FROM ${dbSchema}.bookings WHERE id = $1`,
+    [bookingId],
+  );
+  if (!bkRes.rowCount) throw new Error('Booking not found');
+
+  const { status: prevStatus, user_id: ownerId } = bkRes.rows[0];
+
+  if (customerUid && ownerId && ownerId !== customerUid) {
+    throw Object.assign(new Error('Access denied'), { statusCode: 403 });
+  }
+
+  if (NON_CANCELLABLE_STATUSES.has((prevStatus ?? '').toUpperCase())) {
+    throw new Error(`Cannot cancel booking with status: ${prevStatus}`);
+  }
+
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.bookings SET status = 'CANCELLED', cancelled_at = NOW() WHERE id = $1`,
+    [bookingId],
+  );
+
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.booking_workers SET status = 'CANCELED'
+     WHERE booking_id = $1 AND status IN ('ASSIGNED','ACCEPTED')`,
+    [bookingId],
+  );
+
+  await dbQuery.query(
+    `INSERT INTO ${dbSchema}.booking_timeline_events
+       (booking_id, event_type, title, description, actor_type, actor_uid, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [
+      bookingId, 'booking_cancelled', 'Booking cancelled by customer',
+      reason, 'customer', customerUid ?? null,
+      reasonCode ? JSON.stringify({ reasonCode }) : null,
+    ],
+  );
+
+  const updatedRes = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.bookings WHERE id = $1`,
+    [bookingId],
+  );
+  return updatedRes.rows[0] ?? { id: bookingId, status: 'CANCELLED' };
+};

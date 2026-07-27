@@ -17,6 +17,8 @@ router.get("/dashboard/summary", verifyAuth, verifyRoles([1]), bookingController
 router.get("/users/:userId/bookings", verifyAuthOptional, bookingController.listUserBookings);
 
 router.post("/bookings", bookingController.createBooking);
+// BACKEND_GAP-C15-001: customer self-cancellation — must be before /:id wildcard
+router.post("/bookings/:id/cancel", verifyAuthOptional, bookingController.cancelBooking);
 router.post("/:id/confirm-otp", bookingController.confirmOtp);
 router.get("/:id", bookingController.getBooking);
 router.get("/:id/tracking", bookingController.getTracking);
