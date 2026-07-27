@@ -276,6 +276,48 @@ export const PARITY_REGISTRY: ParityGroup[] = [
     aliases: ['has_additional_work'],
     note: 'boolean — provider has pending additional-work requests for a booking; job card: hasAdditionalWork',
   },
+
+  // ── Chat / Messaging ─────────────────────────────────────────────────────────
+  {
+    canonical: 'conversationId',
+    aliases: ['conversation_id'],
+    note: 'chat_conversations.id FK — REST/socket payloads use conversationId; DB column: conversation_id',
+  },
+  {
+    canonical: 'senderUid',
+    aliases: ['sender_uid'],
+    note: 'chat_messages.sender_uid FK to user Firebase UID — toCamel: senderUid',
+  },
+  {
+    canonical: 'senderRole',
+    aliases: ['sender_role'],
+    note: 'chat_messages.sender_role — numeric role of the message author; toCamel: senderRole',
+  },
+  {
+    canonical: 'clientMsgId',
+    aliases: ['client_msg_id'],
+    note: 'chat_messages.client_msg_id — client-generated idempotency key for deduplication; toCamel: clientMsgId',
+  },
+  {
+    canonical: 'unreadCount',
+    aliases: ['unread_count'],
+    note: 'computed COUNT of unread messages for a participant — inbox query alias: unread_count; response: unreadCount',
+  },
+  {
+    canonical: 'isClosed',
+    aliases: ['is_closed'],
+    note: 'chat_conversations.is_closed — boolean; toCamel: isClosed',
+  },
+  {
+    canonical: 'lastMessageAt',
+    aliases: ['last_message_at'],
+    note: 'chat_conversations.last_message_at — timestamp of most recent message; toCamel: lastMessageAt',
+  },
+  {
+    canonical: 'lastReadMessageId',
+    aliases: ['last_read_message_id'],
+    note: 'chat_participants.last_read_message_id — last message ID the user has seen; REST body key: lastReadMessageId',
+  },
 ];
 
 // ── Internal lookup maps ──────────────────────────────────────────────────────

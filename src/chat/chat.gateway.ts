@@ -117,13 +117,20 @@ export const initChatSocket = (httpServer: HttpServer) => {
       }
     });
 
-    // Ephemeral typing indicator (not persisted).
-    socket.on("message:typing", ({ conversationId, isTyping }) => {
-      socket.to(roomName(Number(conversationId))).emit("typing", {
-        conversationId: Number(conversationId),
-        userUid: actor.uid,
-        isTyping: !!isTyping,
-      });
+    // Ephemeral typing indicator (not persisted). Authorization is verified
+    // before relaying so unauthenticated actors cannot spam rooms they don't belong to.
+    socket.on("message:typing", async ({ conversationId, isTyping }) => {
+      try {
+        const { access } = await chatService.resolveAccessForConversation(actor, Number(conversationId));
+        if (!access.allowed) return;
+        socket.to(roomName(Number(conversationId))).emit("typing", {
+          conversationId: Number(conversationId),
+          userUid: actor.uid,
+          isTyping: !!isTyping,
+        });
+      } catch (_) {
+        // Swallow — typing indicators are best-effort
+      }
     });
   });
 
