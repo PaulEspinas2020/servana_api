@@ -161,8 +161,8 @@ export const PARITY_REGISTRY: ParityGroup[] = [
   // Customer identity in booking context
   {
     canonical: 'customerUid',
-    aliases: ['customer_uid', 'customerId', 'customer_id'],
-    note: 'Customer Firebase UID on booking — adminBookingService: customerUid (from customer_uid); formatBooking: customerId+customerUid from userId',
+    aliases: ['customer_uid', 'customerId', 'customer_id', 'customerUserId', 'customer_user_id'],
+    note: 'Customer Firebase UID on booking — adminBookingService: customerUid (from customer_uid); formatBooking: customerId+customerUid from userId; additional-work POST body: customerUserId',
   },
   // Payment
   {
