@@ -137,6 +137,27 @@ export const PARITY_REGISTRY: ParityGroup[] = [
     aliases: ['cancelled_at', 'canceledAt', 'canceled_at'],
     note: 'DB: cancelled_at  |  response: cancelledAt  |  US-spelling alias: canceledAt',
   },
+  // Payout lifecycle timestamps
+  {
+    canonical: 'disbursedAt',
+    aliases: ['disbursed_at'],
+    note: 'DB: disbursed_at  |  response: disbursedAt',
+  },
+  {
+    canonical: 'payoutDueAt',
+    aliases: ['payout_due_at'],
+    note: 'DB: payout_due_at  |  response: payoutDueAt',
+  },
+  {
+    canonical: 'refundedAt',
+    aliases: ['refunded_at'],
+    note: 'DB: refunded_at  |  response: refundedAt',
+  },
+  {
+    canonical: 'disputedAt',
+    aliases: ['disputed_at'],
+    note: 'DB: disputed_at  |  response: disputedAt',
+  },
   // Customer identity in booking context
   {
     canonical: 'customerUid',
