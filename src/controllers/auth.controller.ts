@@ -116,13 +116,20 @@ const resendVerification = async (req: Request, res: Response) => {
 
 export const firebaseAuthLoginController = async (req: Request, res: Response) => {
   try {
-    const { idToken, sourceClient } = req.body;
+    const { idToken, sourceClient, fcmToken, role } = req.body;
 
     if (!idToken) {
       return res.status(400).json({ status: "failed", message: "idToken is required" });
     }
 
-    const result = await firebaseFunction.firebaseAuthLogin(idToken);
+    // Validate role when provided. Accept "2" (provider) or "3" (customer).
+    // Defaults to "2" inside firebaseAuthLogin when omitted, preserving provider-portal behaviour.
+    // ServanaClient must pass role="3" so new customer accounts receive the correct role on INSERT.
+    if (role !== undefined && role !== "2" && role !== "3") {
+      return res.status(400).json({ status: "failed", message: "Invalid role value" });
+    }
+
+    const result = await firebaseFunction.firebaseAuthLogin(idToken, role);
 
     // Non-blocking attribution: only record when sourceClient is explicitly sent
     if (sourceClient && result?.data?.uid) {
@@ -134,12 +141,51 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
       touchProviderActivity(result.data.uid).catch(() => {});
     }
 
-    return res.status(200).json(result);
+    // Non-blocking FCM token registration — ServanaClient sends fcmToken in this body;
+    // without this call push notifications never reach customers who sign in via Firebase auth.
+    if (fcmToken && result?.data?.uid) {
+      authService.updateFcmToken(result.data.uid, fcmToken).catch(() => {});
+    }
+
+    return res.status(200).json({ status: 'success', data: result.data });
   } catch (error: any) {
     const isDisabled = error?.message?.includes("disabled");
     return res.status(isDisabled ? 403 : 401).json({
       status: "failed",
       message: isDisabled ? "This account has been disabled. Please contact support." : "Authentication failed.",
+    });
+  }
+};
+
+/**
+ * Customer social login (Google / Facebook via Flutter app).
+ * Accepts the Firebase ID token obtained after signing in with a social provider,
+ * upserts the customer account (role=3) in user_credentials, and returns a session
+ * shape identical to the email/password login so the Flutter client can parse it
+ * with the same _loginWithFirebaseToken helper.
+ *
+ * The Firebase ID token IS the session token — subsequent authenticated requests send it
+ * as Authorization: Bearer, which verifyAuth middleware validates via Firebase Admin SDK.
+ */
+export const customerFirebaseLoginController = async (req: Request, res: Response) => {
+  try {
+    const { idToken, fcmToken } = req.body;
+    if (!idToken) {
+      return res.status(400).json({ status: "failed", message: "idToken is required" });
+    }
+    const result = await firebaseFunction.customerFirebaseLogin(idToken);
+    // Non-blocking FCM token registration (must run AFTER upsert so uid is guaranteed)
+    if (fcmToken && result?.data?.id) {
+      authService.updateFcmToken(result.data.id, fcmToken).catch(() => {});
+    }
+    return res.status(200).json(result);
+  } catch (error: any) {
+    const isDisabled = error?.disabled || error?.message?.includes("disabled");
+    return res.status(isDisabled ? 403 : 401).json({
+      status: "failed",
+      message: isDisabled
+        ? "This account has been disabled. Please contact support."
+        : "Authentication failed.",
     });
   }
 };

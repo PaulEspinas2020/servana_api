@@ -14,7 +14,14 @@ import * as userService from "../services/user.service";
 
 const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
 
-const firebaseAuthLogin = async (idToken: string) => {
+/**
+ * role must be "2" (provider) or "3" (customer/client).
+ * Defaults to "2" so existing provider-portal callers that omit role are unaffected.
+ * ServanaClient should pass role="3" so new customer accounts are not mis-classified.
+ * The ON CONFLICT branch in upsertFirebaseUser does NOT update role, so only
+ * brand-new accounts (INSERT path) are affected by this value.
+ */
+const firebaseAuthLogin = async (idToken: string, role: string = "2") => {
   if (!idToken) {
     throw new Error("Missing Firebase ID token");
   }
@@ -39,7 +46,7 @@ const firebaseAuthLogin = async (idToken: string) => {
     phoneNumber: firebaseUser.phoneNumber || null,
     firstName,
     lastName,
-    role: "2",
+    role,
   });
 
   // Deny login for archived / disabled provider accounts.
@@ -50,10 +57,13 @@ const firebaseAuthLogin = async (idToken: string) => {
   return {
     data: {
       success: true,
+      token: idToken,
+      id: firebaseUser.uid,
       uid: firebaseUser.uid,
       role: dbUser.role,
       firstName: dbUser.firstName || "",
       lastName: dbUser.lastName || "",
+      fullname: [dbUser.firstName, dbUser.lastName].filter(Boolean).join(" "),
       email: dbUser.email || null,
       phoneNumber: firebaseUser.phoneNumber || null,
       message: "Authenticated successfully",
@@ -107,9 +117,69 @@ const firebaseProviderRegister = async (
       role: dbUser.role,
       firstName: dbUser.firstName || "",
       lastName: dbUser.lastName || "",
+      fullname: [dbUser.firstName, dbUser.lastName].filter(Boolean).join(" "),
       email: dbUser.email || null,
       phoneNumber: firebaseUser.phoneNumber || null,
       message: "Registration successful",
+    },
+  };
+};
+
+/**
+ * Customer social sign-in (Google / Facebook).
+ * Verifies the Firebase ID token, upserts the customer in user_credentials with role='3'
+ * (role is only set on INSERT — existing accounts keep their original role), and returns
+ * a session shape compatible with the email/password login response so the Flutter client
+ * can parse it identically.
+ *
+ * The token in the response IS the same Firebase ID token that was sent in — the Servana
+ * backend validates Bearer tokens via Firebase Admin verifyIdToken(), so no separate JWT
+ * is needed. The caller stores this token and sends it as Authorization: Bearer on every
+ * subsequent authenticated request.
+ */
+const customerFirebaseLogin = async (idToken: string) => {
+  if (!idToken) { throw new Error("Missing Firebase ID token"); }
+
+  const decoded = await defaultAuthAdmin.verifyIdToken(idToken);
+  const firebaseUser = await defaultAuthAdmin.getUser(decoded.uid);
+
+  let firstName = "";
+  let lastName = "";
+  if (firebaseUser.displayName) {
+    const parts = firebaseUser.displayName.trim().split(/\s+/);
+    firstName = parts[0] || "";
+    lastName = parts.slice(1).join(" ") || "";
+  }
+
+  const dbUser = await userService.upsertFirebaseUser({
+    uid: firebaseUser.uid,
+    email: firebaseUser.email || null,
+    phoneNumber: firebaseUser.phoneNumber || null,
+    firstName,
+    lastName,
+    role: "3",
+  });
+
+  if (dbUser.isArchived) {
+    throw Object.assign(
+      new Error("Your account has been disabled. Please contact Servana support."),
+      { disabled: true },
+    );
+  }
+
+  const fullname = [dbUser.firstName, dbUser.lastName].filter(Boolean).join(" ");
+
+  return {
+    status: "success",
+    data: {
+      token: idToken,
+      id: firebaseUser.uid,
+      customerID: firebaseUser.uid,
+      fullname,
+      phoneNumber: dbUser.phoneNumber || firebaseUser.phoneNumber || "",
+      mobileNumber: dbUser.phoneNumber || firebaseUser.phoneNumber || "",
+      email: dbUser.email || firebaseUser.email || "",
+      emailAddress: dbUser.email || firebaseUser.email || "",
     },
   };
 };
@@ -236,6 +306,7 @@ export {
     signInUserAndGetTokeninFirebase,
     firebaseAuthLogin,
     firebaseProviderRegister,
+    customerFirebaseLogin,
     getFirebaseUserByEmail,
     getFirebaseUserByUid,
     updateFirebaseEmailVerified,
