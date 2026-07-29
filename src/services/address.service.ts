@@ -37,9 +37,11 @@ const addUserAddress = async (userAddressReq: UserAddressReq, uid: string) => {
 
         if (!rows || rows.length == 0) throw "Failed to insert address";
 
-        // Only sync to MongoDB when coordinates are available
+        // Sync to MongoDB (fire-and-forget — failure must not roll back the PostgreSQL save)
         if (locationId && lat != null && lon != null) {
-            await addLocationInDB(locationId, addressId, lat, lon);
+            addLocationInDB(locationId, addressId, lat, lon).catch((e: any) => {
+                console.error('[address.service] MongoDB location write failed (MSP-BUG-029):', e?.message ?? e);
+            });
         }
 
         const dbResponse = await formattedAddress(rows[0]);
@@ -77,9 +79,11 @@ const updateUserAddress = async (userAddressReq: UserAddressReq, uid: string, ad
 
         if (!rows || rows.length == 0) throw "Failed to update address";
 
-        // Only sync to MongoDB when coordinates are available
+        // Sync to MongoDB (fire-and-forget — failure must not roll back the PostgreSQL save)
         if (locationId && lat != null && lon != null) {
-            await updateLocationInDB(locationId, addressId, lat, lon);
+            updateLocationInDB(locationId, addressId, lat, lon).catch((e: any) => {
+                console.error('[address.service] MongoDB location update failed (MSP-BUG-029):', e?.message ?? e);
+            });
         }
 
         const dbResponse = await formattedAddress(rows[0]);
