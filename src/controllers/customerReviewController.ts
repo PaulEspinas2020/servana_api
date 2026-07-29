@@ -22,7 +22,7 @@ init().catch(console.error);
 
 export async function checkEligibility(req: Request, res: Response) {
   const customerUid = req.user?.uid as string;
-  const { bookingId } = req.params;
+  const { bookingId } = req.params as Record<string, string>;
   try {
     const result = await getReviewEligibility(bookingId, customerUid);
     return res.json(result);
@@ -35,7 +35,7 @@ export async function checkEligibility(req: Request, res: Response) {
 
 export async function create(req: Request, res: Response) {
   const customerUid = req.user?.uid as string;
-  const { bookingId } = req.params;
+  const { bookingId } = req.params as Record<string, string>;
   const {
     overallRating,
     dimensions    = {},
@@ -69,7 +69,7 @@ export async function create(req: Request, res: Response) {
 
 export async function getByBooking(req: Request, res: Response) {
   const customerUid = req.user?.uid as string;
-  const { bookingId } = req.params;
+  const { bookingId } = req.params as Record<string, string>;
   try {
     const review = await getReviewByBooking(bookingId, customerUid);
     if (!review) return res.status(404).json({ error: "REVIEW_NOT_FOUND" });
@@ -83,7 +83,7 @@ export async function getByBooking(req: Request, res: Response) {
 
 export async function getById(req: Request, res: Response) {
   const customerUid = req.user?.uid as string;
-  const { reviewId } = req.params;
+  const { reviewId } = req.params as Record<string, string>;
   try {
     const review = await getReviewById(reviewId, customerUid);
     if (!review) return res.status(404).json({ error: "REVIEW_NOT_FOUND" });
@@ -97,7 +97,7 @@ export async function getById(req: Request, res: Response) {
 
 export async function edit(req: Request, res: Response) {
   const customerUid = req.user?.uid as string;
-  const { reviewId } = req.params;
+  const { reviewId } = req.params as Record<string, string>;
   const {
     overallRating,
     dimensions    = {},
@@ -126,7 +126,7 @@ export async function edit(req: Request, res: Response) {
 
 export async function remove(req: Request, res: Response) {
   const customerUid = req.user?.uid as string;
-  const { reviewId } = req.params;
+  const { reviewId } = req.params as Record<string, string>;
   try {
     await deleteReview(reviewId, customerUid);
     return res.json({ deleted: true });
@@ -150,7 +150,7 @@ export async function listMine(req: Request, res: Response) {
 // ─── Provider public reviews ──────────────────────────────────────────────────
 
 export async function listForProvider(req: Request, res: Response) {
-  const { providerUid } = req.params;
+  const { providerUid } = req.params as Record<string, string>;
   const limit  = Math.min(Number(req.query.limit  ?? 20), 50);
   const offset = Number(req.query.offset ?? 0);
   try {
@@ -164,7 +164,7 @@ export async function listForProvider(req: Request, res: Response) {
 // ─── Provider aggregate ───────────────────────────────────────────────────────
 
 export async function providerAggregate(req: Request, res: Response) {
-  const { providerUid } = req.params;
+  const { providerUid } = req.params as Record<string, string>;
   try {
     const agg = await getProviderAggregate(providerUid);
     return res.json(agg);
@@ -177,7 +177,7 @@ export async function providerAggregate(req: Request, res: Response) {
 
 export async function report(req: Request, res: Response) {
   const reporterUid = req.user?.uid as string;
-  const { reviewId } = req.params;
+  const { reviewId } = req.params as Record<string, string>;
   const { reason = "OTHER", details = null } = req.body as Record<string, unknown>;
   try {
     await reportReview(

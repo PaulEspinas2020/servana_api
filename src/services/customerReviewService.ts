@@ -550,7 +550,7 @@ export async function listCustomerReviews(customerUid: string) {
      LIMIT 50`,
     [customerUid]
   );
-  return res.rows.map(row => mapReviewRow(row, false));
+  return res.rows.map((row: any) => mapReviewRow(row, false));
 }
 
 // ─── Provider public reviews ──────────────────────────────────────────────────
@@ -588,7 +588,7 @@ export async function listProviderReviews(providerUid: string, limit = 20, offse
        AND moderation_status IN ('NOT_REQUIRED','APPROVED')`,
     [providerUid]
   );
-  return { reviews: res.rows.map(r => mapPublicReviewRow(r)), total: countRes.rows[0].total };
+  return { reviews: res.rows.map((r: any) => mapPublicReviewRow(r)), total: countRes.rows[0].total };
 }
 
 // ─── Provider aggregate ───────────────────────────────────────────────────────

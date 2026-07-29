@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { verifyAuth } from "../middleware/verifyAuth";
+import verifyAuth from "../middleware/verifyAuth";
 import {
   checkEligibility,
   create,
