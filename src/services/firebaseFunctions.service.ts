@@ -26,7 +26,10 @@ const firebaseAuthLogin = async (idToken: string, role: string = "2") => {
     throw new Error("Missing Firebase ID token");
   }
 
-  const decoded = await defaultAuthAdmin.verifyIdToken(idToken);
+  // checkRevoked=true: reject tokens that were revoked server-side after logout.
+  // Required for session-restore safety — revokeTokenInFirebase() is called on logout,
+  // so a page-reload with a cached-but-revoked token must not re-establish the session.
+  const decoded = await defaultAuthAdmin.verifyIdToken(idToken, /* checkRevoked */ true);
   const firebaseUser = await defaultAuthAdmin.getUser(decoded.uid);
 
   // Derive name from Firebase displayName when available (set during registration).
