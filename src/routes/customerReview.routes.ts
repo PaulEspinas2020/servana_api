@@ -23,6 +23,10 @@ router.get(   "/bookings/:bookingId/review-eligibility", verifyAuth, checkEligib
 router.post(  "/bookings/:bookingId/reviews",            verifyAuth, create);
 router.get(   "/bookings/:bookingId/reviews",            verifyAuth, getByBooking);
 
+// ─── Customer: review history (MUST precede /:reviewId to avoid route shadowing)
+// GET /api/reviews/me
+router.get("/reviews/me", verifyAuth, listMine);
+
 // ─── Customer: review-scoped ──────────────────────────────────────────────────
 // GET    /api/reviews/:reviewId
 // PUT    /api/reviews/:reviewId
@@ -32,10 +36,6 @@ router.get(   "/reviews/:reviewId",        verifyAuth, getById);
 router.put(   "/reviews/:reviewId",        verifyAuth, edit);
 router.delete("/reviews/:reviewId",        verifyAuth, remove);
 router.post(  "/reviews/:reviewId/report", verifyAuth, report);
-
-// ─── Customer: review history ─────────────────────────────────────────────────
-// GET /api/reviews/me
-router.get("/reviews/me", verifyAuth, listMine);
 
 // ─── Public: provider reviews (no auth required) ──────────────────────────────
 // GET /api/providers/:providerUid/reviews
