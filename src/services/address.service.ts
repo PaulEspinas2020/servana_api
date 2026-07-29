@@ -44,7 +44,9 @@ const addUserAddress = async (userAddressReq: UserAddressReq, uid: string) => {
             });
         }
 
-        const dbResponse = await formattedAddress(rows[0]);
+        // Pass known coords so formattedAddress skips the MongoDB read (avoids post-fire-and-forget race)
+        const knownCoords = (lat != null && lon != null) ? { lat, lon } : null;
+        const dbResponse = await formattedAddress(rows[0], knownCoords);
         return dbResponse;
     } catch (error) {
         throw error;
@@ -86,7 +88,9 @@ const updateUserAddress = async (userAddressReq: UserAddressReq, uid: string, ad
             });
         }
 
-        const dbResponse = await formattedAddress(rows[0]);
+        // Pass known coords so formattedAddress skips the MongoDB read (avoids post-fire-and-forget race)
+        const knownCoords = (lat != null && lon != null) ? { lat, lon } : null;
+        const dbResponse = await formattedAddress(rows[0], knownCoords);
         return dbResponse;
     } catch (error) {
         throw error;
@@ -240,9 +244,12 @@ const getLatLonByLocationId = async (locationId: string) => {
     }
 }
 
-const formattedAddress = async (raw: any) => {
+const formattedAddress = async (raw: any, knownCoords?: { lat: number; lon: number } | null) => {
     let coordinates: any[] | null = null;
-    if (raw.location_id) {
+    if (knownCoords != null) {
+        // Caller already has the coordinates — skip MongoDB read to avoid post-fire-and-forget race
+        coordinates = [knownCoords.lon, knownCoords.lat];
+    } else if (raw.location_id) {
         try {
             coordinates = await getLatLonByLocationId(raw.location_id);
         } catch {
