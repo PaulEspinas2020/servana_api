@@ -32,6 +32,20 @@ interface ParityGroup {
 }
 
 export const PARITY_REGISTRY: ParityGroup[] = [
+  // ── Auth token ───────────────────────────────────────────────────────────────
+  {
+    canonical: 'token',
+    aliases: ['idToken', 'id_token', 'sessionToken', 'session_token', 'accessToken', 'access_token'],
+    note: 'Bearer auth token — signin/firebase-login response: token; Firebase ID token in request body: idToken; provider portal session: sessionToken',
+  },
+
+  // ── Email ────────────────────────────────────────────────────────────────────
+  {
+    canonical: 'email',
+    aliases: ['emailAddress', 'email_address'],
+    note: 'User email address — canonical: email; customerFirebaseLogin also returns emailAddress for ServanaClient compatibility',
+  },
+
   // ── Identity ────────────────────────────────────────────────────────────────
   {
     canonical: 'id',

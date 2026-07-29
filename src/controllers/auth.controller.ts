@@ -110,7 +110,7 @@ const resendVerification = async (req: Request, res: Response) => {
 
     return res.status(200).json({
         status: 'success',
-        message: 'If this account exists, a verification link has been sent.',
+        data: { message: 'If this account exists, a verification link has been sent.' },
     });
 };
 
@@ -280,7 +280,7 @@ export const forgotPasswordController = async (req: Request, res: Response) => {
             : undefined;
 
         const result = await authService.forgotPassword(email, continueUrl);
-        return res.status(200).json({ status: "success", ...result });
+        return res.status(200).json({ status: "success", data: result });
     } catch (error: any) {
         const isClientError = typeof error === 'string' && error.toLowerCase().includes('valid email');
         return res.status(isClientError ? 400 : 500).json({
@@ -299,7 +299,7 @@ export const resetPasswordController = async (req: Request, res: Response) => {
         }
 
         const result = await authService.resetPassword({ oobCode, newPassword });
-        return res.status(200).json({ status: "success", ...result });
+        return res.status(200).json({ status: "success", data: result });
     } catch (error: any) {
         return res.status(400).json({
             status: 'error',
@@ -330,11 +330,10 @@ export const logoutController = async (req: Request, res: Response) => {
         if (!uid) {
             return res.status(401).json({ status: "failed", message: "Unauthorized" });
         }
-        // Non-blocking: revoke Firebase token and deactivate device FCM token
-        Promise.allSettled([
+        await Promise.allSettled([
             firebaseFunction.revokeTokenInFirebase(uid),
             clearFcmToken(uid),
-        ]).catch(() => {});
+        ]);
         return res.status(200).json({ status: "success", data: { message: "Logged out." } });
     } catch (error: any) {
         return res.status(500).json({ status: "failed", message: error?.message || "Logout failed" });

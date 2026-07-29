@@ -52,8 +52,9 @@ const validateFirebaseIdToken = async (req: Request, res: Response, next: NextFu
       });
     }
   } else {
-    if (process.env.NODE_ENV === 'production') {
-      console.error('FATAL: TEMP_ID must not be set in production. Exiting.');
+    const DEV_ENVS = new Set(['development', 'local', 'test']);
+    if (!DEV_ENVS.has(process.env.NODE_ENV || '')) {
+      console.error('FATAL: TEMP_ID is set in a non-development environment. Exiting.');
       process.exit(1);
     }
     req['user'] = { uid: tempId };

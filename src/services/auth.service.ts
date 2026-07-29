@@ -72,6 +72,11 @@ const registerUser = async (user: UserCredentialsReq) => {
         throw "Missing required parameters";
     }
 
+    const ALLOWED_PUBLIC_ROLES = [2, 3]; // provider=2, client=3; admins must use /auth/add-employees
+    if (!ALLOWED_PUBLIC_ROLES.includes(Number(role))) {
+        throw Object.assign(new Error("Invalid role. Admin accounts cannot be created via this endpoint."), { statusCode: 403 });
+    }
+
     if (email && (!isValidEmail(email) || !validatePassword(password))) {
         throw "Please enter a valid Email or Password";
     }
@@ -81,7 +86,8 @@ const registerUser = async (user: UserCredentialsReq) => {
         const userInFirebase = await firebaseFunction.checkUserIfExistInFirebase(email);
 
         if (userInFirebase) {
-            throw "User is already Registered. Please login instead.";
+            // Generic message — do not reveal whether the email exists in the system.
+            throw Object.assign(new Error('Registration failed. Please try again.'), { statusCode: 409 });
         }
 
         // Use this if we have different mailer
@@ -242,12 +248,16 @@ const loginUserInDBAndFirebase = async (email: string, password: string) => {
         }
 
         const firebaseUser = await firebaseFunction.signInUserAndGetTokeninFirebase(email, password);
-        delete dbCredentials.password;
+        // Whitelist only the fields the frontend needs — never spread the full DB row.
         const credentials = {
             token: firebaseUser.token,
-            // refreshToken intentionally excluded — long-lived credential not needed by web clients
-            ...dbCredentials,
             id: firebaseUser.uid,
+            uid: firebaseUser.uid,
+            email: dbCredentials.email,
+            role: dbCredentials.role,
+            firstName: dbCredentials.firstName,
+            lastName: dbCredentials.lastName,
+            isEmailVerified: dbCredentials.isEmailVerified,
         };
 
         if (dbCredentials.role == 2) {
