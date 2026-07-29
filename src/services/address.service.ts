@@ -286,7 +286,7 @@ const getAddressesByUserId = async (userId: string) => {
     try {
         const { rows } = await dbQuery.query(searchQuery, [userId]);
         if (!rows || rows.length === 0) return [];
-        return Promise.all(rows.map(formattedAddress));
+        return Promise.all(rows.map((row: any) => formattedAddress(row)));
     } catch (error) {
         throw error;
     }
