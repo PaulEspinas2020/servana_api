@@ -492,10 +492,37 @@ export const assignWorker = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * The worker performing a lifecycle action on their own job.
+ *
+ * These four handlers used to read `req.query.workerUid` on routes with no auth
+ * middleware at all — one of them still carried the comment "or from auth
+ * token", which is where this should always have come from. Anyone able to
+ * reach the API could accept, start, complete or decline any booking while
+ * claiming to be any worker, which moves money: completion is what makes a job
+ * payable.
+ *
+ * assignWorker deliberately does NOT use this. It is admin-only and assigns a
+ * DIFFERENT worker, so there the query parameter is the subject rather than a
+ * claim about the caller (§7 — identity comes from the token; a subject does
+ * not).
+ */
+const actingWorkerUid = (req: Request): string | null => {
+  const fromToken = (req as any).user?.uid as string | undefined;
+  const claimed = req.query.workerUid as string | undefined;
+  if (fromToken && claimed && claimed !== fromToken) {
+    // Not fatal — the token wins regardless. Logged without either value so the
+    // line carries no PII (§58); the point is to see whether a released client
+    // still sends the parameter before it is removed.
+    console.warn('[worker-lifecycle] ignoring a ?workerUid that does not match the caller');
+  }
+  return fromToken ?? null;
+};
+
 export const declineJob = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
-    const workerUid = req.query.workerUid as string;
+    const workerUid = actingWorkerUid(req);
 
     if (!bookingId || !workerUid) {
       return res.status(400).json({
@@ -524,7 +551,7 @@ export const declineJob = async (req: Request, res: Response) => {
 export const acceptJob = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
-   const workerUid = req.query.workerUid as string; // or from auth token
+    const workerUid = actingWorkerUid(req);
 
     if (!bookingId || !workerUid) {
       return res.status(400).json({
@@ -553,7 +580,7 @@ export const acceptJob = async (req: Request, res: Response) => {
 export const startJob = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
-    const workerUid = req.query.workerUid as string;
+    const workerUid = actingWorkerUid(req);
     const workerCode = req.query.workerCode as string; // or from auth token
 
     if (!bookingId || !workerUid) {
@@ -581,7 +608,7 @@ export const startJob = async (req: Request, res: Response) => {
 export const completeJob = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
-    const workerUid = req.query.workerUid as string;
+    const workerUid = actingWorkerUid(req);
 
     if (!bookingId || !workerUid) {
       return res.status(400).json({

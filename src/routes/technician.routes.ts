@@ -75,10 +75,15 @@ router.get(
   verifyOwnership,
   technicianController.getJobCards,
 );
-router.put("/workers/bookings/:bookingId/decline", technicianController.declineJob);
-router.put("/workers/bookings/:bookingId/accept", technicianController.acceptJob);
-router.put("/workers/bookings/:bookingId/start", technicianController.startJob);
-router.put("/workers/bookings/:bookingId/complete", technicianController.completeJob);
+// Booking lifecycle. These carried no auth at all and took the acting worker
+// from `?workerUid=`, so anyone reaching the API could accept, start, complete
+// or decline any booking as any worker — and completion is what makes a job
+// payable. The controllers now derive identity from the token (actingWorkerUid);
+// verifyAuth is what guarantees there is one.
+router.put("/workers/bookings/:bookingId/decline", verifyAuth, technicianController.declineJob);
+router.put("/workers/bookings/:bookingId/accept", verifyAuth, technicianController.acceptJob);
+router.put("/workers/bookings/:bookingId/start", verifyAuth, technicianController.startJob);
+router.put("/workers/bookings/:bookingId/complete", verifyAuth, technicianController.completeJob);
 
 // Admin-only routes — require authenticated admin (role 1)
 router.put("/admin/bookings/:bookingId/assign", verifyAuth, verifyRoles([1]), technicianController.assignWorker);

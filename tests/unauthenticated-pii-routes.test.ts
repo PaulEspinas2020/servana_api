@@ -145,3 +145,46 @@ describe('the misleading comment is gone', () => {
     expect(technicianRoutes).not.toMatch(/do NOT add auth/i);
   });
 });
+
+describe('booking lifecycle — identity from the token, not the query string', () => {
+  const controller = read('controllers', 'technicianController.ts');
+
+  it.each(['decline', 'accept', 'start', 'complete'])(
+    'PUT /workers/bookings/:bookingId/%s requires authentication',
+    (action) => {
+      expect(guardsFor(technicianRoutes, 'put', `/workers/bookings/:bookingId/${action}`))
+        .toContain('verifyAuth');
+    },
+  );
+
+  it('the four self-acting handlers no longer read ?workerUid', () => {
+    // Completion is what makes a job payable, so a spoofable actor here moves
+    // money. Scoped to the region after declineJob: assignWorker sits above it
+    // and legitimately keeps the parameter.
+    const selfActing = controller.slice(controller.indexOf('export const declineJob'));
+    expect(selfActing).not.toMatch(/const workerUid = req\.query\.workerUid/);
+    expect(selfActing.match(/actingWorkerUid\(req\)/g) ?? []).toHaveLength(4);
+  });
+
+  it('actingWorkerUid returns the token uid and never falls back to the claim', () => {
+    const fn = controller.slice(
+      controller.indexOf('const actingWorkerUid'),
+      controller.indexOf('const actingWorkerUid') + 900,
+    );
+    expect(fn).toMatch(/return fromToken \?\? null/);
+    // A `?? claimed` fallback would restore the vulnerability while still
+    // looking like it reads the token first.
+    expect(fn).not.toMatch(/fromToken\s*\?\?\s*claimed/);
+  });
+
+  it('assignWorker keeps the query parameter, because it assigns someone else', () => {
+    const admin = controller.slice(
+      controller.indexOf('export const assignWorker'),
+      controller.indexOf('export const declineJob'),
+    );
+    expect(admin).toMatch(/req\.query\.workerUid/);
+    // And it stays admin-gated, which is what makes that safe.
+    expect(guardsFor(technicianRoutes, 'put', '/admin/bookings/:bookingId/assign'))
+      .toContain('verifyRoles');
+  });
+});
