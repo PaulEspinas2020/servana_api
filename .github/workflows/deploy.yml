@@ -41,6 +41,45 @@ jobs:
             exit 1
           fi
 
+      - name: Use Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline
+
+      # The 1344 tests in this repo had never gated a deploy. The pipeline went
+      # checkout -> secrets -> migrations -> build -> restart, so a change that
+      # broke every test still shipped, and schema changes were applied to
+      # production before the code was even compiled.
+      #
+      # `verify` is typecheck + jest --runInBand --ci: ~18s, deterministic, no
+      # database and no network. Cheap enough that there is no argument for
+      # skipping it, and it runs BEFORE the migration step below so a failure
+      # leaves production completely untouched.
+      - name: Verify (typecheck + tests)
+        run: npm run verify
+
+      # Separate from the suite on purpose. This asserts the admin route
+      # contracts other portals depend on, and a failure here means a breaking
+      # change to a published surface rather than an ordinary test failure.
+      - name: Guard protected route contracts
+        run: npm run guard:protected-contracts
+
+      - name: Build
+        run: npm run build
+
+      # MOVED. This used to be the fifth step — it ran before Node was even
+      # installed, so schema changes were applied to the production database
+      # before the code that needs them had been compiled, let alone tested. A
+      # failed build left production running old code against a migrated
+      # schema, and nothing in the pipeline would have said so.
+      #
+      # Its position is now load-bearing: after verify and build, before the
+      # restart. A failing test touches nothing; a failing migration stops
+      # short of the restart, so the old code keeps serving.
       - name: Run pending DB migrations
         env:
           PGPASSWORD: ${{ secrets.DB_PASSWORD }}
@@ -148,18 +187,6 @@ jobs:
           else
             echo "Migration 008-aircon-installation-repair-services: already applied, skipping"
           fi
-
-      - name: Use Node.js 24
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: "npm"
-
-      - name: Install dependencies
-        run: npm ci --prefer-offline
-
-      - name: Build
-        run: npm run build
 
       - name: Restart PM2
         run: |
