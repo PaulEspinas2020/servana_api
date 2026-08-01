@@ -147,10 +147,35 @@ const archiveUser = async (req: Request, res: Response) => {
     const { uid } = req.user;
     const { userId } = req.params as { userId: string };
 
-    try {
-        const dbResponse = await authService.changeArchiveStatus(userId, false);
+    // `false` used to be hardcoded here, so the handler named "archiveUser"
+    // would have UN-archived had it ever reached a real row. The desired state
+    // is an input; default true, because that is what the endpoint is called.
+    const archived = req.body?.isArchived === undefined
+        ? true
+        : req.body.isArchived === true || req.body.isArchived === "true";
 
-        await createLogEntry("ARCHIVE", uid, userId, "User");
+    if (!userId) {
+        return res.status(400).send({
+            status: "failed",
+            message: "userId is required",
+        });
+    }
+
+    try {
+        const dbResponse = await authService.changeArchiveStatus(userId, archived);
+
+        // Nothing matched: the uid does not exist. Answering 200 here is what
+        // let a no-op look like a completed archive, and what put a fictitious
+        // entry in the audit log (§20).
+        if (!dbResponse || (Array.isArray(dbResponse) && dbResponse.length === 0)) {
+            return res.status(404).send({
+                status: "failed",
+                message: "User not found",
+            });
+        }
+
+        // Logged only after a row actually changed.
+        await createLogEntry(archived ? "ARCHIVE" : "UNARCHIVE", uid, userId, "User");
 
         successMessage.data = dbResponse;
         res.status(status.success).send(successMessage);

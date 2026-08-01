@@ -136,3 +136,69 @@ describe('what must not have changed', () => {
     expect(signInBody).toMatch(/refreshToken:\s*firebaseUser\.refreshToken/);
   });
 });
+
+describe('archiving actually archives', () => {
+  // The check added above is only worth anything if an admin can set the flag.
+  // PUT /api/user/archive declared no :userId while the controller read one, so
+  // every call ran `WHERE uid = NULL`, changed nothing, and answered 200
+  // success — and then wrote an ARCHIVE entry to the audit log. Producing
+  // evidence of an action that did not happen is worse than failing (§20).
+  //
+  // The route's own comment claimed "the broken :userId param issue is fixed
+  // here". It was not; only the role guard had been added.
+  const routes = read('routes', 'user.route.ts');
+  const controller = read('controllers', 'user.controller.ts');
+  const archiveFn = controller.slice(
+    controller.indexOf('const archiveUser'),
+    controller.indexOf('const getAddressesByUserId'),
+  );
+
+  it('the path declares the parameter the handler reads', () => {
+    expect(routes).toMatch(/router\.put\("\/user\/:userId\/archive"/);
+    expect(routes).not.toMatch(/router\.put\("\/user\/archive"/);
+  });
+
+  it('it stays admin-only', () => {
+    const line = routes.match(/router\.put\("\/user\/:userId\/archive"[^\n]*/)?.[0] ?? '';
+    expect(line).toContain('verifyAuth');
+    expect(line).toContain('verifyRoles([1])');
+  });
+
+  it('the stale comment claiming the param bug was fixed is gone', () => {
+    expect(routes).not.toContain('the broken :userId param issue is fixed here');
+  });
+
+  it('a missing userId is rejected rather than run as WHERE uid = NULL', () => {
+    expect(archiveFn).toMatch(/if \(!userId\)/);
+    expect(archiveFn).toContain('userId is required');
+  });
+
+  it('archiving no longer hardcodes false', () => {
+    // The handler is called archiveUser and passed `false`, so a correct id
+    // would have UN-archived.
+    expect(archiveFn).not.toMatch(/changeArchiveStatus\(userId,\s*false\)/);
+    expect(archiveFn).toMatch(/changeArchiveStatus\(userId,\s*archived\)/);
+  });
+
+  it('it defaults to archiving, and accepts an explicit state', () => {
+    expect(archiveFn).toMatch(/isArchived === undefined/);
+    expect(archiveFn).toMatch(/\?\s*true/);
+  });
+
+  it('a uid that matched nothing is a 404, not a 200', () => {
+    expect(archiveFn).toMatch(/dbResponse\.length === 0/);
+    expect(archiveFn).toContain('404');
+  });
+
+  it('the audit entry is written only after a row changed', () => {
+    // Logging before the emptiness check is what recorded archives that never
+    // happened.
+    expect(archiveFn.indexOf('404')).toBeLessThan(
+      archiveFn.indexOf('createLogEntry'),
+    );
+  });
+
+  it('the log distinguishes archive from unarchive', () => {
+    expect(archiveFn).toMatch(/archived \? "ARCHIVE" : "UNARCHIVE"/);
+  });
+});

@@ -24,9 +24,18 @@ router.put("/user/makeaddressprimary", verifyAuth, userController.makeAddressPri
 
 router.delete("/user/deleteaddress", verifyAuth, userController.deleteAddress);
 
-// archiveUser is an admin-only operation; the broken :userId param issue is fixed here
-// by keeping the route as-is but adding the role guard so only admin can call it.
-router.put("/user/archive", verifyAuth, verifyRoles([1]), userController.archiveUser);
+// The comment that used to sit here claimed "the broken :userId param issue is
+// fixed here by keeping the route as-is" — it was not. Only the role guard was
+// added. The path declared no :userId while the controller read one anyway, so
+// every call ran `WHERE uid = NULL`, updated nothing, and answered 200 success.
+// The audit log recorded an ARCHIVE that never happened, which is worse than
+// failing: it produced evidence of an action that did not occur.
+//
+// The path now declares the parameter it has always read. `/admin/workers/:uid/archive`
+// (technician.routes.ts:90) is the equivalent that actually worked and is what the
+// admin portal calls; this one had no caller in any of the four clients, which is
+// why nobody noticed it silently doing nothing.
+router.put("/user/:userId/archive", verifyAuth, verifyRoles([1]), userController.archiveUser);
 
 // ─── FCM token management ────────────────────────────────────────────────────
 router.post("/user/fcm-token", verifyAuth, userController.registerFcmToken);
