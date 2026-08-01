@@ -35,8 +35,12 @@ describe('adminCreateBooking — schema bootstrap', () => {
   });
 
   it('creates booking_create_idempotency table with UNIQUE constraint', () => {
+    // The actor column was renamed admin_actor_uid -> actor_uid when the
+    // CUSTOMER booking path began sharing this table. One concept, one table
+    // (§9) — and the old name would have been a lie the moment a customer uid
+    // was written to it. Existing installs are migrated at boot.
     expect(svcSrc).toContain('booking_create_idempotency');
-    expect(svcSrc).toContain('UNIQUE (idempotency_key, admin_actor_uid)');
+    expect(svcSrc).toContain('UNIQUE (idempotency_key, actor_uid)');
   });
 
   it('adds guest_customer_id column to bookings', () => {

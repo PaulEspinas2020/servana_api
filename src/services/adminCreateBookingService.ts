@@ -117,16 +117,43 @@ export const ensureAdminCreateBookingSchema = async (): Promise<void> => {
     CREATE INDEX IF NOT EXISTS idx_bpe_booking_id ON ${s}.booking_payment_evidence (booking_id)
   `, []);
 
-  // booking_create_idempotency — guards against double-click duplicate creation
+  // booking_create_idempotency — guards against duplicate creation from a
+  // retried or double-tapped request. Used by BOTH the admin create-booking flow
+  // and the customer POST /api/bookings, which is why the actor column is named
+  // generically: it holds whichever uid issued the request.
   await dbQuery.query(`
     CREATE TABLE IF NOT EXISTS ${s}.booking_create_idempotency (
       id               SERIAL PRIMARY KEY,
       idempotency_key  VARCHAR(64)  NOT NULL,
-      admin_actor_uid  VARCHAR(256) NOT NULL,
+      actor_uid        VARCHAR(256) NOT NULL,
       booking_id       INTEGER      NOT NULL,
       created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-      UNIQUE (idempotency_key, admin_actor_uid)
+      UNIQUE (idempotency_key, actor_uid)
     )
+  `, []);
+
+  // Rename for installs created before customers shared this table. Postgres
+  // has no IF EXISTS on RENAME COLUMN, so the catalog is checked first; the
+  // UNIQUE constraint follows the rename automatically. Idempotent, because
+  // this whole function runs on every boot.
+  await dbQuery.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = '${s}'
+          AND table_name = 'booking_create_idempotency'
+          AND column_name = 'admin_actor_uid'
+      ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = '${s}'
+          AND table_name = 'booking_create_idempotency'
+          AND column_name = 'actor_uid'
+      ) THEN
+        ALTER TABLE ${s}.booking_create_idempotency
+          RENAME COLUMN admin_actor_uid TO actor_uid;
+      END IF;
+    END $$;
   `, []);
 
   // bookings.guest_customer_id — links a booking to its guest_customers row
@@ -501,7 +528,7 @@ export const adminCreateBooking = async (
   // ── Pre-flight: idempotency check (outside transaction) ──────────────────
   const existing = await dbQuery.query(
     `SELECT booking_id FROM ${s}.booking_create_idempotency
-     WHERE idempotency_key = $1 AND admin_actor_uid = $2
+     WHERE idempotency_key = $1 AND actor_uid = $2
      LIMIT 1`,
     [idempotencyKey, adminActorUid]
   );
@@ -643,7 +670,7 @@ export const adminCreateBooking = async (
     );
     const existingInTx = await client.query(
       `SELECT booking_id FROM ${s}.booking_create_idempotency
-       WHERE idempotency_key = $1 AND admin_actor_uid = $2
+       WHERE idempotency_key = $1 AND actor_uid = $2
        LIMIT 1`,
       [idempotencyKey, adminActorUid]
     );
@@ -764,7 +791,7 @@ export const adminCreateBooking = async (
     // 7. Record idempotency key
     await client.query(
       `INSERT INTO ${s}.booking_create_idempotency
-         (idempotency_key, admin_actor_uid, booking_id)
+         (idempotency_key, actor_uid, booking_id)
        VALUES ($1, $2, $3)
        ON CONFLICT DO NOTHING`,
       [idempotencyKey, adminActorUid, bookingId]

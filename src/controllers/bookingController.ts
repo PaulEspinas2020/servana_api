@@ -5,6 +5,11 @@ import {
 } from "../services/bookingAccessService";
 import * as bookingService from "../services/bookingService";
 import { formatBooking, formatBookings } from "../services/bookingService";
+import {
+  normaliseIdempotencyKey,
+  findBookingByIdempotencyKey,
+  recordIdempotentBooking,
+} from "../services/bookingIdempotency";
 import { createCustomerNotification } from "../services/notification.service";
 export const createBooking = async (req: any, res: any) => {
   try {
@@ -27,9 +32,63 @@ export const createBooking = async (req: any, res: any) => {
         message: "Authentication is required",
       });
     }
+    // Duplicate-submission protection.
+    //
+    // ServanaClient generates a key per booking draft and sends it as
+    // X-Idempotency-Key, holding it until the backend confirms
+    // (draft_repository.getOrCreateIdempotencyKey). This endpoint read it
+    // nowhere, so a retried submit created a SECOND booking and a second
+    // payment row — and the client's whole recovery layer exists because
+    // requests on Philippine mobile networks are expected to time out and be
+    // retried. A timeout that had actually succeeded charged the customer twice
+    // and dispatched two providers.
+    //
+    // The key is optional: older clients do not send one, and rejecting those
+    // would break every shipped app in order to fix a duplicate-submission bug.
+    // A caller without a key simply gets no protection, exactly as before.
+    const idempotencyKey = normaliseIdempotencyKey(
+      req.header('X-Idempotency-Key'),
+    );
+
+    const alreadyCreated = await findBookingByIdempotencyKey(
+      idempotencyKey,
+      userId,
+    );
+    if (alreadyCreated) {
+      // Return the ORIGINAL booking, not an error. A retry is the client
+      // asking "did that land?", and the honest answer is the booking it
+      // created. 200 with the same body makes the retry indistinguishable from
+      // the first success, which is the point of idempotency (§17).
+      const existing = await bookingService.getBookingById(alreadyCreated);
+      if (existing) {
+        return res.json({
+          success: true,
+          booking: formatBooking(existing),
+          idempotentReplay: true,
+        });
+      }
+      // The row is recorded but the booking is gone — deleted, or a partial
+      // write. Falling through to create is wrong (it would duplicate) and so
+      // is pretending success. Say so.
+      return res.status(409).json({
+        success: false,
+        code: 'IDEMPOTENCY_KEY_REUSED',
+        message:
+          'This request was already processed but its booking is no longer available.',
+      });
+    }
+
     const booking = await bookingService.createBooking(
       userId,
       req.body
+    );
+
+    // Record only after a booking exists, so a failed create leaves the key
+    // free to be retried rather than permanently poisoned.
+    await recordIdempotentBooking(
+      idempotencyKey,
+      userId,
+      (booking as any)?.id ?? (booking as any)?.bookingId ?? null,
     );
 
     // Non-blocking: notify the customer that their booking was received
