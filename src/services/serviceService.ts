@@ -48,7 +48,12 @@ export const getOptionsWithAddons = async (serviceId: number) => {
     SELECT
       so.*,
       COALESCE(m.inclusions, '[]'::jsonb) AS inclusions,
-      COALESCE(m.exclusions, '[]'::jsonb) AS exclusions
+      COALESCE(m.exclusions, '[]'::jsonb) AS exclusions,
+      -- Seeded for every catalog service by migrations 002-008 and shown to
+      -- admins and providers, but this join never selected it — so copy written
+      -- to explain a service to a customer reached everyone except the
+      -- customer. Additive: existing clients ignore the extra key (§4).
+      m.description AS description
     FROM ${dbSchema}.service_options so
     LEFT JOIN ${dbSchema}.service_option_meta m
       ON m.service_option_id = so.id
