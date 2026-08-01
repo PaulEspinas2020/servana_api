@@ -6,6 +6,9 @@ import { logProviderClientActivity } from "../services/adminMobileAttributionSer
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 import { touchProviderActivity } from "../services/adminProviderService";
 import mongoDb from "../db/mongodbQuery";
+import { projectProviderProfile } from "../services/providerProfileProjection";
+import dbQuery from "../db/dbQuery";
+import { db as dbCfg } from "../config";
 
 export const listByRole = async (req: Request, res: Response) => {
   try {
@@ -68,14 +71,26 @@ export const getByUid = async (req: Request, res: Response) => {
       });
     }
 
+    // Project by the caller's relationship to this provider. The full payload
+    // carries compliance documents, booking history naming every customer they
+    // have served, disbursements and earnings — a customer asking who is coming
+    // to their house needs a name and a phone number, not a ledger.
     const { addresses, services, ...rest } = worker;
+    const full = {
+      ...toCamel(rest),
+      addresses,
+      services,
+    };
+
+    // Project the assembled response, not the raw row — `rest` still carries
+    // requirements, bookingHistory, disbursementHistory and earningsSummary, so
+    // camel-casing first is what the client would actually have received.
+    const actorUid = (req as any).user?.uid as string | undefined;
+    const audience = await resolveProviderAudience(actorUid, uid);
+
     return res.json({
       success: true,
-      worker: {
-        ...toCamel(rest),
-        addresses,
-        services,
-      },
+      worker: projectProviderProfile(full, audience),
     });
   } catch (error: any) {
     return res.status(500).json({
@@ -995,4 +1010,30 @@ export const saveNotificationPreferences = async (req: Request, res: Response) =
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to save notification preferences" });
   }
+};
+
+/**
+ * Who is asking about this provider?
+ *
+ * `self` and `admin` see the whole record; everyone else — every customer —
+ * gets the public projection. Unknown or absent actors fall through to `other`,
+ * which is the closed direction (§11).
+ */
+export const resolveProviderAudience = async (
+  actorUid: string | undefined,
+  subjectUid: string,
+): Promise<"self" | "admin" | "other"> => {
+  if (!actorUid) return "other";
+  if (actorUid === subjectUid) return "self";
+  try {
+    const { rows } = await dbQuery.query(
+      `SELECT "role" FROM ${dbCfg.schema}.user_credentials WHERE uid = $1`,
+      [actorUid],
+    );
+    if (rows.length && Number(rows[0].role) === 1) return "admin";
+  } catch {
+    // A role lookup failure must not widen access.
+    return "other";
+  }
+  return "other";
 };

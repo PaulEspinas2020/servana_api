@@ -3,14 +3,36 @@ import * as technicianController from "../controllers/technicianController";
 import verifyAuth from "../middleware/verifyAuth";
 import verifyRoles from "../middleware/verifyRoles";
 import verifyOwnership from "../middleware/verifyOwnership";
+import { legacyRouteTelemetry } from "../middleware/legacyRouteTelemetry";
 
 const router = Router();
+
+// Measure the unauthenticated legacy family before retiring it. Step 4 of
+// docs/WORKER_ROUTE_MIGRATION.md is gated on this traffic reaching zero, and
+// nobody can judge that without numbers. Also surfaces enumeration: a caller
+// claiming many distinct workerUids is doing what no real worker app does.
+// Non-blocking, logs no PII.
+router.use("/workers", legacyRouteTelemetry);
 
 // Public mobile routes — do NOT add auth (mobile app sends workerUid/workerCode as query params, not JWT)
 router.get("/workers/role/:role", technicianController.listByRole);
 router.get("/workers/all", technicianController.list);
 router.get("/workers/available", technicianController.getAvailableWorkers);
-router.get("/workers/:uid", technicianController.getByUid);
+// EXCEPTION to the "do NOT add auth" note above, and the only one so far.
+//
+// This returned the provider's email, birthdate, home addresses, compliance
+// documents, full booking history — which names every customer they have ever
+// served — plus their disbursement ledger and earnings summary, to anyone
+// holding a provider uid. The same financial data is gated with
+// verifyAuth + verifyOwnership 30 lines below, where it is labelled "financial
+// data"; this endpoint predates that and was never revisited.
+//
+// Safe to authenticate because both callers already send a bearer token:
+// ServanaClient via servana_api_client.dart:37-47, ServanaWorker via its Dio
+// interceptor. The controller then projects by the caller's relationship, so a
+// customer still gets the name and phone the booking screen needs (§2 — no
+// protected release).
+router.get("/workers/:uid", verifyAuth, technicianController.getByUid);
 router.post("/workers/location", technicianController.updateLocation);
 router.get("/workers/location/:uid", technicianController.getLocation);
 router.get("/workers/:workerId/schedule", technicianController.workerSchedule);
