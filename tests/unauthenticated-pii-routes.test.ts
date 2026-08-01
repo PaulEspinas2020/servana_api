@@ -188,3 +188,43 @@ describe('booking lifecycle — identity from the token, not the query string', 
       .toContain('verifyRoles');
   });
 });
+
+describe('Employee <-> Services — the block a prefix-scoped sweep missed', () => {
+  // GET /api/services/1/workers answered 200 in PRODUCTION with 8 rows carrying
+  // email, phone_number, uid and first_name, and no token. It is the same
+  // provider contact data a062ef9 locked down on /workers/role/:role hours
+  // earlier; it survived because it is filed under a feature heading rather
+  // than with the /workers/* family.
+  const ROUTES: Array<[string, string]> = [
+    ['post', '/workers/:uid/services'],
+    ['delete', '/workers/:uid/services/:serviceId'],
+    ['get', '/workers/:uid/services'],
+    ['get', '/services/:serviceId/workers'],
+  ];
+
+  it.each(ROUTES)('%s %s is authenticated and admin-only', (method, routePath) => {
+    const guards = guardsFor(technicianRoutes, method, routePath);
+    expect(guards).toContain('verifyAuth');
+    expect(guards).toMatch(/verifyRoles\(\s*\[\s*0\s*,\s*1\s*\]\s*\)/);
+  });
+
+  it('the mutations are guarded, not just the read', () => {
+    // POST and DELETE assign and remove a provider's services. Unauthenticated,
+    // anyone could empty every provider's list — which removes them from
+    // customer search without touching a single booking.
+    for (const m of ['post', 'delete'] as const) {
+      const p = m === 'post' ? '/workers/:uid/services' : '/workers/:uid/services/:serviceId';
+      expect(guardsFor(technicianRoutes, m, p)).toContain('verifyAuth');
+    }
+  });
+
+  it('no route in this block is left bare', () => {
+    const block = technicianRoutes.slice(
+      technicianRoutes.indexOf('// Employee ↔ Services'),
+      technicianRoutes.indexOf('// Worker Requirements'),
+    );
+    const decls = [...block.matchAll(/router\.(get|post|put|patch|delete)\(([\s\S]*?)\);/g)];
+    expect(decls.length).toBe(4);
+    for (const d of decls) expect(d[2]).toContain('adminOnly');
+  });
+});

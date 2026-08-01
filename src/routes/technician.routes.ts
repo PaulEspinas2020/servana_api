@@ -89,11 +89,34 @@ router.put("/workers/bookings/:bookingId/complete", verifyAuth, technicianContro
 router.put("/admin/bookings/:bookingId/assign", verifyAuth, verifyRoles([1]), technicianController.assignWorker);
 router.patch("/admin/workers/:uid/archive", verifyAuth, verifyRoles([1]), technicianController.setArchiveStatus);
 
-// Employee ↔ Services
-router.post("/workers/:uid/services", technicianController.assignEmployeeServices);
-router.delete("/workers/:uid/services/:serviceId", technicianController.removeEmployeeService);
-router.get("/workers/:uid/services", technicianController.getEmployeeServices);
-router.get("/services/:serviceId/workers", technicianController.getWorkersByService);
+// Employee ↔ Services — admin surface only.
+//
+// Verified live against production BEFORE this change:
+//   GET /api/services/1/workers  ->  200, 8 rows carrying
+//   email, phone_number, uid, first_name — with no token.
+//
+// That is the same provider contact data a062ef9 put behind admin-only on
+// /workers/role/:role a few hours earlier. It survived because this block is
+// filed under "Employee <-> Services" rather than with the /workers/* family,
+// so a sweep of that family did not reach it. Grouping by feature hid a route
+// that belongs to the same authorization class — worth remembering the next
+// time a route audit is scoped by prefix.
+//
+// The two mutations were worse than the read: POST and DELETE here assign and
+// remove a provider's services, unauthenticated. Anyone could have emptied
+// every provider's service list, which silently removes them from customer
+// search results.
+//
+// All four are called ONLY by the admin portal
+// (shared/services/services.service.ts:46, shared/services/user.service.ts:83,:96,
+// core/adapters/admin-legacy-provider.adapter.ts:66,:78,
+// core/api/admin-provider360-api.service.ts:83,:220), which attaches a bearer
+// token via AuthorizeInterceptor. No mobile caller exists, so no release is
+// gated on this (§2).
+router.post("/workers/:uid/services", ...adminOnly, technicianController.assignEmployeeServices);
+router.delete("/workers/:uid/services/:serviceId", ...adminOnly, technicianController.removeEmployeeService);
+router.get("/workers/:uid/services", ...adminOnly, technicianController.getEmployeeServices);
+router.get("/services/:serviceId/workers", ...adminOnly, technicianController.getWorkersByService);
 
 // Worker Requirements
 router.post("/workers/:uid/requirements", technicianController.uploadRequirements);
