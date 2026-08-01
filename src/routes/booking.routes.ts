@@ -1,7 +1,6 @@
 import { Router } from "express";
 import * as bookingController from "../controllers/bookingController";
 import verifyAuth from "../middleware/verifyAuth";
-import verifyAuthOptional from "../middleware/verifyAuthOptional";
 import verifyRoles from "../middleware/verifyRoles";
 
 const router = Router();
@@ -12,14 +11,23 @@ const router = Router();
 // provider/customer tokens from enumerating all customer data.
 router.get("/bookings/all", verifyAuth, verifyRoles([1]), bookingController.listAllBookings);
 router.get("/dashboard/summary", verifyAuth, verifyRoles([1]), bookingController.getAnalytics);
-// verifyAuthOptional: unauthenticated mobile calls pass through; authenticated browser sessions
-// must own the userId in the path (enforced in the controller).
-router.get("/users/:userId/bookings", verifyAuthOptional, bookingController.listUserBookings);
+// Hard auth. This was verifyAuthOptional on a "mobile may call without a token"
+// premise, but the controller's ownership check reads
+// `if (actor?.uid && actor.uid !== userId) deny` — so omitting the header
+// skipped the check entirely and any anonymous caller could list any
+// customer's bookings. Every real caller (ServanaClient, ServanaWorker,
+// provider web) attaches a Bearer token, so the anonymous path was only ever
+// reachable by someone deliberately dropping it (§11 fail closed).
+router.get("/users/:userId/bookings", verifyAuth, bookingController.listUserBookings);
 
 // Identity is taken from the token, not from ?userId= (§7).
 router.post("/bookings", verifyAuth, bookingController.createBooking);
 // BACKEND_GAP-C15-001: customer self-cancellation — must be before /:id wildcard
-router.post("/bookings/:id/cancel", verifyAuthOptional, bookingController.cancelBooking);
+// Hard auth for the same reason, and worse here: customerCancelBooking guards
+// with `if (customerUid && ownerId && ...)`, so an anonymous caller cancelled
+// any booking AND the timeline event recorded actor_uid = NULL, leaving the
+// cancellation unattributable (§11, §15, §16).
+router.post("/bookings/:id/cancel", verifyAuth, bookingController.cancelBooking);
 // Booking-scoped routes. verifyAuth establishes WHO is calling;
 // assertBookingAccess in each controller establishes whether this booking is
 // theirs (customer, actively-assigned provider, or admin). Both mobile apps

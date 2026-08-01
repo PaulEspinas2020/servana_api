@@ -3,7 +3,6 @@ const router = express.Router()
 import * as userController from '../controllers/user.controller';
 import verifyAuth from '../middleware/verifyAuth';
 import verifyRoles from '../middleware/verifyRoles';
-import verifyAuthOptional from '../middleware/verifyAuthOptional';
 
 router.get("/user/registereduser", verifyAuth, verifyRoles([1]), userController.userList);
 
@@ -11,8 +10,11 @@ router.get("/user/registereduser", verifyAuth, verifyRoles([1]), userController.
 // addresses, role 2/3 gets only their own. verifyRoles([1]) was incorrect here because
 // ServanaClient (role 3) calls this endpoint to list the customer's own addresses.
 router.get("/user/alluseraddresses", verifyAuth, userController.getAllAddressesOfUser);
-// verifyAuthOptional: mobile may call without token; when JWT is present, controller scopes to JWT uid
-router.get("/user/:userId/addresses", verifyAuthOptional, userController.getAddressesByUserId);
+// Hard auth — same anonymous-bypass shape as the booking routes. Saved home
+// addresses are among the most sensitive data we hold (§58), and the only
+// caller is the provider web portal, which sends a Bearer token on every
+// request via its AuthorizeInterceptor.
+router.get("/user/:userId/addresses", verifyAuth, userController.getAddressesByUserId);
 router.post("/user/adduseraddress", verifyAuth, userController.addUserAddress);
 router.get("/user/getaddressbyid", verifyAuth, userController.getAddressByAddressId);
 

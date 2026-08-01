@@ -250,9 +250,19 @@ describe("ALIGN: /user/alluseraddresses scopes by role in service layer, not rou
     expect(fn).toContain("params = [userId]");
   });
 
-  it("/user/:userId/addresses uses verifyAuthOptional for mobile parity", () => {
+  // REVERSED 2026-08-01. This previously asserted verifyAuthOptional "for mobile
+  // parity" — it pinned the vulnerability as intended behaviour. The controller
+  // guard reads `if (req.user && req.user.uid !== userId) 403`, so with no
+  // Authorization header req.user is undefined, the condition short-circuits,
+  // and any anonymous caller could read any customer's saved home addresses.
+  // Sending no credentials beat sending the wrong ones.
+  //
+  // The parity premise did not hold: the only caller is the provider web
+  // portal, which attaches a Bearer token to every request.
+  it("/user/:userId/addresses requires hard authentication", () => {
     const uidAddrLine = routeSrc.match(/\/user\/:userId\/addresses[^\n]*/)?.[0] ?? "";
-    expect(uidAddrLine).toContain("verifyAuthOptional");
+    expect(uidAddrLine).toContain("verifyAuth");
+    expect(uidAddrLine).not.toContain("verifyAuthOptional");
   });
 
   it("getAddressesByUserId controller enforces ownership when caller is authenticated", () => {
