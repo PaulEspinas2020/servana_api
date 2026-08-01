@@ -59,8 +59,29 @@ export const computeQuote = async (req: QuoteRequest) => {
     addonsTotal = addons.reduce((s, a) => s + Number(a.base_price || 0), 0);
   }
 
-  const parts = req.parts || [];
-  const partsTotal = parts.reduce((s, p) => s + p.qty * p.unit_price, 0);
+  // `parts` used to be reduced into a total by multiplying each entry's
+  // quantity by a per-unit price taken from the REQUEST BODY.
+  //
+  // (The expression is described rather than quoted: a regression test greps
+  // this file for it, and reproducing it here would defeat that —
+  // tests/quote-price-integrity.test.ts.) Every other input to this total is
+  // server-sourced — `base` from a service_options lookup, the three modifiers
+  // from pricing_modifiers scoped to the option, add-ons re-priced from the DB
+  // by id — and `parts` alone was taken on trust. The result flowed into
+  // quoted_price, final_price and the payments row (bookingService.ts:80-104),
+  // so a caller could name their own total, including a negative one.
+  //
+  // No shipped client sends a populated array: ServanaClient's aircon store
+  // sends `'parts': <dynamic>[]` (aircon_booking_store.dart:361) and the
+  // beauty/wellness store omits the key. So dropping the priced form breaks
+  // nothing today and closes the hole.
+  //
+  // Deliberately NOT replaced with a server-side parts lookup: there is no
+  // parts table in this schema, so inventing one here would be speculative.
+  // When parts become a real feature they must arrive as {part_id, qty} and be
+  // priced from the database, exactly as add-ons already are above.
+  const partsTotal = 0;
+  const parts: never[] = [];
 
   const final = base + hp + height + distance + addonsTotal + partsTotal;
 
