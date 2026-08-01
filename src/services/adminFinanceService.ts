@@ -25,8 +25,47 @@ export async function ensureFinanceSchema(): Promise<void> {
     `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ`,
     `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS rejection_reason TEXT`,
     `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ`,
+    // Two live queries have always referenced payments.updated_at, and the
+    // column never existed. scheduler.ts filters failed PayMongo payments on
+    // it, so the retry job raised 42703 on every run and no failed payment has
+    // ever been retried; the finance payments list selects it, so that query
+    // failed too. Backfilled from created_at so existing rows get a sane value
+    // rather than NULL, which would make every historical payment look eligible
+    // for retry the moment the job starts working.
+    `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
+    // Only columns confirmed to exist on payments — paid_at and the
+    // submitted_at added two lines above. `created_at` is NOT referenced
+    // anywhere else in this codebase, so naming it here would raise the very
+    // 42703 this change exists to fix. Falling back to NOW() leaves a
+    // backfilled row looking freshly touched, which is the safe direction: the
+    // retry job waits 6 hours rather than treating every historical payment as
+    // instantly eligible the moment it starts working.
+    `UPDATE ${s}.payments SET updated_at = COALESCE(paid_at, submitted_at, NOW())
+       WHERE updated_at IS NULL`,
+    `ALTER TABLE ${s}.payments ALTER COLUMN updated_at SET DEFAULT NOW()`,
   ];
   for (const sql of paymentCols) await dbQuery.query(sql);
+
+  // Keep updated_at honest without every writer having to remember it. A
+  // trigger is the only way that holds — the column drives retry eligibility,
+  // and a stale value silently means "retry this payment again".
+  await dbQuery.query(`
+    CREATE OR REPLACE FUNCTION ${s}.touch_payments_updated_at()
+    RETURNS TRIGGER AS $$
+    BEGIN
+      NEW.updated_at = NOW();
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+  await dbQuery.query(
+    `DROP TRIGGER IF EXISTS trg_payments_updated_at ON ${s}.payments`,
+  );
+  await dbQuery.query(`
+    CREATE TRIGGER trg_payments_updated_at
+    BEFORE UPDATE ON ${s}.payments
+    FOR EACH ROW EXECUTE FUNCTION ${s}.touch_payments_updated_at()
+  `);
 
   // ── New column on user_credentials ────────────────────────────────────────
   await dbQuery.query(

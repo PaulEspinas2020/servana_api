@@ -25,9 +25,25 @@ jobs:
           cp /home/github-runner/env/servana-serviceAccountKey.json servana-serviceAccountKey.json
           chmod 600 servana-serviceAccountKey.json
 
+      # Fails loudly rather than silently authenticating with a burned password.
+      # The literal fallback that used to live on the PGPASSWORD line below was
+      # the production Postgres password in plaintext, committed and pushed.
+      # 9e06a73 ("fallback DB_PASSWORD so migrations run before secret is
+      # configured") added it, undoing ce92fb5 ("DB password to secret") — so
+      # the hardening was reverted for convenience and then forgotten.
+      - name: Require DB_PASSWORD secret
+        run: |
+          if [ -z "${{ secrets.DB_PASSWORD }}" ]; then
+            echo "::error::DB_PASSWORD repo secret is not set."
+            echo "Set it under Settings > Secrets and variables > Actions."
+            echo "There is deliberately no fallback: the previous literal was"
+            echo "the production password in plaintext and is now rotated."
+            exit 1
+          fi
+
       - name: Run pending DB migrations
         env:
-          PGPASSWORD: ${{ secrets.DB_PASSWORD || 'servana@2026' }}
+          PGPASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
           DONE_DIR="/home/github-runner/migrations-done"
           mkdir -p "$DONE_DIR"
