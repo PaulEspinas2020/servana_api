@@ -198,9 +198,69 @@ const checkUserIfExistInFirebase = async (email: string) => {
         });
 };
 
+/**
+ * Normalises a Philippine mobile number to E.164, or returns null.
+ *
+ * firebase-admin requires a leading '+' (utils/validator.js isPhoneNumber) and
+ * rejects anything else — including the empty string, because it checks
+ * `typeof !== 'undefined'` rather than truthiness. Customers type 09171234567,
+ * which is the normal local form and which firebase-admin will not take.
+ */
+const toE164PH = (raw: unknown): string | null => {
+    if (typeof raw !== "string") return null;
+    const digits = raw.replace(/[^\d+]/g, "");
+    if (!digits) return null;
+    if (/^\+63\d{10}$/.test(digits)) return digits;      // +639171234567
+    if (/^63\d{10}$/.test(digits)) return `+${digits}`;   // 639171234567
+    if (/^0\d{10}$/.test(digits)) return `+63${digits.slice(1)}`; // 09171234567
+    if (/^\+\d{8,15}$/.test(digits)) return digits;       // already E.164, other country
+    return null;
+};
+
+/**
+ * Creates the Firebase auth user for a registration.
+ *
+ * ## This used to spread the whole request body
+ *
+ *     createUser({ ...user, displayName })
+ *
+ * Two P0s came out of that single line.
+ *
+ * 1. SIGN-UP WAS BROKEN. ServanaClient always sends `phoneNumber` and defaults
+ *    it to '' for a field its own UI labels "(optional)"
+ *    (http_backend.dart:130). firebase-admin rejects '' and rejects
+ *    '09171234567', so every email/password customer registration failed unless
+ *    the customer happened to type '+63…'. The controller collapsed the error
+ *    to "Registration failed. Please try again.", naming no field.
+ *
+ * 2. MASS ASSIGNMENT. Every other key the caller sent reached the SDK too,
+ *    including `emailVerified` — so a registration could self-verify its own
+ *    address and skip the OTP gate that sign-in enforces.
+ *
+ * An explicit payload fixes both, and is the reason to prefer whitelists over
+ * spreads at any boundary where the object came from a request.
+ */
 const registerNewUserInFirebase = async (user: any) => {
+    const phoneNumber = toE164PH(user?.phoneNumber);
+
+    const payload: {
+        email: string;
+        password: string;
+        displayName: string;
+        phoneNumber?: string;
+    } = {
+        email: user.email,
+        password: user.password,
+        displayName: `${user.firstName} ${user.lastName}`,
+    };
+
+    // Omitted entirely when absent or unparseable — firebase-admin only
+    // validates the key when it is present, so omission is what makes an
+    // optional field actually optional.
+    if (phoneNumber) payload.phoneNumber = phoneNumber;
+
     return defaultAuthAdmin
-        .createUser({ ...user, displayName: user.firstName + " " + user.lastName })
+        .createUser(payload)
         .then(async (userData) => {
             return userData;
         })
@@ -303,6 +363,7 @@ const getFirebaseUserByUid = async (uid: string) => {
 };
 
 export {
+    toE164PH,
     checkUserIfExistInFirebase,
     registerNewUserInFirebase,
     sendEmailVerificationFirebase,
