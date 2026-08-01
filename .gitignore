@@ -1,5 +1,16 @@
+# Servana API — ignore rules
+#
+# NOTE: an unresolved merge conflict lived in this file from 1ac5af7 until
+# 2026-08-01 — a bare "=======" on line 2 and ">>>>>>> 9e7ec25" on line 155,
+# with an empty "ours" side, so a merge silently replaced the whole file.
+# The markers were inert as patterns (they only matched files literally named
+# "=======") so the rules still worked, but a .gitignore nobody can read is a
+# poor place to keep the only line of defence against committing a key.
+#
+# .gitignore does NOT untrack a file git already knows about. Three separate
+# credentials in this codebase were listed here and committed anyway. If you
+# add a rule for something already tracked, run `git rm --cached` as well.
 
-=======
 # Logs
 logs
 *.log
@@ -152,4 +163,3 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
->>>>>>> 9e7ec25bac9e3e6870e104284a4f35069743c1c9
