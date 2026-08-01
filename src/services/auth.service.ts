@@ -249,8 +249,21 @@ const loginUserInDBAndFirebase = async (email: string, password: string) => {
 
         const firebaseUser = await firebaseFunction.signInUserAndGetTokeninFirebase(email, password);
         // Whitelist only the fields the frontend needs — never spread the full DB row.
+        //
+        // refreshToken is returned deliberately. `token` is a Firebase ID token
+        // and expires after ONE HOUR — verifyAuth rejects it with 401
+        // TOKEN_EXPIRED after that. Firebase hands us a refresh token here and
+        // this whitelist used to drop it, so every mobile client received a
+        // credential it could not renew. Both apps cached it at sign-in and
+        // reused it forever, which meant every authenticated route began
+        // failing an hour into a session and the apps signed the user out.
+        //
+        // Clients exchange this at POST /api/auth/refresh. It is a long-lived
+        // credential and belongs in secure storage on the device, never in a
+        // log or a query string.
         const credentials = {
             token: firebaseUser.token,
+            refreshToken: firebaseUser.refreshToken,
             id: firebaseUser.uid,
             uid: firebaseUser.uid,
             email: dbCredentials.email,

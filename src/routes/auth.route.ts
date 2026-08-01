@@ -51,6 +51,12 @@ router.post("/auth/signup", signupLimiter, authController.signup);
 router.post("/auth/verify-email-otp", otpLimiter, authController.verifyEmailOtpController);
 router.post("/auth/resend-email-otp", otpLimiter, authController.resendEmailOtpController);
 router.post("/auth/signin", signInLimiter, authController.signin);
+
+// Unauthenticated by design: the caller is here BECAUSE their ID token expired,
+// so requiring a valid one would be circular. The refresh token in the body is
+// the credential and Google validates it. Shares signInLimiter because a
+// refresh-token guessing attempt is a sign-in attempt by another name.
+router.post("/auth/refresh", signInLimiter, authController.refreshTokenController);
 router.get("/auth/resendverification", otpLimiter, authController.resendVerification);
 router.post("/auth/firebase-login", signInLimiter, authController.firebaseAuthLoginController);
 router.post("/auth/customer-firebase-login", signInLimiter, authController.customerFirebaseLoginController);

@@ -6,6 +6,7 @@ import { upsertSourceAttribution } from "../services/providerOnboardingService";
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 import { touchProviderActivity } from "../services/adminProviderService";
 import { clearFcmToken } from "../services/notification.service";
+import { refreshIdToken, TokenRefreshError } from '../services/tokenRefreshService';
 
 const signin = async (req: Request, res: Response) => {
     const { email, password, fcmToken } = req.body;
@@ -342,3 +343,32 @@ export const logoutController = async (req: Request, res: Response) => {
 
 
 export { signup, signin, resendVerification, verifyEmailOtpController, resendEmailOtpController };
+
+/**
+ * POST /api/auth/refresh — exchange a refresh token for a fresh ID token.
+ *
+ * Deliberately unauthenticated: the caller's ID token has expired, which is the
+ * entire reason they are here. The refresh token in the body IS the credential,
+ * and Google validates it. Rate limited at the route.
+ */
+export const refreshTokenController = async (req: Request, res: Response) => {
+  try {
+    const { refreshToken } = req.body ?? {};
+    const session = await refreshIdToken(refreshToken);
+    return res.status(200).json({ status: 'success', data: session });
+  } catch (error: any) {
+    if (error instanceof TokenRefreshError) {
+      return res.status(error.statusCode).json({
+        status: 'failed',
+        code: error.code,
+        message: error.message,
+      });
+    }
+    // Never surface an unexpected error's text here — it can carry the token.
+    return res.status(502).json({
+      status: 'failed',
+      code: 'REFRESH_UNAVAILABLE',
+      message: 'Token refresh is unavailable',
+    });
+  }
+};
