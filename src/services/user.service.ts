@@ -98,10 +98,27 @@ export const upsertFirebaseUser = async (payload: {
   return dbResponse;
 };
 
+/**
+ * Re-syncs the local bcrypt hash after Firebase has accepted a password the
+ * cached hash rejected.
+ *
+ * The two stores drift whenever a password changes outside this API — the
+ * Firebase-hosted reset page being the common case. Firebase is authoritative;
+ * this column is a cache, and a stale cache locks the account out of the
+ * email/password route entirely.
+ */
+const updateUserPasswordHash = async (uid: string, passwordHash: string) => {
+    await dbQuery.query(
+        `UPDATE ${dbSchema}.user_credentials SET password = $1 WHERE uid = $2`,
+        [passwordHash, uid],
+    );
+};
+
 const getUserCredentialsByEmail = async (email: string, withPassword = false) => {
     const searchQuery = `
       Select 
-        c.uid, c.email, c.password, c.first_name, c.last_name, c.role, c.created_date, c.fcm_token
+        c.uid, c.email, c.password, c.first_name, c.last_name, c.role, c.created_date, c.fcm_token,
+        c.is_archive
       from ${dbSchema}.user_credentials c
       where c.email = $1`;
 
@@ -111,7 +128,13 @@ const getUserCredentialsByEmail = async (email: string, withPassword = false) =>
         if (!rows || rows.length === 0) {
             return null;
         }
-        const dbResponse = formatUserCredentials(rows[0]);
+        // is_archive is surfaced explicitly: the email/password sign-in path
+        // could not see it, so a disabled customer kept signing in while both
+        // Firebase sign-in paths refused them.
+        const dbResponse = {
+            ...formatUserCredentials(rows[0]),
+            isArchived: rows[0].is_archive === true,
+        };
 
         if (withPassword) {
             return {
@@ -138,7 +161,13 @@ const getUserCredentialsByID = async (uid: string, withPassword = false) => {
         if (!rows || rows.length === 0) {
             return null;
         }
-        const dbResponse = formatUserCredentials(rows[0]);
+        // is_archive is surfaced explicitly: the email/password sign-in path
+        // could not see it, so a disabled customer kept signing in while both
+        // Firebase sign-in paths refused them.
+        const dbResponse = {
+            ...formatUserCredentials(rows[0]),
+            isArchived: rows[0].is_archive === true,
+        };
 
         if (withPassword) {
             return {
@@ -498,6 +527,7 @@ const getUserInfoByBookingId = async (bookingId: number): Promise<{ email: strin
 export {
     registerUserInDB,
     getUserCredentialsByEmail,
+    updateUserPasswordHash,
     getAllUserByRole,
     getNameByEmail,
     getRoleById,

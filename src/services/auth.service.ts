@@ -243,11 +243,43 @@ const loginUserInDBAndFirebase = async (email: string, password: string) => {
             throw Object.assign(new Error('Invalid email or password.'), { statusCode: 401 });
         }
 
-        if (!comparePassword(dbCredentials?.password, password)) {
-            throw Object.assign(new Error('Invalid email or password.'), { statusCode: 401 });
+        // Archived accounts cannot sign in.
+        //
+        // Both Firebase sign-in paths already refuse them (firebaseAuthLogin and
+        // customerFirebaseLogin check dbUser.isArchived), and the admin portal's
+        // archive action is meaningless if this one route ignores it. The lookup
+        // did not even select the column, so this path could not have checked.
+        if ((dbCredentials as any).isArchived) {
+            throw Object.assign(
+                new Error('Your account has been disabled. Please contact Servana support.'),
+                { statusCode: 403 },
+            );
         }
 
+        // Firebase is the authority on the password; the local bcrypt hash is a
+        // cache of it. They drift: a customer who resets their password through
+        // the Firebase-hosted page changes it in Firebase only, and this compare
+        // then fails forever — the account is locked out with "Invalid email or
+        // password" while the new password is, from the customer's point of
+        // view, correct.
+        //
+        // So a failed local compare is not authoritative. Ask Firebase, and if
+        // Firebase accepts the password, re-sync the stale hash. Only when
+        // Firebase also rejects it is the credential actually wrong.
+        const localHashMatches = comparePassword(dbCredentials?.password, password);
+
         const firebaseUser = await firebaseFunction.signInUserAndGetTokeninFirebase(email, password);
+
+        if (!localHashMatches) {
+            // Reached only when Firebase authenticated successfully, so the
+            // password is correct and the stored hash is simply out of date.
+            await userService
+                .updateUserPasswordHash(firebaseUser.uid, hashPassword(password))
+                .catch(() => {
+                    // Non-fatal: the customer is authenticated either way, and
+                    // the next successful sign-in will try again.
+                });
+        }
         // Whitelist only the fields the frontend needs — never spread the full DB row.
         //
         // refreshToken is returned deliberately. `token` is a Firebase ID token
