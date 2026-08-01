@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import {
   assertBookingAccess,
   sendBookingAccessError,
+  BookingAccessError,
 } from "../services/bookingAccessService";
 import * as paymentService from "../services/paymentService";
 import { toCamel } from "../helpers/idGenerator";
@@ -25,12 +26,38 @@ export const gcashSubmit = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Settling a payment is not the same as submitting evidence for one.
+ *
+ * `gcashSubmit` only attaches a reference the customer claims to have paid;
+ * these two flip `payments.status` to PAID and fire an earnings notification to
+ * the provider. That must never be self-service: a customer declaring their own
+ * cash collected is the fraud case (§43 separates declaration, evidence and
+ * verification).
+ *
+ * So ownership alone is not enough here — the actor must also be the provider
+ * doing the collecting or an admin.
+ */
+const assertMaySettlePayment = async (req: Request, bookingId: number) => {
+  const role = await assertBookingAccess(bookingId, (req as any).user?.uid);
+  if (role === "customer") {
+    throw new BookingAccessError(
+      "Payment settlement is recorded by the provider or Servana, not by the customer",
+      403,
+      "BOOKING_ACCESS_DENIED",
+    );
+  }
+  return role;
+};
+
 export const approve = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
+    await assertMaySettlePayment(req, bookingId);
     const payment = await paymentService.approvePayment(bookingId);
     res.json({ status: "success", data: toCamel(payment) });
   } catch (e: any) {
+    if (sendBookingAccessError(res, e)) return;
     res.status(400).json({ status: "failed", message: e.message });
   }
 };
@@ -38,9 +65,11 @@ export const approve = async (req: Request, res: Response) => {
 export const markCashPaid = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
+    await assertMaySettlePayment(req, bookingId);
     const payment = await paymentService.markCashPaid(bookingId);
     res.json({ status: "success", data: toCamel(payment) });
   } catch (e: any) {
+    if (sendBookingAccessError(res, e)) return;
     res.status(400).json({ status: "failed", message: e.message });
   }
 };

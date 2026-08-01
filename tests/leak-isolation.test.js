@@ -58,6 +58,32 @@ describe("LEAK-FIX: address mutations scope to authenticated owner at DB level",
     expect(count).toBeGreaterThanOrEqual(2);
   });
 
+  // updateUserAddress was missed when its two siblings were scoped. Any
+  // authenticated caller could rewrite another customer's address — including
+  // location_id, which drives coverage checks and worker-distance pricing at
+  // booking time, making it a booking-corruption vector and not only a privacy
+  // one. Found by the 2026-08-01 six-pass audit.
+  it("updateUserAddress WHERE clause is scoped to the owning uid", () => {
+    const src = fs.readFileSync(SRC("services", "address.service.ts"), "utf8");
+    expect(src).toContain("WHERE address_id = $11 AND uid = $12 returning *");
+  });
+
+  // Catch-all so the next mutation added to this file cannot repeat the miss.
+  // The uid predicate is written both ways here — `AND uid = $2` when address_id
+  // leads, `WHERE uid = $2 and ...` when it does not — so match either rather
+  // than pinning one spelling.
+  it("no user_address mutation is left unscoped by uid", () => {
+    const src = fs.readFileSync(SRC("services", "address.service.ts"), "utf8");
+    const mutations = src.match(/(UPDATE|DELETE FROM)[\s\S]{0,400}?returning \*/g) || [];
+    expect(mutations.length).toBeGreaterThan(0);
+
+    const unscoped = mutations
+      .filter((m) => /user_address/.test(m))
+      .filter((m) => !/\b(AND|WHERE)\s+uid\s*=\s*\$\d+/i.test(m));
+
+    expect(unscoped).toEqual([]);
+  });
+
   it("user.controller.ts passes uid to makeAddressPrimary", () => {
     const src = fs.readFileSync(SRC("controllers", "user.controller.ts"), "utf8");
     expect(src).toContain("makeAddressPrimary(addressId, uid)");

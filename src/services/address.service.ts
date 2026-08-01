@@ -54,10 +54,17 @@ const addUserAddress = async (userAddressReq: UserAddressReq, uid: string) => {
 };
 
 const updateUserAddress = async (userAddressReq: UserAddressReq, uid: string, addressId: string) => {
+    // `AND uid = $12` is the ownership predicate. Without it any authenticated
+    // caller could rewrite another customer's street address, label, primary
+    // flag and location_id by supplying their addressId — and because
+    // location_id drives coverage checks and worker-distance pricing at booking
+    // time, that was a booking-corruption vector, not only a privacy one.
+    // makeAddressPrimary and deleteAddress were already scoped this way; this
+    // one was missed (§11, §12).
     const updateQuery = `UPDATE ${dbSchema}.user_address
         SET location_id = $1, address_one = $2, address_two = $3, zip_code = $4, post_town = $5,
             country = $6, updated_at = $7, updated_by = $8, label = $9, is_primary = $10
-        WHERE address_id = $11 returning *`;
+        WHERE address_id = $11 AND uid = $12 returning *`;
 
     const { locationId, addressOne, addressTwo, zipCode, postTown, country, label, isPrimary, lat, lon } =
         userAddressReq;
@@ -77,8 +84,12 @@ const updateUserAddress = async (userAddressReq: UserAddressReq, uid: string, ad
             label,
             isPrimary,
             addressId,
+            uid,
         ]);
 
+        // Zero rows means either no such address or it is not this caller's.
+        // Both fail closed with the same message so the response cannot be used
+        // to probe which address ids exist (§11 fail closed, §21 safe errors).
         if (!rows || rows.length == 0) throw "Failed to update address";
 
         // Sync to MongoDB (fire-and-forget — failure must not roll back the PostgreSQL save)
