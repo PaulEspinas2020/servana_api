@@ -1992,3 +1992,24 @@ export const saveWorkerNotificationPrefs = async (
   );
   return { success: true };
 };
+/**
+ * The provider currently serving a booking, or null when none is assigned.
+ *
+ * "Currently" excludes DECLINED and CANCELED assignments, so a provider who
+ * turned the job down — or was reassigned away — is not reported as the one on
+ * their way (§22). Used by the booking-scoped location endpoint so a customer
+ * can only ever be told about the provider actually attached to their booking.
+ */
+export const getAssignedWorkerUid = async (
+  bookingId: number,
+): Promise<string | null> => {
+  const { rows } = await dbQuery.query(
+    `SELECT worker_uid FROM ${dbSchema}.booking_workers
+      WHERE booking_id = $1
+        AND status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED')
+      ORDER BY assigned_at DESC NULLS LAST
+      LIMIT 1`,
+    [bookingId],
+  );
+  return rows.length ? (rows[0].worker_uid as string) ?? null : null;
+};

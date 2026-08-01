@@ -2,6 +2,7 @@ import express from "express";
 import verifyAuth from "../middleware/verifyAuth";
 import verifyRoles from "../middleware/verifyRoles";
 import * as provider from "../controllers/providerController";
+import * as locationAccess from "../controllers/providerLocationAccessController";
 
 const router = express.Router();
 
@@ -165,3 +166,13 @@ router.get("/provider/jobs/:id/tracking", verifyAuth, provider.getProviderBookin
 router.get("/provider/additional-requests", verifyAuth, provider.getAdditionalRequests);
 
 export default router;
+
+// ── Authenticated successors to the unauthenticated legacy worker routes ──────
+// The legacy family in technician.routes.ts takes its subject from the URL and
+// has no auth, so anyone can follow any provider's live position or read their
+// schedule. These take no subject from the caller: schedule is self-scoped from
+// the token, and location is asked for via a booking the caller already owns.
+// Legacy routes stay in place so the live apps keep working (§2); see
+// docs/WORKER_ROUTE_MIGRATION.md.
+router.get("/worker/schedule", verifyAuth, locationAccess.getMySchedule);
+router.get("/booking/:bookingId/provider-location", verifyAuth, locationAccess.getBookingProviderLocation);
