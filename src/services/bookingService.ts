@@ -349,14 +349,25 @@ export const getBookingsByUserId = async (userId: string) => {
       ON ua.address_id = b.user_address_id
     LEFT JOIN ${dbSchema}.booking_workers bw
       ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','DECLINED')
+    -- Guest bookings surface to a registered customer only through the
+    -- explicit link an admin created (linked_customer_uid, alongside
+    -- linked_at / linked_by_admin_uid / link_reason). That link is deliberate
+    -- and audited, which is what §8 requires — a guest is never automatically
+    -- converted to a client.
+    --
+    -- This previously joined user_credentials and matched the two tables'
+    -- phone columns. That was wrong twice over. The column it named on
+    -- guest_customers does not exist (the table stores phone_normalized), so
+    -- the subquery raised at runtime and took the whole booking list with it.
+    -- And had it existed, matching an unverified, non-unique phone number
+    -- would have handed one customer another's guest bookings — anyone who
+    -- ever gave Servana the same number, including a recycled or mistyped one.
     WHERE (
       b.user_id = $1
       OR b.guest_customer_id IN (
         SELECT gc.guest_customer_id
         FROM ${dbSchema}.guest_customers gc
-        JOIN ${dbSchema}.user_credentials uc ON uc.uid = $1
-        WHERE gc.phone_number IS NOT NULL
-          AND gc.phone_number = uc.phone_number
+        WHERE gc.linked_customer_uid = $1
       )
     )
     ORDER BY b.created_at DESC
