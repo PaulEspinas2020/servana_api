@@ -51,10 +51,20 @@ const ACTIVE_WORKER_STATUSES = [
  *  - `admin`    — role 1 in `user_credentials`.
  *
  * Guest bookings (`guest_customer_id`, admin-created per §8) have no `user_id`.
- * A guest has no Servana login and therefore no token, so they cannot reach
- * these routes at all — such bookings stay visible to the assigned provider and
- * to admins only. That is deliberate: a guest is served by phone/Messenger, not
- * by the app.
+ * An *unlinked* guest has no Servana login and therefore no token, so those
+ * bookings stay visible to the assigned provider and to admins only.
+ *
+ * A *linked* guest booking is different. When an admin links a guest to a real
+ * account (`guest_customers.linked_customer_uid`, set with an audit trail in
+ * adminGuestService), that customer owns the booking for every purpose — 880d5bc
+ * taught the booking LIST query exactly this predicate. Resolving ownership here
+ * on `user_id` alone contradicted it: the booking appeared in the customer's list
+ * and then 403'd when they tapped it.
+ *
+ * Deriving guest ownership here rather than in each caller is the point. The
+ * cancel path used to hand-roll `if (ownerId && ownerId !== uid) throw` — a guard
+ * that FAILS OPEN on a guest booking, because `user_id` is NULL and the `&&`
+ * short-circuits, letting any authenticated user cancel any guest booking.
  */
 export const resolveBookingAccess = async (
   bookingId: number,
@@ -64,7 +74,7 @@ export const resolveBookingAccess = async (
   if (!Number.isInteger(bookingId) || bookingId <= 0) return null;
 
   const bookingRes = await dbQuery.query(
-    `SELECT user_id FROM ${dbSchema}.bookings WHERE id = $1`,
+    `SELECT user_id, guest_customer_id FROM ${dbSchema}.bookings WHERE id = $1`,
     [bookingId],
   );
   if (!bookingRes.rowCount) {
@@ -73,6 +83,19 @@ export const resolveBookingAccess = async (
 
   const ownerUid: string | null = bookingRes.rows[0].user_id ?? null;
   if (ownerUid && ownerUid === actorUid) return "customer";
+
+  // Same predicate the booking list uses (bookingService.listBookings, 880d5bc).
+  // Only an explicit admin-set link counts; never a phone-number match.
+  const guestCustomerId = bookingRes.rows[0].guest_customer_id ?? null;
+  if (guestCustomerId) {
+    const linkRes = await dbQuery.query(
+      `SELECT 1 FROM ${dbSchema}.guest_customers
+        WHERE guest_customer_id = $1 AND linked_customer_uid = $2
+        LIMIT 1`,
+      [guestCustomerId, actorUid],
+    );
+    if (linkRes.rowCount) return "customer";
+  }
 
   const workerRes = await dbQuery.query(
     `SELECT 1 FROM ${dbSchema}.booking_workers

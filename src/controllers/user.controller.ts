@@ -163,9 +163,16 @@ const archiveUser = async (req: Request, res: Response) => {
 const getAddressesByUserId = async (req: Request, res: Response) => {
     const { userId } = req.params as { userId: string };
 
-    // When the caller is authenticated (browser session), enforce ownership.
-    // Unauthenticated calls pass through for mobile parity.
-    if (req.user && req.user.uid !== userId) {
+    // Fail closed: the caller must be present AND match. Requiring req.user to
+    // exist before comparing meant a tokenless call skipped ownership and read
+    // another customer's saved addresses — their home address, in practice.
+    // The route carries verifyAuth (user.route.ts:17), so this can only be
+    // reached with a token; that is defence in depth, not redundancy, because
+    // the identical shape elsewhere in this codebase turned out to be reachable.
+    //
+    // The "mobile parity" note that used to sit here was wrong: ServanaClient
+    // sends a bearer token on every request (servana_api_client.dart:37-47).
+    if (!req.user?.uid || req.user.uid !== userId) {
         return res.status(403).json({ status: "failed", message: "Access denied" });
     }
 

@@ -5,15 +5,29 @@ import verifyRoles from "../middleware/verifyRoles";
 
 const router = Router();
 
-// Booking-scoped read — unprotected (mobile queries by bookingId)
-router.get("/additional/booking/:bookingId", additionalController.getByBooking);
+// The "mobile calls these without a token" note below was checked and is false:
+// neither ServanaClient nor ServanaWorker references /api/additional anywhere in
+// lib/. The only real caller is the provider WEB portal
+// (Servana.com.ph/src/app/core/api/provider-additional-work-api.service.ts:177,
+// :213), an Angular app whose AuthorizeInterceptor attaches a bearer token to
+// every request. So nothing shipped depends on these being open (§2).
+//
+// Left open, the family let an unauthenticated caller read any booking's extra
+// charges, raise new charges in any customer's name, and — via
+// /additional/:id/payment — make Servana email a live PayMongo checkout link to
+// a customer for a charge the caller invented. That is a payment handler with no
+// authentication at all, which is the case §12 exists for.
+//
+// verifyAuth is the floor, not the ceiling: these handlers still take the
+// booking and customer from the URL, so per-object authorization inside the
+// controllers is a follow-up (recorded in the masterlist, not silently assumed).
+router.get("/additional/booking/:bookingId", verifyAuth, additionalController.getByBooking);
 
-// Customer/worker lifecycle — unprotected (mobile calls these without a token)
-router.post("/additional/request/:userId", additionalController.createRequest);
-router.post("/additional/:id/payment", additionalController.generatePayment);
-router.post("/additional/:id/worker-decision", additionalController.workerDecision);
-router.post("/additional/:id/withdraw", additionalController.workerWithdraw);
-router.post("/additional/:id/confirm-proceed", additionalController.workerConfirmProceed);
+router.post("/additional/request/:userId", verifyAuth, additionalController.createRequest);
+router.post("/additional/:id/payment", verifyAuth, additionalController.generatePayment);
+router.post("/additional/:id/worker-decision", verifyAuth, additionalController.workerDecision);
+router.post("/additional/:id/withdraw", verifyAuth, additionalController.workerWithdraw);
+router.post("/additional/:id/confirm-proceed", verifyAuth, additionalController.workerConfirmProceed);
 
 // Admin approval — protected (admin portal only; mobile never calls this route)
 router.post("/additional/:id/approve", verifyAuth, verifyRoles([1]), additionalController.approveRequest);

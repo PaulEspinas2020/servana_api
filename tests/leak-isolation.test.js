@@ -115,9 +115,13 @@ describe("LEAK-FIX: archiveUser route requires admin role", () => {
 // ---------------------------------------------------------------------------
 
 describe("LEAK-FIX: listUserBookings enforces ownership when JWT present", () => {
-  it("bookingController.ts checks actor.uid !== userId", () => {
+  // REVERSED a second time. This asserted the "present-and-differs" shape
+  // (`actor?.uid && actor.uid !== userId`), which skips ownership entirely when
+  // the actor is absent. Now absent-or-differs, so a missing actor is denied.
+  it("bookingController.ts denies an absent OR mismatched actor", () => {
     const src = fs.readFileSync(SRC("controllers", "bookingController.ts"), "utf8");
-    expect(src).toContain("actor?.uid && actor.uid !== userId");
+    expect(src).toContain("!actor?.uid || actor.uid !== userId");
+    expect(src).not.toContain("if (actor?.uid && actor.uid !== userId)");
   });
 
   it("booking.routes.ts applies verifyAuthOptional to /users/:userId/bookings", () => {
@@ -265,10 +269,14 @@ describe("ALIGN: /user/alluseraddresses scopes by role in service layer, not rou
     expect(uidAddrLine).not.toContain("verifyAuthOptional");
   });
 
-  it("getAddressesByUserId controller enforces ownership when caller is authenticated", () => {
+  // REVERSED. Asserting `req.user && req.user.uid !== userId` pinned a guard
+  // that does nothing when req.user is undefined — the exact condition this
+  // file's own comment, twenty lines up, describes as the vulnerability.
+  it("getAddressesByUserId denies an absent OR mismatched caller", () => {
     const ctrlSrc = fs.readFileSync(SRC("controllers", "user.controller.ts"), "utf8");
-    const fn = ctrlSrc.match(/getAddressesByUserId[\s\S]{0,400}/)?.[0] ?? "";
-    expect(fn).toContain("req.user && req.user.uid !== userId");
+    const fn = ctrlSrc.match(/getAddressesByUserId[\s\S]{0,900}/)?.[0] ?? "";
+    expect(fn).toContain("!req.user?.uid || req.user.uid !== userId");
+    expect(fn).not.toContain("if (req.user && req.user.uid !== userId)");
     expect(fn).toContain("403");
   });
 });

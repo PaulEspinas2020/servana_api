@@ -100,7 +100,18 @@ const runPaymentRetries = async () => {
       JOIN ${dbSchema}.bookings b ON b.id = p.booking_id
       WHERE p.status  = 'FAILED'
         AND p.provider = 'PAYMONGO'
-        AND b.status NOT IN ('COMPLETED', 'CANCELED', 'PAID')
+        -- Both spellings, deliberately. Cancels are written inconsistently:
+        -- bookings.status gets 'CANCELLED' (bookingService.customerCancelBooking)
+        -- while booking_workers.status gets 'CANCELED', and technicianService
+        -- writes 'CANCELED' to bookings in four places. NON_CANCELLABLE_STATUSES
+        -- already matches both; this filter matched only one, so a booking
+        -- cancelled through the customer app stayed eligible for payment retry.
+        --
+        -- Dormant until 799b6aa: this job died on a missing payments.updated_at
+        -- every run, so it had never reached this line in production. Creating
+        -- that column armed it. Left as-is, the first scheduler tick would email
+        -- live PayMongo checkout links for cancelled bookings.
+        AND UPPER(b.status) NOT IN ('COMPLETED', 'CANCELED', 'CANCELLED', 'PAID')
         AND p.updated_at < NOW() - INTERVAL '6 hours'
       `,
       []

@@ -129,10 +129,22 @@ export const listUserBookings = async (req: Request, res: Response) => {
       });
     }
 
-    // When the caller has a verified JWT (browser session), enforce ownership.
-    // Mobile clients call without a token — unauthenticated path is unchanged for parity.
+    // Fail closed: the actor must be present AND match.
+    //
+    // This previously required the actor to exist before comparing, so a missing
+    // actor skipped ownership entirely. That was safe only for as long as the
+    // route in front stayed authenticated — an invariant held in a comment
+    // rather than in code. The same shape one layer down, in
+    // customerCancelBooking, was NOT safe: it keyed on a booking owner that is
+    // NULL for guest bookings, and let any authenticated user cancel any guest
+    // booking. Removing verifyAuthOptional in bd8c355 removed the carrier of
+    // this pattern, not the pattern.
+    //
+    // The "mobile calls without a token" note that used to sit here was wrong:
+    // ServanaClient attaches a bearer token to every request
+    // (servana_api_client.dart:37-47).
     const actor = (req as any).user;
-    if (actor?.uid && actor.uid !== userId) {
+    if (!actor?.uid || actor.uid !== userId) {
       return res.status(403).json({ success: false, message: "Access denied" });
     }
 

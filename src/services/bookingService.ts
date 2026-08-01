@@ -11,6 +11,7 @@ import { assignNearestWorker } from "../services/technicianService";
 import { send } from "../helpers/mailer";
 import { getEmailById, getNameByEmail } from "./user.service";
 import { toCamel } from "../helpers/idGenerator";
+import { assertBookingAccess } from "./bookingAccessService";
 
 export const createBooking = async (
   userId: string,
@@ -552,9 +553,28 @@ export const customerCancelBooking = async (
   );
   if (!bkRes.rowCount) throw new Error('Booking not found');
 
-  const { status: prevStatus, user_id: ownerId } = bkRes.rows[0];
+  const { status: prevStatus } = bkRes.rows[0];
 
-  if (customerUid && ownerId && ownerId !== customerUid) {
+  // This used to be an inline three-term conjunction: caller present, owner
+  // present, owner differs — throw. It failed open twice over.
+  //
+  // `bookings.user_id` is NULL on a guest booking, so the owner-present term was
+  // falsy and the whole check short-circuited: ANY authenticated caller could
+  // cancel ANY guest booking. A null caller skipped the check for the same
+  // reason — the same anonymous-bypass shape bd8c355 removed from the middleware
+  // layer, still living one layer down in the service. Deleting the middleware
+  // removed the carrier, not the pattern.
+  //
+  // The literal expression is deliberately not reproduced here: a regression
+  // test greps this function for it, and quoting it in a comment would defeat
+  // that (tests/guest-booking-cancel.test.ts).
+  //
+  // assertBookingAccess fails closed and understands admin-linked guest
+  // ownership, so a linked customer keeps the ability to cancel their own.
+  const actorRole = await assertBookingAccess(bookingId, customerUid);
+  if (actorRole === 'provider') {
+    // Providers decline or reassign; they do not cancel on the customer's
+    // behalf, and this route writes a 'cancelled by customer' timeline event.
     throw Object.assign(new Error('Access denied'), { statusCode: 403 });
   }
 

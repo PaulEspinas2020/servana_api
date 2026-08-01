@@ -14,11 +14,32 @@ const router = Router();
 // Non-blocking, logs no PII.
 router.use("/workers", legacyRouteTelemetry);
 
-// Public mobile routes — do NOT add auth (mobile app sends workerUid/workerCode as query params, not JWT)
-router.get("/workers/role/:role", technicianController.listByRole);
-router.get("/workers/all", technicianController.list);
+// The blanket "public mobile routes" note that used to head this block was both
+// inaccurate and load-bearing: it was read as a constraint, and left three
+// routes open through an audit that read them.
+// Both released apps DO send a bearer token on every request — ServanaClient at
+// servana_api_client.dart:37-47, ServanaWorker via the global _AuthInterceptor
+// at servana_api_config.dart:74-79 — so authenticating a legacy route is safe
+// wherever its callers already hold a session (§2).
+//
+// role/:role took the role from the URL and ran
+//   SELECT uid, email, first_name, last_name, phone_number FROM user_credentials
+//   WHERE role = $1
+// (technicianService.ts:16-28). Role 3 is customer, so `GET /api/workers/role/3`
+// returned EVERY customer's email and phone to anyone who could reach the API.
+// It sat 30 lines above the /workers/:uid projection added in 65b4337, which
+// carefully withholds exactly this data — the projection was bypassable by
+// asking a different question in the same router.
+//
+// Admin-only rather than projected: both client methods that call it
+// (servana_api_client.dart:338, ServanaWorker servana_api.dart:310) have zero
+// call sites, so no shipped screen depends on it and no release is needed.
+// /workers/all has no caller in any of the four clients.
+const adminOnly = [verifyAuth, verifyRoles([0, 1])];
+router.get("/workers/role/:role", ...adminOnly, technicianController.listByRole);
+router.get("/workers/all", ...adminOnly, technicianController.list);
 router.get("/workers/available", technicianController.getAvailableWorkers);
-// EXCEPTION to the "do NOT add auth" note above, and the only one so far.
+// EXCEPTION to the blanket note that used to head the block above.
 //
 // This returned the provider's email, birthdate, home addresses, compliance
 // documents, full booking history — which names every customer they have ever
@@ -36,7 +57,24 @@ router.get("/workers/:uid", verifyAuth, technicianController.getByUid);
 router.post("/workers/location", technicianController.updateLocation);
 router.get("/workers/location/:uid", technicianController.getLocation);
 router.get("/workers/:workerId/schedule", technicianController.workerSchedule);
-router.get("/workers/:workerId/job-cards", technicianController.getJobCards);
+
+// getJobCards (technicianController.ts:214-243) takes workerId from the URL and
+// returns, per job, the customer's name, phone number and full street address
+// including delivery instructions. Unauthenticated, that is a customer address
+// book keyed by a guessable worker id.
+//
+// verifyOwnership already reads req.params.workerId and is what the financial
+// routes below this line use; the caller must now BE the worker. ServanaWorker
+// is the only mobile caller (job_cards_store.dart) and its interceptor attaches
+// a token to every request, so this needs no coordinated release. The provider
+// web portal already moved to the authenticated successor GET /worker/job-cards
+// (provider-jobs-api.service.ts:140-149).
+router.get(
+  "/workers/:workerId/job-cards",
+  verifyAuth,
+  verifyOwnership,
+  technicianController.getJobCards,
+);
 router.put("/workers/bookings/:bookingId/decline", technicianController.declineJob);
 router.put("/workers/bookings/:bookingId/accept", technicianController.acceptJob);
 router.put("/workers/bookings/:bookingId/start", technicianController.startJob);

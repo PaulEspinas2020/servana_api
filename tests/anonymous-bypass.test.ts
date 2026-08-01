@@ -74,22 +74,52 @@ describe('the three previously-bypassable routes require authentication', () => 
 });
 
 describe('the guards that made the bypass invisible', () => {
-  it('cancellation cannot record a NULL actor once auth is required', () => {
-    // customerCancelBooking still guards with `if (customerUid && ...)`, which
-    // is only safe because the route can no longer be reached anonymously.
-    // If the route is ever loosened again, this pairing silently breaks — so
-    // assert the route side, which is the load-bearing half.
+  /**
+   * REVERSED. This block used to assert the vulnerability.
+   *
+   * It required bookingService.ts to CONTAIN the string
+   * `customerUid && ownerId && ownerId !== customerUid`, reasoning that the
+   * guard was "only safe because the route can no longer be reached
+   * anonymously". That reasoning was wrong, and the test made it permanent.
+   *
+   * `bookings.user_id` is NULL on a guest booking, so the middle term is falsy
+   * and the comparison never runs — authenticated or not. Any logged-in user
+   * could cancel any guest booking. Requiring the string kept the fail-open
+   * shape pinned in place, and a green suite reported it as intended design.
+   *
+   * That is twice now: leak-isolation.test.js asserted that
+   * /user/:userId/addresses "uses verifyAuthOptional for mobile parity". A test
+   * that pins an implementation detail it does not understand is worse than no
+   * test — it converts a bug into a requirement.
+   */
+  it('cancellation fails closed rather than relying on the route in front', () => {
     const routes = read('routes', 'booking.routes.ts');
     expect(routes).toMatch(/\/bookings\/:id\/cancel",\s*verifyAuth/);
 
     const service = read('services', 'bookingService.ts');
-    expect(service).toContain('customerUid && ownerId && ownerId !== customerUid');
+    expect(service).not.toContain('customerUid && ownerId && ownerId !== customerUid');
+    expect(service).toMatch(/await assertBookingAccess\(\s*bookingId,\s*customerUid\s*\)/);
   });
 
-  it('listUserBookings still compares the actor to the requested userId', () => {
-    // Auth alone is not enough: an authenticated customer must not read another
-    // customer's list either.
+  it('listUserBookings requires the actor to be present AND to match', () => {
+    // Was: /actor\?\.uid && actor\.uid !== userId/ — present-and-differs, which
+    // skips the check when the actor is absent. Now absent-or-differs.
     const src = read('controllers', 'bookingController.ts');
-    expect(src).toMatch(/actor\?\.uid\s*&&\s*actor\.uid\s*!==\s*userId/);
+    expect(src).toMatch(/if\s*\(!actor\?\.uid\s*\|\|\s*actor\.uid\s*!==\s*userId\)/);
+    expect(src).not.toMatch(/if\s*\(actor\?\.uid\s*&&\s*actor\.uid\s*!==\s*userId\)/);
+  });
+
+  it('address reads require the caller to be present AND to match', () => {
+    const src = read('controllers', 'user.controller.ts');
+    expect(src).toMatch(/if\s*\(!req\.user\?\.uid\s*\|\|\s*req\.user\.uid\s*!==\s*userId\)/);
+    expect(src).not.toMatch(/if\s*\(req\.user\s*&&\s*req\.user\.uid\s*!==\s*userId\)/);
+  });
+
+  it('no controller still claims mobile calls arrive without a token', () => {
+    // The premise behind every one of these guards, and it was never true for
+    // the released apps. Both attach a bearer token to every request.
+    for (const f of ['bookingController.ts', 'user.controller.ts']) {
+      expect(read('controllers', f)).not.toMatch(/unauthenticated (path|calls) .*parity/i);
+    }
   });
 });
