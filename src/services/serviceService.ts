@@ -510,6 +510,38 @@ export const hardDeleteService = async (serviceId: number) => {
     }
 };
 
+/**
+ * Groups flat service_options rows into the nested catalog shape the customer
+ * app renders.
+ *
+ * ## The keys are camelCase by the time they arrive here
+ *
+ * getFullServiceCatalog runs every row through `toCamel`
+ * (helpers/idGenerator.ts:13-20), so `level_2` is already `level2` and `level_3`
+ * is already `level3`. This function read the SNAKE spellings, which are
+ * undefined on a camelCased object — and `JSON.stringify` omits undefined, so
+ * the keys vanished from the wire entirely rather than arriving as null.
+ *
+ * Live production response before this fix:
+ *
+ *     "options": [{ "items": [{ "level3id": 130, "unit": "per unit",
+ *                               "base_price": 3190, "addons": [] }] }]
+ *
+ * Every option group and every item shipped NAMELESS. `parityMiddleware` cannot
+ * paper over it: fieldParity.ts:397 skips undefined before aliasing, so it can
+ * rescue a renamed key but never an absent one.
+ *
+ * The customer-visible effect was total. search_repository.dart:29-30 drops any
+ * group whose level2 is empty, so the search cache was always empty and every
+ * query rendered "No services match your search." — a complete data-layer
+ * failure presented as a legitimate empty result (§20).
+ *
+ * The tell was inside this function all along: `opt.basePrice` on the next line
+ * is camelCase and works. Two keys were missed when the rest were converted.
+ *
+ * Both spellings are accepted below so this cannot break again if a caller ever
+ * passes raw rows that have not been through toCamel.
+ */
 export const transformServiceCatalog = (services: any[]) => {
 
     return services.map(service => {
@@ -518,7 +550,7 @@ export const transformServiceCatalog = (services: any[]) => {
 
         for (const opt of service.options) {
 
-            const level2 = opt.level_2;
+            const level2 = opt.level2 ?? opt.level_2;
 
             if (!level2Map[level2]) {
                 level2Map[level2] = {
@@ -529,14 +561,14 @@ export const transformServiceCatalog = (services: any[]) => {
 
             level2Map[level2].items.push({
                 level3id: opt.id,
-                level3: opt.level_3,
+                level3: opt.level3 ?? opt.level_3,
                 unit: opt.unit,
                 base_price: Number(opt.basePrice),
                 inclusions: opt.inclusions || [],
                 exclusions: opt.exclusions || [],
                 addons: (opt.addons || []).map((a: any) => ({
                     level3id: a.id,
-                    level3: a.level_3,
+                    level3: a.level3 ?? a.level_3,
                     unit: a.unit,
                     base_price: Number(a.basePrice),
                 })),
