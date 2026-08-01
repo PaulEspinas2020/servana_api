@@ -73,8 +73,17 @@ web_modules/
 !.env.example
 
 # Firebase service account credentials — never commit private keys
+# Firebase Admin SDK credentials — a LIVE key that bypasses every Security Rule
+# and can mint auth tokens for any UID. Never commit it.
+#
+# NOTE: these entries were inert until 2026-08-01. .gitignore does not untrack a
+# file git already knows about, so the key stayed committed from "first commit"
+# onward despite being listed here. It is now untracked — see
+# docs/ROTATE_SERVICE_ACCOUNT.md, and rotate, because untracking does not
+# un-leak what is already in history.
 servana-serviceAccountKey.json
 *serviceAccountKey.json
+!servana-serviceAccountKey.json.example
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
