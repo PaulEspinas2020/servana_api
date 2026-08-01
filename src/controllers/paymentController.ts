@@ -1,9 +1,16 @@
 import { Request, Response } from "express";
+import {
+  assertBookingAccess,
+  sendBookingAccessError,
+} from "../services/bookingAccessService";
 import * as paymentService from "../services/paymentService";
 import { toCamel } from "../helpers/idGenerator";
 export const gcashSubmit = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
+    // Payment evidence is attached to someone's booking — prove entitlement
+    // before accepting it (§11, §43).
+    await assertBookingAccess(bookingId, (req as any).user?.uid);
     const { referenceNo, proofUrl } = req.body;
 
     if (!referenceNo) {
@@ -13,6 +20,7 @@ export const gcashSubmit = async (req: Request, res: Response) => {
     const payment = await paymentService.submitGcash(bookingId, referenceNo, proofUrl);
     res.json({ success: true, payment: toCamel(payment) });
   } catch (e: any) {
+    if (sendBookingAccessError(res, e)) return;
     res.status(400).json({ success: false, message: e.message });
   }
 };
@@ -40,6 +48,7 @@ export const markCashPaid = async (req: Request, res: Response) => {
 export const createPaymongoPayment = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
+    await assertBookingAccess(bookingId, (req as any).user?.uid);
 
     const result = await paymentService.createCheckoutSession(bookingId);
 
@@ -49,6 +58,7 @@ export const createPaymongoPayment = async (req: Request, res: Response) => {
     });
 
   } catch (error: any) {
+    if (sendBookingAccessError(res, error)) return;
 
     return res.status(400).json({
       success: false,
