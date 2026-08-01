@@ -48,7 +48,12 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci --prefer-offline
+        # --include=dev explicitly: jest and typescript are devDependencies, and
+        # if the runner's environment carries NODE_ENV=production then `npm ci`
+        # silently omits them — the verify step below would then fail on a
+        # missing binary and read as a broken test suite rather than a missing
+        # install. Harmless when NODE_ENV is unset, which it is today.
+        run: npm ci --prefer-offline --include=dev
 
       # The 1344 tests in this repo had never gated a deploy. The pipeline went
       # checkout -> secrets -> migrations -> build -> restart, so a change that
