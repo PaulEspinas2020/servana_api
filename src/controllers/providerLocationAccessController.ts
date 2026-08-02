@@ -82,7 +82,18 @@ export const getBookingProviderLocation = async (req: Request, res: Response) =>
       return res.json({ success: true, assigned: true, location: null });
     }
 
-    return res.json({ success: true, assigned: true, location });
+    // `location` is the documented field. `data` is an additive alias carrying
+    // the SAME document, because the shipped ServanaClient only unwraps a GPS
+    // payload from the root or from `data`
+    // (geo_position_snapshot.dart fromApiMap: `map['loc'] != null ? map :
+    // map['data'] ?? map`). It never looks under `location`, so fromApiMap
+    // returned null and live tracking never plotted the provider — the customer
+    // watched an empty map for the whole journey.
+    //
+    // Aliasing here fixes the shipped app with no release. The client is being
+    // taught to read `location` too, so this alias can be dropped once that
+    // build is out; until then removing it silently breaks tracking again.
+    return res.json({ success: true, assigned: true, location, data: location });
   } catch (e: any) {
     if (sendBookingAccessError(res, e)) return;
     return res.status(500).json({

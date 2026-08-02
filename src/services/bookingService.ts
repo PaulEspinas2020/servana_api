@@ -133,6 +133,74 @@ export const createBooking = async (
 };
 
 
+/**
+ * Re-issues the booking OTP and re-sends the email.
+ *
+ * The OTP screen's Resend button called POST /api/:bookingId/resend-otp, which
+ * did not exist — a comment in the client even said so
+ * (servana_api_client.dart:594 "must exist on the backend"). So a customer whose
+ * verification email never arrived had no recovery at all: the booking sat in
+ * PENDING_OTP, the only route out was an OTP they did not have, and the code has
+ * no expiry to force a new one.
+ *
+ * A NEW code is generated rather than re-sending the old one. Re-sending would
+ * make every superseded email valid forever, which turns a delivery problem into
+ * a security one.
+ *
+ * Restricted to PENDING_OTP. Re-issuing against a booking that is already
+ * confirmed, cancelled or completed would move it backwards, and an OTP for a
+ * finished job is only useful to someone who should not have one.
+ */
+export const resendBookingOtp = async (bookingId: number) => {
+  const res = await dbQuery.query(
+    `SELECT id, user_id, status, schedule FROM ${dbSchema}.bookings WHERE id = $1`,
+    [bookingId],
+  );
+  if (!res.rowCount) throw new Error('Booking not found');
+
+  const booking = res.rows[0];
+  if (String(booking.status).toUpperCase() !== 'PENDING_OTP') {
+    throw Object.assign(
+      new Error('This booking is no longer awaiting verification.'),
+      { statusCode: 409 },
+    );
+  }
+
+  const otp = generateOTP();
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.bookings SET otp_code = $1 WHERE id = $2`,
+    [otp, bookingId],
+  );
+
+  // Best-effort: the code IS rotated regardless of whether the mail goes out.
+  // Failing here would leave the customer holding a code that no longer works,
+  // which is worse than a missing email.
+  try {
+    const email = await getEmailById(booking.user_id);
+    const firstName = await getNameByEmail(email);
+    send(email, 'verify_booking_otp', {
+      first_name: firstName,
+      otp_code: otp,
+      booking_id: bookingId,
+      booking_date: booking.schedule
+        ? new Date(booking.schedule).toLocaleDateString('en-US', {
+            year: 'numeric', month: 'long', day: 'numeric',
+          })
+        : '',
+      booking_time: booking.schedule
+        ? new Date(booking.schedule).toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit',
+          })
+        : '',
+    });
+  } catch {
+    // Swallowed deliberately — see above.
+  }
+
+  // The code itself is never returned: it travels by email only.
+  return { bookingId, resent: true };
+};
+
 export const confirmOtp = async (
   bookingId: number,
   otp: string

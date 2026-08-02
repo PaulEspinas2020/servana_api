@@ -34,6 +34,13 @@ router.post("/bookings/:id/cancel", verifyAuth, bookingController.cancelBooking)
 // already send a Bearer token on these calls, so this closes the hole without
 // forcing a protected-client release (§2).
 router.post("/:id/confirm-otp", verifyAuth, bookingController.confirmOtp);
+
+// The client has called this since the OTP screen was written
+// (servana_api_client.dart:597) and it did not exist, so Resend was the only
+// recovery path on that screen and it always failed. verifyAuth + the
+// controller's assertBookingAccess: rotating another customer's OTP would lock
+// them out of confirming their own booking.
+router.post("/:bookingId/resend-otp", verifyAuth, bookingController.resendOtp);
 router.get("/:id", verifyAuth, bookingController.getBooking);
 router.get("/:id/tracking", verifyAuth, bookingController.getTracking);
 export default router;

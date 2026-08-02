@@ -137,6 +137,36 @@ export const confirmOtp = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * POST /api/:bookingId/resend-otp
+ *
+ * The OTP screen's Resend button has always called this; it did not exist. A
+ * customer whose verification email never arrived had no recovery — the booking
+ * sat in PENDING_OTP and the only way forward was a code they never received.
+ */
+export const resendOtp = async (req: Request, res: Response) => {
+  try {
+    const bookingId = Number(req.params.bookingId ?? req.params.id);
+
+    if (!bookingId || Number.isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid booking id" });
+    }
+
+    // Same authorization as every other booking route: possession of an id is
+    // not entitlement (§11). Without this, anyone could rotate the OTP on any
+    // booking and lock the real customer out of confirming it.
+    await assertBookingAccess(bookingId, (req as any).user?.uid);
+
+    const result = await bookingService.resendBookingOtp(bookingId);
+    return res.json({ success: true, ...result });
+  } catch (e: any) {
+    if (sendBookingAccessError(res, e)) return;
+    return res
+      .status(e?.statusCode === 409 ? 409 : 400)
+      .json({ success: false, message: e.message });
+  }
+};
+
 export const getBooking = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.id);

@@ -100,10 +100,17 @@ describe('GET /booking/:bookingId/provider-location — booking-scoped', () => {
 
     expect(assertAccess).toHaveBeenCalledWith(42, 'uid-customer');
     expect(getLocation).toHaveBeenCalledWith(PROVIDER);
+    // `data` is an additive alias carrying the SAME document. The shipped
+    // ServanaClient only unwraps a GPS payload from the root or from `data`
+    // (geo_position_snapshot.fromApiMap), never from `location` — so live
+    // tracking returned null on every response and the customer watched an
+    // empty map. The alias fixes installed builds without a release; the
+    // client is being taught to read `location` so it can later be dropped.
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       assigned: true,
       location: { lat: 14.55, lng: 121.02 },
+      data: { lat: 14.55, lng: 121.02 },
     });
   });
 
