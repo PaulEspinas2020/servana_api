@@ -64,7 +64,45 @@ const requireActiveProvider = async (
       [uid]
     );
 
-    const status = String(rows[0]?.account_status ?? "").toLowerCase();
+    // No row at all is a genuinely unknown actor and still denies.
+    if (rows.length === 0) {
+      res.status(403).json({
+        status: "error",
+        error: { code: "PROVIDER_NOT_APPROVED", message: "This account is not permitted to perform this action", retryable: false },
+      });
+      return;
+    }
+
+    /**
+     * A row whose account_status was NEVER SET is a legacy account, not a
+     * blocked one, and must be allowed.
+     *
+     * This shipped as a production outage. `String(rows[0]?.account_status ?? "")`
+     * collapsed NULL to "", which is not in WORKING_STATUSES, so every account
+     * predating the column got 403 on every operational route. It was invisible
+     * in testing because those accounts sign in fine — the failure lands on the
+     * FIRST guarded call afterwards, which the portal surfaces as "your session
+     * expired", pointing at auth rather than at authorization.
+     *
+     * It hit phone sign-in hardest: Firebase issues a uid per identifier, so
+     * signing in by mobile creates a NEW row via upsertFirebaseUser, which does
+     * not set account_status. Those accounts were blocked from their very first
+     * request while email sign-in kept working, which is why it looked like a
+     * mobile-only bug.
+     *
+     * Failing closed is still right for an UNKNOWN status — that is a value
+     * somebody wrote deliberately and this code does not understand. Absence is
+     * different: it means nothing was ever written, and yesterday that account
+     * worked. Suspension is unaffected, because suspending writes an explicit
+     * status.
+     */
+    const raw = rows[0].account_status;
+    if (raw === null || raw === undefined || String(raw).trim() === "") {
+      next();
+      return;
+    }
+
+    const status = String(raw).toLowerCase();
 
     if (WORKING_STATUSES.has(status)) {
       next();
