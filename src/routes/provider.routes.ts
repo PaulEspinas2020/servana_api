@@ -1,4 +1,5 @@
 import express from "express";
+import requireActiveProvider from "../middleware/requireActiveProvider";
 import verifyAuth from "../middleware/verifyAuth";
 import verifyRoles from "../middleware/verifyRoles";
 import * as provider from "../controllers/providerController";
@@ -12,7 +13,7 @@ router.post("/provider/service-preference", verifyAuth, provider.saveServicePref
 
 // Location / online status
 router.get("/provider/location/status", verifyAuth, provider.getLocationStatus);
-router.post("/provider/location/go-online", verifyAuth, provider.goOnline);
+router.post("/provider/location/go-online", verifyAuth, requireActiveProvider, provider.goOnline);
 router.post("/provider/location/go-offline", verifyAuth, provider.goOffline);
 
 // Dashboard
@@ -98,7 +99,7 @@ router.delete("/provider/security/sessions/:id", verifyAuth, provider.revokeProv
 // Payout settings (P1)
 router.get("/provider/payout/summary", verifyAuth, provider.getProviderPayoutSummary);
 router.post("/provider/payout/update-session", verifyAuth, provider.requestProviderPayoutUpdate);
-router.post("/provider/payout", verifyAuth, provider.registerProviderPayout);
+router.post("/provider/payout", verifyAuth, requireActiveProvider, provider.registerProviderPayout);
 
 // Privacy / account actions (P1)
 router.get("/provider/privacy", verifyAuth, provider.getProviderPrivacy);
@@ -139,15 +140,15 @@ router.get("/worker/job-cards", verifyAuth, provider.getWorkerJobCards);
 
 // ─── Booking lifecycle (auth-scoped; BOLA enforced in service via SQL WHERE worker_uid = token.uid) ──
 // Web portal equivalents of the unauthenticated /workers/bookings/:id/* mobile routes.
-router.put("/worker/bookings/:bookingId/accept", verifyAuth, provider.acceptBooking);
-router.put("/worker/bookings/:bookingId/decline", verifyAuth, provider.declineBooking);
-router.put("/worker/bookings/:bookingId/en-route", verifyAuth, provider.markBookingEnRoute);
-router.put("/worker/bookings/:bookingId/arrived", verifyAuth, provider.markBookingArrived);
-router.put("/worker/bookings/:bookingId/start", verifyAuth, provider.startBooking);
-router.put("/worker/bookings/:bookingId/complete", verifyAuth, provider.completeBooking);
+router.put("/worker/bookings/:bookingId/accept", verifyAuth, requireActiveProvider, provider.acceptBooking);
+router.put("/worker/bookings/:bookingId/decline", verifyAuth, requireActiveProvider, provider.declineBooking);
+router.put("/worker/bookings/:bookingId/en-route", verifyAuth, requireActiveProvider, provider.markBookingEnRoute);
+router.put("/worker/bookings/:bookingId/arrived", verifyAuth, requireActiveProvider, provider.markBookingArrived);
+router.put("/worker/bookings/:bookingId/start", verifyAuth, requireActiveProvider, provider.startBooking);
+router.put("/worker/bookings/:bookingId/complete", verifyAuth, requireActiveProvider, provider.completeBooking);
 
 // ─── Location update (auth-scoped; uid from Firebase token, not request body) ─
-router.post("/worker/location", verifyAuth, provider.updateWorkerLocation);
+router.post("/worker/location", verifyAuth, requireActiveProvider, provider.updateWorkerLocation);
 
 // ─── Worker services (auth-scoped; uid from Firebase token, not URL param) ────
 router.get("/worker/services", verifyAuth, provider.getWorkerServices);
