@@ -35,11 +35,13 @@ import {
   getPermissionDefinitions,
   invalidatePermissionCache,
 } from "../src/services/adminPermissionService";
+import { auditFire } from "../src/services/adminAuditService";
 
 const s = db.schema;
 const auth = getAuthAdmin(firebaseAdmin);
 const APPLY = process.argv.includes("--apply");
 const SUPER = process.argv.includes("--super");
+const CONVERT = process.argv.includes("--convert");
 const ACTOR = "bootstrap-script";
 const REASON = "Bootstrap: initial admin provisioning";
 
@@ -60,6 +62,46 @@ const PASSWORD = process.env.ADMIN_BOOTSTRAP_PASSWORD ?? "";
 const PROTECTED: Record<number, string> = { 2: "provider", 3: "customer" };
 
 type Outcome = { email: string; uid: string; created: boolean; granted: number; note?: string };
+
+/**
+ * Every row anywhere in the schema that references this uid.
+ *
+ * Exists so --convert cannot be talked into destroying an account someone
+ * glanced at. Granting admin sets role = 1, and every customer and provider
+ * query scopes on role — so a conversion silently detaches bookings, addresses,
+ * reviews, payments and applications all at once, with nothing to undo it.
+ * Checking one table by hand and concluding "it's empty" is exactly how that
+ * goes wrong.
+ *
+ * The column list is discovered from information_schema rather than hardcoded,
+ * because a hardcoded list silently stops covering a table the day someone adds
+ * one — and the failure mode is data loss, not a test going red.
+ *
+ * Compared as ::text so a numeric id column cannot raise a type error and
+ * abort the sweep. Such a column can never match a Firebase uid anyway, so
+ * casting costs nothing but an index scan on a script that runs once.
+ */
+async function accountFootprint(uid: string) {
+  const { rows: cols } = await dbQuery.query(
+    `SELECT table_name, column_name
+     FROM information_schema.columns
+     WHERE table_schema = $1
+       AND column_name IN ('user_id', 'uid', 'customer_uid', 'user_uid', 'customer_id', 'provider_uid', 'worker_uid')
+       AND table_name NOT IN ('user_credentials', 'admin_users', 'admin_permission_grants', 'admin_permission_events')
+     ORDER BY table_name`,
+    [s]
+  );
+
+  const hits: Array<{ table: string; column: string; rows: number }> = [];
+  for (const c of cols) {
+    const { rows } = await dbQuery.query(
+      `SELECT count(*)::int AS n FROM ${s}."${c.table_name}" WHERE "${c.column_name}"::text = $1`,
+      [uid]
+    );
+    if (rows[0]?.n > 0) hits.push({ table: c.table_name, column: c.column_name, rows: rows[0].n });
+  }
+  return hits;
+}
 
 async function resolveFirebaseUser(email: string): Promise<{ uid: string; created: boolean } | null> {
   try {
@@ -93,13 +135,60 @@ async function provision(rawEmail: string): Promise<Outcome | null> {
   );
   const role = rows[0]?.role;
   if (role && PROTECTED[role]) {
+    if (!CONVERT) {
+      console.log(
+        `  REFUSED  ${email} — this is already a ${PROTECTED[role]} account.\n` +
+          `           Granting admin would set role = 1 and destroy their\n` +
+          `           ${PROTECTED[role]} access. Use a different address,\n` +
+          `           or pass --convert to convert it deliberately.`
+      );
+      process.exitCode = 1;
+      return null;
+    }
+
+    /**
+     * --convert: turn an EMPTY customer/provider account into an admin.
+     *
+     * The footprint is recomputed here rather than taken on trust. Someone
+     * eyeballing "0 bookings" in psql has checked one table; the account may
+     * still own addresses, reviews, payments or applications, and role = 1
+     * detaches every one of them at once. This asks the schema where the uid
+     * actually appears instead of assuming bookings is the only place.
+     */
+    const footprint = await accountFootprint(uid);
+    if (footprint.length > 0) {
+      console.log(`  REFUSED  ${email} — this ${PROTECTED[role]} account HAS DATA:`);
+      footprint.forEach((f) => console.log(`             ${f.table}.${f.column}: ${f.rows} row(s)`));
+      console.log(`           Converting would detach all of it. Use a different address.`);
+      process.exitCode = 1;
+      return null;
+    }
+
+    if (!APPLY) {
+      console.log(`  WOULD CONVERT  ${email} — empty ${PROTECTED[role]} account (role ${role} -> 1)`);
+      return null;
+    }
+
+    await dbQuery.query(`UPDATE ${s}.user_credentials SET role = 1 WHERE uid = $1`, [uid]);
+
+    // The previous role is recorded so this is reversible. Without it, "what was
+    // this account before?" has no answer once the column is overwritten.
+    auditFire({
+      actionCategory: "admin",
+      action: "admin_role_converted",
+      entityType: "admin_user" as any,
+      entityId: uid,
+      actorUid: ACTOR,
+      actorDisplayName: "Bootstrap script",
+      outcome: "success",
+      metadata: { email, previousRole: role, previousRoleName: PROTECTED[role], newRole: 1, footprint: "empty" },
+      requestId: null,
+    });
+
     console.log(
-      `  REFUSED  ${email} — this is already a ${PROTECTED[role]} account.\n` +
-        `           Granting admin would set role = 1 and destroy their\n` +
-        `           ${PROTECTED[role]} access. Use a different address.`
+      `  CONVERTED  ${email} — was ${PROTECTED[role]} (role ${role}), now admin.\n` +
+        `             Reverse with:  UPDATE ${s}.user_credentials SET role = ${role} WHERE uid = '${uid}';`
     );
-    process.exitCode = 1;
-    return null;
   }
 
   const existingAdmin = await getAdminUser(uid);
