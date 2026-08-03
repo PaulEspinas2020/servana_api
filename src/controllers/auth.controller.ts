@@ -150,6 +150,23 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
 
     return res.status(200).json({ status: 'success', data: result.data });
   } catch (error: any) {
+    // Log before collapsing. Every failure here used to become a bare 401 with
+    // the cause discarded, so a database constraint, a Firebase outage and a
+    // genuinely bad token were indistinguishable in production — and the portal
+    // renders all of them as "session expired", which points at the wrong thing.
+    console.error("[firebase-login] failed:", error?.code ?? "", error?.message ?? error);
+
+    // Signing in with an identifier that belongs to an existing account is not
+    // an authentication failure. Told to try again, the person will keep failing
+    // the same way; they need to know which identifier to use instead.
+    if (error?.code === "ACCOUNT_LINK_REQUIRED") {
+      return res.status(409).json({
+        status: "failed",
+        error: { code: "ACCOUNT_LINK_REQUIRED", message: error.message, retryable: false },
+        message: error.message,
+      });
+    }
+
     const isDisabled = error?.message?.includes("disabled");
     return res.status(isDisabled ? 403 : 401).json({
       status: "failed",

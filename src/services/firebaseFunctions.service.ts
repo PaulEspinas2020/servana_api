@@ -11,6 +11,11 @@ import {
     verifyPasswordResetCode,
 } from "firebase/auth";
 import * as userService from "../services/user.service";
+import dbQuery from "../db/dbQuery";
+import { db as dbConfig } from "../config";
+import { findLinkCollision, AccountLinkRequiredError } from "./accountLinkGuard";
+
+const dbSchema = dbConfig.schema;
 
 const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
 
@@ -41,6 +46,33 @@ const firebaseAuthLogin = async (idToken: string, role: string = "2") => {
     const parts = firebaseUser.displayName.trim().split(/\s+/);
     firstName = parts[0] || "";
     lastName = parts.slice(1).join(" ") || "";
+  }
+
+  /**
+   * Before creating a row for a uid that has never been seen, check whether
+   * this identifier already belongs to somebody's existing account.
+   *
+   * Firebase issues a uid per identifier, so a provider who registered by email
+   * and signs in by mobile arrives as a DIFFERENT uid. upsertFirebaseUser keys
+   * on uid, so it creates a second account and the person lands in an empty
+   * portal — no jobs, no earnings — with nothing having errored. That is how one
+   * provider ends up as two half-populated records.
+   *
+   * Scoped to first-sight uids deliberately. If the uid already has a row this
+   * is a returning user and nothing is checked, so no existing sign-in can be
+   * affected by this guard however the lookup behaves.
+   */
+  const { rows: existing } = await dbQuery.query(
+    `SELECT 1 FROM ${dbSchema}.user_credentials WHERE uid = $1 LIMIT 1`,
+    [firebaseUser.uid]
+  );
+  if (existing.length === 0) {
+    const collision = await findLinkCollision(
+      firebaseUser.uid,
+      firebaseUser.email || null,
+      firebaseUser.phoneNumber || null
+    );
+    if (collision) throw new AccountLinkRequiredError(collision.via);
   }
 
   const dbUser = await userService.upsertFirebaseUser({
