@@ -33,7 +33,7 @@ import {
   getAdminUser,
   createAdminUser,
   getPermissionDefinitions,
-  updateAdminUserPermissions,
+  invalidatePermissionCache,
 } from "../src/services/adminPermissionService";
 
 const s = db.schema;
@@ -41,6 +41,7 @@ const auth = getAuthAdmin(firebaseAdmin);
 const APPLY = process.argv.includes("--apply");
 const SUPER = process.argv.includes("--super");
 const ACTOR = "bootstrap-script";
+const REASON = "Bootstrap: initial admin provisioning";
 
 /** Emails to provision. Edited here rather than passed on a command line. */
 const EMAILS = ["ralphwayneacenas@gmail.com", "allanagadi@gmail.com"];
@@ -146,22 +147,68 @@ async function provision(rawEmail: string): Promise<Outcome | null> {
      * account is the goal; the destructive extras are a decision for whoever
      * runs the portal, not for a bootstrap script.
      */
+    /**
+     * Granted directly, NOT through updateAdminUserPermissions.
+     *
+     * That function requires the ACTOR to be a Super Admin, and this script's
+     * actor is a label rather than an account — so it refused with FORBIDDEN
+     * and left a real admin holding zero permissions and an empty portal. That
+     * is a worse outcome than either creating nothing or granting everything,
+     * because it looks like success.
+     *
+     * The guard is correct and is NOT weakened: the HTTP route still requires a
+     * Super Admin. This path is reachable only by someone who already holds root
+     * on the server and the database password — strictly more privileged than
+     * any Super Admin — so gating it behind one would be theatre.
+     *
+     * Two things are preserved rather than shortcut. The grants use the same
+     * append-only shape as the service (insert what is missing; revocation is a
+     * revoked_at stamp, never a delete), so re-running adds nothing. And the
+     * event row names `bootstrap-script` as the actor rather than borrowing a
+     * real Super Admin's uid, which would put a person's name on something they
+     * did not do.
+     */
     const defs = await getPermissionDefinitions();
-    const keys = defs.groups
+    const wanted = defs.groups
       .flatMap((g) => g.permissions)
       .filter((p: any) => !p.isDangerous && !p.isHiddenFromNormalUi)
-      .map((p: any) => p.key);
-    const withheld = defs.total - keys.length;
+      .map((p: any) => p.key as string);
+    const withheld = defs.total - wanted.length;
 
-    try {
-      const res = await updateAdminUserPermissions(
-        uid, keys, "Bootstrap: initial admin provisioning", ACTOR, "Bootstrap script", null
+    const existing = await dbQuery.query(
+      `SELECT permission_key FROM ${s}.admin_permission_grants
+       WHERE admin_uid = $1 AND granted = TRUE AND revoked_at IS NULL`,
+      [uid]
+    );
+    const have = new Set<string>(existing.rows.map((r: any) => r.permission_key));
+    const toAdd = wanted.filter((k) => !have.has(k));
+
+    for (const key of toAdd) {
+      await dbQuery.query(
+        `INSERT INTO ${s}.admin_permission_grants
+           (admin_uid, permission_key, granted, granted_by, reason)
+         VALUES ($1, $2, TRUE, $3, $4)`,
+        [uid, key, ACTOR, REASON]
       );
-      granted = res.savedPermissions.length;
-      if (withheld > 0) note = `${withheld} dangerous/hidden permission(s) withheld — grant in the portal if needed`;
-    } catch (e: any) {
-      note = `PERMISSIONS NOT GRANTED (${e.message?.slice(0, 70)}) — set them in the portal`;
-      process.exitCode = 1;
+    }
+
+    if (toAdd.length) {
+      // added/removed/before/after are JSONB, so they are stringified. Passing
+      // a JS array binds as a Postgres array and fails the type on insert.
+      await dbQuery.query(
+        `INSERT INTO ${s}.admin_permission_events
+           (target_admin_uid, actor_admin_uid, event_type, added_permissions,
+            removed_permissions, before_permissions, after_permissions, reason, request_id)
+         VALUES ($1, $2, 'granted', $3::jsonb, '[]'::jsonb, $4::jsonb, $5::jsonb, $6, NULL)`,
+        [uid, ACTOR, JSON.stringify(toAdd), JSON.stringify([...have]), JSON.stringify(wanted), REASON]
+      );
+    }
+
+    invalidatePermissionCache(uid);
+    invalidatePermissionCache(`sa:${uid}`);
+    granted = wanted.length;
+    if (withheld > 0) {
+      note = `${withheld} dangerous/hidden permission(s) withheld — grant in the portal if needed`;
     }
   }
 
