@@ -12,6 +12,7 @@
  */
 
 const fs   = require('fs');
+const { bareRoutes } = require('./helpers/routeAuth');
 const path = require('path');
 
 const SRC   = (...parts) => path.join(__dirname, '..', 'src', ...parts);
@@ -148,10 +149,21 @@ describe('REPEAT — WORKER.SERVICE_AREA canonical storage', () => {
 // ---------------------------------------------------------------------------
 
 describe('REPEAT — Mobile contract protection (no-touch guarantees)', () => {
-  it('providerAvailabilityEngine does not modify technician.routes.ts', () => {
+  it('nothing unauthenticated survives in technician.routes.ts', () => {
+    // This asserted that /workers/:uid/availability was still present, as a
+    // no-touch guarantee for mobile. That route had no authentication and took
+    // its subject from the URL, so anyone could rewrite any provider's
+    // availability by knowing a uid. Both apps now use the authenticated
+    // /api/worker/availability, and the bare block was deleted in Command 4.
+    //
+    // The guarantee is inverted rather than dropped: instead of pinning a
+    // specific unauthenticated route into existence, this asserts the property
+    // that mattered all along — no route in this file is reachable without a
+    // credential.
     const routes = fs.readFileSync(ROUTE('technician.routes.ts'), 'utf8');
-    // Mobile routes /workers/:uid/availability must still be present
-    expect(routes).toContain('/workers/:uid/availability');
+    const bare = bareRoutes(routes);
+    expect(bare).toEqual([]);
+    expect(routes).not.toContain('/workers/:uid/availability');
   });
 
   it('provider.routes.ts /worker/availability routes still point to providerController', () => {

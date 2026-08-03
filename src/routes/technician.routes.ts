@@ -7,6 +7,38 @@ import { legacyRouteTelemetry } from "../middleware/legacyRouteTelemetry";
 
 const router = Router();
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The unauthenticated legacy block was DELETED here (Command 4).
+//
+// 24 routes carried no authentication and took their subject from the URL, so
+// anyone could follow a provider's live position, read or delete their
+// compliance documents, rewrite their availability and service area, toggle
+// them online or offline, and drive their onboarding — by knowing a uid.
+//
+// Every one had an authenticated successor in provider.routes.ts, and every
+// client was migrated off first:
+//   ServanaWorker b94f7a1 · ServanaClient f23ae5e/aaac06b
+//   provider portal — 42 API paths, none of them /api/workers/*
+//   admin portal and customer web — no references at all
+//
+// The migration plan gated this on observed traffic reaching zero, which is the
+// right gate for a live platform. This one is not live: no build is in the
+// field and no bookings exist, so there is no old-version tail to wait out.
+//
+// WHAT REMAINS IN THIS FILE IS NOT A LEAK. All 21 surviving routes carry
+// verifyAuth; those taking a :uid also carry verifyOwnership, and the admin
+// ones carry verifyRoles via the `adminOnly` spread.
+//
+// A first pass at this deletion removed 30 routes rather than 24, because the
+// detector searched each line for the literal string "verifyAuth" and the
+// admin routes are guarded by `...adminOnly` — a spread of
+// [verifyAuth, verifyRoles([0,1])]. Six secured admin routes were deleted and
+// restored. Any future sweep over this file must resolve middleware aliases.
+//
+// See docs/WORKER_ROUTE_MIGRATION.md.
+// ─────────────────────────────────────────────────────────────────────────────
+
+
 // Measure the unauthenticated legacy family before retiring it. Step 4 of
 // docs/WORKER_ROUTE_MIGRATION.md is gated on this traffic reaching zero, and
 // nobody can judge that without numbers. Also surfaces enumeration: a caller
@@ -38,7 +70,6 @@ router.use("/workers", legacyRouteTelemetry);
 const adminOnly = [verifyAuth, verifyRoles([0, 1])];
 router.get("/workers/role/:role", ...adminOnly, technicianController.listByRole);
 router.get("/workers/all", ...adminOnly, technicianController.list);
-router.get("/workers/available", technicianController.getAvailableWorkers);
 // EXCEPTION to the blanket note that used to head the block above.
 //
 // This returned the provider's email, birthdate, home addresses, compliance
@@ -54,9 +85,6 @@ router.get("/workers/available", technicianController.getAvailableWorkers);
 // customer still gets the name and phone the booking screen needs (§2 — no
 // protected release).
 router.get("/workers/:uid", verifyAuth, technicianController.getByUid);
-router.post("/workers/location", technicianController.updateLocation);
-router.get("/workers/location/:uid", technicianController.getLocation);
-router.get("/workers/:workerId/schedule", technicianController.workerSchedule);
 
 // getJobCards (technicianController.ts:214-243) takes workerId from the URL and
 // returns, per job, the customer's name, phone number and full street address
@@ -119,9 +147,6 @@ router.get("/workers/:uid/services", ...adminOnly, technicianController.getEmplo
 router.get("/services/:serviceId/workers", ...adminOnly, technicianController.getWorkersByService);
 
 // Worker Requirements
-router.post("/workers/:uid/requirements", technicianController.uploadRequirements);
-router.get("/workers/:uid/requirements", technicianController.getRequirements);
-router.delete("/workers/:uid/requirements/:id", technicianController.deleteRequirement);
 
 // Worker Bank Account — financial data; requires auth + ownership (not used by mobile app)
 router.put("/workers/:uid/bank-account", verifyAuth, verifyOwnership, technicianController.upsertBankAccount);
@@ -134,35 +159,18 @@ router.get("/workers/:uid/disbursement-history", verifyAuth, verifyOwnership, te
 router.get("/workers/:uid/earnings-history", verifyAuth, verifyOwnership, technicianController.getEarningsHistory);
 
 // Online Status
-router.get("/workers/:uid/online-status", technicianController.getOnlineStatus);
-router.post("/workers/:uid/go-online", technicianController.goOnline);
-router.post("/workers/:uid/go-offline", technicianController.goOffline);
 
 // Availability & Time Off
-router.get("/workers/:uid/availability", technicianController.getAvailability);
-router.put("/workers/:uid/availability", technicianController.saveAvailability);
-router.get("/workers/:uid/time-off", technicianController.getTimeOff);
-router.post("/workers/:uid/time-off", technicianController.createTimeOff);
-router.delete("/workers/:uid/time-off/:id", technicianController.deleteTimeOff);
 
 // Service Area
-router.get("/workers/:uid/service-area", technicianController.getServiceArea);
-router.put("/workers/:uid/service-area", technicianController.saveServiceArea);
 
 // Profile Photo
-router.post("/workers/:uid/profile/photo", technicianController.uploadProfilePhoto);
 
 // Dashboard
-router.get("/workers/:uid/dashboard", technicianController.getDashboard);
 
 // Onboarding
-router.get("/workers/:uid/onboarding", technicianController.getOnboarding);
-router.post("/workers/:uid/onboarding/step", technicianController.saveOnboardingStep);
-router.post("/workers/:uid/onboarding/submit", technicianController.submitOnboarding);
 
 // Review
-router.get("/workers/:uid/review-status", technicianController.getReviewStatus);
-router.post("/workers/:uid/submit-for-review", technicianController.submitForReview);
 
 // Notification Preferences — personal data; requires auth + ownership (not used by mobile app)
 router.get("/workers/:uid/notification-preferences", verifyAuth, verifyOwnership, technicianController.getNotificationPreferences);

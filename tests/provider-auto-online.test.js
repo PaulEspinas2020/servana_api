@@ -6,6 +6,7 @@
  */
 
 const fs   = require('fs');
+const { bareRoutes } = require('./helpers/routeAuth');
 const path = require('path');
 
 const SRC  = (...parts) => path.join(__dirname, '..', 'src', ...parts);
@@ -312,11 +313,23 @@ describe('Command 14 — assignNearestWorker includes auto-bookable providers', 
     expect(fn).toContain('return existing');
   });
 
-  it('mobile routes are untouched', () => {
+  it('the auto-online engine still does not reach into the worker routes', () => {
+    // This asserted that /workers/:uid/availability and /workers/:uid were
+    // present, as a no-touch guarantee for mobile clients that depended on
+    // them. Both apps have since been migrated to the authenticated
+    // /api/worker/* family, and the unauthenticated block was deleted in
+    // Command 4 — so requiring those routes to exist now pins the platform to
+    // the exposure it just removed.
+    //
+    // The part of the guarantee that still means something is the second
+    // clause: this engine must not wire itself into the worker routes. That is
+    // kept, and the surviving routes are asserted to be authenticated rather
+    // than merely present, which is the stronger property.
     const routes = fs.readFileSync(ROUTE('technician.routes.ts'), 'utf8');
-    expect(routes).toContain('/workers/:uid/availability');
-    expect(routes).toContain('/workers/:uid');
     expect(routes).not.toContain('autoOnlineEngine');
+
+    const bare = bareRoutes(routes);
+    expect(bare).toEqual([]);
   });
 });
 
