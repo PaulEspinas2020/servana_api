@@ -82,7 +82,11 @@ describe('technicianService — system messages on startJob / completeJob / decl
 
   it('only creates new conversation in acceptJob (startJob checks for existing)', function () {
     // startJob should NOT call getOrCreateConversation — only findExisting
-    var startBlock = src.match(/startJob[\s\S]{0,3000}/)?.[0] || '';
+    // Anchored on the DECLARATION, not on any mention. `/startJob/` matched the
+    // first occurrence anywhere in the file, so a doc comment that merely named
+    // the function shifted this assertion onto prose and it failed against text
+    // instead of code.
+    var startBlock = src.match(/export const startJob[\s\S]{0,3000}/)?.[0] || '';
     // The presence of findExistingConversationByBookingId in startBlock proves only existing is used
     expect(startBlock).toMatch(/findExistingConversationByBookingId/);
   });
