@@ -56,7 +56,8 @@ job-matching query rather than as a guard.
 | **Booking** — en route / arrived | — | own | — | — | SQL, guarded transition |
 | **Booking** — start / complete | — | own | — | — | SQL, guarded transition |
 | **Booking** — reassigned away | — | — | — | Y | row no longer matches |
-| **Provider location** — write | — | own | own | — | `POST /worker/location`, token uid |
+| **Provider location** — write | — | own | — | — | `POST /worker/location` + `requireActiveProvider` |
+| **Go online** | — | own | — | — | `requireActiveProvider` |
 | **Provider location** — read | — | own | — | Y | `GET /booking/:id/provider-location` + `assertBookingAccess` |
 | **Conversation** — read | — | participant | participant | Y | `resolveAccessForConversation` |
 | **Conversation** — send | — | participant | — | Y | participation |
