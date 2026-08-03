@@ -56,7 +56,7 @@ exists today.
 |---|---|---|---|
 | `ACCEPT_BOOKING` | `PUT /api/worker/bookings/:id/accept` | yes | `status = 'ASSIGNED'` |
 | `DECLINE_BOOKING` | `PUT /api/worker/bookings/:id/decline` | yes | `status = 'ASSIGNED'` |
-| `START_WORK` | `PUT /api/worker/bookings/:id/start` | yes | `status = 'ACCEPTED'` |
+| `START_WORK` | `PUT /api/worker/bookings/:id/start` | yes | `status IN ('ACCEPTED','EN_ROUTE','ARRIVED')` |
 | `COMPLETE_WORK` | `PUT /api/worker/bookings/:id/complete` | yes | `status = 'IN_PROGRESS'` |
 | `VERIFY_CODE` | `?workerCode=` on start | yes | arrival code, passed to `startJob` |
 | `MESSAGE_CUSTOMER` | `POST /api/chat/conversations/:id/messages` | yes | conversation participation |
@@ -73,10 +73,13 @@ exists today.
 | **`OPEN_DISPUTE`** | — | **NO ROUTE** | no dispute status exists |
 | **`REPORT_NO_SHOW`** | — | **NO ROUTE** | — |
 
-Seven of the actions the command enumerates have **no backend at all**. Building
-UI for them would produce buttons that cannot work. `MARK_EN_ROUTE` and
-`MARK_ARRIVED` are the most consequential: arrival tracking is table stakes for a
-field-worker product, and today the platform cannot express it.
+Five of the actions the command enumerates still have **no backend at all**.
+Building UI for them would produce buttons that cannot work.
+
+`MARK_EN_ROUTE` and `MARK_ARRIVED` were on that list and are now implemented —
+they were the most consequential, since arrival tracking is table stakes for a
+field-worker product and both mobile apps already had UI branching on states the
+platform could not produce.
 
 ## Disabled reason codes
 

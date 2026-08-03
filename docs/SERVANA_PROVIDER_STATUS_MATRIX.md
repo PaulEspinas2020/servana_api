@@ -13,7 +13,7 @@ already has it.
 | Dimension | Column | Values |
 |---|---|---|
 | Booking lifecycle | `bookings.status` | `PENDING_OTP`, `CONFIRMED`, `WORKER_ASSIGNED`, `PAID`, `COMPLETED`, `CANCELLED`, `REVIEWED` |
-| Assignment / provider response | `booking_workers.status` | `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`, `COMPLETED`, `DECLINED`, `CANCELED` |
+| Assignment / provider response | `booking_workers.status` | `ASSIGNED`, `ACCEPTED`, `EN_ROUTE`, `ARRIVED`, `IN_PROGRESS`, `COMPLETED`, `DECLINED`, `CANCELLED` |
 | Payment | `payments.status` | `PENDING`, `PAID`, `FAILED`, `REFUNDED` |
 | Payout | `disbursements.status` | `PENDING`, `PROCESSING`, `RELEASED`, `FAILED` |
 | Customer timeline | `booking_tracking.status` | `CONFIRMED`, `WORKER_ASSIGNED`, `ADDITIONAL_PAID`, `PAYMENT_PAID` |
@@ -23,17 +23,18 @@ already has it.
 `bookings.status`.** A client that reads only the booking row cannot tell whether
 the provider has accepted, started, or finished.
 
-## ⚠ The spelling split
+## The spelling split — resolved
 
-`bookings.status` is written **`CANCELLED`** (double L).
-`booking_workers.status` is written **`CANCELED`** (single L).
+`booking_workers.status` used to be written **`CANCELED`** (single L) while
+`bookings.status` used **`CANCELLED`** (double L). Both were load-bearing, and
+`getWorkerDashboard` crossed them — counting the parent's spelling against the
+child's table — so `cancelledJobs` read zero forever.
 
-Both spellings are real and both are load-bearing. This is not cosmetic:
-`getWorkerDashboard` counted the parent's spelling against the child's table, so
-`cancelledJobs` read zero forever. Fixed in `2750bfd` by matching both.
-
-**Any new query against `booking_workers` must use `CANCELED`, or accept both.**
-Normalising the two is a data migration and has not been done.
+**`CANCELLED` is now the only spelling written** (`aad7dc9`). Reads still accept
+both, deliberately: a query matching only the canonical spelling against rows
+written before `scripts/normalise-cancelled-spelling.ts` has run reintroduces
+exactly the bug that was removed. Keep reads tolerant until that script has run
+everywhere.
 
 ## Transitions the backend actually enforces
 
@@ -45,14 +46,16 @@ out-of-order call changes nothing rather than corrupting state.
 | `bookings.PENDING_OTP` | `CONFIRMED` | `bookingService.ts:215` |
 | `booking_workers.ASSIGNED` | `ACCEPTED` | `technicianService.ts:961` |
 | `booking_workers.ASSIGNED` | `DECLINED` | `technicianService.ts:1027` |
-| `booking_workers.ACCEPTED` | `IN_PROGRESS` | `technicianService.ts:1144` |
+| `booking_workers.ACCEPTED` | `EN_ROUTE` | `technicianService.ts` (`markEnRoute`) |
+| `booking_workers.EN_ROUTE` | `ARRIVED` | `technicianService.ts` (`markArrived`) |
+| `booking_workers.ACCEPTED\|EN_ROUTE\|ARRIVED` | `IN_PROGRESS` | `technicianService.ts:1144` |
 | `booking_workers.IN_PROGRESS` | `COMPLETED` | `technicianService.ts:1208` |
-| `booking_workers.ASSIGNED\|ACCEPTED` | `CANCELED` | `bookingService.ts:660` |
+| `booking_workers.ASSIGNED\|ACCEPTED\|EN_ROUTE\|ARRIVED` | `CANCELLED` | `bookingService.ts:660` |
 | `disbursements.PENDING` | `PROCESSING` | `disbursement.service.ts:71` |
 | `payments.PAID` | `REFUNDED` | `refund.service.ts:31` |
 
-The provider lifecycle — `ASSIGNED → ACCEPTED → IN_PROGRESS → COMPLETED` — is
-fully guarded. A provider cannot start a job they have not accepted, or complete
+The provider lifecycle — `ASSIGNED → ACCEPTED → [EN_ROUTE → ARRIVED] → IN_PROGRESS
+→ COMPLETED` — is fully guarded. The two bracketed stages are optional. A provider cannot start a job they have not accepted, or complete
 one they have not started.
 
 ## Transitions that are NOT guarded
