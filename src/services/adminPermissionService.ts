@@ -713,6 +713,31 @@ export async function getAdminUserDetail(adminUid: string): Promise<any | null> 
   return res.rows[0] ? toCamel(res.rows[0]) : null;
 }
 
+/**
+ * First and last name for a user_credentials row backing an admin account.
+ *
+ * Both columns are NOT NULL, so something must be supplied. Nothing here
+ * fabricates a plausible human name: an empty last name is honest about not
+ * knowing it, whereas inventing one puts a wrong name on an account that later
+ * appears in audit trails as the actor for real decisions.
+ *
+ * NOT NULL is not the same as non-empty — "" satisfies the constraint.
+ */
+function splitNameForCredentials(
+  displayName: string | null | undefined,
+  email: string
+): { first: string; last: string } {
+  const dn = (displayName ?? "").trim();
+  if (dn) {
+    const parts = dn.split(/\s+/);
+    return { first: parts[0], last: parts.slice(1).join(" ") };
+  }
+  // No name given. The email local part is the only real information there is,
+  // and it is what the person will recognise as themselves.
+  const local = (email.split("@")[0] ?? "").trim();
+  return { first: local || "admin", last: "" };
+}
+
 export async function createAdminUser(
   data: { adminUid: string; email: string; displayName?: string | null; isSuperAdmin?: boolean },
   actorUid: string,
@@ -724,11 +749,35 @@ export async function createAdminUser(
     throw Object.assign(new Error('Admin user already exists'), { code: 'CONFLICT' });
   }
 
-  // Ensure user has role=1 in user_credentials (upsert)
+  /**
+   * Ensure user has role=1 in user_credentials (upsert).
+   *
+   * first_name and last_name are NOT NULL. This statement used to insert only
+   * (uid, role), which meant it could ONLY ever succeed on the ON CONFLICT
+   * branch — i.e. for a uid that already had a row. For a genuinely new admin
+   * it raised 23502 every time:
+   *
+   *   null value in column "first_name" violates not-null constraint
+   *
+   * That made the entire invite flow non-functional for new people, which is
+   * the only kind of person one invites. It went unnoticed because every test
+   * and every manual check used a uid that already existed as a customer or
+   * provider, so the insert always took the conflict path.
+   *
+   * The real signup path (user.service.ts) has always supplied both columns.
+   *
+   * ON CONFLICT deliberately does NOT overwrite the names: an existing account
+   * has a real name that the person entered, and clobbering it with an email
+   * local part because someone was granted admin would be a regression.
+   */
+  const { first, last } = splitNameForCredentials(data.displayName, data.email);
   await dbQuery.query(
-    `INSERT INTO ${s}.user_credentials (uid, role) VALUES ($1, 1)
-     ON CONFLICT (uid) DO UPDATE SET role = 1`,
-    [data.adminUid]
+    `INSERT INTO ${s}.user_credentials (uid, email, first_name, last_name, role)
+     VALUES ($1, $2, $3, $4, 1)
+     ON CONFLICT (uid) DO UPDATE SET
+       role = 1,
+       email = COALESCE(${s}.user_credentials.email, EXCLUDED.email)`,
+    [data.adminUid, data.email, first, last]
   );
 
   const row = await insertAdminUserRow({
@@ -1142,10 +1191,18 @@ export async function bootstrapSuperAdmin(
     onConflict: "elevate",
   });
 
+  // Same NOT NULL requirement as createAdminUser, and it was the same bug here.
+  // Found only because a test asserted the broken shape was GONE rather than
+  // that the fixed shape was present — the first phrasing would have passed
+  // with this copy still sitting untouched a thousand lines below.
+  const boot = splitNameForCredentials(displayName, email);
   await dbQuery.query(
-    `INSERT INTO ${s}.user_credentials (uid, role) VALUES ($1, 1)
-     ON CONFLICT (uid) DO UPDATE SET role = 1`,
-    [adminUid]
+    `INSERT INTO ${s}.user_credentials (uid, email, first_name, last_name, role)
+     VALUES ($1, $2, $3, $4, 1)
+     ON CONFLICT (uid) DO UPDATE SET
+       role = 1,
+       email = COALESCE(${s}.user_credentials.email, EXCLUDED.email)`,
+    [adminUid, email, boot.first, boot.last]
   );
 
   auditFire({

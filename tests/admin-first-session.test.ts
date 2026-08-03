@@ -57,8 +57,16 @@ describe('first sign-in does not overwrite the role', () => {
 
 describe('the invite establishes the role before any sign-in', () => {
   test('createAdminUser writes role = 1', () => {
-    expect(permSvc).toMatch(/INSERT INTO \$\{s\}\.user_credentials \(uid, role\) VALUES \(\$1, 1\)/);
-    expect(permSvc).toMatch(/ON CONFLICT \(uid\) DO UPDATE SET role = 1/);
+    // Asserts the OUTCOME (role = 1 is established), not one exact column list.
+    //
+    // This test previously pinned `(uid, role) VALUES ($1, 1)` literally, and in
+    // doing so it held a real bug in place: first_name and last_name are NOT
+    // NULL, so that statement could only succeed for a uid that already had a
+    // row, and every genuinely new invite died on a 23502. The test passed
+    // throughout, because it was checking that the code still said what it said
+    // rather than that the code worked.
+    expect(permSvc).toMatch(/INSERT INTO \$\{s\}\.user_credentials \([^)]*\brole\b[^)]*\)/);
+    expect(permSvc).toMatch(/ON CONFLICT \(uid\) DO UPDATE SET\s*role\s*=\s*1/);
   });
 
   test('the invite calls it BEFORE sending the email', () => {
