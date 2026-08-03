@@ -109,6 +109,19 @@ export const AUTH_ERRORS = {
     recovery: "CONTACT_SUPPORT",
     retryable: false,
   },
+  /**
+   * The identifier or password did not match.
+   *
+   * Deliberately does NOT distinguish "no such account" from "wrong password":
+   * that difference tells an attacker which addresses are registered, and it
+   * tells a legitimate user nothing they cannot discover by using recovery.
+   */
+  INVALID_CREDENTIALS: {
+    status: 401,
+    message: "Invalid email or password.",
+    recovery: "REAUTHENTICATE",
+    retryable: false,
+  },
   /** The identifier exists but has not been verified, and this action needs it. */
   IDENTIFIER_NOT_VERIFIED: {
     status: 403,

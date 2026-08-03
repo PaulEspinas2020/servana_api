@@ -25,10 +25,13 @@ const signin = async (req: Request, res: Response) => {
         return res.status(200).json({ status: 'success', data: dbResponse });
     } catch (error: any) {
         if ((error as any)?.statusCode === 401 || error?.message === 'Invalid email or password.') {
-            return res.status(401).json({ status: 'error', message: 'Invalid email or password.' });
+            return sendAuthError(res, "INVALID_CREDENTIALS");
         }
         if ((error as any)?.statusCode === 403) {
-            return res.status(403).json({ status: 'error', message: error?.message || 'Email not verified.' });
+            // Not an authentication failure: the credential was correct. Routing
+            // this to a login screen is what makes people retype a password that
+            // was never the problem.
+            return sendAuthError(res, "IDENTIFIER_NOT_VERIFIED", error?.message || 'Email not verified.');
         }
         const msg = typeof error === 'string' ? error : error?.message;
         if (msg && (msg.includes('valid Email') || msg.includes('valid Password') || msg.includes('valid email'))) {
@@ -352,7 +355,7 @@ export const logoutController = async (req: Request, res: Response) => {
     try {
         const uid = req.user && req.user.uid;
         if (!uid) {
-            return res.status(401).json({ status: "failed", message: "Unauthorized" });
+            return sendAuthError(res, "UNAUTHENTICATED");
         }
         await Promise.allSettled([
             firebaseFunction.revokeTokenInFirebase(uid),
