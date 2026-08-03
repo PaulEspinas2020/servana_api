@@ -9,7 +9,12 @@ HERE = os.path.dirname(__file__)
 rows = json.load(io.open(os.path.join(HERE, "inventory.json"), encoding="utf-8"))
 OUT = r"C:\Users\paulg\OneDrive\Desktop\servana_api-main\docs\SERVANA_PROVIDER_API_SPEC.yaml"
 
-CANON = ("/api/worker/", "/api/provider/", "/api/providers/")
+# The booking-scoped successors (/api/booking/:id/provider-location, and
+# /api/booking/:id/provider) are provider-facing by purpose but do not carry a
+# provider-shaped prefix — they are keyed on the booking deliberately, so the
+# caller cannot name an arbitrary provider. Filtering on prefix alone excluded
+# the two endpoints that exist BECAUSE of this specification.
+CANON = ("/api/worker/", "/api/provider/", "/api/providers/", "/api/booking/")
 LEGACY_FILE = "routes/technician.routes.ts"
 
 # Canonical + shared provider surface only. Admin has its own permission model.

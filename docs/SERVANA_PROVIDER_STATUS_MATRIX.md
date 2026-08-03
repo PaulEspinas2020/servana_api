@@ -79,15 +79,16 @@ silently does not work.
 | Phantom | Read at | Effect |
 |---|---|---|
 | `bookings.IN_PROGRESS` | `providerController.ts:222` | `activeJob` was always null while a job ran. **Fixed in `2750bfd`** |
-| `bookings.EN_ROUTE`, `bookings.ARRIVED` | `serviceService.ts:125` | Never match |
+| ~~`bookings.EN_ROUTE`, `bookings.ARRIVED`~~ | `serviceService.ts:125` | **No longer phantom** — written by `markEnRoute`/`markArrived` |
 | `bookings.REJECTED` | `providerController.ts:1641, :1715` | Never matches |
 | `bookings.ACCEPTED` | `adminProviderService.ts:684` | Never matches; acceptance lives on `booking_workers` |
 | `bookings.CANCELED` (single L) | `technicianService.ts:577, :831, :901` | Phantom on this table |
 | `payments.REFUND_PENDING` | 3 admin sites | Never written |
 
-**`EN_ROUTE` and `ARRIVED` do not exist anywhere in the backend.** No route, no
-write, no transition. Neither client can implement arrival tracking today: this
-is a platform gap, not a client gap, and no amount of frontend work closes it.
+**`EN_ROUTE` and `ARRIVED` now exist.** Added as optional stages between
+`ACCEPTED` and `IN_PROGRESS`, guarded like every other transition, cascaded to
+`bookings.status`, with `booking_tracking` events. `startJob` accepts `ACCEPTED`,
+`EN_ROUTE` or `ARRIVED`, so a provider who skips them is unaffected.
 
 ## Additional work
 

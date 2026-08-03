@@ -65,8 +65,8 @@ exists today.
 | `REPORT_INCIDENT` | `POST /api/provider/safety/incidents` | yes | — |
 | `SAFETY_CHECK_IN` | `POST /api/provider/safety/check-in` | yes | — |
 | `CONTACT_SUPPORT` | `POST /api/provider/support/tickets` | yes | — |
-| **`MARK_EN_ROUTE`** | — | **NO ROUTE** | — |
-| **`MARK_ARRIVED`** | — | **NO ROUTE** | — |
+| `MARK_EN_ROUTE` | `PUT /api/worker/bookings/:id/en-route` | yes | `status = 'ACCEPTED'` |
+| `MARK_ARRIVED` | `PUT /api/worker/bookings/:id/arrived` | yes | `status = 'EN_ROUTE'` |
 | **`PAUSE_WORK` / `RESUME_WORK`** | — | **NO ROUTE** | no `PAUSED` status exists |
 | **`COLLECT_CASH`** | payment routes exist | partial | not modelled as a provider action |
 | **`REQUEST_RESCHEDULE`** | — | **NO ROUTE** | no reschedule status exists |

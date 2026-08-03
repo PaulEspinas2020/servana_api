@@ -194,6 +194,44 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/booking/{bookingId}/provider:
+    get:
+      operationId: getBookingProvider
+      summary: locationAccess.getBookingProvider
+      description: >-
+        Source: routes/provider.routes.ts:181.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/booking/{bookingId}/provider-location:
+    get:
+      operationId: getBookingProviderLocation
+      summary: locationAccess.getBookingProviderLocation
+      description: >-
+        Source: routes/provider.routes.ts:180.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/bookings/{bookingId}/conversation:
     get:
       operationId: getBookingConversation
@@ -436,7 +474,7 @@ paths:
       operationId: getAdditionalRequests
       summary: provider.getAdditionalRequests
       description: >-
-        Source: routes/provider.routes.ts:166.
+        Source: routes/provider.routes.ts:168.
         Authentication: required.
         Acting identity derived from: token.
       responses:
@@ -483,7 +521,7 @@ paths:
       operationId: getProviderBookingDetail
       summary: provider.getProviderBookingDetail
       description: >-
-        Source: routes/provider.routes.ts:160.
+        Source: routes/provider.routes.ts:162.
         Authentication: required.
         Acting identity derived from: token.
       parameters:
@@ -595,7 +633,7 @@ paths:
       operationId: getProviderBookingTracking
       summary: provider.getProviderBookingTracking
       description: >-
-        Source: routes/provider.routes.ts:161.
+        Source: routes/provider.routes.ts:163.
         Authentication: required.
         Acting identity derived from: token.
       parameters:
@@ -1248,12 +1286,31 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/bookings/{bookingId}/arrived:
+    put:
+      operationId: markBookingArrived
+      summary: provider.markBookingArrived
+      description: >-
+        Source: routes/provider.routes.ts:144.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/worker/bookings/{bookingId}/complete:
     put:
       operationId: completeBooking
       summary: provider.completeBooking
       description: >-
-        Source: routes/provider.routes.ts:144.
+        Source: routes/provider.routes.ts:146.
         Authentication: required.
         Acting identity derived from: token.
       parameters:
@@ -1286,12 +1343,31 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/bookings/{bookingId}/en-route:
+    put:
+      operationId: markBookingEnRoute
+      summary: provider.markBookingEnRoute
+      description: >-
+        Source: routes/provider.routes.ts:143.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/worker/bookings/{bookingId}/start:
     put:
       operationId: startBooking
       summary: provider.startBooking
       description: >-
-        Source: routes/provider.routes.ts:143.
+        Source: routes/provider.routes.ts:145.
         Authentication: required.
         Acting identity derived from: token.
       parameters:
@@ -1343,7 +1419,7 @@ paths:
       operationId: updateWorkerLocation
       summary: provider.updateWorkerLocation
       description: >-
-        Source: routes/provider.routes.ts:147.
+        Source: routes/provider.routes.ts:149.
         Authentication: required.
         Acting identity derived from: token.
       responses:
@@ -1473,7 +1549,7 @@ paths:
       operationId: getMySchedule
       summary: locationAccess.getMySchedule
       description: >-
-        Source: routes/provider.routes.ts:177.
+        Source: routes/provider.routes.ts:179.
         Authentication: required.
         Acting identity derived from: token.
       responses:
@@ -1579,7 +1655,7 @@ paths:
       operationId: getWorkerServices
       summary: provider.getWorkerServices
       description: >-
-        Source: routes/provider.routes.ts:150.
+        Source: routes/provider.routes.ts:152.
         Authentication: required.
         Acting identity derived from: token.
       responses:
@@ -1593,7 +1669,7 @@ paths:
       operationId: removeWorkerService
       summary: provider.removeWorkerService
       description: >-
-        Source: routes/provider.routes.ts:151.
+        Source: routes/provider.routes.ts:153.
         Authentication: required.
         Acting identity derived from: token.
       parameters:
