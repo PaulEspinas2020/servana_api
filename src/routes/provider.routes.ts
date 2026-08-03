@@ -128,6 +128,7 @@ router.patch("/worker/services/:serviceId/reactivate",  verifyAuth, provider.rea
 
 // FCM token — saved after login so push notifications reach this device
 router.post("/provider/fcm-token", verifyAuth, provider.saveProviderFcmToken);
+router.delete("/provider/fcm-token", verifyAuth, provider.deleteProviderFcmToken);
 
 // ─── Job cards (auth-scoped; UID resolved from Firebase token, never from URL) ─
 // These are the web-portal equivalents of the mobile /workers/:uid/job-cards routes.

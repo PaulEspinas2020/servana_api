@@ -2014,6 +2014,47 @@ export const reactivateWorkerService = async (req: Request, res: Response) => {
 
 // ─── FCM Token ────────────────────────────────────────────────────────────────
 
+/**
+ * DELETE /api/provider/fcm-token — release this device on sign-out.
+ *
+ * Without this, signing out leaves the handset addressable as the provider who
+ * just left. The next push carries their booking details to a phone they have
+ * handed back, put down, or sold.
+ *
+ * Scoped to the caller AND to the token they present, so one device signing out
+ * cannot silently unsubscribe the same provider's other devices.
+ *
+ * Idempotent: releasing a token that is already gone is a success, because a
+ * sign-out must never be blocked by the state of a push registration.
+ */
+export const deleteProviderFcmToken = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+
+    const { token } = req.body ?? {};
+    if (token && typeof token === "string" && token.trim().length >= 10) {
+      await dbQuery.query(
+        `UPDATE ${dbSchema}.user_credentials
+         SET fcm_token = NULL
+         WHERE uid = $1 AND fcm_token = $2`,
+        [uid, token.trim()]
+      );
+    } else {
+      // No token supplied — the client lost it, or never had one. Release
+      // whatever this provider currently holds rather than refusing: a
+      // sign-out that leaves a live registration behind is the worse outcome.
+      await dbQuery.query(
+        `UPDATE ${dbSchema}.user_credentials SET fcm_token = NULL WHERE uid = $1`,
+        [uid]
+      );
+    }
+    return res.status(200).json({ status: "success", data: { released: true } });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: "Server error" });
+  }
+};
+
 export const saveProviderFcmToken = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
@@ -2022,9 +2063,26 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
     if (!token || typeof token !== 'string' || token.trim().length < 10) {
       return res.status(400).json({ status: "failed", message: "token is required" });
     }
+    const value = token.trim();
+
+    // A push token identifies a DEVICE, not a person, and providers share
+    // devices. Binding it to the caller without releasing it from whoever held
+    // it before leaves the previous provider still addressable at a handset
+    // someone else is now carrying — so a booking notification meant for A
+    // arrives on the phone B is holding, with A's customer's name in it.
+    //
+    // One token, one owner. Released first, in the same statement chain, so
+    // there is no window where two rows claim the same device.
+    await dbQuery.query(
+      `UPDATE ${dbSchema}.user_credentials
+       SET fcm_token = NULL
+       WHERE fcm_token = $1 AND uid <> $2`,
+      [value, uid]
+    );
+
     await dbQuery.query(
       `UPDATE ${dbSchema}.user_credentials SET fcm_token = $1 WHERE uid = $2`,
-      [token.trim(), uid]
+      [value, uid]
     );
     return res.status(200).json({ status: "success", data: { saved: true } });
   } catch (error: any) {
