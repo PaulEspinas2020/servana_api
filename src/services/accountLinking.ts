@@ -94,8 +94,15 @@ export async function mergePhoneIntoExistingAccount(opts: {
   // (4) and (5). Exactly one claimant, and it must be usable. Two claimants
   // means ambiguous ownership, which is quarantined for review rather than
   // resolved by picking one.
+  // The COLUMN is `is_archive`. The response-shape name is `isArchived`, and
+  // `src/utils/fieldParity.ts:79` records both spellings as aliases of one
+  // concept — which is exactly how `is_archived` ended up in this query.
+  // It is not a column, so this threw 42703 and took the whole merge with it:
+  // the guard detected the collision, the merge died before condition (4), and
+  // the caller got a 500 instead of either a merge or the 409 below. The alias
+  // is kept so the row shape reaching `claimants[0].is_archived` is unchanged.
   const { rows: claimants } = await dbQuery.query(
-    `SELECT uid, COALESCE(is_archived, FALSE) AS is_archived
+    `SELECT uid, COALESCE(is_archive, FALSE) AS is_archived
        FROM ${s}.user_credentials
       WHERE uid <> $1
         AND (
