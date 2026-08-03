@@ -286,6 +286,28 @@ import { ensureFinanceSchema } from "./services/adminFinanceService";
   }
 })();
 
+/**
+ * Identity columns MUST be ensured at boot.
+ *
+ * upsertFirebaseUser has written email_normalized / phone_normalized since
+ * f97fc0d, but this bootstrap was written and never called — so the columns did
+ * not exist in production and EVERY Firebase sign-in failed with
+ * `42703 column "email_normalized" does not exist`.
+ *
+ * It went unnoticed because email/password sign-in uses a different endpoint
+ * that never touches this table's normalized columns. Only phone auth, which
+ * goes through firebase-login, was broken — so it read as a mobile-specific bug
+ * rather than as a missing migration.
+ */
+import { ensureIdentityColumns } from "./services/identityColumns";
+(async () => {
+  try {
+    await ensureIdentityColumns();
+  } catch (err) {
+    console.error("[identity] column bootstrap failed:", err);
+  }
+})();
+
 import { ensurePermissionSchema } from "./services/adminPermissionService";
 (async () => {
   try {
