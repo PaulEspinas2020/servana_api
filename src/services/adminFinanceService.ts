@@ -1,5 +1,6 @@
 ﻿import dbQuery from '../db/dbQuery';
 import { db } from '../config';
+import { providerShareOf, servanaShareOf, SERVANA_COMMISSION_RATE } from './revenueSplit';
 import { auditFire } from './adminAuditService';
 import { toCamel } from '../helpers/idGenerator';
 
@@ -7,8 +8,7 @@ import { toCamel } from '../helpers/idGenerator';
 
 const s = db.schema;
 
-const SERVANA_COMMISSION = 0.20;
-const WORKER_SHARE_RATE  = 0.80;
+// Rates live in revenueSplit.ts.
 const GCASH_SLA_HOURS    = 48;
 const CASH_SLA_HOURS     = 24;
 const PAYMONGO_STALE_HOURS = 24;
@@ -195,9 +195,9 @@ function computeRevenueSplit(
     return { servanaRevenue: grossAmount, providerPayable: 0, commissionRate: 1 };
   }
   return {
-    servanaRevenue:  Math.round(grossAmount * SERVANA_COMMISSION * 100) / 100,
-    providerPayable: Math.round(grossAmount * WORKER_SHARE_RATE  * 100) / 100,
-    commissionRate:  SERVANA_COMMISSION,
+    servanaRevenue:  servanaShareOf(grossAmount),
+    providerPayable: providerShareOf(grossAmount),
+    commissionRate:  SERVANA_COMMISSION_RATE,
   };
 }
 

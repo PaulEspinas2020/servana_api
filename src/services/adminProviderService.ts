@@ -7,6 +7,7 @@
  */
 
 import dbQuery from '../db/dbQuery';
+import { providerShareOf, PROVIDER_SHARE_PERCENT } from './revenueSplit';
 import { db } from '../config';
 import mongoDb from '../db/mongodbQuery';
 import * as serviceApplicationService from './serviceApplicationService';
@@ -720,10 +721,10 @@ export const getProviderEarningsSummary = async (uid: string) => {
   return {
     totalJobs: Number(s.total_jobs ?? 0),
     totalGrossAmount: gross,
-    totalProviderShare: Math.round(gross * 0.8 * 100) / 100,
+    totalProviderShare: providerShareOf(gross),
     thisMonthGross: monthGross,
-    thisMonthProviderShare: Math.round(monthGross * 0.8 * 100) / 100,
-    providerSharePercent: 80,
+    thisMonthProviderShare: providerShareOf(monthGross),
+    providerSharePercent: PROVIDER_SHARE_PERCENT,
     currency: 'PHP',
   };
 };

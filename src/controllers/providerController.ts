@@ -1,5 +1,6 @@
 ﻿import { Request, Response } from "express";
 import { db } from "../config";
+import { providerShareOf, PROVIDER_SHARE_RATE, PROVIDER_SHARE_PERCENT } from '../services/revenueSplit';
 import dbQuery from "../db/dbQuery";
 import * as technicianService from "../services/technicianService";
 import * as userService from "../services/user.service";
@@ -344,7 +345,7 @@ export const getEarnings = async (req: Request, res: Response) => {
       const gross = Number(r.final_price || 0);
       const workerShare = r.worker_share != null
         ? Math.round(Number(r.worker_share) * 100) / 100
-        : Math.round(gross * 0.8 * 100) / 100;
+        : providerShareOf(gross);
       return {
         id: String(r.id),
         bookingId: String(r.id),
@@ -357,7 +358,7 @@ export const getEarnings = async (req: Request, res: Response) => {
         scheduledAt: r.schedule,
         bookingAmount: gross,
         providerShareAmount: workerShare,
-        providerSharePercent: 80,
+        providerSharePercent: PROVIDER_SHARE_PERCENT,
         clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
         bookingStatus: r.status ? r.status.toLowerCase() : "completed",
         providerPayoutStatus: normalizePayoutStatus(r.payout_status),
@@ -403,7 +404,7 @@ export const getEarningById = async (req: Request, res: Response) => {
     const gross = Number(r.final_price || 0);
     const workerShareDetail = r.worker_share != null
       ? Math.round(Number(r.worker_share) * 100) / 100
-      : Math.round(gross * 0.8 * 100) / 100;
+      : providerShareOf(gross);
     const data = {
       id:                  String(r.id),
       bookingId:           String(r.id),
@@ -413,7 +414,7 @@ export const getEarningById = async (req: Request, res: Response) => {
       scheduledAt:         r.schedule,
       bookingAmount:       gross,
       providerShareAmount: workerShareDetail,
-      providerSharePercent: 80,
+      providerSharePercent: PROVIDER_SHARE_PERCENT,
       clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
       bookingStatus:       r.status ? r.status.toLowerCase() : "completed",
       providerPayoutStatus: normalizePayoutStatus(r.payout_status),
@@ -449,7 +450,7 @@ export const getEarningsSummary = async (req: Request, res: Response) => {
          COALESCE(SUM(b.final_price), 0) AS total_gross,
          COALESCE(SUM(CASE WHEN d.status = 'RELEASED' THEN d.worker_share ELSE 0 END), 0) AS total_paid,
          COALESCE(SUM(CASE WHEN d.status IN ('PENDING','FAILED') OR d.id IS NULL
-                           THEN b.final_price * 0.8 ELSE 0 END), 0) AS total_pending
+                           THEN b.final_price * ${PROVIDER_SHARE_RATE} ELSE 0 END), 0) AS total_pending
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.disbursements d ON d.booking_id = b.id AND d.worker_uid = $1
        WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
@@ -464,7 +465,7 @@ export const getEarningsSummary = async (req: Request, res: Response) => {
     return res.status(200).json({
       status: "success",
       data: {
-        totalEarned:  Math.round(Number(s.total_gross ?? 0) * 0.8 * 100) / 100,
+        totalEarned:  providerShareOf(Number(s.total_gross ?? 0)),
         totalPaid,
         totalPending,
         totalRefunded: 0,
@@ -501,7 +502,7 @@ export const getLedger = async (req: Request, res: Response) => {
         type: "booking_earning",
         direction: "credit",
         status: "settled",
-        amountMinor: Math.round(gross * 0.8 * 100),
+        amountMinor: Math.round(providerShareOf(gross) * 100),
         currency: "PHP",
         description: `${r.service_name || "Service"} · ${code}`,
         bookingId: String(r.id),

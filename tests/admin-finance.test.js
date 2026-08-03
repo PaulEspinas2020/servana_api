@@ -255,12 +255,21 @@ describe('C17 Finance — internal fixer revenue model', () => {
     expect(segment).toContain('servanaRevenue: grossAmount');
   });
 
-  it('computeRevenueSplit uses SERVANA_COMMISSION (0.20) for external providers', () => {
-    expect(svc).toContain('SERVANA_COMMISSION = 0.20');
+  it('computeRevenueSplit uses the canonical 20% commission for external providers', () => {
+    // The rate no longer lives in this file. It was a bare float duplicated
+    // across twelve sites in four files, two of which were the authoritative
+    // payout path and the rest display, with nothing forcing them to agree.
+    // It is now defined once in services/revenueSplit.ts, and this asserts the
+    // same intent against that single definition rather than against a literal
+    // that happened to sit in this file.
+    const { SERVANA_COMMISSION_RATE } = require('../src/services/revenueSplit');
+    expect(SERVANA_COMMISSION_RATE).toBe(0.2);
+
     const idx     = svc.indexOf('function computeRevenueSplit');
     const segment = svc.slice(idx, idx + 600);
-    expect(segment).toContain('SERVANA_COMMISSION');
-    expect(segment).toContain('WORKER_SHARE_RATE');
+    expect(segment).toContain('servanaShareOf');
+    expect(segment).toContain('providerShareOf');
+    expect(segment).toContain('SERVANA_COMMISSION_RATE');
   });
 
   it('setInternalFixer updates user_credentials.is_internal_fixer', () => {

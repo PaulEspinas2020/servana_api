@@ -1,12 +1,12 @@
 import { db } from "../config";
+import { splitRevenue } from './revenueSplit';
 import dbQuery from "../db/dbQuery";
 import axios from "axios";
 import { getWorkerBankAccount } from "./technicianService";
 
 const dbSchema = db.schema;
 
-const SERVANA_COMMISSION = 0.20;
-const WORKER_SHARE_RATE  = 0.80;
+// Rates live in revenueSplit.ts — see that file for why they are not here.
 const PAYMONGO_BASE_URL  = "https://api.paymongo.com/v1";
 const RELEASE_HOURS      = 72;
 
@@ -15,11 +15,10 @@ const getAuthHeader = () => {
   return `Basic ${Buffer.from(`${key}:`).toString("base64")}`;
 };
 
-const computeSplit = (total: number) => ({
-  totalAmount:   Math.round(total * 100) / 100,
-  servanaShare:  Math.round(total * SERVANA_COMMISSION * 100) / 100,
-  workerShare:   Math.round(total * WORKER_SHARE_RATE  * 100) / 100,
-});
+const computeSplit = (total: number) => {
+  const { totalAmount, servanaShare, providerShare } = splitRevenue(total);
+  return { totalAmount, servanaShare, workerShare: providerShare };
+};
 
 // ---------------------------------------------------------------------------
 // Called when worker marks job COMPLETED — creates a PENDING disbursement.
