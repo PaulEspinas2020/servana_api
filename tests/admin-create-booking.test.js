@@ -63,13 +63,37 @@ describe('adminCreateBooking — schema bootstrap', () => {
 });
 
 describe('adminCreateBooking — phone normalization', () => {
+  // These asserted the IMPLEMENTATION — the literal source text
+  // `startsWith('09') && cleaned.length === 11`. That pinned one particular way
+  // of writing the rule rather than the rule, so moving the logic into the
+  // shared strict normalizer broke them while the behaviour was unchanged.
+  //
+  // Asserting the behaviour instead is both stronger and survives a refactor:
+  // it would still catch the rule actually changing, which the source-text
+  // version was standing in for.
+  const { normalizePhilippinePhone } = require('../src/services/adminCreateBookingService');
+
   it('normalizes 09XXXXXXXXX → +639XXXXXXXXX', () => {
-    expect(svcSrc).toContain("startsWith('09') && cleaned.length === 11");
-    expect(svcSrc).toContain("'+63' + cleaned.slice(1)");
+    expect(normalizePhilippinePhone('09171234567')).toBe('+639171234567');
   });
 
   it('normalizes 63XXXXXXXXXX → +63XXXXXXXXXX', () => {
-    expect(svcSrc).toContain("startsWith('63') && cleaned.length === 12");
+    expect(normalizePhilippinePhone('639171234567')).toBe('+639171234567');
+  });
+
+  it('every human spelling collapses to one value', () => {
+    const all = new Set(
+      ['0917 123 4567', '0917-123-4567', '9171234567', '+63 917 123 4567']
+        .map(normalizePhilippinePhone)
+    );
+    expect(all).toEqual(new Set(['+639171234567']));
+  });
+
+  it('still records an odd number rather than refusing a booking', () => {
+    // Deliberate: a guest contact number is what an admin heard on a call, and
+    // refusing the booking is worse than storing it as given. This helper must
+    // NOT be used where uniqueness depends on it — see helpers/phoneIdentifier.
+    expect(normalizePhilippinePhone('12345')).toBe('+12345');
   });
 });
 

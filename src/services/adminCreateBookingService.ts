@@ -10,6 +10,7 @@
  */
 
 import { pool } from '../db/dbQuery';
+import { toE164PhMobile } from '../helpers/phoneIdentifier';
 import dbQuery from '../db/dbQuery';
 import { db } from '../config';
 import { randomUUID } from 'crypto';
@@ -252,14 +253,24 @@ export const ensureAdminCreateBookingSchema = async (): Promise<void> => {
 
 // ── Phone normalization ───────────────────────────────────────────────────────
 
+/**
+ * Guest contact numbers — best effort, never fails.
+ *
+ * Delegates to the strict identifier normalizer and falls back only when that
+ * rejects. The fallback is deliberate here and stated rather than accidental: a
+ * guest's contact number is something an admin typed off a phone call, and
+ * refusing to record a booking because the number looks odd is worse than
+ * storing it as given.
+ *
+ * DO NOT use this for anything that feeds a uniqueness constraint. Because it
+ * cannot fail, every malformed spelling produces a distinct output, so an index
+ * over it will not catch duplicates. Use `toE164PhMobile`, which returns null.
+ */
 export function normalizePhilippinePhone(raw: string): string {
-  const cleaned = raw.replace(/[\s\-().+]/g, '');
-  if (cleaned.startsWith('63') && cleaned.length === 12) return '+63' + cleaned.slice(2);
-  if (cleaned.startsWith('09') && cleaned.length === 11) return '+63' + cleaned.slice(1);
-  if (cleaned.startsWith('9')  && cleaned.length === 10) return '+63' + cleaned;
-  // already normalized or unknown format — prefix + if missing
-  if (cleaned.length === 12 && !cleaned.startsWith('+')) return '+' + cleaned;
-  return raw.startsWith('+') ? raw : '+' + cleaned;
+  const strict = toE164PhMobile(raw);
+  if (strict) return strict;
+  const cleaned = String(raw ?? '').replace(/[\s\-().+]/g, '');
+  return raw?.startsWith('+') ? raw : '+' + cleaned;
 }
 
 // ── Client search ─────────────────────────────────────────────────────────────
