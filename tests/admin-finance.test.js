@@ -247,12 +247,30 @@ describe('C17 Finance — internal fixer revenue model', () => {
   let svc;
   beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8'); });
 
-  it('computeRevenueSplit returns full amount as servanaRevenue for internal fixers', () => {
+  it('computeRevenueSplit applies 80/20 to internal fixers like everyone else', () => {
+    // INVERTED, deliberately. This asserted that an internal fixer yields
+    // servanaRevenue = grossAmount and providerPayable = 0.
+    //
+    // That contradicted the platform rule — all revenue splits 80/20, no
+    // exceptions — and, worse, it disagreed with the money that actually moved:
+    // createDisbursement has no internal-fixer branch, so those providers were
+    // PAID the normal 80% while the ledger recorded them as owed nothing. One
+    // booking, two engines, two answers.
+    //
+    // is_internal_fixer is still written to the ledger row; it is a reporting
+    // attribute, not a pricing input.
     const idx     = svc.indexOf('function computeRevenueSplit');
     const segment = svc.slice(idx, idx + 400);
-    // When isInternalFixer = true, servanaRevenue = grossAmount, providerPayable = 0
-    expect(segment).toContain('providerPayable: 0');
-    expect(segment).toContain('servanaRevenue: grossAmount');
+    expect(segment).not.toContain('providerPayable: 0');
+    expect(segment).not.toContain('servanaRevenue: grossAmount');
+    expect(segment).not.toContain('isInternalFixer');
+  });
+
+  it('still records is_internal_fixer on the ledger entry', () => {
+    // Removing it from the split must not remove it from reporting.
+    expect(svc).toContain('is_internal_fixer');
+    const idx     = svc.indexOf('INSERT INTO ${s}.finance_ledger_entries');
+    expect(svc.slice(idx, idx + 400)).toContain('is_internal_fixer');
   });
 
   it('computeRevenueSplit uses the canonical 20% commission for external providers', () => {

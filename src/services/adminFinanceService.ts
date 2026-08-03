@@ -187,13 +187,24 @@ function toNum(v: unknown): number { return Number(v ?? 0); }
 function toStr(v: unknown): string { return v != null ? String(v) : ''; }
 function toNullStr(v: unknown): string | null { return v != null ? String(v) : null; }
 
+/**
+ * The ledger's view of a booking's revenue. Identical to the payout path's, by
+ * construction — both go through splitRevenue.
+ *
+ * This used to take an `isInternalFixer` flag and return 100% Servana / 0%
+ * provider for it. That was wrong in two separate ways. It contradicted the
+ * platform rule, which is that ALL revenue splits 80/20 with no exceptions; and
+ * it disagreed with the money that actually moved, because createDisbursement
+ * has no internal-fixer branch and paid those providers the normal 80% while
+ * this recorded them as owed nothing. One booking, two engines, two answers —
+ * and the ledger was the one that was wrong.
+ *
+ * `is_internal_fixer` is still recorded on the ledger entry. It remains a
+ * meaningful categorisation for reporting; it is simply not a pricing input.
+ */
 function computeRevenueSplit(
-  grossAmount: number,
-  isInternalFixer: boolean
+  grossAmount: number
 ): { servanaRevenue: number; providerPayable: number; commissionRate: number } {
-  if (isInternalFixer) {
-    return { servanaRevenue: grossAmount, providerPayable: 0, commissionRate: 1 };
-  }
   return {
     servanaRevenue:  servanaShareOf(grossAmount),
     providerPayable: providerShareOf(grossAmount),
@@ -558,8 +569,10 @@ export async function createLedgerEntry(opts: LedgerEntryOpts): Promise<number> 
   const providerUid    = toNullStr(bRow?.worker_uid);
   const isInternalFixer = bRow?.is_internal_fixer === true;
 
+  // isInternalFixer is still written to the ledger row below — it is a
+  // reporting attribute, not a pricing input.
   const { servanaRevenue, providerPayable, commissionRate } =
-    computeRevenueSplit(opts.grossAmount, isInternalFixer);
+    computeRevenueSplit(opts.grossAmount);
 
   const ins = await dbQuery.query(
     `INSERT INTO ${s}.finance_ledger_entries
