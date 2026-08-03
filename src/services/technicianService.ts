@@ -1813,9 +1813,18 @@ export const updateWorkerPhotoUrl = async (uid: string, photoUrl: string) => {
 export const getWorkerDashboard = async (uid: string) => {
   const [historyRes, pendingRes, onlineDoc] = await Promise.all([
     dbQuery.query(
+      // booking_workers is only ever written 'CANCELED' (single L) — see
+      // bookingService.ts:659 and adminBookingService.ts:942. The parent
+      // bookings row uses 'CANCELLED' (double L). This counted the parent's
+      // spelling against the child's table, so `cancelled` was permanently 0.
+      //
+      // Both spellings are matched rather than just the correct one: the split
+      // is real across the schema, and a counter that silently reads zero is
+      // worse than one that over-matches. Normalising the two spellings is
+      // tracked separately — it is a data migration, not a query fix.
       `SELECT COUNT(*) AS total_jobs,
               COALESCE(SUM(CASE WHEN bw.status = 'COMPLETED' THEN 1 ELSE 0 END), 0) AS completed,
-              COALESCE(SUM(CASE WHEN bw.status = 'CANCELLED' THEN 1 ELSE 0 END), 0) AS cancelled
+              COALESCE(SUM(CASE WHEN bw.status IN ('CANCELED', 'CANCELLED') THEN 1 ELSE 0 END), 0) AS cancelled
        FROM ${dbSchema}.booking_workers bw WHERE bw.worker_uid = $1`,
       [uid]
     ),

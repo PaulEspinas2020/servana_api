@@ -219,15 +219,44 @@ export const getDashboard = async (req: Request, res: Response) => {
       JOB_SELECT(filter).replace(/\{SCHEMA\}/g, schema) + (limit ? ` LIMIT ${limit}` : "");
 
     const [activeJobRes, upcomingRes, todayStatsRes, locationDoc] = await Promise.all([
-      dbQuery.query(jobSql("b.status = 'IN_PROGRESS'", 1), [uid]),
+      // `bookings.status` is NEVER written 'IN_PROGRESS' — startJob writes that to
+      // booking_workers only (technicianService.ts:1139). This filter therefore
+      // matched nothing, and the dashboard reported no active job while the
+      // provider was standing in the customer's house doing the work.
+      //
+      // EXISTS rather than a JOIN so JOB_SELECT keeps its single-row-per-booking
+      // shape for the three other callers.
+      dbQuery.query(
+        jobSql(
+          `EXISTS (
+             SELECT 1 FROM ${schema}.booking_workers bw
+             WHERE bw.booking_id = b.id
+               AND bw.worker_uid = $1
+               AND bw.status = 'IN_PROGRESS'
+           )`,
+          1
+        ),
+        [uid]
+      ),
       dbQuery.query(jobSql("b.status IN ('WORKER_ASSIGNED', 'CONFIRMED')", 10), [uid]),
       dbQuery.query(
+        // Earnings come from disbursements.worker_share — the authoritative
+        // 80% figure computed at completion — NOT from bookings.final_price,
+        // which is the gross the CUSTOMER paid. Summing final_price here
+        // reported the provider's take as 125% of what they are actually paid,
+        // the same defect the Worker app has in earnings_view.dart.
+        //
+        // LEFT JOIN so a completed booking with no disbursement row yet counts
+        // toward completed_today but contributes 0 to earnings, rather than
+        // dropping the job from the count entirely.
         `SELECT
-           COUNT(*) FILTER (WHERE status = 'COMPLETED' AND schedule >= $2 AND schedule <= $3) AS completed_today,
-           COALESCE(SUM(final_price) FILTER (WHERE status = 'COMPLETED' AND schedule >= $2 AND schedule <= $3), 0) AS today_earnings,
-           COALESCE(SUM(final_price) FILTER (WHERE status = 'COMPLETED'), 0) AS total_earned
-         FROM ${schema}.bookings
-         WHERE worker_uid = $1`,
+           COUNT(*) FILTER (WHERE b.status = 'COMPLETED' AND b.schedule >= $2 AND b.schedule <= $3) AS completed_today,
+           COALESCE(SUM(d.worker_share) FILTER (WHERE b.status = 'COMPLETED' AND b.schedule >= $2 AND b.schedule <= $3), 0) AS today_earnings,
+           COALESCE(SUM(d.worker_share) FILTER (WHERE b.status = 'COMPLETED'), 0) AS total_earned
+         FROM ${schema}.bookings b
+         LEFT JOIN ${schema}.disbursements d
+                ON d.booking_id = b.id AND d.worker_uid = b.worker_uid
+         WHERE b.worker_uid = $1`,
         [uid, todayStart, todayEnd]
       ),
       (async () => {

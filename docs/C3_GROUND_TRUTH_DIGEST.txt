@@ -1,0 +1,488 @@
+LOG: Extracting canonical ground truth from source across 4 repos...
+LOG: extraction complete; 9 claim(s) refuted by skeptics
+
+dimensions returned: ['bookingdto', 'errors', 'identity', 'lists', 'money', 'status']
+refuted claims: 9
+
+============================================================================
+### STATUS
+============================================================================
+33 status values across layers {'db': 17, 'backend': 5, 'portal': 4, 'worker': 3, 'customer': 4}
+
+  ENFORCED: bookings.PENDING_OTP -> bookings.CONFIRMED   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\bookingService.ts:215
+  ENFORCED: bookings.PENDING_OTP -> bookings.PENDING_OTP (OTP re-issue)   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\bookingService.ts:162
+  ENFORCED: booking_workers.ASSIGNED -> booking_workers.ACCEPTED   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\technicianService.ts:961
+  ENFORCED: booking_workers.ASSIGNED -> booking_workers.DECLINED   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\technicianService.ts:1027
+  ENFORCED: booking_workers.ACCEPTED -> booking_workers.IN_PROGRESS   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\technicianService.ts:1144
+  ENFORCED: booking_workers.IN_PROGRESS -> booking_workers.COMPLETED   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\technicianService.ts:1208
+  ENFORCED: booking_workers.* (any) -> bookings.COMPLETED   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\technicianService.ts:1219
+  ENFORCED: bookings.(not CANCELLED/CANCELED/COMPLETED/IN_PROGRESS/EN_ROUTE/ARRIVED/AWAITING_COMPLETION/REVIEWED/REFUNDED/EXPIRED/FAILED) -> bookings.CANCELLED   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\bookingService.ts:649
+  ENFORCED: booking_workers.ASSIGNED|ACCEPTED -> booking_workers.CANCELED   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\bookingService.ts:660
+  ENFORCED: bookings.(not CANCELLED/CANCELED/COMPLETED) -> bookings.CANCELLED (admin)   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\adminBookingService.ts:932
+  ENFORCED: booking_workers.ASSIGNED -> booking_workers.ACCEPTED (admin on behalf of provider)   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\adminBookingService.ts:1096
+  ENFORCED: booking_workers.IN_PROGRESS|ACCEPTED|ASSIGNED -> booking_workers.COMPLETED (admin approve completion)   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\adminBookingService.ts:1029
+  ENFORCED: bookings.(ANY, including COMPLETED/CANCELLED) -> bookings.WORKER_ASSIGNED (admin assign)   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\adminBookingService.ts:779
+  ENFORCED: bookings.(ANY) -> bookings.WORKER_ASSIGNED (admin reassign)   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\adminBookingService.ts:844
+  ENFORCED: bookings.(ANY) -> bookings.PAID (PayMongo webhook)   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\paymentService.ts:472
+  ENFORCED: bookings.(ANY) -> bookings.WORKER_ASSIGNED (auto-assign nearest worker)   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\technicianService.ts:620
+  ENFORCED: bookings.(ANY) -> bookings.CONFIRMED + worker_uid=NULL (after decline)   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\technicianService.ts:1059
+  ENFORCED: bookings.COMPLETED|REVIEWED|PAID -> bookings.REVIEWED   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\customerReviewService.ts:271
+  ENFORCED: booking_additional_requests.PENDING_ADMIN_APPROVAL|WAITING_WORKER_APPROVAL -> booking_additional_requests.CANCELLED   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\additional.service.ts:170
+  ENFORCED: booking_additional_requests.ACCEPTED -> booking_additional_requests.IN_PROGRESS / PROCEEDING   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\additional.service.ts:185
+  ENFORCED: disbursements.PENDING -> disbursements.PROCESSING   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\disbursement.service.ts:71
+  ENFORCED: payments.PAID -> payments.REFUNDED   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\refund.service.ts:31
+  ENFORCED: NONE — there is no EN_ROUTE / ARRIVED transition anywhere -> n/a   @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\routes
+
+  ! DIVERGENCE: SPELLING SPLIT, CANCELLED vs CANCELED. The parent booking is written 'CANCELLED' (bookingService.ts:654, adminBookingService.ts:937) while the child assignment is written 'CANCELED' (bookingService.ts:659, adminBookingService.ts:942). Both spellings are then read defensively in different places, and one place gets it wrong: technicianService.ts:1818 counts `COALESCE(SUM(CASE WHEN bw.status = 'CANCELLED' THEN 1 ELSE 0 END), 0) AS cancelled` against booking_workers, which is only ever written 'CANCELED' — so getWorkerDashboard().cancelledJobs is permanently 0.
+  ! DIVERGENCE: CODE vs COMMENT. scheduler.ts:103-106 claims: '-- bookings.status gets 'CANCELLED' (bookingService.customerCancelBooking) -- while booking_workers.status gets 'CANCELED', and technicianService -- writes 'CANCELED' to bookings in four places.' The first two clauses are correct; the third is FALSE. technicianService READS 'CANCELED' from bookings in four places (:577, :831, :901 and adminBookingService.ts:713) but never WRITES it — the only bookings.status writes in that file are WORKER_ASSIGNED (:624, :931), CONFIRMED (:1063) and COMPLETED (:1220). Code wins: 'CANCELED' is a phantom bookings value.
+  ! DIVERGENCE: PHANTOM bookings.status = 'IN_PROGRESS'. No code path anywhere writes IN_PROGRESS to bookings — startJob writes it only to booking_workers (technicianService.ts:1139). Yet providerController.ts:222 runs `jobSql("b.status = 'IN_PROGRESS'", 1)` to populate the provider dashboard's `activeJob`. That query can never match, so activeJob is always null while a job is genuinely running. The same phantom is read at adminProviderService.ts:684 and :1319.
+  ! DIVERGENCE: MORE PHANTOM bookings.status VALUES read but never written: 'EN_ROUTE' and 'ARRIVED' (serviceService.ts:125 `b.status IN ('PENDING_OTP','CONFIRMED','WORKER_ASSIGNED','EN_ROUTE','ARRIVED','IN_PROGRESS')`), 'REJECTED' (providerController.ts:1641 and :1715 `status NOT IN ('COMPLETED', 'CANCELLED', 'REJECTED')`), and 'ACCEPTED' as a booking status (adminProviderService.ts:684). Also payments.status 'REFUND_PENDING' is filtered on in three places (adminBookingService.ts:396, adminDashboardService.ts:261 and :291) and written nowhere.
+  ! DIVERGENCE: WORKER_ASSIGNED MEANS TWO DIFFERENT THINGS. Backend writes bookings.status='WORKER_ASSIGNED' the instant a provider row is inserted with booking_workers.status='ASSIGNED' — i.e. before the provider has seen the job (technicianService.ts:624 and :642 in the same function). The customer app maps 'WORKER_ASSIGNED' → BookingStatus.enRoute (booking_status.dart:86) and renders 'Your provider is on the way to your location.' (:341) / 'Provider En Route' (:289). Customers are told a provider is travelling to them at the moment of assignment, potentially days before the appointment and before anyone accepted.
+  ! DIVERGENCE: THE BOOKING LIFECYCLE STALLS WHILE THE ASSIGNMENT LIFECYCLE ADVANCES. bookings.status goes PENDING_OTP → CONFIRMED → WORKER_ASSIGNED → (nothing) → COMPLETED. Provider acceptance and job start move ONLY booking_workers.status (ACCEPTED at technicianService.ts:958, IN_PROGRESS at :1139) and write no booking row and no booking_tracking row. Because the customer app reads only `status` (customer_booking.dart:164) and never `workerStatus` — grep for workerStatus|worker_status across servana_client-main/lib returns zero matches — the customer sees 'Provider En Route' from assignment right through acceptance and the entire service, jumping straight to 'Completed'. BookingStatus.arrived, .inProgress and .awaitingCompletion are unreachable for a customer.
+  ! DIVERGENCE: BOTH PROVIDER-SIDE CLIENTS DISCARD THE DISTINCTION THE BACKEND MAINTAINS. The job-card response deliberately carries two fields (providerController.ts:1998 `status: job.status` = bookings.status, :2004 `workerStatus: job.worker_status` = booking_workers.status, both raw uppercase). The portal collapses them: `const status = (raw.workerStatus ?? raw.worker_status ?? raw.status ?? '').toLowerCase();` (provider-job-api.models.ts:168). The worker app collapses them identically: `status: workerStatus ?? bookingStatus` (bookingrequest_model.dart:105). Both then feed the single collapsed value into action guards, so an inconsistent pair silently resolves to whichever field happens to be present.
+  ! DIVERGENCE: BACKEND SENDS THREE DIFFERENT CASINGS OF THE SAME FIELD. Job cards return raw UPPERCASE booking status (providerController.ts:1998). The provider dashboard lowercases it (`status: (r.status || "").toLowerCase()`, providerController.ts:180) and never sends workerStatus at all. formatBooking sends UPPERCASE `status` plus a lowercase `statusLower` alias (bookingService.ts:587). The admin projection sends a fourth, derived lowercase vocabulary (OperationsStatus, adminBookingService.ts:9).
+  ! DIVERGENCE: PORTAL CANNOT REPRESENT A CANCELLED ASSIGNMENT. booking_workers.status='CANCELED' is a real persisted value (bookingService.ts:659) and the job-card query explicitly selects it (technicianService.ts:783 `bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','DECLINED')`). But ProviderAssignmentStatus omits it (provider-job.models.ts:4-10 lists only ASSIGNED|ACCEPTED|IN_PROGRESS|COMPLETED|DECLINED|UNKNOWN) and resolveProviderAssignmentStatus (:33-42) has no branch for it, so it returns 'UNKNOWN'. ProviderJobStatus likewise has 'cancelled' but not 'canceled' (provider-booking-status.mapper.ts:29), so mapProviderJobStatus('canceled') falls through to unknownStatusDisplay (:281). A cancelled job renders as Unknown in the portal.
+  ! DIVERGENCE: THE PORTAL CARRIES TWO MUTUALLY INCOMPATIBLE STATUS UNIONS. ProviderJobStatus (provider-booking-status.mapper.ts:23-43, 20 values) and BookingStatus (booking.models.ts:1-14, 13 values) overlap only partially: BookingStatus has 'pending', 'on_the_way' and 'admin_review' which ProviderJobStatus lacks; ProviderJobStatus has 'offered', 'awaiting_provider_response', 'scheduled', 'en_route', 'additional_work_requested', 'additional_work_pending_payment', 'completion_pending_confirmation', 'disputed', 'no_show' and 'expired' which BookingStatus lacks. Each has its own display map (provider-booking-status.mapper.ts:47 vs shared/mappers/status.mapper.ts:41) and its own action guards (canStartJob at :295 allows accepted|scheduled; canStart at status.mapper.ts:63 allows accepted|on_the_way|arrived).
+  ! DIVERGENCE: CLIENT VOCABULARIES ARE FAR LARGER THAN REALITY. Backend writes 7 distinct bookings.status values and 6 booking_workers.status values (13 total). The customer app defines 23 BookingStatus enum values (booking_status.dart:6-43) — 13 have no backend writer (draft, otpVerified, pendingPayment, paymentProcessing, paymentPendingConfirmation, awaitingAssignment, enRoute, arrived, awaitingCompletion, cancelledByProvider, cancelledByAdmin, expired, refunded — refunded exists only on payments/additional-requests, never on bookings). The portal defines 20+13. The worker app's buckets accept 20 strings (job_status.dart:9-14) of which only 6 are ever sent.
+  ! DIVERGENCE: WORKER APP FABRICATES A PAYMENT STATUS AND THEN DISABLES ITS OWN CASH FLOW. bookingrequest_model.dart:99-101 derives `paymentStatus = rawStatus.toUpperCase() == 'PAID' ? 'PAID' : 'PENDING'` from the booking status, because the job-card query genuinely selects no payment column (technicianService.getJobCardsByWorker, technicianService.ts:733-790). But the same constructor hardcodes `paymentMethodUsed: null` (:107), and JobStatus.canCollectCash requires `method == 'CASH'` (job_status.dart:54) — so canCollectCash is unconditionally false and the cash-collection step can never appear. Separately, bookings.status='PAID' is overwritten by WORKER_ASSIGNED/COMPLETED, so the derived paymentStatus is wrong for most paid bookings anyway.
+  ! DIVERGENCE: THE SAME ACTION WRITES TWO DIFFERENT VALUES DEPENDING ON WHICH ROUTE IS CALLED. 'Worker confirms proceed' on an additional-work request: additional.service.ts:189 writes `status = 'IN_PROGRESS'`; providerController.ts:881 writes `status = 'PROCEEDING'`. Both are guarded identically on ACCEPTED (additional.service.ts:185, providerController.ts:874). The same two paths also disagree on withdrawal scope: the service allows PENDING_ADMIN_APPROVAL or WAITING_WORKER_APPROVAL (additional.service.ts:170), the controller allows only WAITING_WORKER_APPROVAL (providerController.ts:840).
+  ! DIVERGENCE: 'DECLINED' IS OVERLOADED. adminBookingService.ts:832-833 writes `SET status = 'DECLINED' WHERE booking_id = $1 AND worker_uid = $2 AND status IN ('ASSIGNED','ACCEPTED')` when an ADMIN reassigns the job away from a provider. The provider declined nothing. Every consumer that treats DECLINED as a provider refusal — the portal's PROVIDER_JOB_STATUS_PRESENTATION.DECLINED 'You declined this assignment.' (provider-job.models.ts:254-257), the worker app's cancelled bucket (job_status.dart:11), bookingAccessService's ACTIVE_WORKER_STATUSES exclusion (bookingAccessService.ts:36-41) — will misreport it.
+  ! DIVERGENCE: THE CUSTOMER TIMELINE IS MISSING MOST OF THE LIFECYCLE. booking_tracking rows are inserted for exactly four events: 'CONFIRMED' (bookingService.ts:228, technicianService.ts:1075), 'WORKER_ASSIGNED' (technicianService.ts:650 and :936), 'ADDITIONAL_PAID' (paymentService.ts:459) and 'PAYMENT_PAID' (paymentService.ts:484). Nothing is written on accept, start, complete or cancel. A parallel, richer table (booking_timeline_events) is written only by the customer-cancel path (bookingService.ts:665) and by admin actions (adminBookingService addTimelineEvent), so the two timelines cover disjoint events.
+  ! DIVERGENCE: PAYMENT STATUS AND BOOKING STATUS ARE FUSED IN THE DB AND SEPARATE EVERYWHERE ELSE. payments.status is a clean four-value lifecycle (PENDING/PAID/FAILED/REFUNDED). But paymentService.ts:473 also stamps 'PAID' onto bookings.status, putting a payment state inside the booking lifecycle column. Downstream this forces defensive OR-lists everywhere: mapOperationsStatus treats 'PAID' as equivalent to 'CONFIRMED' (adminBookingService.ts:197-198), review eligibility accepts PAID as if completed with the comment '// Allow PAID as some flows mark payment before completion' (customerReviewService.ts:201), and the scheduler must exclude it from retry (scheduler.ts:114).
+  ! DIVERGENCE: ADMIN WRITE PATHS ARE THE UNGUARDED ONES. Every provider-initiated transition is guarded in-SQL and throws on mismatch (accept/decline/start/complete). By contrast adminAssignProvider (adminBookingService.ts:736-782) and adminReassignProvider (:806-847) apply no booking-status guard at all — both read `status` only to write it into the audit log — so a COMPLETED or CANCELLED booking can be pushed back to WORKER_ASSIGNED. adminApproveCompletion guards the assignment row (:1029) but not the booking row (:1022).
+  ! DIVERGENCE: ADMIN AND CUSTOMER CANCEL GUARDS DISAGREE ON IN_PROGRESS. The customer set blocks 11 statuses including IN_PROGRESS, EN_ROUTE, ARRIVED, AWAITING_COMPLETION, REVIEWED, REFUNDED, EXPIRED, FAILED (bookingService.ts:598-602). The admin guard blocks only three: `['CANCELLED', 'CANCELED', 'COMPLETED']` (adminBookingService.ts:932). Since bookings.status is never IN_PROGRESS anyway (see above), the customer's IN_PROGRESS entry is inert and an in-flight job is cancellable by the customer via the booking's real status (WORKER_ASSIGNED).
+  ! DIVERGENCE: THERE IS NO TYPESCRIPT TYPE FOR EITHER REAL STATUS. The backend has exactly one status union, OperationsStatus (adminBookingService.ts:9-17), and it is a derived admin projection that is never persisted. bookings.status and booking_workers.status exist only as bare SQL string literals scattered across services — src/types/type.d.ts contains no occurrence of the word 'status'. Nothing in the backend can fail to compile on a typo.
+
+  ? UNKNOWN: I could not determine whether any DB CHECK constraint or enum type constrains bookings.status, booking_workers.status, payments.status, disbursements.status, booking_tracking.status or booking_additional_requests.status. The bookings and booking_workers tables are NOT created by application code — there is no CREATE TABLE for them anywhere in src/, and scripts/migrations/ contains only eight service-catalog seed files (001-massage-services.sql through 008-aircon-installation-repair-services.sql) with no schema DDL. The only CHECK constraints visible in source are for unrelated tables: employee_services status IN ('active','paused') (technicianService.ts:1301), worker_service_applications status IN ('pending_review','action_required','rejected','cancelled','approved') (serviceApplicationService.ts:28), provider catalog status IN ('draft','active','archived') and ('active','suspended','archived') (providerCatalogService.ts:25 and :76), customer_reviews moderation_status (customerReviewService.ts:38), and a draft-status constraint (adminBookingDraftService.ts:163). Answering this requires querying information_schema on the live Postgres instance.
+  ? UNKNOWN: I could not determine the actual column types (VARCHAR length, TEXT, or a Postgres ENUM) of bookings.status or booking_workers.status, for the same reason — the DDL is not in the repo.
+  ? UNKNOWN: I could not determine what status values already exist in production data. Every phantom value listed above ('IN_PROGRESS' on bookings, 'EN_ROUTE', 'ARRIVED', 'REJECTED', 'CANCELED' on bookings, 'REFUND_PENDING' on payments) is unwritten *by the current code*. Whether an earlier revision wrote them, leaving rows that today's readers still match, cannot be established from source.
+  ? UNKNOWN: I could not determine whether booking_workers permits multiple rows per (booking_id, worker_uid). It matters for status resolution: getBookingById LEFT JOINs booking_workers with no ORDER BY or LIMIT and filters only on status IN (...) (bookingService.ts:302-303), so with multiple assignment rows the returned worker_status is non-deterministic. Other call sites explicitly defend against this with ORDER BY assigned_at DESC NULLS LAST LIMIT 1 (technicianService.ts:2010-2011, adminBookingService.ts:1086-1087), which implies duplicates are possible — but no unique constraint is visible in source. Note adminReassignProvider unconditionally INSERTs a second row (adminBookingService.ts:839-841).
+  ? UNKNOWN: I could not determine what `bookings.worker_code` is or how a provider obtains it, only that startJob requires it and matches it against b.worker_code (technicianService.ts:1132-1134, :1146). It is generated by generateOTP() at assignment (technicianService.ts:617, written at :624-636) and returned to the CALLER of assignNearestWorker as `otpCode` (:694), but I found no endpoint that delivers it to the provider app or portal. The portal's startJob call passes it as a query param (providerController.ts:2082 `req.query.workerCode`), source unknown.
+  ? UNKNOWN: I did not audit the admin portal repo (servana_adminportal) — it was not in scope for this task and is a fifth consumer of OperationsStatus. Its status vocabulary is unverified here.
+  ? UNKNOWN: I could not determine whether the getDashboardAnalytics CTE in bookingService.ts:471-477 is correct or a copy-paste error. It aliases booking_workers as `bt` in a CTE named `latest_status` and picks DISTINCT ON (bt.booking_id) with `ORDER BY bt.booking_id` and no tiebreaker, then at :486 filters `ls.status = 'PAID'` — a value never written to booking_workers. The revenue figure it produces is therefore always NULL, but whether the intent was payments.status or bookings.status is not recoverable from the code.
+  ? UNKNOWN: I did not verify how the worker app and portal render `bookings.status` values that their collapsed single-status pipelines never see. Because both prefer workerStatus when present (bookingrequest_model.dart:105, provider-job-api.models.ts:168), and the job-card query only returns rows where bw.status is one of six values (technicianService.ts:783), the booking-level fallback branch is likely dead in practice — but I did not trace every call site to confirm.
+
+============================================================================
+### IDENTITY
+============================================================================
+23 findings  severity={'high': 8, 'blocker': 3, 'medium': 9, 'low': 3}
+
+  [HIGH] req.user after verifyAuth — exact contents
+      is: req.user IS the raw firebase-admin DecodedIdToken, assigned verbatim. Nothing is added: no DB row, no role, no worker id, no account id. The only field the backend ever reads off it in practice is `.uid` (plus `.name`/`.email` in requirePermission for audit display). In the TEMP_ID dev-bypass branch req.user is a hand-made object with ONLY `{ uid }` — no email, no exp, no firebase claims.
+      mismatch: There is no `role` on req.user. Role is ALWAYS a second DB round-trip: verifyRoles.ts L8-11 `SELECT "role" FROM ${dbSchema}.user_credentials WHERE uid = $1` with `[req.user.uid]`. No Firebase custom claims are ever set anywhere in the backend (grep for setCustomUserClaims/customClaims returns zero hits in src/).
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\middleware\verifyAuth.ts
+
+  [HIGH] Firebase uid IS the provider/worker/customer primary key — there is no lookup and no second id
+      is: user_credentials.uid holds the Firebase uid and is the conflict target of the upsert, i.e. the identity key. `technicianService.getWorkerByUid(uid)` is NOT an id translation — it is a profile fan-out that filters every child table on that same Firebase uid. No `worker_id`, `provider_id`, `technician_id`, `employee_id` or `service_provider_profile_id` column exists anywhere in the backend source.
+      mismatch: None between code and reality — but the aliasing layer implies there is a translation when there is not.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\technicianService.ts
+
+  [HIGH] `technicianId` / `technicianUid` / `technician_id` do not exist anywhere
+      is: Zero occurrences across all four repos. The word "technician" survives only as (a) backend FILE names — technicianController.ts / technicianService.ts / technician.routes.ts — whose routes are all `/api/workers/*`, and (b) customer-app UI copy. The three names are therefore NOT interchangeable synonyms for workerId/providerId; two of the three are not names in the system at all.
+      mismatch: The stated platform rule lists `technicianUid` as a canonical alias. It is not in the parity registry and appears in no source file in any repo. Aligning three clients to it would be aligning them to a name the backend has never emitted or accepted.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\routes\technician.routes.ts
+
+  [BLOCKER] The parity registry's canonical name is `workerUid`, NOT `providerUid`
+      is: PARITY_REGISTRY declares `canonical: 'workerUid'` with aliases `['worker_uid', 'providerUid', 'provider_uid', 'cleanerId', 'cleaner_id']`. `providerUid` is an ALIAS that resolves TO `workerUid`, not the other way round. `uid` is not in this group at all, and `technicianUid` is absent entirely.
+      mismatch: The stated rule "canonical provider identity is `providerUid` with aliases workerUid/worker_uid/provider_uid/technicianUid/uid" is wrong on three counts against the code: (1) canonical is workerUid; (2) `uid` is in a DIFFERENT group and is explicitly excluded from middleware aliasing; (3) `technicianUid` is not registered anywhere. As written, the rule is aspirational.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\utils\fieldParity.ts
+
+  [BLOCKER] `uid` is deliberately firewalled from workerUid/providerUid by the `contextual` flag
+      is: `uid` belongs to the `id` group, which is marked `contextual: true`, and BOTH global middlewares call applyContextSafeParity(), which skips contextual groups. Consequence: no response and no request body is ever automatically bridged between `uid` and `workerUid`/`providerUid`. Only the two hand-written user formatters (which know the entity type) do that bridge.
+      mismatch: Because `providerUid` and `provider_uid` sit in the workerUid group (non-contextual, always aliased) while `provider_id` and `userId` sit in the `id` group (contextual, never aliased), two names that look like synonyms resolve to different canonical concepts. `provider_uid` in a body is auto-expanded; `provider_id` in the same body is not.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\utils\fieldParity.ts
+
+  [HIGH] What the login endpoints actually return as identity — four different shapes
+      is: There is no single login identity field. Four auth endpoints return four different key sets, and only ONE of them (the email/password path via formatUserCredentials-derived callers) can produce providerUid/workerUid. The three literal-object endpoints emit `id`/`uid`/`customerID` and the context-safe response middleware cannot add provider aliases to them.
+      mismatch: `customerID` (capital I-D) is NOT in the parity registry — the registry has `customerId`/`customer_id`/`customerUid` (fieldParity.ts L176-180) but never `customerID`. The customer app's entire session key is a field the alias system cannot produce or resolve.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\firebaseFunctions.service.ts
+
+  [HIGH] Every client sends identity the same way: the bearer token, and nothing else that the backend honours
+      is: All three clients authenticate with `Authorization: Bearer <Firebase ID token>` and none of them can choose an identity. Every identity parameter still on the wire is either ignored by the backend or hits a route that no longer exists.
+      mismatch: Two dead identity params in ServanaWorker: servana_api.dart L315-317 `getUserProfile(String id) => _dio.get('/api/user/profile', queryParameters: {'id': id})` — backend user.controller.ts L80-81 says `// Always read the authenticated user's own profile — never allow a query-param UID override.` / `const id = req.user.uid;`. And L308-313 `archiveUser(String userId) => _dio.put('/api/user/archieve', queryParameters: {'userId': userId})` — the backend route is `router.put("/user/:userId/archive", ...)` (user.route.ts L38), a three-segment path; `/api/user/archieve` matches no route and 404s.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\controllers\technicianController.ts
+
+  [BLOCKER] 24 unauthenticated routes still take provider identity from the URL or body
+      is: In technician.routes.ts, 24 route registrations carry NO auth middleware. On those, the provider identity is `req.params.uid`, `req.params.workerId`, or `req.body.uid` — supplied by the caller. This is the single largest divergence between "identity comes from the token" and what the code does.
+      mismatch: docs/SERVANA_PROVIDER_ENDPOINT_INVENTORY.md L36 and L44 state **30** unauthenticated legacy routes; the current technician.routes.ts contains 24. The doc is pinned to backend `6442b6e` (L12) and the file has since moved. Take 24 as the count for the current tree.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\routes\technician.routes.ts
+
+  [HIGH] The DB columns that hold the Firebase uid — full list from the SQL that is actually executed
+      is: One value (the Firebase uid) is stored under five different column names depending on the table. There is no naming rule; the name tracks the table's era.
+      mismatch: `employee_uid` is a provider uid, not an employee-of-a-provider uid. There is no sub-account / staff-membership model: adminProviderService.ts L1070 `FROM (SELECT DISTINCT employee_uid AS uid FROM ${s}.employee_services) es` treats employee_uid and uid as the same column contents.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\adminProviderService.ts
+
+  [HIGH] Guest customer identity is a UUID, not a Firebase uid — and admin responses merge the two under one key
+      is: Guests have no Firebase account. `guest_customers` has a surrogate `id SERIAL PRIMARY KEY` that is never used externally, plus the real external key `guest_customer_id UUID`. `bookings.guest_customer_id UUID` links a booking to it. Admin booking responses COALESCE a Firebase uid and a guest UUID into a single field called `customer_uid`.
+      mismatch: `customerUid` is not type-safe: it is a Firebase uid string for a client booking and a UUID for a guest booking, and only the sibling `customerType` field distinguishes them. bookings.user_id is NULL on guest bookings — bookingService.ts L629 `// \`bookings.user_id\` is NULL on a guest booking, so the owner-present term was`.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\adminCreateBookingService.ts
+
+  [HIGH] Client-side read aliases for the assigned-provider field — three different lists
+      is: Each client hand-maintains its own fallback chain for the assigned provider's uid on a booking. No two chains are the same, and none matches the backend registry exactly.
+      mismatch: ServanaWorker will silently fail to resolve the provider on a payload that only carries `providerUid` or `worker_uid` — the two names formatBooking and the response middleware are most likely to add (bookingService.ts L582, fieldParity.ts L261). ServanaClient will silently fail on a payload that only carries `provider_uid` or `cleanerId`.
+      @ C:\Users\paulg\OneDrive\Desktop\ServanaWorker\lib\features\homepage\data\models\bookingrequest_model.dart
+
+  ? UNKNOWN: The actual database schema is NOT in the repo. servana_api-main/scripts/migrations contains only 8 service-catalog seed files (001-massage-services.sql … 008-aircon-installation-repair-services.sql); there is no DDL for user_credentials, bookings, booking_workers, user_profile, user_address, employee_services, worker_requirements or disbursements. Every column name and every join key I report is read out of the SQL strings the code executes — I could not verify column TYPES, NOT NULL constraints, PRIMARY KEY declarations or foreign keys for any of those tables. Specifically: I could NOT confirm that user_credentials.uid is declared PRIMARY KEY (only that `ON CONFLICT (uid)` works, which requires a unique index of some kind).
+  ? UNKNOWN: Whether `user_credentials.worker_code` actually exists as a column, and if so what populates it. providerController.ts:904 SELECTs `uc.worker_code`, but grep over all of src/ finds NO INSERT or UPDATE that writes it. Either an out-of-band process populates it, or it is always NULL and the portal's workerCode badge is permanently empty. I cannot tell from source which.
+  ? UNKNOWN: The exact set of claims on a real production Firebase ID token. req.user is whatever firebase-admin's verifyIdToken returns; I read no captured token and no test fixture, so I cannot enumerate the claims (name/picture/phone_number/firebase.sign_in_provider) that are actually present for Servana's tenant. What I CAN state is that the backend reads only .uid, .name and .email from it.
+  ? UNKNOWN: Whether the working trees I read are the builds in the field. docs/SERVANA_PROVIDER_ENDPOINT_INVENTORY.md pins backend 6442b6e / portal 42fbec9 / worker b94f7a1 / client 0c8af75, and its unauthenticated-route count (30) already disagrees with the current technician.routes.ts (24). I did not check git state in any repo, so 'the migrated clients are live' is a claim from that doc, not something I verified.
+  ? UNKNOWN: The admin portal repo (servana_adminportal) was not provided. Everything I say about admin-side naming (providerUid as the admin-facing input name) is inferred from the backend controllers that serve it, not from admin client code.
+  ? UNKNOWN: Whether `cleanerId` / `cleaner_id` — registered as aliases of workerUid at fieldParity.ts:261 — are read by anything. They appear in no consumer I searched; the only near-hit is a commented-out block in auth.service.ts L51-57 (`// const cleanerProfile = await cleanerService.getCleanerProfileByUID(credentials.id);` / `// cleanerId: cleanerProfile?.cleanerId,`) referencing a cleanerService that does not exist in src/services/. I could not determine whether the admin portal reads cleanerId today.
+  ? UNKNOWN: Whether the response parity middleware actually fires on every route. It wraps res.json (parityMiddleware.ts:57), so any handler using res.send() bypasses it — and several user.controller handlers do exactly that (e.g. `res.status(status.success).send(successMessage)` at user.controller.ts L38, L53, L87, L103, L122). I did not enumerate how many routes send rather than json, so I cannot state the real coverage percentage of the alias layer.
+  ? UNKNOWN: Whether ServanaWorker's `archiveUser` 404 (PUT /api/user/archieve?userId=… against a backend route of /user/:userId/archive) is reachable in the shipped UI. The call site is profile.dart:169 behind _handleArchive, but I did not trace whether that button is rendered in a released build.
+
+============================================================================
+### MONEY
+============================================================================
+27 findings  severity={'high': 13, 'medium': 6, 'low': 2, 'none': 3, 'blocker': 3}
+
+  [HIGH] Provider share rate: where the 80% actually lives
+      is: 80/20 is a hardcoded floating-point literal, duplicated in 5+ places. It is NOT configurable (no env var, no DB config, no per-service rate). The only per-entity variation anywhere is `is_internal_fixer`, and it only affects the finance ledger, never the actual disbursement.
+      mismatch: Three independent hardcodings of the same business rule with no single source of truth. Changing the rate requires edits in the backend (5 sites), the portal mapper, and the portal additional-work facade.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\disbursement.service.ts
+
+  [HIGH] is_internal_fixer 100% commission exists ONLY in the finance ledger, not in disbursements
+      is: computeRevenueSplit() returns 100% Servana / 0% provider for internal fixers, but that function is only used by createLedgerEntry(). createDisbursement() uses computeSplit(), which has no internal-fixer branch — so an internal fixer still gets an 80% PayMongo payout while the ledger records them as 0% payable.
+      mismatch: Two split engines with different rules on the same booking. Ledger says provider_payable = 0; disbursements row says worker_share = 0.8 * final_price and PayMongo is called for that amount (disbursement.service.ts:91-110).
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\adminFinanceService.ts
+
+  [HIGH] Which money concepts are REAL vs aspirational
+      is: REAL and persisted: gross (bookings.final_price / quoted_price), transport fee (bookings.transpo_fee), commission (disbursements.servana_share), provider net (disbursements.worker_share), payment amount (payments.amount), additional-work amount (booking_additional_requests.total_amount), refund amount (finance_refund_reviews.amount), and the parallel ledger triple (finance_ledger_entries.gross_amount / servana_revenue / provider_payable / commission_rate). ASPIRATIONAL / NON-EXISTENT: tax, VAT, tip, deduction, withholding, bonus, incentive, net-of-fee, platform fee as a distinct concept.
+      mismatch: Any canonical contract that names tax/tip/fee/deduction fields would be inventing them. The provider's 80% is computed on a gross that INCLUDES the transport fee, i.e. providers are paid 80% of their own travel reimbursement and Servana keeps 20% of it.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\adminFinanceService.ts
+
+  [HIGH] GET /api/provider/earnings — completedAt is the SCHEDULED time, not the completion time
+      is: `completedAt` and `scheduledAt` are both populated from the same column, `b.schedule`. The real completion timestamp (booking_workers.completed_at) is never joined in this handler, even though the disbursement release clock is driven by exactly that column.
+      mismatch: A job scheduled for last month but completed yesterday shows as long past its release window in the portal while the backend has not started the clock. A job completed early shows the reverse.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\controllers\providerController.ts
+
+  [HIGH] GET /api/provider/earnings/summary — PROCESSING disbursements vanish from both buckets
+      is: totalEarned is 0.8 × SUM(all completed gross) regardless of disbursement state; totalPaid counts only status='RELEASED'; totalPending counts only PENDING, FAILED, or missing rows. Status 'PROCESSING' (set by releaseDisbursement while the PayMongo call is in flight) is in neither, so in-flight money disappears from the provider's view. totalRefunded is a hardcoded 0.
+      mismatch: totalPaid + totalPending != totalEarned whenever any row is PROCESSING. Also totalPending uses `b.final_price * 0.8` (recomputed) while totalPaid uses `d.worker_share` (stored) — two different sources for the same quantity. totalRefunded is literally the constant 0, so the field is aspirational despite finance_refund_reviews being a real table.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\controllers\providerController.ts
+
+  [HIGH] GET /api/provider/earnings — payments LEFT JOIN duplicates rows when additional work exists
+      is: The join is `LEFT JOIN payments p ON p.booking_id = b.id` with no `additional_request_id IS NULL` filter, while additional-work payments are inserted against the same booking_id. One booking with N additional-work payments yields N+1 identical earnings rows.
+      mismatch: getEarningsSummary does NOT join payments (providerController.ts:411-412) so it is not duplicated; the list and the summary therefore disagree for any booking with additional work.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\controllers\providerController.ts
+
+  [BLOCKER] Additional work revenue never reaches the provider's share
+      is: booking_additional_requests.total_amount is charged to the customer via its own PayMongo checkout but is never added to bookings.final_price or quoted_price. Since worker_share = 0.8 × final_price, additional work contributes exactly 0 to provider earnings.
+      mismatch: Frontend promises 80% of additional work; backend pays 0%. This is a pure frontend fabrication with no backend counterpart field anywhere.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\additional.service.ts
+
+  [HIGH] GET /api/provider/dashboard reports GROSS as earnings
+      is: todayEarnings and pendingPayout are raw SUM(final_price) with no 80% applied — i.e. the customer price, not the provider's pay. This contradicts every other provider-facing money endpoint.
+      mismatch: Backend dashboard money is gross and lifetime-cumulative; portal dashboard money is 80% and outstanding-only. Any client that trusts the documented DTO (e.g. a future mobile dashboard) overstates pay by 25% and never decreases it after payout.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\controllers\providerController.ts
+
+  [BLOCKER] WORKER APP earnings computation — prior '25% overstatement' claim VERIFIED with a correction
+      is: CONFIRMED in direction: the worker app applies no share rate whatsoever and displays a gross customer figure as 'My Earnings'. CORRECTION to the prior audit: the number it sums is NOT bookings.final_price — it is pricing_breakdown.final, which is the PRE-transport-fee quote. So the overstatement is exactly 25% only when transpo_fee = 0.
+      mismatch: Two independent defects compound: no 80% applied (overstates by 25%) and a stale pre-transport `final` (understates by the transport fee). Worked example, quoted ₱600 / transpo ₱0: backend pays ₱480, app shows ₱600. Worked example, quoted ₱600 / transpo ₱500 (>25 km): backend pays ₱880, app shows ₱600.
+      @ C:\Users\paulg\OneDrive\Desktop\ServanaWorker\lib\features\earnings\presentation\screens\earnings_view.dart
+
+  [HIGH] Payout idempotency
+      is: Idempotent at row creation (`ON CONFLICT (booking_id) DO NOTHING`) and at claim time (conditional UPDATE ... WHERE status='PENDING'). NOT idempotent toward PayMongo: the reference_id embeds Date.now(), so every retry presents a brand-new reference to the payment processor.
+      mismatch: A stuck-PROCESSING row is invisible to every retry path AND excluded from both totalPaid and totalPending in the summary endpoint. The Date.now() in reference_id means PayMongo cannot dedupe a genuine double-send.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\disbursement.service.ts
+
+  [BLOCKER] Admin payout HOLD is not honoured by the release job
+      is: holdPayout writes hold_reason/hold_until/held_by but leaves status = 'PENDING'. processPendingDisbursements selects on status and elapsed time only, with no hold predicate — so a held payout is released on the next hourly tick.
+      mismatch: The admin portal offers payouts.hold as a permissioned control (adminFinance.routes.ts:28 `router.post('/admin/finance/payouts/:disbursementId/hold', ...adminOnly, requirePermission('payouts.hold'), ctrl.holdPayout);`) and the action succeeds and is audit-logged, but has no effect on money movement.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\disbursement.service.ts
+
+  [HIGH] retryFailedDisbursements cron bypasses the PAYOUT_MAX_RETRIES cap
+      is: The 3-retry cap is enforced only in the admin-triggered retryPayout. The 6-hourly cron resets FAILED→PENDING and re-fires the payout without reading or incrementing retry_count, for any row failed >6h ago and created within 7 days.
+      mismatch: Documented/administered policy says max 3 retries; the automated path retries every 6 hours for 7 days (up to ~28 attempts) regardless.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\disbursement.service.ts
+
+  [HIGH] retryPayout selects a column this repo never creates
+      is: adminFinanceService.retryPayout SELECTs disbursements.is_internal_fixer_job. ensureFinanceSchema adds hold_reason, hold_until, held_by, retry_count and last_retry_at to that table but NOT is_internal_fixer_job, and no other statement in src creates it.
+      mismatch: If the column does not exist in the deployed DB, POST /admin/finance/payouts/:id/retry raises Postgres 42703 on every call and admin retry is entirely non-functional. This cannot be settled from source because the disbursements DDL is not in this repo.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\adminFinanceService.ts
+
+  [HIGH] Release window: backend 72 hours vs provider portal 48 hours
+      is: Backend holds payouts for 72 hours after completion. The provider portal's payout status machine, status labels, and 'payout due' estimate are all built on 48 hours.
+      mismatch: 48 vs 72. The portal's 'ready_for_disbursement' bucket is systematically 24h premature, and the bucket totals it drives (provider-earnings.facade.ts:573-575) misclassify money for a full day.
+      @ C:\Users\paulg\OneDrive\Desktop\Servana.com.ph\src\app\core\status\provider-payout-status.mapper.ts
+
+  [HIGH] Job-cards endpoint returns no authoritative price field at all
+      is: GET /api/workers/:workerId/job-cards — the only booking feed the worker app consumes — selects pricing_breakdown but NOT final_price, quoted_price or transpo_fee. The worker app therefore has no access to the real gross, let alone the share.
+      mismatch: A worker-facing endpoint cannot express worker pay. Fixing the worker app's earnings display requires a backend change first — the correct number is not reachable from any endpoint the app currently calls.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\technicianService.ts
+
+  [HIGH] Two parallel money ledgers that are never reconciled to each other
+      is: disbursements (created on job completion, drives real PayMongo payouts) and finance_ledger_entries (created on payment approval/confirmation, drives admin revenue reporting) are written by different triggers, use different split functions, and are never compared. /provider/ledger reads NEITHER — it synthesises entries from bookings on the fly.
+      mismatch: Every /provider/ledger row is hardcoded status:'settled' and payoutId:null regardless of the actual disbursement state — a FAILED or held payout still shows as settled credit. settledAt is the SCHEDULE date, not a settlement date. The list is silently capped at LIMIT 50 with no pagination.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\controllers\providerController.ts
+
+  ? UNKNOWN: DB column types for bookings.final_price / bookings.quoted_price / bookings.transpo_fee / payments.amount / disbursements.total_amount / servana_share / worker_share. The repo contains NO DDL for these tables — all 36 CREATE TABLE statements in src were enumerated and none creates bookings, payments or disbursements, and scripts/migrations/ holds only 8 service-catalog seed files. The only money columns with a declared type in source are NUMERIC(12,2) on the finance_* tables (adminFinanceService.ts:93-95, 121, 160). NUMERIC is strongly implied for the others (code always wraps reads in Number(), and src/db/dbQuery.ts installs no pg type parser, so pg would return NUMERIC as a string) but this is inference, not verified fact.
+  ? UNKNOWN: Whether disbursements has a UNIQUE constraint on booking_id. disbursement.service.ts:55 relies on `ON CONFLICT (booking_id) DO NOTHING`, which requires one, but the constraint is not declared anywhere in the repo. If it is absent in the deployed DB, that statement raises Postgres 42P10 and disbursement creation fails on every completed job.
+  ? UNKNOWN: Whether disbursements.is_internal_fixer_job exists in the deployed database. adminFinanceService.ts:783 selects it; nothing in this repo creates it. Cannot be resolved from source. If absent, admin payout retry is 100% broken.
+  ? UNKNOWN: Whether bookings.booking_reference exists in the deployed database. It is SELECTed in 10 places across adminFinanceService.ts (lines 288, 321, 336, 353, 612, 679, 695, 948, 963, 1378) including the payouts list and payout detail, but is never created or written anywhere in src. If absent, listPayouts and getPayoutDetail both fail with 42703.
+  ? UNKNOWN: Whether any per-service or per-provider commission rate exists in production data outside this repo (e.g. a services or user_credentials column read by a system not in these four repos). Within all four repos the rate is exclusively the hardcoded 0.80/0.20 pair, but I cannot rule out an out-of-band configuration table.
+  ? UNKNOWN: The actual behaviour and availability of the PayMongo Disbursements API (POST https://api.paymongo.com/v1/disbursements, disbursement.service.ts:94-110) — whether it accepts these bank_code values, whether it dedupes on reference_id, and whether it is enabled on the account. This is external and not determinable from source.
+  ? UNKNOWN: Whether MongoDB worker_payout_methods.status ever transitions off 'pending'. registerProviderPayout hardcodes `status: 'pending'` (providerController.ts:1604, :1620) and no code path in src writes 'verified' or 'failed', though PAYOUT_STATUS_LABELS (providerController.ts:1508-1511) defines labels for all five states. I found no verification workflow, but it may live in the admin portal repo which was not in scope.
+  ? UNKNOWN: Whether admin-created bookings ever get a transport fee. adminCreateBookingService.ts:631-639 sets `finalPrice = quotedPrice` and `transpo_fee: 0` at creation, and I did not trace whether applyNearestWorkerTranspoFee / assignNearestWorker later runs for that path.
+  ? UNKNOWN: The exact production values of RELEASE_HOURS and the commission constants at runtime — they are compile-time constants in TypeScript, so the deployed dist/ could in principle differ from src/. I read only src/; dist/ was not verified against it.
+
+============================================================================
+### ERRORS
+============================================================================
+18 findings  severity={'blocker': 3, 'high': 7, 'none': 1, 'medium': 5, 'low': 2}
+
+  [BLOCKER] Error envelope shapes — there is no single one; at least 8 distinct shapes coexist
+      is: The backend has NO canonical error envelope. Eight structurally distinct failure bodies are emitted across ~494 4xx/5xx `.status(...)` sites, and several controllers emit two of them in the same file. Tallies (occurrence counts of the discriminator literal in src/, excluding node_modules): (1) `{success:false, message}` = 221 `success: false`; (2) `{status:"failed", message}` = 285 (246 double-quoted + 39 single-quoted); (3) `{status:'error', error:{code,message,kind,requestId}}` = 213 adminError-family call sites; (4) `{error:CODE, message?}` = 13; (5) `{success:false, error:{code?,message}}` = 6; (6) `{success:false, code, message}` = ~7; (7) `{status:"failed", code, message}` = ~7; (8) `{status:'error', message}` (flat, from express-rate-limit) = 6.
+      mismatch: No client can write one parser. A client that discriminates on `success === false` misses 285 `status:"failed"` sites and all 213 admin sites; one that discriminates on `status === 'error'` hits BOTH the nested admin envelope AND the flat rate-limit body.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\utils\apiResponse.ts, C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\helpers\adminError.ts, C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\controllers\customerReviewController.ts, C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\controllers\adminBookingDraftController.ts
+
+  [HIGH] Two different bodies both use the `status:'error'` discriminator with incompatible inner structure
+      is: `adminError()` emits `{status:'error', error:{code,message,kind,requestId}}` — message is NESTED. express-rate-limit is configured to emit `{status:'error', message}` — message is FLAT and there is no `error` object and no `code`. A client that branches on `status === 'error'` and then reads `body.error.code` throws on every 429.
+      mismatch: Same discriminator value, two incompatible payload layouts.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\routes\auth.route.ts, C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\helpers\adminError.ts
+
+  [HIGH] No central error handler / middleware — every controller hand-rolls
+      is: There is NO Express error-handling middleware (4-arg `(err, req, res, next)`) anywhere in the backend, and no 404 catch-all. A repo-wide regex for 4-arg error middleware returns zero matches. app.ts registers 30+ route modules and then calls `httpServer.listen` with nothing after it. Every failure response is hand-written inside a per-handler `try/catch`.
+      mismatch: Because there is no handler of last resort, an unhandled async rejection in any controller (Express 5 auto-forwards these) and any unmatched route both fall through to Express's built-in `finalhandler`, which returns an HTML body — not JSON — and includes the stack trace unless NODE_ENV==='production'. All three clients assume JSON.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\app.ts
+
+  [BLOCKER] Raw error text (including raw Postgres error messages) is passed straight to clients
+      is: 146 sites assign an unfiltered `error.message` / `e.message` / `err?.message` into a response body. `dbQuery.query` rejects with the RAW `pg` error object with no wrapping, so a Postgres error message — which carries table names, column names, relation names and unique-constraint names — reaches the client verbatim. `adminServerError` does this too, at 66 further call sites, on 500s.
+      mismatch: Comments and helper names claim safety while the code leaks. bookingAccessService.ts:139 comments its helper as '/** Express helper: maps a BookingAccessError onto a safe response (§21). */' — that one IS safe, but the 146 unfiltered sites around it are not. auth.controller.ts:368 explicitly comments '// Never surface an unexpected error\'s text here — it can carry the token.' proving the team knows the hazard, yet applies the guard at exactly one endpoint.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\db\dbQuery.ts, C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\helpers\adminError.ts, C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\controllers\bookingController.ts
+
+  [HIGH] Raw Postgres SQLSTATE can be emitted as if it were an API error code
+      is: Five providerController sites and three adminBookingDraftController sites pass `error.code` straight through with only a fallback for absence, not for validity. `pg` errors carry the five-character SQLSTATE in `.code` (e.g. `23505` unique_violation, `42P01` undefined_table). Because dbQuery.ts rejects raw pg errors, a DB failure at these endpoints emits `code: "23505"` in the machine-readable code slot.
+      mismatch: The `??` guards absence but not provenance. The only intended value is a domain code set by hand — serviceApplicationService.ts:412 `err.code = 'SERVICE_APPLICATION_ALREADY_APPROVED';` — but the same slot silently accepts SQLSTATE.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\controllers\providerController.ts
+
+  [HIGH] Machine-readable error codes exist but there is no central registry; only one code family is typed
+      is: Codes DO exist — 102 sites match `code: "UPPER_SNAKE"` yielding 44 distinct values — but there is exactly ONE typed union and it covers only the admin surface. Everything else is a bare inline string literal with no shared constant. A repo-wide grep for a central enum/const (`ErrorCode`, `ERROR_CODES`, `ApiError`) returns zero matches, and the only file in src/ named *error* is helpers/adminError.ts.
+      mismatch: No `BOOKING_INVALID_TRANSITION` or any transition-family code exists anywhere. Several of the 44 values are NOT errors at all — ELIGIBLE, CITY_MATCH, BRANCH_MATCH, DEFAULT_ALL_CITIES, ALL_CITIES_EXPLICIT are success/diagnostic reason codes sharing the same `code` key, so the key is not a reliable failure discriminator.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\helpers\adminError.ts
+
+  [HIGH] Worker app ApiFailure taxonomy keys on HTTP STATUS CODE only — never on a code, never on message text
+      is: `ApiFailure._fromServana` derives `ApiFailureKind` from a `switch (status)` over the HTTP status code, plus DioExceptionType for transport-level failures. It reads no `code` field from any body. Message text is used only for display, never for classification.
+      mismatch: The file's own doc comment (api_failure.dart:9-11) states 'The UI switches on [ApiFailureKind] — never on a raw status code or on the text of a server message. That keeps a backend copy change from silently altering what the app *does*.' The UI half is true, but the MAPPING that produces the kind is 100% status-code-driven, so the taxonomy is only as expressive as the backend's status codes. Also note the 400||422 arm at line 182-185 is a no-op ternary — both branches return `ApiFailureKind.validation` — so `fields.isNotEmpty` has no effect. And `ApiFailureKind.maintenance` is dead: grep for `503` across the backend src returns zero matches, so the backend never emits 503.
+      @ C:\Users\paulg\OneDrive\Desktop\ServanaWorker\lib\core\api\api_failure.dart
+
+  [HIGH] Provider portal has a live functional bug: it reads `err.error.code`, but the interceptor strips that nesting
+      is: The backend emits the domain code at the TOP LEVEL of the body — `{success:false, code:'SERVICE_APPLICATION_ALREADY_APPROVED', message}`. The facade checks `err?.error?.code`. But the interceptor rethrows a normalized `ServanaApiError`, which has no `.error` property at all (its fields are code/message/backendMessage/status/traceId/safeMessage/retryable/authRelated/forbidden/notFound/validationErrors). The branch can never fire.
+      mismatch: Two compounding errors: wrong nesting (`err.error.code` vs top-level `code`) AND the interceptor discards non-401 body codes entirely. The user always gets the generic `SERVICE_APPLICATION_CANCEL_FAILED` toast (line 382) instead of the 'already approved' path plus `this.load()` refresh.
+      @ C:\Users\paulg\OneDrive\Desktop\Servana.com.ph\src\app\core\facades\provider-services.facade.ts
+
+  [BLOCKER] Customer app classifies failures by substring-matching English message text
+      is: The customer app has no failure taxonomy. `ErrorMessageMapper` lowercases the raw backend message and runs `String.contains` against hardcoded English keyword lists to decide which user-facing copy to show. It reads no status code and no error code for classification.
+      mismatch: The file's own header (error_message_mapper.dart:1-2) reads '/// Maps raw backend messages / exception types to user-friendly copy. /// No raw backend strings or stack traces should ever reach the UI directly.' The second claim holds; the first is the defect — any backend copy edit silently changes app behaviour. Concretely: because raw `e.message` from pg is passed through (see leak finding), a Postgres error containing the word 'invalid' or 'not found' would render as 'The email or password is incorrect.'
+      @ C:\Users\paulg\OneDrive\Desktop\servana_client-main\lib\common\services\error_message_mapper.dart
+
+  [HIGH] Customer app runs two parallel, incompatible HTTP failure stacks
+      is: Stack A (`http_backend.dart`) never throws — it returns a record `(session: null, error: String)` carrying a display string. Stack B (`servana_api_client.dart`) throws `ServanaApiException{statusCode:int, body:String}` where `body` is the RAW UNPARSED response string — the envelope is never decoded, so no `message`, `code` or `success` field is ever extracted on this path. The two stacks share no taxonomy.
+      mismatch: Stack B consumers can only branch on the integer status: messaging_repository.dart:33 `if (e.statusCode == 404) return null;`, reviews_repository.dart:41 and :53 same, tracking_data_source.dart:50 `if (e.statusCode == 404 || e.statusCode == 403) return null;`, retry_policy.dart:26-28 `return error.statusCode >= 500 || error.statusCode == 408 || error.statusCode == 429;`. A synthetic 408 is minted client-side by `_TimeoutClient` (servana_api_client.dart:1071-1082), so 408 is a client invention, not a backend status.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_client-main\lib\common\data\backend\servana_api_client.dart, C:\Users\paulg\OneDrive\Desktop\servana_client-main\lib\common\data\backend\http_backend.dart
+
+  ? UNKNOWN: Production NODE_ENV value. This determines whether Express 5's built-in finalhandler includes the stack trace in the HTML body it returns for unmatched routes and unhandled async rejections (there is no error middleware to intercept them). The source only proves NODE_ENV is READ — verifyAuth.ts:55-56 `const DEV_ENVS = new Set(['development','local','test']); if (!DEV_ENVS.has(process.env.NODE_ENV || '')) {` — and package.json:8 `"start": "tsc -p . && node dist/app.js"` does not set it. The runtime value lives in /home/github-runner/env/servana_api.env on the Linode host, which I did not read. I could not determine whether stack traces are exposed in production.
+  ? UNKNOWN: Whether the deployed build matches what I read. I analysed src/**/*.ts only. dist/ exists in the repo and is what `npm start` actually runs (package.json:8 `node dist/app.js`). I did not diff dist/ against src/, so if dist/ is stale the live error contract may differ from everything above.
+  ? UNKNOWN: Whether the ServanaWorker Flutter app ever calls an /api/admin* route and therefore ever receives the adminError envelope. I confirmed the app reads no `code` field at all, but I did not enumerate its endpoint list against the backend's admin route table, so the real-world blast radius of the 'nested error object stringifies into the message' finding is unquantified.
+  ? UNKNOWN: The Servana Admin Portal (servana_adminportal) is the primary consumer of the 213-site adminError envelope, but that repo was not in the four given to me. How it maps `error.code` / `error.kind` / `error.requestId` — and whether it is the only client that reads any of them — is unverified.
+  ? UNKNOWN: Which specific pg error messages actually reach clients in practice. I proved the channel is open (dbQuery.ts:34-37 rejects the raw pg error, 146 sites pass `.message` through unfiltered) but I did not execute the server, so I cannot list the concrete constraint or relation names that leak. This needs a runtime probe against a real DB error, not source reading.
+  ? UNKNOWN: Whether `express-rate-limit`'s configured `message` object is emitted with the library's default 429 status and whether the parity middleware runs before or after it in the stack. I read the five limiter configs in auth.route.ts:9-46 and one in pricing.routes.ts:31-40, but did not verify the emitted status code or the middleware ordering at runtime.
+  ? UNKNOWN: Whether any client depends on the `x-request-id` RESPONSE header (adminError.ts:47) as opposed to the body field. I grepped the three given client repos for `traceId`/`requestId` body reads but did not audit header reads.
+
+============================================================================
+### LISTS
+============================================================================
+18 findings  severity={'high': 7, 'blocker': 1, 'medium': 8, 'low': 2}
+
+  [HIGH] Pagination: none exists on any provider-facing list endpoint
+      is: Not one provider-facing list handler reads limit, offset, page, or cursor. A repo-wide grep of `req.query` for pagination names returns hits ONLY in chat.controller.ts (shared), the admin* controllers, customerReviewController (public provider reviews), and providerCatalogController (admin). providerController.ts contains exactly 4 `req.query` reads in 2250 lines: startDate/endDate (x2), filter, workerCode. Page size, when it exists, is a hardcoded SQL literal the caller cannot influence, and several lists have no cap at all.
+      mismatch: There is no pagination contract to align to. Three clients each assume the server will hand them everything, and for four of the eight lists it literally does (unbounded queries); for the other four a hardcoded cap silently truncates with no signal.
+      @ C:/Users/paulg/OneDrive/Desktop/servana_api-main/src/controllers/providerController.ts
+
+  [HIGH] No list endpoint returns a total or a next-page indicator (except chat)
+      is: Of the eight provider-facing lists, exactly one — chat messages — returns any continuation signal. Nothing returns a total count. A provider whose notification list exceeds 100 rows, whose ledger exceeds 50, or whose support tickets exceed 50 gets a silently truncated array indistinguishable from a complete one.
+      mismatch: The one endpoint with a cursor (chat) is also the one endpoint the worker app cannot call at all — ServanaWorker ships no chat client.
+      @ C:/Users/paulg/OneDrive/Desktop/servana_api-main/src/chat/chat.service.ts
+
+  [BLOCKER] Timestamps are UTC-with-Z on the wire and BOTH Flutter apps render them without converting to local time
+      is: The backend applies no timezone anywhere in the read path. There is no `pg.types.setTypeParser` in the repo, so node-pg returns JS Date objects and `res.json()` serialises them via Date.prototype.toJSON — i.e. ISO 8601 in UTC with a trailing `Z`. One handler makes this explicit with `new Date(...).toISOString()`. Asia/Manila is applied ONLY inside admin dashboard SQL, never on any provider-facing list. Both Flutter apps parse that `Z` string into a UTC DateTime and then hand it straight to `DateFormat.format()`, which formats the DateTime's own fields — so the provider and the customer are shown UTC wall-clock time, 8 hours behind Manila.
+      mismatch: Three clients, three behaviours on the identical wire value: Angular converts to browser-local (right in PH, wrong elsewhere), ServanaWorker renders raw UTC (always 8h early), ServanaClient renders raw UTC for bookings but local for chat — so the same app shows a job at 1:00 AM and the chat about that job at 9:00 AM.
+      @ C:/Users/paulg/OneDrive/Desktop/ServanaWorker/lib/features/calendar/presentation/screens/calendar_view.dart
+
+  [HIGH] Portal sends date-only startDate/endDate; backend compares them against timestamps with <=, so the end day is excluded
+      is: getEarnings and getEarningsSummary are the only provider list handlers that accept any filter. They inject `AND b.schedule >= $2 AND b.schedule <= $3` with the caller's raw strings. Postgres coerces a bare 'YYYY-MM-DD' to midnight, so `<= '2026-08-03'` matches only bookings scheduled at exactly 00:00:00 on the end date. Selecting a single-day range returns effectively nothing.
+      mismatch: The only filterable provider list has an inclusive upper bound against a timestamp column while the admin equivalent 30 files away uses the correct half-open bound.
+      @ C:/Users/paulg/OneDrive/Desktop/servana_api-main/src/controllers/providerController.ts
+
+  [HIGH] Six mutually incompatible list envelopes across the provider surface
+      is: There is no list envelope. Counting only provider-facing reads, the backend emits at least six distinct shapes, and the choice is per-handler with no visible rule: (1) bare array, (2) {status:'success', data:[...]}, (3) {status:'success', data:{<key>:[...]}}, (4) {success:true, <domain key>:[...]}, (5) {success:true, data:[...]}, (6) {<key>:[...], total} with no status/success field at all. Error envelopes diverge in the same way — `status:'failed'` on the provider routes vs `status:'error'` on the customer routes.
+      mismatch: The portal's job-card extractor accepts `cards|bookings|data` (provider-job-api.models.ts:209-214) while the worker's accepts `jobCards|jobs|bookings|items|results|data` (job_cards_store.dart:276-299). The two key sets are not the same set — `cards` is portal-only, `jobCards|jobs|items|results` are worker-only. Today both survive only because the backend returns a bare array, which both handle. Any future move to a keyed envelope breaks one client or the other depending on which key is chosen.
+      @ C:/Users/paulg/OneDrive/Desktop/servana_api-main/src/controllers/providerController.ts
+
+  [HIGH] ServanaWorker computes earnings from job cards and never calls the earnings endpoints
+      is: The backend exposes /provider/earnings, /provider/earnings/summary, /provider/ledger and /provider/payouts, all of which return the provider's 80% share (`worker_share`, or `gross * 0.8` when no disbursement row exists). ServanaWorker calls none of them. Its earnings screen sums the GROSS booking amount off the job-card list instead.
+      mismatch: For the same completed job, the portal shows ₱480 (80% of ₱600, from `worker_share`) and ServanaWorker shows ₱600. The worker app also cannot show payout status at all — `providerPayoutStatus`/`disbursedAt` exist only on the earnings DTO it never fetches.
+      @ C:/Users/paulg/OneDrive/Desktop/ServanaWorker/lib/features/earnings/presentation/screens/earnings_view.dart
+
+  [HIGH] Date-only values are produced via toISOString().slice(0,10) on a node-pg DATE, which shifts the day for any server TZ ahead of UTC
+      is: node-pg's default DATE parser returns a JS Date at LOCAL midnight of the Node process. The code then calls `.toISOString().slice(0,10)`, converting to UTC before slicing. On a process running Asia/Manila (UTC+8), a stored date of 2026-08-03 becomes Date(2026-08-03 00:00 +08:00) → '2026-08-02T16:00:00.000Z' → sliced to '2026-08-02'. The pattern appears four times in the availability engine and is also used to build query parameters, so a wrong day is both displayed AND queried.
+      mismatch: Whether this is currently firing depends on the production process TZ, which is not determinable from the repo — see unknowns. If the server runs UTC the code is correct; if it runs Asia/Manila (which the availability table's own default `timezone TEXT NOT NULL DEFAULT 'Asia/Manila'` at providerAvailabilityEngine.ts:31 suggests is the operating assumption) every time-off date is reported one day early.
+      @ C:/Users/paulg/OneDrive/Desktop/servana_api-main/src/services/providerAvailabilityEngine.ts
+
+  [HIGH] Job-card list has no LIMIT and grows without bound for the life of a provider account
+      is: getJobCardsByWorker selects every booking ever assigned to a worker across all six terminal and non-terminal statuses, ordered ascending by schedule, with no LIMIT and no date floor. Both the portal and ServanaWorker fetch this on every screen load.
+      mismatch: The single-card endpoint added specifically to avoid a client-side full-list filter (comment at providerController.ts:2022-2023 'Avoids full-list client-side filter in the live-job screen') still performs the full-list fetch server-side — it moved the cost, it did not remove it.
+      @ C:/Users/paulg/OneDrive/Desktop/servana_api-main/src/services/technicianService.ts
+
+  ? UNKNOWN: The SQL column type of `bookings.schedule` (and `bookings.created_at`, `booking_workers.assigned_at/started_at/completed_at`, `disbursements.created_at/released_at/paymongo_payout_id`). There is NO DDL for the `bookings` table anywhere in servana_api-main: scripts/migrations/ contains only 001-008 catalog seed files (massage/nail/hair/beauty/aircon services) with zero `schedule` references, and a grep for `CREATE TABLE` matching `bookings` finds only the satellite tables (booking_timeline_events, booking_notes, booking_escalations, booking_audit_events, booking_payment_evidence, booking_create_idempotency). I therefore could NOT determine whether `schedule` is `timestamptz`, `timestamp without time zone`, or `date`. This matters: with `timestamptz` node-pg yields the correct instant; with `timestamp` node-pg interprets it in the Node process's local timezone before `toJSON()` converts to UTC, corrupting every schedule by the server's UTC offset. The UTC-`Z`-on-the-wire finding holds either way (both OIDs parse to a JS Date), but WHICH instant is on the wire is undetermined.
+  ? UNKNOWN: The production Node process timezone (`process.env.TZ`). A grep for `process.env.TZ` across servana_api-main/src returns zero hits, and package.json's `"start": "tsc -p . && node dist/app.js"` sets no TZ prefix. The runtime env file is at /home/github-runner/env/servana_api.env, outside this repo, so I could not read it. This value decides (a) whether the `toISOString().slice(0,10)` date-only conversions in providerAvailabilityEngine.ts:196-197/307-308/347-348/384-385 are off by one day, and (b) how a `timestamp without time zone` column would be interpreted if `bookings.schedule` turns out to be one.
+  ? UNKNOWN: The Postgres session `TimeZone` setting. dbQuery.ts:6-16 constructs the Pool with only user/port/host/database/password — it sets no `options`, no `application_name`, and issues no `SET TimeZone`. The server's `timezone` GUC is therefore whatever postgresql.conf defines, which is not in this repo. This decides how the bare date strings `startDate`/`endDate` are coerced in `AND b.schedule >= $2 AND b.schedule <= $3` (providerController.ts:286).
+  ? UNKNOWN: Whether any live client calls the legacy `GET /api/workers/:uid/time-off` (technician.routes.ts:144). None of the three in-scope clients do — a grep for `time-off` finds nothing in ServanaWorker/lib or servana_client-main/lib, and the portal uses the canonical `/worker/time-off`. The admin portal (servana_adminportal) was not among the repos provided, so I could not rule it out as the caller.
+  ? UNKNOWN: Whether the truncating caps are being hit in production. LIMIT 100 (notifications), 50 (support tickets, ledger, additional requests), and 20 (alerts) silently drop rows with no total and no indicator, but nothing in source reveals actual row counts per provider, so I cannot say whether providers are currently losing data or the caps are merely latent.
+  ? UNKNOWN: How the admin portal consumes these same lists. Several of the eight endpoints are shared with admin surfaces (disbursements, bookings, catalog), and the memory index names an Angular admin portal at servana_adminportal, but that repo was not in scope and I did not read it. Any canonical envelope decision needs a fourth read of that client before it is safe.
+  ? UNKNOWN: Whether `GET /api/provider/support/tickets` can exceed its LIMIT 50 in a way that breaks the unread-count endpoint's arithmetic. getSupportUnreadCount (provider.routes.ts:110) was not read in full; I confirmed only that the list itself is capped at notification.service.ts:384.
+  ? UNKNOWN: The exact behaviour of `Math.min(limit, 100)` in chat.service.ts:219 for hostile inputs. `?limit=0` produces `LIMIT 0` and `?limit=-5` produces `LIMIT -5` (a Postgres error) because only the upper bound is clamped — but I did not execute either against a live server, so this is read from source, not observed.
+
+============================================================================
+### BOOKINGDTO
+============================================================================
+22 findings  severity={'none': 2, 'blocker': 2, 'high': 9, 'medium': 8, 'low': 1}
+
+  [BLOCKER] Guest / admin-created bookings render the literal string "null null" as the customer name
+      is: The customer name is built with a template literal over two LEFT JOIN columns that are NULL for admin-created guest bookings. JS interpolation of null yields the string "null", so the backend emits customer.name === "null null" (7 chars, non-empty) rather than null or "". The real guest name lives in guest_customers.first_name/last_name, which getJobCardsByWorker never joins.
+      mismatch: Both provider clients have a name-fallback chain, and both are defeated because the backend sends a non-empty garbage string instead of null.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\controllers\providerController.ts
+
+  [HIGH] The two provider-facing job-card formatters disagree: address.instructions
+      is: technicianController.getJobCards emits an 11th address field, `instructions`, sourced from service_address->>'instructions'. providerController.formatJobCard does NOT emit it, even though both are fed by the identical getJobCardsByWorker row (which does SELECT the column). Since both shipped provider clients call the providerController endpoints, delivery instructions entered by admins are SELECTed from the DB and then silently dropped before serialization.
+      mismatch: Admin-entered delivery instructions reach the database and reach one dead controller, but no shipped client can ever display them. Data is captured and lost.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\controllers\technicianController.ts
+
+  [HIGH] No coordinates anywhere in the provider job-card payload
+      is: Neither formatJobCard nor getJobCardsByWorker emits or selects lat/lon. The coordinates DO exist in the DB — service_address JSONB carries lat/lon — and other services extract them, but the provider job-card SQL selects only addressLine and city out of that JSONB. A provider therefore receives a street address with no geocode.
+      mismatch: Silent null. The worker app models per-job coordinates as a first-class field; the backend has the data and never ships it. Any map pin or navigation hand-off on the worker side is permanently dead.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\technicianService.ts
+
+  [HIGH] addOns is raw pricing_breakdown JSONB with two mutually incompatible shapes
+      is: `addOns` is passed through untransformed from the pricing_breakdown JSONB column, and that column holds two different schemas depending on who created the booking. Customer-created: `{ base, modifiers:{hp,height,distance}, addons:[{id, level_3, base_price}], addonsTotal, parts, partsTotal, final, transpo_fee, worker_distance }`. Admin-created: `{ base_price, addons:[{id, name, price}], addons_total, final, transpo_fee }`. Only `final`, `addons` and `transpo_fee` are common keys. Note toCamel is shallow (top-level keys only) and is not applied to this route at all, so inner keys stay snake_case.
+      mismatch: One JSON column, two schemas, no discriminator field. Clients cope only by accident of which alias list happens to overlap.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\pricingService.ts
+
+  [HIGH] service.name is level_2 and service.type is level_3 — the worker app's level3 collapses onto level2
+      is: The SQL maps the coarse category to `name` and the specific service to `type`: `s.level_2 AS service_name, s.level_3 AS service_type`, emitted as service:{name, type}.
+      mismatch: Three different opinions about which of level_2/level_3 is the 'name' and which is the 'category'. The worker app additionally duplicates one value into two fields.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\technicianService.ts
+
+  [HIGH] Portal reads ~20 fields the job-card endpoint never sends
+      is: formatJobCard emits 10 top-level keys. Every snake_case alias in BackendJobCard beyond those is unreachable on this route: booking_code, barangay, total_amount, payment_method, payment_status, conversation_id, has_additional_work, has_unread_chat, unread_messages, booking_completed_at, cancelled_at, refunded_at, disputed_at, provider_share_amount, provider_payout_status, payout_due_at, disbursed_at, notes, currency, customer_display_name, customer_initials. Critically, payment status/method are not merely unmapped — getJobCardsByWorker never joins the payments table at all.
+      mismatch: Silent nulls, several of them money-bearing. Provider payout/share/disbursement UI and chat-unread badges are wired to fields that are structurally absent, so they render as undefined/false/'' rather than failing loudly.
+      @ C:\Users\paulg\OneDrive\Desktop\Servana.com.ph\src\app\core\contracts\provider-job-api.models.ts
+
+  [HIGH] GET /api/provider/bookings/:id returns SELECT b.* — every bookings column, including the customer OTP and raw coordinates
+      is: The handler does `SELECT b.*` with no column allowlist and spreads the row straight into the response. Confirmed bookings columns therefore reaching the provider: id, user_id, guest_customer_id, user_address_id, service_option_id, schedule, payment_method, otp_code, status, quoted_price, final_price, pricing_breakdown, service_address (JSONB containing lat/lon/instructions/locationId), admin_created, admin_created_by, worker_uid, worker_code, transpo_fee, eta_minutes, eta_at, branch_id, cancelled_at, created_at, updated_at — plus joined payment reference_no and proof_url. This is the ONLY provider-facing endpoint that exposes customer coordinates and the OTP.
+      mismatch: Zero shipped callers. This is simultaneously the widest PII/secret surface in the provider API and entirely dead payload. Exploitability of the OTP specifically is limited because confirmOtp additionally requires status='PENDING_OTP' while worker assignment happens later, but the secret is still shipped over the wire.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\controllers\providerController.ts
+
+  [HIGH] startJob requires workerCode unconditionally, but the portal treats it as optional and the code is never in the job card
+      is: technicianService.startJob throws immediately when workerCode is absent, and the SQL additionally requires `b.worker_code = $3`. The controller reads it from the query string. bookings.worker_code is NOT part of formatJobCard, so the provider cannot obtain it from any job-card endpoint — it must come from the customer at handoff.
+      mismatch: Backend requires; worker app requires; portal makes it optional. A portal start without a code produces a guaranteed failure, surfaced as an opaque 500 (see error-mapping finding).
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\technicianService.ts
+
+  [BLOCKER] Customer app's totalAmount is structurally always 0.0
+      is: No `total_amount` column exists on bookings and no booking payload ever emits `totalAmount`. The money columns are quoted_price and final_price, which formatBooking's shallow toCamel renders as quotedPrice and finalPrice. A repo-wide search for totalAmount in the backend returns only disbursement/payment internals, never a booking response field.
+      mismatch: Silent null on a money field, defaulted to 0.0 rather than null, so it renders as a plausible-looking amount instead of an obvious blank.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_client-main\lib\common\domain\booking\customer_booking.dart
+
+  [HIGH] Customer booking-detail endpoint returns no service name or category
+      is: getBookingById joins payments, branches, user_address and booking_workers — but NOT service_options. The response therefore contains service_option_id and nothing human-readable about the service. The controller applies only formatBooking, which adds no service fields.
+      mismatch: The provider job-card route DOES join service_options (technicianService.ts:776-777) and gets a service name; the customer detail route does not. The two sides of the same booking disagree on whether the service is nameable.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\bookingService.ts
+
+  [HIGH] Three different booking reference formats for the same booking
+      is: The backend generates a reference only in formatBooking, as `SVN-` plus the PK zero-padded to 6 digits. formatJobCard emits no booking code at all, so the provider route never carries one.
+      mismatch: Customer sees SVN-000042, provider portal sees SVN-42, worker sees nothing. Support and providers cannot reliably quote the same booking identifier to a customer.
+      @ C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\services\bookingService.ts
+
+  ? UNKNOWN: The bookings table DDL could not be read. There are no migration files and no schema dump in servana_api-main (the repo root contains only dist, docs, jest.config.js, node_modules, package-lock.json, package.json, scripts, servana-serviceAccountKey.json, src, tests, tsconfig.json). The column list I give for `SELECT b.*` is reconstructed from INSERT/UPDATE/ALTER statements in src and is therefore a verified LOWER BOUND, not a complete enumeration — any column never written or read by name in src is invisible to this method. Confirmed-by-write columns: user_id, user_address_id, service_option_id, schedule, payment_method, otp_code, status, quoted_price, final_price, pricing_breakdown (bookingService.ts:77-80); guest_customer_id, service_address, admin_created, admin_created_by, worker_uid, worker_code (adminCreateBookingService.ts:162-194, 722-726); cancelled_at (adminDashboardService.ts:155); transpo_fee, eta_minutes, eta_at (technicianService.ts:499, 625-628); updated_at (customerReviewService.ts:343); branch_id (read at bookingService.ts:299). NOT verified: exact types, NOT NULL constraints, defaults, and whether created_at exists as a real column (it is read at bookingService.ts:382 `ORDER BY b.created_at DESC` but never written in src).
+  ? UNKNOWN: I could not determine the runtime NULL rate of any field. Every nullability claim is derived from LEFT JOIN structure and INSERT statements in source; I did not query a database. In particular I cannot say what fraction of live bookings are admin-created (the population that gets NULL customer name, NULL addressTwo/zipCode/country/label, and the `base_price` pricing_breakdown variant).
+  ? UNKNOWN: Whether the literal "null null" customer name is actually reaching production providers depends on whether admin-created guest bookings exist in the live data. I verified the code path is complete and reachable end to end (booking insert with user_id NULL at adminCreateBookingService.ts:731, booking_workers insert at :766-772, and the job-card query's LEFT JOIN at technicianService.ts:770-771), but not that any such row exists.
+  ? UNKNOWN: The `parts` key in the customer-created pricing_breakdown is now permanently an empty array (pricingService.ts:83-84 `const partsTotal = 0; const parts: never[] = [];`). I could not determine whether historical rows written before that change still contain populated `parts` arrays with a different inner shape, since I have no DB access. Any client that ever reads addOns.parts would face a third variant.
+  ? UNKNOWN: I did not verify which specific portal or worker-app UI components render the always-null fields (providerShareAmount, payoutDueAt, conversationId, addressLat/addressLng, basePrice). I confirmed the adapters produce null/undefined/'' but did not trace each to a template, so I cannot state the exact visible symptom per field.
+  ? UNKNOWN: For the reassignment scenario feeding the getProviderBookingDetail join defect, I confirmed multiple booking_workers rows per booking_id are possible via adminBookingService.ts:831-842. I could NOT confirm whether a UNIQUE constraint on (booking_id, worker_uid) exists — no DDL for booking_workers is present in src (only ALTER TABLE ... ADD COLUMN IF NOT EXISTS admin_actor_uid at adminCreateBookingService.ts:239). Such a constraint would not prevent the defect (the two rows have different worker_uids) but would bound the row count at one per provider.
+  ? UNKNOWN: I did not audit the admin portal (servana_adminportal) — it was not in scope and not provided in the repo list. Since adminBookingService.ts:470-499 selects lat/lon and serviceAddress for admin consumers, the admin portal is a fourth client of the same bookings row and may have its own field expectations that conflict with the three examined here.
+
+============================================================================
+REFUTED BY SKEPTICS (must NOT go into the spec as stated)
+============================================================================
+
+[identity] Quotes check out verbatim. verifyAuth.ts L36-38 is exactly `const decodedIdToken = await defaultAuthAdmin.verifyIdToken(idToken); req.user = decodedIdToken; next();` and L60 is `req['user'] = { uid: tempId };`. type.d.ts L3-4 is `user: any; id: string;`. requirePermission.ts L11-18 reads only `.uid` and `u?.name ?? u?.email`.
+
+The structural core is CONFIRMED and I verified it independently rather
+  CORRECTION: req.user after verifyAuth — verified contents:
+
+SHAPE (confirmed): `req.user` IS the raw firebase-admin DecodedIdToken, assigned verbatim at verifyAuth.ts L36-38. Nothing is ever added to it: no DB row, no role, no worker id, no account id. Verified by repo-wide grep — the only writers of req.user are verifyAuth.ts (L37, L60) and verifyAuthOptional.ts (L19, L38); no code anywhere assigns `req.user.<field>`. In particular verifyRoles.ts L8-13 looks up `role` from user_credentials by uid and uses 
+
+[identity] The quotes are accurate but the headline conclusion is overstated, and the overstatement is exactly the kind that breaks client teams.
+
+WHAT VERIFIED CLEAN:
+- technicianService.ts L70-97 matches the quote verbatim (user_credentials u LEFT JOIN roles r ON u.role::int = r.role_id LEFT JOIN user_profile up ON up.uid = u.uid WHERE u.uid = $1 LIMIT 1).
+- The fan-out characterization is correct: L108 `W
+  CORRECTION: Correct, narrower statement for the spec:
+
+For AUTHENTICATED users (providers/workers, role 2; clients, role 3; admins), the Firebase uid is the sole identity key. It is stored as `user_credentials.uid`, carries a unique constraint (it is the `ON CONFLICT (uid)` target of the upsert at src/services/user.service.ts L67-96), and is the same value used as the foreign key in every child table — `user_profile.uid` (declared `VARCHAR(128) PRIMARY KEY` at src/controllers/providerController.ts:1372-73),
+
+[identity] The central factual finding is verified: I re-ran the greps and `technician_id|technicianId|technicianUid|technician_uid` has zero matches in servana_api-main (src, tests, scripts, docs, .sql migrations), Servana.com.ph, ServanaWorker, servana_adminportal and servana_Customer_WebPortal, and exactly one match in servana_client-main — `lib\core\analytics\data\analytics_privacy_filter.dart:92 'techni
+  CORRECTION: Corrected version safe for the spec:
+
+`technicianId`, `technicianUid`, and `technician_uid` do not appear anywhere in the Servana codebase. `technician_id` appears exactly once, and not as a field: servana_client-main\lib\core\analytics\data\analytics_privacy_filter.dart:92 lists it in a PII redaction denylist (alongside 'provider_id', 'provider_uid', 'uid', 'customer_id'), i.e. a set of key names to strip from analytics payloads, not a key the platform emits. Verified by grepping `technician_id
+
+[identity] The quote at L259-263 is verbatim-accurate, the L367-374 build loop is quoted correctly, the module is live (app.ts L67/L69 mounts both parity middlewares; user.service.ts L393/L409 calls applyParity), and technicianUid is genuinely absent from all of src/. However, the claim omits a material fact that changes what the code guarantees: workerUid and providerUid are declared TWICE. L50-55 declares 
+  CORRECTION: Corrected statement for the spec: PARITY_REGISTRY contains TWO groups that both claim the names `workerUid` and `providerUid`.
+
+1. L50-55 (Identity): `{ canonical: 'id', aliases: ['uid', 'workerUid', 'providerUid', 'userId', 'provider_id'], contextual: true }`
+2. L259-263 (Worker/Provider): `{ canonical: 'workerUid', aliases: ['worker_uid', 'providerUid', 'provider_uid', 'cleanerId', 'cleaner_id'] }`
+
+The build loop at L367-374 performs `aliasToCanonical[name] = group.canonical` with NO collisio
+
+[money] The claim's inventory is largely correct and its quotes are verbatim-accurate, but it overstates a money rule in a way that would mislead client teams — the exact failure mode a canonical spec must avoid.
+
+VERIFIED TRUE:
+1. All five code quotes match the files exactly: disbursement.service.ts:52-54 INSERT (claim omits only the trailing `ON CONFLICT (booking_id) DO NOTHING`), adminFinanceService.ts
+  CORRECTION: Keep the REAL vs ASPIRATIONAL inventory and the zero-grep finding — both verified. Replace the commission statement with the conditional truth:
+
+COMMISSION IS NOT A CONSTANT. There are two split implementations and they diverge:
+
+1. finance_ledger_entries (adminFinanceService.ts:190-202, computeRevenueSplit):
+   - normal provider: servana_revenue = 20% x gross, provider_payable = 80% x gross, commission_rate = 0.20
+   - internal fixer (user_credentials.is_internal_fixer = true): servana_revenue 
+
+[errors] All five quotes are verbatim accurate and the headline tallies check out exactly (success:false=221; status:"failed"=246+39=285; adminError-family=224 grep hits minus 11 inside helpers/adminError.ts = 213 call sites; {error:CODE}=13; 494 4xx/5xx .status sites). I also confirmed parityMiddleware only adds field aliases (utils/fieldParity.ts has no alias for message/status/success/error/code), so no
+  CORRECTION: The backend has no canonical error envelope; at least 8 structurally distinct failure bodies coexist across 494 4xx/5xx `.status(...)` sites in src/, and several controllers emit two of them. No middleware normalizes them: `parityMiddleware` (src/middleware/parityMiddleware.ts:57) wraps `res.json` but `src/utils/fieldParity.ts` defines no alias for `message`/`status`/`success`/`error`/`code`, so every shape below reaches the client verbatim.
+
+Corrected inventory (occurrence counts of the discrim
+
+[errors] I read C:\Users\paulg\OneDrive\Desktop\servana_api-main\src\app.ts in full (309 lines) and ran the greps myself.
+
+CONFIRMED TRUE (the headline): There is no 4-arg `(err, req, res, next)` error-handling middleware anywhere under src/ — two independent regex sweeps (4-param arrow with leading err/error, and `err...,  req` param pairs) returned zero matches, and the only non-app.ts `.use(` calls are 
+  CORRECTION: Corrected text for the spec:
+
+**No error-handling middleware; three different error envelopes; unmatched routes return HTML.**
+
+The backend runs Express 5.2.1 (package.json; node_modules confirms 5.2.1). There is no 4-arg `(err, req, res, next)` error-handling middleware anywhere in `src/` (verified by repo-wide regex, zero matches) and no custom 404 catch-all. `src/app.ts` registers 27 route modules (lines 97–193), creates the HTTP server at line 198, and calls `httpServer.listen` at line 307 w
+
+[lists] The claim's literal quotes all verify, but its generalizations do not, and it presents an environment-dependent, client-driven outcome as a backend guarantee.
+
+VERIFIED: dbQuery.ts:1-18 constructs the Pool with only connection fields (no `types`, no `setTypeParser`, no session TimeZone); a repo-wide grep finds zero `setTypeParser` in src/. providerController.ts:501-503 matches verbatim. adminDashb
+  CORRECTION: Replace the blanket claim with the following, which distinguishes observed behaviour from enforced guarantees:
+
+TIMESTAMP HANDLING (as-built; NOT enforced)
+
+Backend. No timezone is applied in provider-facing read paths. dbQuery.ts:1-18 builds the pg Pool with connection fields only — no `types`, no `setTypeParser` (zero occurrences repo-wide), no session TimeZone. Columns declared TIMESTAMPTZ in this repo (disbursements, payments, audit, drafts) are parsed by node-pg into JS Date and serialised 
+
+[lists] The core defect is real and I verified it end to end, but the claim wraps it in two supporting assertions that are factually false and would install a wrong reference implementation into a canonical spec.
+
+VERIFIED (the headline holds):
+- Both quotes are verbatim. providerController.ts:281-287 (getEarnings) and :396-402 (getEarningsSummary) match character for character, including `dateFilter = \`
+  CORRECTION: Accurate version for the spec:
+
+DEFECT (confirmed): `GET /provider/earnings` and `GET /provider/earnings/summary` accept optional `startDate`/`endDate` query params. When both are present, the handlers validate only that `Date.parse` is not NaN, then bind the caller's raw strings into `AND b.schedule >= $2 AND b.schedule <= $3` (providerController.ts:281-287 and :396-402). Nothing normalises or widens the upper bound, and no middleware does so either. The provider portal sends bare `YYYY-MM-DD` 

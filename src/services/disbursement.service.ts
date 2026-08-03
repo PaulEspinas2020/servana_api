@@ -160,6 +160,19 @@ export const processPendingDisbursements = async () => {
      AND bw.status     = 'COMPLETED'
     WHERE d.status = 'PENDING'
       AND bw.completed_at + INTERVAL '${RELEASE_HOURS} hours' <= NOW()
+      -- Honour an admin hold. holdPayout (adminFinanceService.ts:717) writes
+      -- hold_reason/hold_until/held_by but deliberately leaves status='PENDING',
+      -- and this query previously selected on status and elapsed time alone — so
+      -- a held payout went out on the very next hourly tick. The control was
+      -- permissioned and audit-logged and moved the money anyway.
+      --
+      -- holdReason is required but holdUntil is optional (adminFinanceController
+      -- passes holdUntil ?? null), so a hold with no expiry means "indefinite"
+      -- and must not age out. A hold whose expiry has passed releases normally.
+      AND (
+        d.hold_reason IS NULL
+        OR (d.hold_until IS NOT NULL AND d.hold_until <= NOW())
+      )
     `,
     []
   );
