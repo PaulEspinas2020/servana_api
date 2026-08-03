@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { rateLimitBody } from '../helpers/rateLimitBody';
 import { rateLimit } from "express-rate-limit";
 import * as pricingController from "../controllers/pricingController";
 
@@ -33,10 +34,7 @@ const quoteLimiter = rateLimit({
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
-  message: {
-    status: "error",
-    message: "Too many pricing requests. Please try again shortly.",
-  },
+  message: rateLimitBody("Too many pricing requests. Please try again shortly."),
 });
 
 router.post("/quote", quoteLimiter, pricingController.quote);

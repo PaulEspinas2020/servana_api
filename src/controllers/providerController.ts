@@ -2217,7 +2217,7 @@ export const getProviderBookingDetail = async (req: Request, res: Response) => {
        LEFT JOIN ${dbSchema}.payments p ON p.booking_id = b.id
        LEFT JOIN ${dbSchema}.user_address ua ON ua.address_id = b.user_address_id
        LEFT JOIN ${dbSchema}.booking_workers bw ON bw.booking_id = b.id
-         AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','DECLINED')
+         AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
        WHERE b.id = $1 AND b.worker_uid = $2`,
       [bookingId, uid]
     );

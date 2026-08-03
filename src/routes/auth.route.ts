@@ -1,5 +1,6 @@
 import express from 'express'
 import { rateLimit } from 'express-rate-limit';
+import { rateLimitBody } from '../helpers/rateLimitBody';
 const router = express.Router()
 import * as authController from '../controllers/auth.controller';
 import verifyAuth from '../middleware/verifyAuth';
@@ -11,7 +12,7 @@ const signInLimiter = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { status: 'error', message: 'Too many login attempts. Please try again in 15 minutes.' },
+  message: rateLimitBody('Too many login attempts. Please try again in 15 minutes.'),
 });
 
 const forgotPasswordLimiter = rateLimit({
@@ -19,7 +20,7 @@ const forgotPasswordLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { status: 'error', message: 'Too many password reset requests. Please try again in 1 hour.' },
+  message: rateLimitBody('Too many password reset requests. Please try again in 1 hour.'),
 });
 
 const resetPasswordLimiter = rateLimit({
@@ -27,7 +28,7 @@ const resetPasswordLimiter = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { status: 'error', message: 'Too many password reset attempts. Please try again in 1 hour.' },
+  message: rateLimitBody('Too many password reset attempts. Please try again in 1 hour.'),
 });
 
 const otpLimiter = rateLimit({
@@ -35,7 +36,7 @@ const otpLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { status: 'error', message: 'Too many OTP requests. Please try again in 10 minutes.' },
+  message: rateLimitBody('Too many OTP requests. Please try again in 10 minutes.'),
 });
 
 const signupLimiter = rateLimit({
@@ -43,7 +44,7 @@ const signupLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { status: 'error', message: 'Too many registration attempts. Please try again in 1 hour.' },
+  message: rateLimitBody('Too many registration attempts. Please try again in 1 hour.'),
 });
 
 router.get("/auth/me", verifyAuth, provider.getMe);

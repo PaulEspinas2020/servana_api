@@ -300,7 +300,7 @@ export const getBookingById = async (
     LEFT JOIN ${dbSchema}.user_address ua
       ON ua.address_id = b.user_address_id
     LEFT JOIN ${dbSchema}.booking_workers bw
-      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','DECLINED')
+      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
     WHERE b.id = $1
     `,
     [bookingId]
@@ -375,7 +375,7 @@ export const getAllBookings = async (from?: string, to?: string) => {
       ON ua.address_id = b.user_address_id
     LEFT JOIN ${dbSchema}.booking_workers bw
       ON bw.booking_id = b.id
-      AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','DECLINED')
+      AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
     LEFT JOIN ${dbSchema}.user_credentials w
       ON w.uid = bw.worker_uid
     ${whereClause}
@@ -417,7 +417,7 @@ export const getBookingsByUserId = async (userId: string) => {
     LEFT JOIN ${dbSchema}.user_address ua
       ON ua.address_id = b.user_address_id
     LEFT JOIN ${dbSchema}.booking_workers bw
-      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','DECLINED')
+      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
     -- Guest bookings surface to a registered customer only through the
     -- explicit link an admin created (linked_customer_uid, alongside
     -- linked_at / linked_by_admin_uid / link_reason). That link is deliberate
@@ -656,7 +656,7 @@ export const customerCancelBooking = async (
   );
 
   await dbQuery.query(
-    `UPDATE ${dbSchema}.booking_workers SET status = 'CANCELED'
+    `UPDATE ${dbSchema}.booking_workers SET status = 'CANCELLED'
      WHERE booking_id = $1 AND status IN ('ASSIGNED','ACCEPTED')`,
     [bookingId],
   );

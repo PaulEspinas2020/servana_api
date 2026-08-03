@@ -174,3 +174,31 @@ describe('disbursement basis — additional work', () => {
     expect(sub![0]).not.toMatch(/booking_additional_requests/);
   });
 });
+
+describe('cancelled spelling normalisation', () => {
+  const bookingSvc = flat(code(read('services/bookingService.ts')));
+  const adminSvc = flat(code(read('services/adminBookingService.ts')));
+
+  test('nothing WRITES the single-L spelling to booking_workers any more', () => {
+    // Two spellings of one state is how getWorkerDashboard came to report zero
+    // cancellations forever. 'CANCELLED' is canonical, matching bookings.status.
+    for (const src of [bookingSvc, adminSvc]) {
+      expect(src).not.toMatch(/booking_workers SET status = 'CANCELED'/);
+    }
+    expect(bookingSvc).toMatch(/booking_workers SET status = 'CANCELLED'/);
+  });
+
+  test('READS still accept both, for rows written before normalisation', () => {
+    // A query matching only the canonical spelling against un-normalised data
+    // reintroduces exactly the bug this replaced. Reads stay tolerant until the
+    // migration has run everywhere.
+    const provider = flat(code(read('controllers/providerController.ts')));
+    expect(provider).toMatch(/'CANCELED','CANCELLED'/);
+  });
+
+  test('the dashboard counter still matches both', () => {
+    const tech = flat(code(read('services/technicianService.ts')));
+    const m = tech.match(/AS total_jobs[\s\S]{0,400}?booking_workers bw/);
+    expect(m![0]).toMatch(/IN \('CANCELED', 'CANCELLED'\)/);
+  });
+});
