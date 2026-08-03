@@ -657,7 +657,7 @@ export const customerCancelBooking = async (
 
   await dbQuery.query(
     `UPDATE ${dbSchema}.booking_workers SET status = 'CANCELLED'
-     WHERE booking_id = $1 AND status IN ('ASSIGNED','ACCEPTED')`,
+     WHERE booking_id = $1 AND status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED')`,
     [bookingId],
   );
 

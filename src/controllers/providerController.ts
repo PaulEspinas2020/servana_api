@@ -2116,6 +2116,54 @@ export const declineBooking = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * PUT /api/worker/bookings/:bookingId/en-route
+ * PUT /api/worker/bookings/:bookingId/arrived
+ *
+ * The two arrival stages. Both are OPTIONAL — a provider who never taps either
+ * can still start the job, and an older app build is unaffected.
+ *
+ * Provider comes from the token, never from the request, like every other route
+ * in this family.
+ */
+const arrivalHandler = (
+  advance: (bookingId: number, uid: string) => Promise<any>,
+  successMessage: string
+) => async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId) return res.status(400).json({ success: false, message: "bookingId is required" });
+
+    const result = await advance(bookingId, uid);
+    touchProviderActivity(uid).catch(() => {});
+    return res.json({ success: true, message: successMessage, data: result });
+  } catch (error: any) {
+    // The guard rejects an out-of-order call by matching no row, which is a
+    // client-state problem rather than a server fault — 409, not 500, so the
+    // client can refetch instead of retrying blindly.
+    if (/cannot move to/i.test(error?.message || "")) {
+      return res.status(409).json({
+        success: false,
+        code: "INVALID_TRANSITION",
+        message: error.message,
+      });
+    }
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const markBookingEnRoute = arrivalHandler(
+  technicianService.markEnRoute,
+  "Marked on the way"
+);
+
+export const markBookingArrived = arrivalHandler(
+  technicianService.markArrived,
+  "Marked arrived"
+);
+
 export const startBooking = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;

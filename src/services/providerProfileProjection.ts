@@ -1,3 +1,5 @@
+import dbQuery from "../db/dbQuery";
+import { db } from "../config";
 /**
  * Projection for `GET /api/workers/:uid`.
  *
@@ -96,3 +98,32 @@ export const WITHHELD_FROM_OTHERS = [
   'disbursementHistory',
   'earningsSummary',
 ] as const;
+
+/**
+ * Who is asking about whom.
+ *
+ * Moved here from technicianController so it can be used without importing a
+ * controller — that import pulled in the Mongo client at module load and broke
+ * any test that only wanted the projection. It is projection logic; it belongs
+ * with the projector.
+ *
+ * Fails closed: an unknown actor, or a role lookup that errors, is "other".
+ */
+export const resolveProviderAudience = async (
+  actorUid: string | undefined,
+  subjectUid: string,
+): Promise<"self" | "admin" | "other"> => {
+  if (!actorUid) return "other";
+  if (actorUid === subjectUid) return "self";
+  try {
+    const { rows } = await dbQuery.query(
+      `SELECT "role" FROM ${db.schema}.user_credentials WHERE uid = $1`,
+      [actorUid],
+    );
+    if (rows.length && Number(rows[0].role) === 1) return "admin";
+  } catch {
+    // A role lookup failure must not widen access.
+    return "other";
+  }
+  return "other";
+};

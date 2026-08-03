@@ -202,3 +202,43 @@ describe('cancelled spelling normalisation', () => {
     expect(m![0]).toMatch(/IN \('CANCELED', 'CANCELLED'\)/);
   });
 });
+
+describe('arrival stages — EN_ROUTE and ARRIVED', () => {
+  const tech = flat(code(read('services/technicianService.ts')));
+  const booking = flat(code(read('services/bookingService.ts')));
+  const routes = flat(code(read('routes/provider.routes.ts')));
+
+  test('the transitions are guarded, not blind writes', () => {
+    // Every other lifecycle transition carries its expected current status, so
+    // an out-of-order call changes nothing rather than corrupting state. These
+    // must match that standard or they become the weak link.
+    expect(tech).toMatch(/ACCEPTED["'],\s*["']EN_ROUTE/);
+    expect(tech).toMatch(/EN_ROUTE["'],\s*["']ARRIVED/);
+    expect(tech).toMatch(/AND status = \$3/);
+  });
+
+  test('startJob still accepts a provider who skipped both stages', () => {
+    // Requiring ACCEPTED alone would strand a provider who tapped "on my way"
+    // one tap short of starting the job, because the stage advanced the status.
+    expect(tech).toMatch(/bw\.status IN \('ACCEPTED', 'EN_ROUTE', 'ARRIVED'\)/);
+  });
+
+  test('cancelling reaches a provider who is already travelling', () => {
+    // The cancel path matched ASSIGNED/ACCEPTED only. Adding stages after
+    // ACCEPTED without widening this would leave the assignment live on a
+    // cancelled booking, with the provider still driving to the address.
+    expect(booking).toMatch(/'ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED'/);
+  });
+
+  test('both routes are authenticated', () => {
+    expect(routes).toMatch(/en-route", verifyAuth/);
+    expect(routes).toMatch(/arrived", verifyAuth/);
+  });
+
+  test('the columns are added additively', () => {
+    // Nullable and IF NOT EXISTS, so every existing row and every shipped
+    // client is unaffected.
+    expect(tech).toMatch(/ADD COLUMN IF NOT EXISTS en_route_at/);
+    expect(tech).toMatch(/ADD COLUMN IF NOT EXISTS arrived_at/);
+  });
+});

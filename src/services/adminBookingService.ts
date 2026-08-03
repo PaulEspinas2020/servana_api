@@ -830,7 +830,7 @@ export const adminReassignProvider = async (
   if (fromProviderUid) {
     await dbQuery.query(
       `UPDATE ${dbSchema}.booking_workers SET status = 'DECLINED'
-       WHERE booking_id = $1 AND worker_uid = $2 AND status IN ('ASSIGNED','ACCEPTED')`,
+       WHERE booking_id = $1 AND worker_uid = $2 AND status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED')`,
       [bookingId, fromProviderUid]
     );
   }
@@ -940,7 +940,7 @@ export const adminCancelBooking = async (
 
   await dbQuery.query(
     `UPDATE ${dbSchema}.booking_workers SET status = 'CANCELLED'
-     WHERE booking_id = $1 AND status IN ('ASSIGNED','ACCEPTED')`,
+     WHERE booking_id = $1 AND status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED')`,
     [bookingId]
   );
 

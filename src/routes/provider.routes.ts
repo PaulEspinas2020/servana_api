@@ -140,6 +140,8 @@ router.get("/worker/job-cards", verifyAuth, provider.getWorkerJobCards);
 // Web portal equivalents of the unauthenticated /workers/bookings/:id/* mobile routes.
 router.put("/worker/bookings/:bookingId/accept", verifyAuth, provider.acceptBooking);
 router.put("/worker/bookings/:bookingId/decline", verifyAuth, provider.declineBooking);
+router.put("/worker/bookings/:bookingId/en-route", verifyAuth, provider.markBookingEnRoute);
+router.put("/worker/bookings/:bookingId/arrived", verifyAuth, provider.markBookingArrived);
 router.put("/worker/bookings/:bookingId/start", verifyAuth, provider.startBooking);
 router.put("/worker/bookings/:bookingId/complete", verifyAuth, provider.completeBooking);
 
@@ -176,3 +178,4 @@ export default router;
 // docs/WORKER_ROUTE_MIGRATION.md.
 router.get("/worker/schedule", verifyAuth, locationAccess.getMySchedule);
 router.get("/booking/:bookingId/provider-location", verifyAuth, locationAccess.getBookingProviderLocation);
+router.get("/booking/:bookingId/provider", verifyAuth, locationAccess.getBookingProvider);

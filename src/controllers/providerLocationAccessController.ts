@@ -4,6 +4,11 @@ import {
   assertBookingAccess,
   sendBookingAccessError,
 } from "../services/bookingAccessService";
+import { toCamel } from "../helpers/idGenerator";
+import {
+  projectProviderProfile,
+  resolveProviderAudience,
+} from "../services/providerProfileProjection";
 
 /**
  * Authenticated successors to the unauthenticated legacy worker-lookup routes.
@@ -99,6 +104,71 @@ export const getBookingProviderLocation = async (req: Request, res: Response) =>
     return res.status(500).json({
       success: false,
       message: e.message || "Failed to fetch provider location",
+    });
+  }
+};
+
+/**
+ * GET /api/booking/:bookingId/provider
+ *
+ * Who is coming to this booking — the assigned provider's display details, for a
+ * caller entitled to the booking.
+ *
+ * The last legacy route with no successor. `GET /api/workers/:uid` is
+ * authenticated and already audience-projected, so it is not a leak the way the
+ * unauthenticated routes were — but it still lets any authenticated user name
+ * any provider and pull their profile, and it is the only thing keeping
+ * technician.routes.ts alive now that both apps are migrated off everything
+ * else.
+ *
+ * The migration document listed `GET /provider/profile` as the successor. That
+ * is wrong: /provider/profile is SELF-scoped, and the caller here is a customer
+ * asking about somebody else. Re-framing on the booking is the same move that
+ * fixed provider-location — the caller names a booking they already own, and the
+ * server decides whose details that entitles them to.
+ *
+ * Projection is `resolveProviderAudience` + `projectProviderProfile`, exactly as
+ * the legacy route does, so the payload a customer receives is unchanged: a name
+ * and a phone number, not the compliance documents, booking history,
+ * disbursements and earnings the raw row carries.
+ */
+export const getBookingProvider = async (req: Request, res: Response) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    if (!Number.isInteger(bookingId) || bookingId <= 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid booking id" });
+    }
+
+    const actorUid = (req as any).user?.uid as string | undefined;
+    await assertBookingAccess(bookingId, actorUid);
+
+    const workerUid = await technician.getAssignedWorkerUid(bookingId);
+    if (!workerUid) {
+      // Normal state: the booking has not been matched yet.
+      return res.json({ success: true, assigned: false, worker: null });
+    }
+
+    const worker = await technician.getWorkerByUid(workerUid);
+    if (!worker) {
+      return res.json({ success: true, assigned: true, worker: null });
+    }
+
+    const { addresses, services, ...rest } = worker as any;
+    const full = { ...toCamel(rest), addresses, services };
+    const audience = await resolveProviderAudience(actorUid, workerUid);
+
+    return res.json({
+      success: true,
+      assigned: true,
+      worker: projectProviderProfile(full, audience),
+    });
+  } catch (e: any) {
+    if (sendBookingAccessError(res, e)) return;
+    return res.status(500).json({
+      success: false,
+      message: e.message || "Failed to fetch booking provider",
     });
   }
 };

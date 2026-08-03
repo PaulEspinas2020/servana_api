@@ -1124,6 +1124,136 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
   };
 };
 
+/**
+ * ACCEPTED -> EN_ROUTE, and EN_ROUTE -> ARRIVED.
+ *
+ * These two stages did not exist. `EN_ROUTE` and `ARRIVED` were read in
+ * `serviceService.ts:125` and mapped by both mobile apps, but nothing anywhere
+ * ever wrote them — the customer app even branches on them in three places
+ * (booking_action_resolver, bookings_screen, booking_detail_screen), so it was
+ * carrying UI for a journey stage the platform could not express. A customer
+ * watching the tracking screen saw the provider accept and then nothing until
+ * work started.
+ *
+ * Written to `booking_workers.status`, because that is where provider state
+ * lives (SERVANA_PROVIDER_STATUS_MATRIX.md), and cascaded to `bookings.status`
+ * so the customer's booking view can show it — the same shape `completeJob`
+ * already uses for COMPLETED.
+ *
+ * Guarded like every other transition: the UPDATE carries the expected current
+ * status, so an out-of-order call changes nothing rather than corrupting state,
+ * and a duplicate tap is a no-op instead of a second event. That makes these
+ * idempotent in effect, which is the standard the rest of the lifecycle meets.
+ *
+ * Both stages remain OPTIONAL. `startJob` still accepts a booking sitting at
+ * ACCEPTED, so a provider who never taps "on my way" can still start the job and
+ * an older app build keeps working unchanged.
+ */
+/**
+ * Adds the two arrival timestamp columns.
+ *
+ * Additive and nullable, so every existing row and every shipped client is
+ * unaffected — a build that has never heard of these stages reads the same
+ * fields it always did.
+ */
+let arrivalColumnsReady: Promise<void> | null = null;
+
+const ensureArrivalColumns = (): Promise<void> => {
+  // Memoised: this runs on the first arrival transition rather than at boot, so
+  // it must not issue a DDL statement on every tap.
+  arrivalColumnsReady ??= dbQuery
+    .query(
+      `ALTER TABLE ${dbSchema}.booking_workers
+         ADD COLUMN IF NOT EXISTS en_route_at TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS arrived_at  TIMESTAMPTZ`,
+      []
+    )
+    .then(() => undefined)
+    .catch((e: any) => {
+      // Reset so a transient failure can be retried rather than poisoning the
+      // process for its lifetime.
+      arrivalColumnsReady = null;
+      throw e;
+    });
+  return arrivalColumnsReady;
+};
+
+const advanceArrivalStage = async (
+  bookingId: number,
+  workerUid: string,
+  from: string,
+  to: string,
+  timestampColumn: string,
+  trackingNote: string
+) => {
+  await ensureArrivalColumns();
+
+  const res = await dbQuery.query(
+    `
+    UPDATE ${dbSchema}.booking_workers
+    SET status = $4,
+        ${timestampColumn} = NOW()
+    WHERE booking_id = $1
+      AND worker_uid = $2
+      AND status = $3
+    RETURNING *
+    `,
+    [bookingId, workerUid, from, to]
+  );
+
+  if (!res.rowCount) {
+    throw new Error(`Job cannot move to ${to}`);
+  }
+
+  // Cascade so the customer's booking view reflects it. Scoped to this worker's
+  // booking and to the statuses this transition can legally follow, so a
+  // concurrent admin action cannot be clobbered.
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.bookings
+     SET status = $2
+     WHERE id = $1 AND worker_uid = $3`,
+    [bookingId, to, workerUid]
+  );
+
+  // Customer-facing timeline. booking_tracking previously carried only four
+  // event kinds and nothing between assignment and completion.
+  try {
+    await dbQuery.query(
+      `INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note)
+       VALUES ($1, $2, $3)`,
+      [bookingId, to, trackingNote]
+    );
+  } catch (e: any) {
+    // A timeline row is not worth failing the transition over — the state
+    // change is already committed and is the thing that matters.
+    console.warn(`[arrival] tracking insert failed for booking ${bookingId}: ${e.message}`);
+  }
+
+  return res.rows[0];
+};
+
+/** The provider is travelling to the customer. */
+export const markEnRoute = (bookingId: number, workerUid: string) =>
+  advanceArrivalStage(
+    bookingId,
+    workerUid,
+    "ACCEPTED",
+    "EN_ROUTE",
+    "en_route_at",
+    "Provider is on the way"
+  );
+
+/** The provider has reached the address and has not yet started work. */
+export const markArrived = (bookingId: number, workerUid: string) =>
+  advanceArrivalStage(
+    bookingId,
+    workerUid,
+    "EN_ROUTE",
+    "ARRIVED",
+    "arrived_at",
+    "Provider has arrived"
+  );
+
 export const startJob = async (
   bookingId: number,
   workerUid: string,
@@ -1141,7 +1271,11 @@ export const startJob = async (
     FROM ${dbSchema}.bookings b
     WHERE bw.booking_id = $1
       AND bw.worker_uid = $2
-      AND bw.status = 'ACCEPTED'
+      -- ACCEPTED plus the two optional arrival stages. Requiring ACCEPTED
+      -- alone would mean a provider who tapped "on my way" could never start
+      -- the job — the arrival stages advance the status, so demanding the
+      -- pre-arrival value would strand them one tap from the work.
+      AND bw.status IN ('ACCEPTED', 'EN_ROUTE', 'ARRIVED')
       AND bw.booking_id = b.id
       AND b.worker_code = $3
     RETURNING bw.*

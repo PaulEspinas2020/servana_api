@@ -6,7 +6,10 @@ import { logProviderClientActivity } from "../services/adminMobileAttributionSer
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 import { touchProviderActivity } from "../services/adminProviderService";
 import mongoDb from "../db/mongodbQuery";
-import { projectProviderProfile } from "../services/providerProfileProjection";
+import {
+  projectProviderProfile,
+  resolveProviderAudience,
+} from "../services/providerProfileProjection";
 import dbQuery from "../db/dbQuery";
 import { db as dbCfg } from "../config";
 
@@ -1046,21 +1049,8 @@ export const saveNotificationPreferences = async (req: Request, res: Response) =
  * gets the public projection. Unknown or absent actors fall through to `other`,
  * which is the closed direction (§11).
  */
-export const resolveProviderAudience = async (
-  actorUid: string | undefined,
-  subjectUid: string,
-): Promise<"self" | "admin" | "other"> => {
-  if (!actorUid) return "other";
-  if (actorUid === subjectUid) return "self";
-  try {
-    const { rows } = await dbQuery.query(
-      `SELECT "role" FROM ${dbCfg.schema}.user_credentials WHERE uid = $1`,
-      [actorUid],
-    );
-    if (rows.length && Number(rows[0].role) === 1) return "admin";
-  } catch {
-    // A role lookup failure must not widen access.
-    return "other";
-  }
-  return "other";
-};
+// resolveProviderAudience moved to services/providerProfileProjection so it
+// can be imported without dragging this controller — and the Mongo client it
+// loads — into a test that only wants the projection. Re-exported so existing
+// callers are unaffected.
+export { resolveProviderAudience };
