@@ -192,6 +192,18 @@ app.use("/api", cors(corsOptionsDelegate), customerSupportRoutes);
 import customerReviewRoutes from "./routes/customerReview.routes";
 app.use("/api", cors(corsOptionsDelegate), customerReviewRoutes);
 
+/**
+ * Account deletion (Google Play "Data deletion" policy).
+ *
+ * The page router is mounted WITHOUT the /api prefix and without the CORS
+ * delegate: it is a plain HTML page a Play reviewer opens directly in a
+ * browser, not an XHR target, and putting it behind the API origin allowlist
+ * would 403 exactly the person it exists for.
+ */
+import accountDeletionRoutes, { accountDeletionPageRouter } from "./routes/accountDeletion.routes";
+app.use("/api", cors(corsOptionsDelegate), accountDeletionRoutes);
+app.use(accountDeletionPageRouter);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
