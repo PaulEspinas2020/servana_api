@@ -349,6 +349,60 @@ const PERMISSION_SEEDS: PermissionSeed[] = [
 
 // ── Schema bootstrap ───────────────────────────────────────────────────────────
 
+
+// ── admin_users row writing ───────────────────────────────────────────────────
+
+/**
+ * The column list, in one place.
+ *
+ * Four call sites wrote this INSERT independently — schema seeding,
+ * ensureAdminUserRow, createAdminUser and bootstrapSuperAdmin — with four
+ * copies of the same column list and three different ON CONFLICT behaviours.
+ * The behaviours genuinely differ and should; the COLUMN LIST should not. Add a
+ * column and three of the four would silently omit it, which shows up later as
+ * a row that is missing a field nobody can explain.
+ */
+const ADMIN_USER_COLUMNS =
+  "(admin_uid, email, display_name, is_super_admin, account_status, created_by)";
+
+/**
+ * How an insert should behave when the admin already exists.
+ *
+ *   ignore  — leave the existing row alone (backfill; the row is the point,
+ *             not its contents)
+ *   elevate — force is_super_admin TRUE (bootstrap; the whole purpose is to
+ *             raise an existing account)
+ *   fail    — let the constraint raise (explicit creation; a caller asking to
+ *             create something that exists has made a mistake worth surfacing)
+ */
+type AdminRowConflict = "ignore" | "elevate" | "fail";
+
+const CONFLICT_SQL: Record<AdminRowConflict, string> = {
+  ignore: "ON CONFLICT (admin_uid) DO NOTHING",
+  elevate:
+    "ON CONFLICT (admin_uid) DO UPDATE SET is_super_admin = TRUE, updated_at = NOW()",
+  fail: "",
+};
+
+async function insertAdminUserRow(opts: {
+  adminUid: string;
+  email: string;
+  displayName: string | null;
+  isSuperAdmin: boolean;
+  createdBy: string;
+  onConflict: AdminRowConflict;
+  returning?: boolean;
+}): Promise<any | null> {
+  const res = await dbQuery.query(
+    `INSERT INTO ${s}.admin_users ${ADMIN_USER_COLUMNS}
+     VALUES ($1, $2, $3, $4, 'active', $5)
+     ${CONFLICT_SQL[opts.onConflict]}
+     ${opts.returning ? "RETURNING *" : ""}`,
+    [opts.adminUid, opts.email, opts.displayName, opts.isSuperAdmin, opts.createdBy]
+  );
+  return res.rows?.[0] ?? null;
+}
+
 export async function ensurePermissionSchema(): Promise<void> {
   const s = db.schema;
 
@@ -435,7 +489,7 @@ export async function ensurePermissionSchema(): Promise<void> {
 
   // Bootstrap: promote existing role=1 users to Super Admin if no super admins exist
   await dbQuery.query(`
-    INSERT INTO ${s}.admin_users (admin_uid, email, display_name, is_super_admin, account_status, created_by)
+    INSERT INTO ${s}.admin_users ${ADMIN_USER_COLUMNS}
     SELECT uc.uid,
            COALESCE(uc.email, uc.uid),
            NULLIF(TRIM(COALESCE(uc.first_name,'') || ' ' || COALESCE(uc.last_name,'')), ''),
@@ -494,12 +548,12 @@ export async function ensureAdminUserRow(adminUid: string): Promise<void> {
   const fn = userRes.rows[0]?.first_name ?? '';
   const ln = userRes.rows[0]?.last_name ?? '';
   const displayName = (fn + ' ' + ln).trim() || null;
-  await dbQuery.query(
-    `INSERT INTO ${s}.admin_users (admin_uid, email, display_name, is_super_admin, account_status, created_by)
-     VALUES ($1, $2, $3, FALSE, 'active', 'system')
-     ON CONFLICT (admin_uid) DO NOTHING`,
-    [adminUid, email, displayName]
-  );
+  await insertAdminUserRow({
+    adminUid, email, displayName,
+    isSuperAdmin: false,
+    createdBy: "system",
+    onConflict: "ignore",
+  });
 
   // First arrival of an invited admin. This runs on every authenticated admin
   // request, which is the right hook: there is no separate "accept invitation"
@@ -677,12 +731,18 @@ export async function createAdminUser(
     [data.adminUid]
   );
 
-  const res = await dbQuery.query(
-    `INSERT INTO ${s}.admin_users (admin_uid, email, display_name, is_super_admin, account_status, created_by)
-     VALUES ($1, $2, $3, $4, 'active', $5)
-     RETURNING *`,
-    [data.adminUid, data.email, data.displayName ?? null, data.isSuperAdmin ?? false, actorUid]
-  );
+  const row = await insertAdminUserRow({
+    adminUid: data.adminUid,
+    email: data.email,
+    displayName: data.displayName ?? null,
+    isSuperAdmin: data.isSuperAdmin ?? false,
+    createdBy: actorUid,
+    // No ON CONFLICT: a caller asking to create an admin that already exists
+    // has made a mistake, and the constraint saying so is more useful than a
+    // silent no-op. getAdminUser above already handles the expected case.
+    onConflict: "fail",
+    returning: true,
+  });
 
   auditFire({
     actionCategory: 'admin', action: 'admin_user_created',
@@ -694,7 +754,7 @@ export async function createAdminUser(
 
   invalidatePermissionCache(data.adminUid);
   invalidatePermissionCache(`sa:${data.adminUid}`);
-  return toCamel(res.rows[0]);
+  return toCamel(row);
 }
 
 export async function updateAdminUser(
@@ -1075,12 +1135,12 @@ export async function bootstrapSuperAdmin(
     );
   }
 
-  await dbQuery.query(
-    `INSERT INTO ${s}.admin_users (admin_uid, email, display_name, is_super_admin, account_status, created_by)
-     VALUES ($1, $2, $3, TRUE, 'active', 'bootstrap')
-     ON CONFLICT (admin_uid) DO UPDATE SET is_super_admin=TRUE, updated_at=NOW()`,
-    [adminUid, email, displayName]
-  );
+  await insertAdminUserRow({
+    adminUid, email, displayName,
+    isSuperAdmin: true,
+    createdBy: "bootstrap",
+    onConflict: "elevate",
+  });
 
   await dbQuery.query(
     `INSERT INTO ${s}.user_credentials (uid, role) VALUES ($1, 1)
