@@ -15,9 +15,9 @@
  * to wherever they typed it. Anyone created this way must change it on first
  * sign-in.
  *
- *   npm run admin:bootstrap                 # dry run
- *   npm run admin:bootstrap -- --apply
- *   npm run admin:bootstrap -- --apply --super
+ *   npm run admin:bootstrap -- someone@example.com              # dry run
+ *   npm run admin:bootstrap -- --apply someone@example.com
+ *   npm run admin:bootstrap -- --apply --super someone@example.com
  *
  * Password comes from ADMIN_BOOTSTRAP_PASSWORD so it stays out of this file and
  * out of shell history.
@@ -45,8 +45,16 @@ const CONVERT = process.argv.includes("--convert");
 const ACTOR = "bootstrap-script";
 const REASON = "Bootstrap: initial admin provisioning";
 
-/** Emails to provision. Edited here rather than passed on a command line. */
-const EMAILS = ["ralphwayneacenas@gmail.com", "allanagadi@gmail.com"];
+/**
+ * Emails to provision, taken from the command line.
+ *
+ * This used to be a hardcoded array, which meant every new admin needed a code
+ * change, a commit and a deploy before anyone could be added — and worse, it
+ * combined badly with --convert: running the script with no arguments would
+ * silently re-target whoever happened to be listed, and --convert changes a
+ * person's role. An operation that destructive should never have a default.
+ */
+const EMAILS = process.argv.slice(2).filter((a) => !a.startsWith("-") && a.includes("@"));
 
 const PASSWORD = process.env.ADMIN_BOOTSTRAP_PASSWORD ?? "";
 
@@ -310,6 +318,18 @@ async function provision(rawEmail: string): Promise<Outcome | null> {
 }
 
 async function main() {
+  if (EMAILS.length === 0) {
+    console.error(
+      "No email addresses given.\n\n" +
+        "  npm run admin:bootstrap -- someone@example.com                 # dry run\n" +
+        "  npm run admin:bootstrap -- --apply someone@example.com\n" +
+        "  npm run admin:bootstrap -- --apply --convert someone@example.com\n\n" +
+        "--convert allows an EMPTY customer/provider account to become an admin.\n" +
+        "It refuses if the account owns any data anywhere in the schema."
+    );
+    process.exit(2);
+  }
+
   if (APPLY && PASSWORD.length < 10) {
     console.error(
       "ADMIN_BOOTSTRAP_PASSWORD is unset or shorter than 10 characters.\n" +
