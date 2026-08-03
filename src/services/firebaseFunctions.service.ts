@@ -14,6 +14,7 @@ import * as userService from "../services/user.service";
 import dbQuery from "../db/dbQuery";
 import { db as dbConfig } from "../config";
 import { findLinkCollision, AccountLinkRequiredError } from "./accountLinkGuard";
+import { mergePhoneIntoExistingAccount } from "./accountLinking";
 
 const dbSchema = dbConfig.schema;
 
@@ -72,7 +73,51 @@ const firebaseAuthLogin = async (idToken: string, role: string = "2") => {
       firebaseUser.email || null,
       firebaseUser.phoneNumber || null
     );
-    if (collision) throw new AccountLinkRequiredError(collision.via);
+
+    if (collision) {
+      /**
+       * Mobile collisions are MERGED: this sign-in proved possession of the
+       * number, and the account that claims it is the same person. The orphan
+       * uid is folded into the existing account so only one uid survives.
+       *
+       * Email collisions are not merged here. An email sign-in that lands on a
+       * different uid than the account holding that address means two Firebase
+       * identities exist for one address — which Firebase itself prevents for
+       * password auth, so reaching this means a federated provider is involved
+       * and the right resolution is not obvious enough to take automatically.
+       */
+      if (collision.via === "mobile") {
+        const merge = await mergePhoneIntoExistingAccount({
+          incomingUid: firebaseUser.uid,
+          signInProvider: (decoded as any)?.firebase?.sign_in_provider,
+          phoneNumber: firebaseUser.phoneNumber || null,
+          canonicalUid: collision.existingUid,
+        });
+
+        if (merge.merged) {
+          // The caller's token belongs to a uid that no longer exists, so it
+          // cannot be used to continue. The custom token lets them complete
+          // sign-in as the surviving account without a second OTP, having
+          // already proven the number seconds ago.
+          return {
+            data: {
+              success: true,
+              relinked: true,
+              customToken: merge.customToken,
+              uid: merge.canonicalUid,
+              id: merge.canonicalUid,
+              message:
+                "This mobile number belongs to your existing account. Signing you into it.",
+            },
+          };
+        }
+        console.warn(
+          `[link] merge declined for ${firebaseUser.uid}: ${merge.reason}`
+        );
+      }
+
+      throw new AccountLinkRequiredError(collision.via);
+    }
   }
 
   const dbUser = await userService.upsertFirebaseUser({
