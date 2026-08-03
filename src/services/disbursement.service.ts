@@ -27,13 +27,35 @@ const computeSplit = (total: number) => ({
 
 export const createDisbursement = async (bookingId: number) => {
   const r = await dbQuery.query(
-    `SELECT final_price, worker_uid FROM ${dbSchema}.bookings WHERE id = $1`,
+    // additional_paid is the on-site upsell revenue the provider actually
+    // earned. It was previously invisible here: booking_additional_requests
+    // charges the customer through its own PayMongo checkout and never writes
+    // back to bookings.final_price, and the split below is computed from
+    // final_price alone — so additional work contributed exactly 0 to provider
+    // pay while both frontends told the provider they would receive 80% of it.
+    //
+    // Summed from `payments`, not from booking_additional_requests.total_amount,
+    // deliberately: a request can be ACCEPTED, IN_PROGRESS or PROCEEDING without
+    // the customer having paid. Paying a provider a share of money Servana never
+    // collected would turn a shortfall into a loss. `status = 'PAID'` on the
+    // payment row is the only evidence money arrived.
+    `SELECT b.final_price,
+            b.worker_uid,
+            COALESCE((
+              SELECT SUM(p.amount)
+              FROM ${dbSchema}.payments p
+              WHERE p.booking_id = b.id
+                AND p.additional_request_id IS NOT NULL
+                AND p.status = 'PAID'
+            ), 0) AS additional_paid
+     FROM ${dbSchema}.bookings b
+     WHERE b.id = $1`,
     [bookingId]
   );
 
   if (!r.rowCount) throw new Error("Booking not found");
 
-  const { final_price, worker_uid } = r.rows[0];
+  const { final_price, worker_uid, additional_paid } = r.rows[0];
 
   if (!worker_uid) {
     console.warn(`createDisbursement: booking ${bookingId} has no worker — skipping`);
@@ -45,7 +67,9 @@ export const createDisbursement = async (bookingId: number) => {
     return null;
   }
 
-  const { totalAmount, servanaShare, workerShare } = computeSplit(Number(final_price));
+  const payableBasis = Number(final_price) + Number(additional_paid || 0);
+
+  const { totalAmount, servanaShare, workerShare } = computeSplit(payableBasis);
 
   const res = await dbQuery.query(
     `

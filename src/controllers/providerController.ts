@@ -316,16 +316,24 @@ export const getEarnings = async (req: Request, res: Response) => {
     }
 
     const result = await dbQuery.query(
+      // bw.completed_at is when the provider actually finished. It is joined
+      // because completedAt below used to be populated from b.schedule — the
+      // time the job was BOOKED for. On any job that ran late, started early or
+      // was rescheduled, the earnings history showed a completion time that
+      // never happened, and it silently agreed with scheduledAt on every row.
       `SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
               so.level_2 AS service_name,
               p.status   AS payment_status,
               d.status   AS payout_status,
               d.released_at,
-              d.worker_share
+              d.worker_share,
+              bw.completed_at
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
        LEFT JOIN ${dbSchema}.payments p ON p.booking_id = b.id
        LEFT JOIN ${dbSchema}.disbursements d ON d.booking_id = b.id AND d.worker_uid = $1
+       LEFT JOIN ${dbSchema}.booking_workers bw
+              ON bw.booking_id = b.id AND bw.worker_uid = $1
        WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
        ${dateFilter}
        ORDER BY b.schedule DESC`,
@@ -342,7 +350,10 @@ export const getEarnings = async (req: Request, res: Response) => {
         bookingId: String(r.id),
         bookingCode: bookingCode(r.id),
         serviceName: r.service_name || "",
-        completedAt: r.schedule,
+        // Falls back to the schedule only when the assignment row carries no
+        // completion time, so the field degrades to its old value rather than
+        // to null for any historical row written before completed_at was set.
+        completedAt: r.completed_at ?? r.schedule,
         scheduledAt: r.schedule,
         bookingAmount: gross,
         providerShareAmount: workerShare,
@@ -375,11 +386,13 @@ export const getEarningById = async (req: Request, res: Response) => {
               p.status   AS payment_status,
               d.status   AS payout_status,
               d.released_at,
-              d.worker_share
+              d.worker_share,
+              bw.completed_at
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
        LEFT JOIN ${dbSchema}.payments        p  ON p.booking_id = b.id
        LEFT JOIN ${dbSchema}.disbursements   d  ON d.booking_id = b.id AND d.worker_uid = $1
+       LEFT JOIN ${dbSchema}.booking_workers bw ON bw.booking_id = b.id AND bw.worker_uid = $1
        WHERE b.id = $2 AND b.worker_uid = $1`,
       [uid, id]
     );
@@ -396,7 +409,7 @@ export const getEarningById = async (req: Request, res: Response) => {
       bookingId:           String(r.id),
       bookingCode:         bookingCode(r.id),
       serviceName:         r.service_name || "",
-      completedAt:         r.schedule,
+      completedAt:         r.completed_at ?? r.schedule,
       scheduledAt:         r.schedule,
       bookingAmount:       gross,
       providerShareAmount: workerShareDetail,

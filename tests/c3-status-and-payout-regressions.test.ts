@@ -148,3 +148,29 @@ describe('payout release — admin hold', () => {
     expect(releaseQuery()).toMatch(/hold_until <= NOW\(\)/);
   });
 });
+
+describe('disbursement basis — additional work', () => {
+  const src = flat(code(read('services/disbursement.service.ts')));
+
+  test('the payable basis includes paid additional work', () => {
+    // booking_additional_requests charges the customer through its own PayMongo
+    // checkout and never writes back to bookings.final_price. The split was
+    // computed from final_price alone, so on-site upsells contributed exactly 0
+    // to provider pay while both frontends promised 80% of them.
+    expect(src).toContain('additional_paid');
+    expect(src).toMatch(/payableBasis/);
+    expect(src).not.toMatch(/computeSplit\(Number\(final_price\)\)/);
+  });
+
+  test('it counts money received, not merely work agreed', () => {
+    // A request can be ACCEPTED, IN_PROGRESS or PROCEEDING with the customer
+    // having paid nothing. Paying a share of uncollected money turns a
+    // shortfall into a loss, so the sum keys on the PAYMENT row.
+    const sub = src.match(/SELECT SUM\(p\.amount\)[\s\S]{0,320}?\)/);
+    expect(sub).not.toBeNull();
+    expect(sub![0]).toMatch(/p\.status = 'PAID'/);
+    expect(sub![0]).toMatch(/p\.additional_request_id IS NOT NULL/);
+    // Not the request table, whose status does not evidence payment.
+    expect(sub![0]).not.toMatch(/booking_additional_requests/);
+  });
+});
