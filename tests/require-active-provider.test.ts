@@ -100,3 +100,62 @@ describe('scope', () => {
     expect(q.mock.calls[0][1]).toEqual(['w-1']);
   });
 });
+
+/**
+ * The gap that let a production outage ship.
+ *
+ * The `run` helper above maps a null status to `rows: []` — a MISSING ROW. So
+ * every case in this file was either "no row" or "a row with a real status",
+ * and the third possibility was never expressed: a row that EXISTS whose
+ * account_status was never written.
+ *
+ * That is not a hypothetical. upsertFirebaseUser does not set the column, and
+ * Firebase issues a uid per identifier — so signing in by mobile creates a new
+ * row with a NULL status. Those providers got 403 on every operational route
+ * from their first request, while the whole suite stayed green.
+ *
+ * These cases talk to the mock directly rather than through `run`, because the
+ * helper cannot represent the state that broke.
+ */
+describe('a row whose status was never set', () => {
+  const call = async (row: Record<string, unknown>) => {
+    q.mockReset();
+    q.mockResolvedValue({ rows: [row] });
+    const req: any = { user: { uid: 'w-1' } };
+    let code = 0;
+    const body: any = {};
+    const res: any = {
+      status: (c: number) => { code = c; return res; },
+      json: (b: any) => { Object.assign(body, b); return res; },
+    };
+    let passed = false;
+    await requireActiveProvider(req, res, () => { passed = true; });
+    return { passed, code, body };
+  };
+
+  test.each([
+    ['NULL', null],
+    ['undefined', undefined],
+    ['empty string', ''],
+    ['whitespace', '   '],
+  ])('%s is a legacy account and PASSES', async (_label, value) => {
+    // Absence is not denial. Nothing was ever written here, and this account
+    // worked before the middleware existed.
+    expect((await call({ account_status: value })).passed).toBe(true);
+  });
+
+  test('an UNRECOGNISED status still fails closed', async () => {
+    // The distinction that makes the above safe: a value somebody wrote
+    // deliberately and this code does not understand must still deny, or the
+    // fix would have turned a lockout into a hole.
+    const r = await call({ account_status: 'frozen_pending_review' });
+    expect(r.passed).toBe(false);
+    expect(r.code).toBe(403);
+  });
+
+  test('suspension is unaffected by the NULL allowance', async () => {
+    const r = await call({ account_status: 'suspended' });
+    expect(r.passed).toBe(false);
+    expect(r.body.error.code).toBe('PROVIDER_SUSPENDED');
+  });
+});
