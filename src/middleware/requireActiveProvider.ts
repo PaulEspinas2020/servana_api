@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { sendAuthError, AUTH_ERRORS } from "../errors/authErrors";
 import dbQuery from "../db/dbQuery";
 import { db } from "../config";
 
@@ -51,10 +52,7 @@ const requireActiveProvider = async (
 ): Promise<void> => {
   const uid = (req as any).user?.uid as string | undefined;
   if (!uid) {
-    res.status(401).json({
-      status: "error",
-      error: { code: "UNAUTHENTICATED", message: "Authentication is required", retryable: false },
-    });
+    sendAuthError(res, "UNAUTHENTICATED");
     return;
   }
 
@@ -66,10 +64,7 @@ const requireActiveProvider = async (
 
     // No row at all is a genuinely unknown actor and still denies.
     if (rows.length === 0) {
-      res.status(403).json({
-        status: "error",
-        error: { code: "PROVIDER_NOT_APPROVED", message: "This account is not permitted to perform this action", retryable: false },
-      });
+      sendAuthError(res, "PROVIDER_NOT_APPROVED");
       return;
     }
 
@@ -109,27 +104,19 @@ const requireActiveProvider = async (
       return;
     }
 
-    const code = BLOCKED_REASON[status] ?? "PROVIDER_NOT_APPROVED";
-    res.status(403).json({
-      status: "error",
-      error: {
-        code,
-        // Deliberately does not echo the raw status value: the client routes on
-        // the code, and the message is shown to a person.
-        message: "Your account is not currently permitted to perform this action.",
-        retryable: false,
-      },
-    });
+    // Deliberately does not echo the raw status value: the client routes on the
+    // code, and the message is shown to a person. Each code carries its own
+    // recovery action, so a disabled account is sent to support while a
+    // suspended one is sent to its status screen — the distinction that makes
+    // these codes worth emitting at all.
+    const code = (BLOCKED_REASON[status] ?? "PROVIDER_NOT_APPROVED") as keyof typeof AUTH_ERRORS;
+    sendAuthError(res, code, "Your account is not currently permitted to perform this action.");
   } catch {
     // A status lookup that fails must not widen access.
-    res.status(403).json({
-      status: "error",
-      error: {
-        code: "PROVIDER_NOT_APPROVED",
-        message: "Your account status could not be verified.",
-        retryable: true,
-      },
-    });
+    // A status lookup that fails must not widen access, but it IS transient —
+    // so it routes to RETRY rather than parking the person on a status screen
+    // that will never change.
+    sendAuthError(res, "ACCOUNT_STATUS_UNAVAILABLE");
   }
 };
 

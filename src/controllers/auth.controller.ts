@@ -7,6 +7,7 @@ import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 import { touchProviderActivity } from "../services/adminProviderService";
 import { clearFcmToken } from "../services/notification.service";
 import { refreshIdToken, TokenRefreshError } from '../services/tokenRefreshService';
+import { sendAuthError } from "../errors/authErrors";
 
 const signin = async (req: Request, res: Response) => {
     const { email, password, fcmToken } = req.body;
@@ -160,18 +161,23 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
     // an authentication failure. Told to try again, the person will keep failing
     // the same way; they need to know which identifier to use instead.
     if (error?.code === "ACCOUNT_LINK_REQUIRED") {
-      return res.status(409).json({
-        status: "failed",
-        error: { code: "ACCOUNT_LINK_REQUIRED", message: error.message, retryable: false },
-        message: error.message,
-      });
+      // Keeps the specific message — it names which identifier to use, which is
+      // the whole point. The generic one would send them round the same loop.
+      return sendAuthError(res, "ACCOUNT_LINK_REQUIRED", error.message);
     }
 
-    const isDisabled = error?.message?.includes("disabled");
-    return res.status(isDisabled ? 403 : 401).json({
-      status: "failed",
-      message: isDisabled ? "This account has been disabled. Please contact support." : "Authentication failed.",
-    });
+    if (error?.message?.includes("disabled")) {
+      return sendAuthError(res, "PROVIDER_DISABLED");
+    }
+
+    // Firebase distinguishes an expired or revoked token from a malformed one.
+    // Collapsing both into one response is what makes a client unable to decide
+    // between refreshing silently and interrupting the person.
+    if (error?.code === "auth/id-token-expired" || error?.code === "auth/id-token-revoked") {
+      return sendAuthError(res, "TOKEN_EXPIRED");
+    }
+
+    return sendAuthError(res, "INVALID_TOKEN");
   }
 };
 
