@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import * as inviteSvc from '../services/adminInviteService';
 import {
   adminServerError,
   adminNotFound,
@@ -89,6 +90,55 @@ export async function createAdminUser(req: Request, res: Response): Promise<void
       uid, name, rid(req)
     );
     res.status(201).json({ status: 'success', data });
+  } catch (err) {
+    handleSvcError(res, err);
+  }
+}
+
+// ── Admin user INVITE (email only, no Firebase UID) ───────────────────────────
+
+/**
+ * POST /api/admin/admin-users/invite
+ *
+ * Creates the Firebase account, the admin record, and emails a set-password
+ * link — so an operator only needs an email address.
+ *
+ * The existing POST /admin/admin-users still takes a Firebase UID and is
+ * unchanged: it remains the right call when the account demonstrably already
+ * exists and someone is granting it access.
+ */
+export async function inviteAdminUser(req: Request, res: Response): Promise<void> {
+  try {
+    const { email, displayName, isSuperAdmin } = req.body;
+    if (!email?.trim()) {
+      adminValidationError(res, 'email is required');
+      return;
+    }
+    const { uid, name } = actorFrom(req);
+    const data = await inviteSvc.inviteAdminUser(
+      {
+        email: email.trim(),
+        displayName: displayName?.trim() || null,
+        isSuperAdmin: isSuperAdmin === true,
+      },
+      uid, name, rid(req)
+    );
+
+    // 201 whether or not the mail hop succeeded — the admin record exists
+    // either way, and `emailSent: false` tells the portal to offer Resend
+    // rather than implying the whole invitation failed.
+    res.status(201).json({ status: 'success', data });
+  } catch (err) {
+    handleSvcError(res, err);
+  }
+}
+
+/** POST /api/admin/admin-users/:adminUid/resend-invite */
+export async function resendAdminInvite(req: Request, res: Response): Promise<void> {
+  try {
+    const { name } = actorFrom(req);
+    const data = await inviteSvc.resendAdminInvite(String(req.params.adminUid), name);
+    res.status(200).json({ status: 'success', data });
   } catch (err) {
     handleSvcError(res, err);
   }

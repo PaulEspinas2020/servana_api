@@ -21,6 +21,15 @@ router.get('/admin/admin-users',
 router.post('/admin/admin-users',
   ...adminOnly, requireSuperAdmin, ctrl.createAdminUser);
 
+// ── Invite an admin by EMAIL (Super Admin only) ───────────────────────────────
+// Same authorization as create: only a Super Admin may grant admin access. The
+// difference is only that this one does not demand a Firebase UID up front.
+router.post('/admin/admin-users/invite',
+  ...adminOnly, requireSuperAdmin, ctrl.inviteAdminUser);
+
+router.post('/admin/admin-users/:adminUid/resend-invite',
+  ...adminOnly, requireSuperAdmin, ctrl.resendAdminInvite);
+
 // ── Bootstrap Super Admin (any authenticated user; service enforces first-caller-wins) ───
 router.post('/admin/admin-users/bootstrap-super-admin',
   verifyAuth, ctrl.bootstrapSuperAdmin);
