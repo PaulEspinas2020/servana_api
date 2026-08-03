@@ -5,6 +5,7 @@ import { db } from "../config";
 import { send } from "../helpers/mailer";
 import { normalizeEmail } from "../helpers/phoneIdentifier";
 import { createAdminUser } from "./adminPermissionService";
+import { ensureInviteColumns } from "./adminInviteState";
 
 const s = db.schema;
 const auth = getAuthAdmin(firebaseAdmin);
@@ -37,6 +38,7 @@ const adminPortalUrl = process.env.ADMIN_PORTAL_URL || "https://admin.servana.co
  * password link for someone else's address, but only the owner of that mailbox
  * can use it.
  */
+
 
 export type InviteResult = {
   adminUid: string;
@@ -163,6 +165,16 @@ export async function sendInviteEmail(
       action_url: link,
       portal_url: adminPortalUrl,
     });
+
+    // Stamped only after the send SUCCEEDS. Setting it before would mark an
+    // invitation as sent that never left, and the list would show "Pending"
+    // for someone who was never actually contacted.
+    await ensureInviteColumns();
+    await dbQuery.query(
+      `UPDATE ${s}.admin_users SET invited_at = NOW() WHERE email = $1`,
+      [email]
+    ).catch(() => {});
+
     return true;
   } catch (e: any) {
     // Never fail the invitation because the mail hop failed. The admin record

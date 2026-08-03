@@ -1,4 +1,5 @@
 import dbQuery from '../db/dbQuery';
+import { markInviteAccepted, ensureInviteColumns } from './adminInviteState';
 import { db } from '../config';
 import { auditFire } from './adminAuditService';
 import { toCamel } from '../helpers/idGenerator';
@@ -368,6 +369,12 @@ export async function ensurePermissionSchema(): Promise<void> {
     )
   `);
 
+  // invited_at / accepted_at. Added here rather than lazily, because the admin
+  // user LIST query derives invitationState from them — a lazily-added column
+  // means the first page load after deploy fails on a database that has not yet
+  // sent an invitation, which is every database at the moment of deploy.
+  await ensureInviteColumns();
+
   // admin_permission_definitions
   await dbQuery.query(`
     CREATE TABLE IF NOT EXISTS ${s}.admin_permission_definitions (
@@ -493,6 +500,15 @@ export async function ensureAdminUserRow(adminUid: string): Promise<void> {
      ON CONFLICT (admin_uid) DO NOTHING`,
     [adminUid, email, displayName]
   );
+
+  // First arrival of an invited admin. This runs on every authenticated admin
+  // request, which is the right hook: there is no separate "accept invitation"
+  // call to instrument — following the emailed link sets a password in Firebase
+  // and nothing reaches this backend until they actually use the portal.
+  //
+  // Fire-and-forget and internally guarded, so a bookkeeping failure cannot
+  // turn a working admin session into an error.
+  markInviteAccepted(adminUid).catch(() => {});
 }
 
 export async function isSuperAdmin(adminUid: string): Promise<boolean> {
@@ -596,7 +612,17 @@ export async function listAdminUsers(filter: {
   const total = Number(countRes.rows[0]?.count ?? 0);
 
   const dataRes = await dbQuery.query(
+    // invitationState is DERIVED, never stored. A status column would drift out
+    // of step with the two events that produce it; a CASE over those events
+    // cannot. 'direct' covers admins created before invitations existed and
+    // those granted access by uid — neither was ever invited, so neither can be
+    // pending, and showing them as such would invent a problem.
     `SELECT au.*,
+       CASE
+         WHEN au.invited_at IS NOT NULL AND au.accepted_at IS NULL THEN 'pending'
+         WHEN au.accepted_at IS NOT NULL                           THEN 'accepted'
+         ELSE 'direct'
+       END AS invitation_state,
        (SELECT COUNT(*) FROM ${s}.admin_permission_grants g
         WHERE g.admin_uid = au.admin_uid AND g.granted = TRUE AND g.revoked_at IS NULL)
          AS permission_count
@@ -612,7 +638,17 @@ export async function listAdminUsers(filter: {
 
 export async function getAdminUserDetail(adminUid: string): Promise<any | null> {
   const res = await dbQuery.query(
+    // invitationState is DERIVED, never stored. A status column would drift out
+    // of step with the two events that produce it; a CASE over those events
+    // cannot. 'direct' covers admins created before invitations existed and
+    // those granted access by uid — neither was ever invited, so neither can be
+    // pending, and showing them as such would invent a problem.
     `SELECT au.*,
+       CASE
+         WHEN au.invited_at IS NOT NULL AND au.accepted_at IS NULL THEN 'pending'
+         WHEN au.accepted_at IS NOT NULL                           THEN 'accepted'
+         ELSE 'direct'
+       END AS invitation_state,
        (SELECT COUNT(*) FROM ${s}.admin_permission_grants g
         WHERE g.admin_uid = au.admin_uid AND g.granted = TRUE AND g.revoked_at IS NULL)
          AS permission_count
