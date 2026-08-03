@@ -1,4 +1,5 @@
 import { db } from "../config";
+import { deriveNormalized } from "./identityColumns";
 import dbQuery from "../db/dbQuery";
 import bcrypt from "bcryptjs";
 const dbSchema = db.schema;
@@ -64,22 +65,40 @@ export const upsertFirebaseUser = async (payload: {
     role = "2",
   } = payload;
 
+  // Normalized forms are derived here rather than at the call sites, so every
+  // path that creates or updates an account maintains them. They are what the
+  // uniqueness indexes and the unified sign-in lookup key on; a row that misses
+  // them is a row that can be duplicated.
+  //
+  // Null when the raw value does not parse. That is deliberate: a number nobody
+  // can receive an SMS at should not become a lookup key (see deriveNormalized).
+  const { emailNormalized, phoneNormalized } = deriveNormalized(email, phoneNumber);
+
   const result = await dbQuery.query(
     `
     INSERT INTO ${dbSchema}.user_credentials (
       uid,
       email,
       phone_number,
+      email_normalized,
+      phone_normalized,
       first_name,
       last_name,
       "role",
       created_date
     )
-    VALUES ($1,$2,$3,$4,$5,$6,$7)
+    VALUES ($1,$2,$3,$8,$9,$4,$5,$6,$7)
     ON CONFLICT (uid)
     DO UPDATE SET
       email = COALESCE(EXCLUDED.email, user_credentials.email),
       phone_number = COALESCE(EXCLUDED.phone_number, user_credentials.phone_number),
+      -- COALESCE, matching the raw columns: signing in with a phone must not
+      -- erase the email this account already links, and vice versa. This is the
+      -- account-LINKING behaviour §13 requires, and it already worked for the
+      -- raw columns — the normalized ones have to follow the same rule or the
+      -- lookup key disagrees with the value it was derived from.
+      email_normalized = COALESCE(EXCLUDED.email_normalized, user_credentials.email_normalized),
+      phone_normalized = COALESCE(EXCLUDED.phone_normalized, user_credentials.phone_normalized),
       first_name = CASE WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name ELSE user_credentials.first_name END,
       last_name  = CASE WHEN EXCLUDED.last_name  <> '' THEN EXCLUDED.last_name  ELSE user_credentials.last_name  END
     RETURNING *;
@@ -92,6 +111,8 @@ export const upsertFirebaseUser = async (payload: {
       lastName,
       role,
       now,
+      emailNormalized,
+      phoneNormalized,
     ]
   );
   const dbResponse = formatUserCredentials(result.rows[0]);
