@@ -148,6 +148,22 @@ export const ensureOnboardingSchema = (): Promise<void> => {
       )
     `);
 
+    /**
+     * Additive columns for the suspension domain and reapplication policy.
+     *
+     * Separate ALTERs rather than edits to the CREATE above: that statement is
+     * `IF NOT EXISTS`, so on every already-deployed database it is a no-op and
+     * a new column added inside it would never appear. This is the same shape
+     * as ensureIdentityColumns — the difference being that this one is actually
+     * reached, because ensureOnboardingSchema is awaited by its callers.
+     */
+    await dbQuery.query(`
+      ALTER TABLE ${dbSchema}.provider_review_reason_codes
+        ADD COLUMN IF NOT EXISTS restricts_scope          TEXT,
+        ADD COLUMN IF NOT EXISTS may_auto_lift            BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS reapplication_wait_days  INTEGER
+    `);
+
     // ── provider_onboarding_notes ─────────────────────────────────────────────
     await dbQuery.query(`
       CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_onboarding_notes (
@@ -249,6 +265,131 @@ export const seedReasonCodes = async () => {
         (c as any).sensitive_escalation ?? false,
         (c as any).sensitive ?? false,
       ]
+    );
+  }
+
+  await seedSuspensionReasonCodes();
+};
+
+/**
+ * Suspension reason codes (Command 6 §12, §13).
+ *
+ * A separate domain because suspension is not a review decision. The three
+ * existing domains answer "what did we conclude about this submission";
+ * suspension answers "what may this provider no longer do, and can it lift on
+ * its own". Those need `restricts_scope` and `may_auto_lift`, which review
+ * codes have no use for.
+ */
+const seedSuspensionReasonCodes = async () => {
+  const codes = [
+    { code: 'sus_document_expired', label: 'Document Expired', title: 'A required document has expired',
+      body: 'One of your required documents is past its expiry date, so new jobs are paused until it is replaced.',
+      correction: 'Upload a current document. Work resumes once it is approved.',
+      scope: 'new_jobs', autoLift: true, sensitive: false },
+    { code: 'sus_safety_review', label: 'Safety Review', title: 'Your account is paused for a safety review',
+      body: 'We have paused your account while we review a safety report.',
+      correction: 'Our team will contact you. You can reach support at any time.',
+      scope: 'all_operational', autoLift: false, sensitive: true },
+    { code: 'sus_quality_review', label: 'Quality Review', title: 'Your account is paused for a service review',
+      body: 'We are reviewing recent feedback on your completed jobs. New jobs are paused meanwhile.',
+      correction: 'No action needed yet — we will be in touch.',
+      scope: 'new_jobs', autoLift: false, sensitive: false },
+    { code: 'sus_repeated_violation', label: 'Repeated Policy Issues', title: 'Your account is paused',
+      body: 'Your account has been paused following repeated policy issues.',
+      correction: 'Contact support to discuss reinstatement.',
+      scope: 'all_operational', autoLift: false, sensitive: false },
+    { code: 'sus_payment_review', label: 'Payment Review', title: 'Withdrawals are paused',
+      body: 'Withdrawals are paused while we review a payment. You can continue working.',
+      correction: 'No action needed. We will update you once the review completes.',
+      scope: 'withdrawal', autoLift: false, sensitive: false },
+    { code: 'sus_security_concern', label: 'Account Security', title: 'We have paused your account to protect it',
+      body: 'We noticed something unusual and paused your account as a precaution.',
+      correction: 'Please contact support so we can verify it is you.',
+      scope: 'all_operational', autoLift: false, sensitive: true },
+    { code: 'sus_regulatory', label: 'Regulatory Requirement', title: 'Your account is paused',
+      body: 'We must pause your account to meet a regulatory requirement.',
+      correction: 'Contact support for guidance on next steps.',
+      scope: 'all_operational', autoLift: false, sensitive: true },
+    { code: 'sus_admin_hold', label: 'Administrative Hold', title: 'Your account is on hold',
+      body: 'Your account is temporarily on hold.',
+      correction: 'Please contact support.',
+      scope: 'all_operational', autoLift: false, sensitive: true },
+  ];
+
+  for (const c of codes) {
+    await dbQuery.query(
+      `INSERT INTO ${dbSchema}.provider_review_reason_codes
+         (code, domain, applicable_decisions, internal_label, provider_facing_title,
+          provider_facing_body, suggested_correction, requires_free_text,
+          requires_escalation, is_sensitive, is_active, restricts_scope, may_auto_lift)
+       VALUES ($1,'suspension',$2,$3,$4,$5,$6,false,false,$7,true,$8,$9)
+       ON CONFLICT (code) DO NOTHING`,
+      [
+        c.code,
+        JSON.stringify(['suspended']),
+        c.label, c.title, c.body, c.correction,
+        c.sensitive, c.scope, c.autoLift,
+      ]
+    );
+  }
+};
+
+export class ReasonCodeError extends Error {
+  constructor(message: string, readonly statusCode: number) {
+    super(message);
+  }
+}
+
+/**
+ * Validate a reason code before it is stored (Command 6 §12).
+ *
+ * Until now `reason_code` was read straight off the request body and written
+ * as-is — so any string an admin sent was persisted and later rendered to a
+ * provider as though it were curated text. Three checks, all against columns
+ * that already exist:
+ *
+ *   1. the code exists and is active
+ *   2. the decision being made is in its `applicable_decisions`
+ *   3. `requires_free_text` is honoured
+ *
+ * Fails closed with 422 — an unrecognised code is never stored.
+ */
+export const assertValidReasonCode = async (
+  code: string | null | undefined,
+  decision: string,
+  providerMessage?: string | null
+): Promise<void> => {
+  await ensureOnboardingSchema();
+  if (!code) return; // absence is handled by the callers that require one
+
+  const { rows } = await dbQuery.query(
+    `SELECT applicable_decisions, requires_free_text
+       FROM ${dbSchema}.provider_review_reason_codes
+      WHERE code = $1 AND is_active = true
+      LIMIT 1`,
+    [code]
+  );
+
+  if (!rows.length) {
+    throw new ReasonCodeError(`Unknown or inactive reason code '${code}'.`, 422);
+  }
+
+  const raw = rows[0].applicable_decisions;
+  const applicable: string[] = Array.isArray(raw)
+    ? raw
+    : (() => { try { return JSON.parse(raw ?? '[]'); } catch { return []; } })();
+
+  if (applicable.length && !applicable.includes(decision)) {
+    throw new ReasonCodeError(
+      `Reason code '${code}' cannot accompany decision '${decision}'.`,
+      422
+    );
+  }
+
+  if (rows[0].requires_free_text && !String(providerMessage ?? '').trim()) {
+    throw new ReasonCodeError(
+      `Reason code '${code}' requires an accompanying message.`,
+      422
     );
   }
 };
@@ -796,6 +937,10 @@ export const decideRequirement = async (
   actorUid: string,
   opts: { reasonCode?: string; providerMessage?: string; internalRationale?: string } = {}
 ) => {
+  // Validate BEFORE anything is written. A code rejected after the decision row
+  // exists would leave the provider looking at a stored decision explained by a
+  // code we already refused.
+  await assertValidReasonCode(opts.reasonCode, decision, opts.providerMessage);
   await ensureOnboardingSchema();
 
   const reqRes = await dbQuery.query(
@@ -1106,6 +1251,8 @@ export const finalRejectProvider = async (
   await ensureOnboardingSchema();
   if (!reasonCode) throw Object.assign(new Error('reasonCode is required'), { statusCode: 400 });
   if (!providerMessage) throw Object.assign(new Error('providerMessage is required'), { statusCode: 400 });
+  // Present is not the same as valid — until now any string was accepted here.
+  await assertValidReasonCode(reasonCode, 'rejected', providerMessage);
 
   const caseRes = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.provider_onboarding_cases WHERE id = $1 LIMIT 1`,
