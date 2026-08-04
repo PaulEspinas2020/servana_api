@@ -416,6 +416,111 @@ export interface AvailabilityExplanation {
   reasons: Array<{ code: string; severity: 'info' | 'warning' | 'blocker'; message: string }>;
 }
 
+/**
+ * Does a stored weekly schedule cover this day + time window?
+ *
+ * Extracted so explainAvailability (one provider, full reasons) and
+ * filterUidsAvailableAt (many providers, set-based) decide identically. §10
+ * requires one canonical implementation of a domain rule — two copies of slot
+ * matching would drift and let auto-assignment and the Admin explanation
+ * disagree about the same provider.
+ *
+ * Returns a discriminated result rather than a bare boolean because callers
+ * need to distinguish "no schedule configured" (which auto-assignment must not
+ * treat as a blocker) from "explicitly not available then" (which it must).
+ */
+export type ScheduleCoverage = 'covered' | 'no_schedule' | 'day_unavailable' | 'outside_window';
+
+export const scheduleCoversWindow = (
+  rawSchedule: unknown,
+  dow: number,
+  startTime: string,
+  endTime: string,
+): ScheduleCoverage => {
+  if (!rawSchedule || !Array.isArray(rawSchedule) || rawSchedule.length === 0) {
+    return 'no_schedule';
+  }
+  const daySlots = (rawSchedule as any[]).filter(
+    (sl: any) => sl.isAvailable && (sl.dayOfWeek ?? sl.day_of_week) === dow
+  );
+  if (daySlots.length === 0) { return 'day_unavailable'; }
+  const covered = daySlots.some((sl: any) => {
+    const start = sl.startTime ?? sl.start_time;
+    const end   = sl.endTime   ?? sl.end_time;
+    return start <= startTime && end >= endTime;
+  });
+  return covered ? 'covered' : 'outside_window';
+};
+
+/** Weekday + HH:mm pair for a booking window, matching explainAvailability. */
+export const windowParts = (startAt: string, endAt: string) => {
+  const bookingStart = new Date(startAt);
+  const bookingEnd   = new Date(endAt);
+  const hhmm = (d: Date) =>
+    `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return { dow: bookingStart.getDay(), startTime: hhmm(bookingStart), endTime: hhmm(bookingEnd) };
+};
+
+/**
+ * Set-based availability filter for auto-assignment.
+ *
+ * `missingScheduleIsAvailable` exists because the two callers need opposite
+ * answers for the same state. Admin's explainAvailability calls an unconfigured
+ * schedule a blocker — correct when a human is asking "can I confirm this
+ * provider is free?". Auto-assignment must NOT: most providers have never saved
+ * a schedule, and treating that as unavailable would silently stop assigning
+ * anyone. Missing configuration is not a declaration of unavailability (§28).
+ *
+ * One query per concern for the whole candidate set, not per provider (§56).
+ */
+export const filterUidsAvailableAt = async (
+  uids: string[],
+  startAt: string,
+  endAt: string,
+  opts: { missingScheduleIsAvailable: boolean },
+): Promise<{ eligible: string[]; excluded: Array<{ uid: string; reason: string }> }> => {
+  if (!uids.length) { return { eligible: [], excluded: [] }; }
+  await bootstrap();
+
+  const { dow, startTime, endTime } = windowParts(startAt, endAt);
+  const day = new Date(startAt).toISOString().slice(0, 10);
+
+  const [availRes, timeOffRes] = await Promise.all([
+    dbQuery.query(
+      `SELECT worker_uid, schedule FROM ${s}.worker_availability WHERE worker_uid = ANY($1::text[])`,
+      [uids]
+    ),
+    dbQuery.query(
+      `SELECT DISTINCT worker_uid FROM ${s}.worker_time_off
+        WHERE worker_uid = ANY($1::text[])
+          AND COALESCE(status, 'active') = 'active'
+          AND start_date <= $2::date AND end_date >= $2::date`,
+      [uids, day]
+    ),
+  ]);
+
+  const scheduleByUid = new Map<string, unknown>();
+  for (const row of availRes.rows as any[]) { scheduleByUid.set(row.worker_uid, row.schedule); }
+  const onTimeOff = new Set((timeOffRes.rows as any[]).map(r => r.worker_uid));
+
+  const eligible: string[] = [];
+  const excluded: Array<{ uid: string; reason: string }> = [];
+
+  for (const uid of uids) {
+    if (onTimeOff.has(uid)) { excluded.push({ uid, reason: 'TIME_OFF' }); continue; }
+    const coverage = scheduleCoversWindow(scheduleByUid.get(uid), dow, startTime, endTime);
+    if (coverage === 'covered') { eligible.push(uid); continue; }
+    if (coverage === 'no_schedule') {
+      if (opts.missingScheduleIsAvailable) { eligible.push(uid); }
+      else { excluded.push({ uid, reason: 'NO_AVAILABILITY_SET' }); }
+      continue;
+    }
+    excluded.push({ uid, reason: coverage === 'day_unavailable' ? 'DAY_NOT_AVAILABLE' : 'OUTSIDE_SCHEDULE_WINDOW' });
+  }
+
+  return { eligible, excluded };
+};
+
 export const explainAvailability = async (
   providerUid: string,
   startAt: string,
@@ -482,38 +587,33 @@ export const explainAvailability = async (
     });
   }
 
-  // 3. Weekly schedule check
+  // 3. Weekly schedule check — shared with filterUidsAvailableAt so the Admin
+  //    explanation and auto-assignment can never disagree about a provider.
   const rawSchedule = availRes.rows[0]?.schedule;
-  if (!rawSchedule || !Array.isArray(rawSchedule) || rawSchedule.length === 0) {
-    reasons.push({
-      code: 'NO_AVAILABILITY_SET',
-      severity: 'blocker',
-      message: 'Provider has no weekly schedule configured — cannot confirm availability',
-    });
-  } else {
-    const daySlots = (rawSchedule as any[]).filter(
-      (sl: any) => sl.isAvailable && (sl.dayOfWeek ?? sl.day_of_week) === dow
-    );
-    if (daySlots.length === 0) {
+  switch (scheduleCoversWindow(rawSchedule, dow, bookingStartTime, bookingEndTime)) {
+    case 'no_schedule':
+      reasons.push({
+        code: 'NO_AVAILABILITY_SET',
+        severity: 'blocker',
+        message: 'Provider has no weekly schedule configured — cannot confirm availability',
+      });
+      break;
+    case 'day_unavailable':
       reasons.push({
         code: 'DAY_NOT_AVAILABLE',
         severity: 'blocker',
         message: `Provider is not available on ${DOW_LABELS[dow]}s`,
       });
-    } else {
-      const covered = daySlots.some((sl: any) => {
-        const start = sl.startTime ?? sl.start_time;
-        const end   = sl.endTime   ?? sl.end_time;
-        return start <= bookingStartTime && end >= bookingEndTime;
+      break;
+    case 'outside_window':
+      reasons.push({
+        code: 'OUTSIDE_SCHEDULE_WINDOW',
+        severity: 'blocker',
+        message: `Booking time ${bookingStartTime}–${bookingEndTime} falls outside provider's ${DOW_LABELS[dow]} slots`,
       });
-      if (!covered) {
-        reasons.push({
-          code: 'OUTSIDE_SCHEDULE_WINDOW',
-          severity: 'blocker',
-          message: `Booking time ${bookingStartTime}–${bookingEndTime} falls outside provider's ${DOW_LABELS[dow]} slots`,
-        });
-      }
-    }
+      break;
+    case 'covered':
+      break;
   }
 
   const blockers = reasons.filter(r => r.severity === 'blocker');

@@ -4,6 +4,7 @@ import mongoDb from "../db/mongodbQuery";
 import { generateOTP } from "../helpers/otp";
 import { send } from "../helpers/mailer";
 import { getAutoBookableProviderUids } from "./providerAutoOnlineEngine";
+import { filterUidsAvailableAt } from "./providerAvailabilityEngine";
 import { getUserInfoByBookingId } from "./user.service";
 import { computeTranspoFee } from "./pricingService";
 import { createNotification } from "./notification.service";
@@ -592,10 +593,50 @@ export const assignNearestWorker = async (
     await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);
     return { assigned: false, reason: "NO_WORKER_ONLINE" };
   }
-  const availableWorkers = onlineWorkers.filter((w: any) => !busyUids.has(w.uid));
-  if (!availableWorkers.length) {
+  const notBusyWorkers = onlineWorkers.filter((w: any) => !busyUids.has(w.uid));
+  if (!notBusyWorkers.length) {
     await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);
     return { assigned: false, reason: "NO_WORKER_AVAILABLE" };
+  }
+
+  // 3b. Honour the provider's own weekly schedule and time-off.
+  //
+  // Step 2 only rules out providers already booked elsewhere; it never asked
+  // whether the provider said they work at this hour at all, so auto-assignment
+  // could hand someone a job on their day off.
+  //
+  // missingScheduleIsAvailable is deliberately true: most providers have never
+  // saved a schedule, and treating "not configured" as "not available" would
+  // silently shrink the candidate pool to almost nobody. Absence of a
+  // declaration is not a declaration of unavailability (§28). Only a provider
+  // who HAS a schedule that excludes this window is filtered out, which makes
+  // this change strictly narrowing and safe to ship against live data.
+  let scheduleEligible = notBusyWorkers;
+  try {
+    const { eligible, excluded } = await filterUidsAvailableAt(
+      notBusyWorkers.map((w: any) => w.uid),
+      schedule.toISOString(),
+      new Date(schedule.getTime() + 60 * 60 * 1000).toISOString(),
+      { missingScheduleIsAvailable: true },
+    );
+    if (excluded.length) {
+      console.info(
+        `[assignNearestWorker] booking ${bookingId}: ${excluded.length} provider(s) excluded by schedule/time-off:`,
+        excluded.map(e => `${e.uid}:${e.reason}`).join(", ")
+      );
+    }
+    const eligibleSet = new Set(eligible);
+    scheduleEligible = notBusyWorkers.filter((w: any) => eligibleSet.has(w.uid));
+  } catch (e: any) {
+    // Availability is an additional filter, not the assignment's source of
+    // truth. If it fails, assign as before rather than stranding the booking.
+    console.error(`[assignNearestWorker] availability filter failed, proceeding unfiltered:`, e?.message ?? e);
+  }
+
+  const availableWorkers = scheduleEligible;
+  if (!availableWorkers.length) {
+    await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);
+    return { assigned: false, reason: "NO_WORKER_AVAILABLE_IN_SCHEDULE" };
   }
 
   // 4. Rank available workers by distance and pick the nearest
