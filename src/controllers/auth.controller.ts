@@ -8,6 +8,7 @@ import { touchProviderActivity } from "../services/adminProviderService";
 import { clearFcmToken } from "../services/notification.service";
 import { refreshIdToken, TokenRefreshError } from '../services/tokenRefreshService';
 import { sendAuthError } from "../errors/authErrors";
+import { continueUrlFor } from "../constants/platformContinueUrls";
 
 const signin = async (req: Request, res: Response) => {
     const { email, password, fcmToken } = req.body;
@@ -100,11 +101,17 @@ const resendVerification = async (req: Request, res: Response) => {
         return res.status(400).json({ status: 'error', message: 'Email is required' });
     }
 
+    // Optional, and absent from every existing caller — the customer mobile app
+    // and the provider portal both call this with `?email=` alone, so they keep
+    // landing on Firebase's own page. A caller that names an allowlisted
+    // platform gets a link home instead.
+    const continueUrl = continueUrlFor('verify', req.query.platform);
+
     // Fixed response time floor collapses fast (user-not-found) vs slow (send-email) paths.
     const MIN_RESPONSE_MS = 600;
     const start = Date.now();
     try {
-        await authService.getAndSendEmailVerificationLink(email);
+        await authService.getAndSendEmailVerificationLink(email, null, continueUrl);
     } catch (error: any) {
         console.error('resendVerification: failed', { email: email?.slice(0, 3) + '***', err: error?.message || error });
     }
@@ -282,16 +289,6 @@ export const addEmployeesController = async (req: Request, res: Response) => {
     }
 };
 
-// Platform-specific reset redirect URLs.
-// Client app and admin portal omit `platform`, so they continue to use Firebase's
-// default hosted reset page — no change to their existing behavior.
-const PLATFORM_RESET_URLS: Record<string, string> = {
-    provider: process.env.PROVIDER_RESET_URL || "https://servana.com.ph/provider/reset-password",
-};
-
-// Only these platform values may override the reset URL — guards against prototype pollution.
-const ALLOWED_PLATFORMS = new Set(['provider']);
-
 export const forgotPasswordController = async (req: Request, res: Response) => {
     try {
         const { email, platform } = req.body;
@@ -300,11 +297,15 @@ export const forgotPasswordController = async (req: Request, res: Response) => {
             return res.status(400).json({ status: "error", message: "Email is required" });
         }
 
-        // Only 'provider' callers get a platform-specific continueUrl.
-        // All others (client app, admin) receive undefined so Firebase uses its own default page.
-        const continueUrl = (typeof platform === 'string' && ALLOWED_PLATFORMS.has(platform))
-            ? PLATFORM_RESET_URLS[platform]
-            : undefined;
+        // Only allowlisted platforms get a platform-specific continueUrl. Every
+        // other caller — the customer mobile app and the admin portal, which
+        // omit `platform` entirely — receives undefined and continues to land on
+        // Firebase's own hosted page, exactly as before.
+        //
+        // The allowlist and the URL map live together in one file so they cannot
+        // drift; see src/constants/platformContinueUrls.ts for why the caller
+        // sends a NAME and never a URL.
+        const continueUrl = continueUrlFor('reset', platform);
 
         const result = await authService.forgotPassword(email, continueUrl);
         return res.status(200).json({ status: "success", data: result });

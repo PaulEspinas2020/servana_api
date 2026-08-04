@@ -13,6 +13,7 @@ import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import uploadInStorage from "../helpers/firebaseStorageUploader";
 import * as addressService from "../services/address.service";
 import { idGenerator } from "../helpers/idGenerator";
+import { continueUrlFor } from "../constants/platformContinueUrls";
 
 const now = dayjs();
 const dbSchema = db.schema;
@@ -135,7 +136,18 @@ const registerUser = async (user: UserCredentialsReq) => {
         }
 
 
-        const verify = await firebaseFunction.sendEmailVerificationFirebase(dbRegister.email);
+        // Reached only when `platform !== "mobile"` — the OTP branch above
+        // returns before here. So a mobile registration cannot acquire a
+        // continueUrl by this path even if one were somehow resolvable for it.
+        //
+        // `platform` carries two vocabularies (see platformContinueUrls.ts):
+        // this call reads it as a destination name, and only 'provider' and
+        // 'customer' resolve. The default 'web', which every existing caller
+        // sends, resolves to undefined and keeps Firebase's hosted page.
+        const verify = await firebaseFunction.sendEmailVerificationFirebase(
+            dbRegister.email,
+            continueUrlFor('verify', platform),
+        );
 
         if (!verify) {
             throw "User created but failed to generate Verification link";
@@ -315,8 +327,17 @@ const loginUserInDBAndFirebase = async (email: string, password: string) => {
     }
 };
 
-const getAndSendEmailVerificationLink = async (email: string, firstName = null) => {
-    const verify = await firebaseFunction.sendEmailVerificationFirebase(email);
+/**
+ * `continueUrl` is optional and defaults to today's behaviour — no
+ * ActionCodeSettings, so the link ends on Firebase's own hosted page. Both
+ * existing callers omit it.
+ */
+const getAndSendEmailVerificationLink = async (
+    email: string,
+    firstName = null,
+    continueUrl?: string,
+) => {
+    const verify = await firebaseFunction.sendEmailVerificationFirebase(email, continueUrl);
     if (!verify) {
         throw Error("Failed Verification");
     }

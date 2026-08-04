@@ -395,9 +395,19 @@ const registerNewUserInFirebase = async (user: any) => {
         });
 };
 
-const sendEmailVerificationFirebase = async (email: string) => {
+/**
+ * Generates an email-verification link.
+ *
+ * `continueUrl` is optional and, when omitted, this behaves exactly as it
+ * always has: no `ActionCodeSettings`, so Firebase uses the project's own
+ * hosted action page. Same shape as `generatePasswordResetLink` above,
+ * deliberately — two functions doing the same thing two different ways is how
+ * one of them ends up not being given the setting at all.
+ */
+const sendEmailVerificationFirebase = async (email: string, continueUrl?: string) => {
     try {
-        const link = await defaultAuthAdmin.generateEmailVerificationLink(email);
+        const actionCodeSettings = continueUrl ? { url: continueUrl } : undefined;
+        const link = await defaultAuthAdmin.generateEmailVerificationLink(email, actionCodeSettings);
         return link;
     } catch (err: any) {
         console.error('sendEmailVerificationFirebase failed:', err?.code || err?.message || err);
