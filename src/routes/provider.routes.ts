@@ -4,10 +4,16 @@ import verifyAuth from "../middleware/verifyAuth";
 import verifyRoles from "../middleware/verifyRoles";
 import * as provider from "../controllers/providerController";
 import * as locationAccess from "../controllers/providerLocationAccessController";
+import * as accountState from "../controllers/providerAccountStateController";
 
 const router = express.Router();
 
 // Provider profile (provider-portal specific — includes worker_code + service_preference)
+// Canonical account state (Command 6 §5). Authenticated only, NOT behind
+// requireActiveProvider: a suspended or pending provider needs this endpoint
+// precisely because they are restricted, and gating it would leave them unable
+// to discover why.
+router.get("/provider/account-state", verifyAuth, accountState.getAccountState);
 router.get("/provider/profile", verifyAuth, provider.getProviderProfile);
 router.post("/provider/service-preference", verifyAuth, provider.saveServicePreference);
 
