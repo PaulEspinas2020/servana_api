@@ -23,10 +23,18 @@ interface ParityGroup {
   /** Human-readable note on which platform uses which name */
   note: string;
   /**
-   * contextual = true means this group's canonical key (`id`) is ambiguous —
-   * it appears as the PK on EVERY entity (bookings, services, addresses, users)
-   * so the id→uid alias must NOT be applied without knowing the entity type.
+   * contextual = true means the canonical key does not always mean the same
+   * thing, so the alias must not be applied without knowing the entity type.
    * applyParity() applies all groups; applyContextSafeParity() skips contextual ones.
+   *
+   * Two groups qualify, for two different reasons:
+   *   `id`    — the PK on EVERY entity (bookings, services, addresses, users).
+   *             Numeric on some, a Firebase uid on others; aliasing it blindly
+   *             produces `uid: 5` on a booking.
+   *   `email` — usually an address, but not always. Parity recurses through the
+   *             whole response, and `verification.email` on
+   *             GET /provider/account-state is a VERIFIED/PENDING/MISSING state.
+   *             Aliasing that produced `emailAddress: 'VERIFIED'`.
    */
   contextual?: boolean;
 }
@@ -39,11 +47,20 @@ export const PARITY_REGISTRY: ParityGroup[] = [
     note: 'Bearer auth token — signin/firebase-login response: token; Firebase ID token in request body: idToken; provider portal session: sessionToken',
   },
 
-  // ── Email ────────────────────────────────────────────────────────────────────
+  // ── Email (contextual — see the flag's doc above) ────────────────────────────
   {
     canonical: 'email',
     aliases: ['emailAddress', 'email_address'],
-    note: 'User email address — canonical: email; customerFirebaseLogin also returns emailAddress for ServanaClient compatibility',
+    contextual: true,
+    note:
+      'User email address — canonical: email. CONTEXTUAL: `email` is not always ' +
+      'an address (verification.email on /provider/account-state is a state), and ' +
+      'parity recurses, so the middleware must not alias it blindly. Nothing ' +
+      'depends on the middleware for this: customerFirebaseLogin sets emailAddress ' +
+      'explicitly (firebaseFunctions.service.ts), ServanaClient reads ' +
+      "data['email'] first and only then data['emailAddress'] (http_backend.dart), " +
+      'no client sends emailAddress in a request body, and no controller reads one. ' +
+      'applyParity() still applies it in typed formatters where the entity is known.',
   },
 
   // ── Identity ────────────────────────────────────────────────────────────────

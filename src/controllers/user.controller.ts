@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { successMessage, errorMessage, status } from "../helpers/status";
+import { status, buildSuccess, sendFailure } from "../helpers/status";
 import * as userService from "../services/user.service";
 import * as authService from "../services/auth.service";
 import * as addressService from "../services/address.service";
@@ -15,11 +15,9 @@ const userList = async (req: Request, res: Response) => {
         roles = !role ? [2, 3] : [parseInt(role)];
         const dbResponse = await userService.getAllUserByRole([2, 3], isArchived == "true");
 
-        successMessage.data = dbResponse;
-        res.status(status.success).send(successMessage);
+        res.status(status.success).send(buildSuccess(dbResponse));
     } catch (error) {
-        errorMessage.error = "" + error;
-        res.status(status.error).send(errorMessage);
+        sendFailure(res, 'user.controller.userList', error);
     }
 };
 const addUserAddress = async (req: Request, res: Response) => {
@@ -34,11 +32,9 @@ const addUserAddress = async (req: Request, res: Response) => {
 
         // TODO logs
 
-        successMessage.data = dbResponse;
-        res.status(status.success).send(successMessage);
+        res.status(status.success).send(buildSuccess(dbResponse));
     } catch (error) {
-        errorMessage.error = "ERROR: " + error;
-        res.status(status.error).send(errorMessage);
+        sendFailure(res, 'user.controller.addUserAddress', error);
     }
 };
 
@@ -49,11 +45,9 @@ const getAllAddressesOfUser = async (req: Request, res: Response) => {
         const role = await userService.getRoleById(uid);
         const dbResponse = await addressService.getAllAddressesOfUser(uid, role);
 
-        successMessage.data = dbResponse;
-        res.status(status.success).send(successMessage);
+        res.status(status.success).send(buildSuccess(dbResponse));
     } catch (error) {
-        errorMessage.error = "ERROR: " + error;
-        res.status(status.error).send(errorMessage);
+        sendFailure(res, 'user.controller.getAllAddressesOfUser', error);
     }
 };
 
@@ -68,11 +62,9 @@ const getAddressByAddressId = async (req: Request, res: Response) => {
             return res.status(403).json({ status: "failed", message: "Access denied" });
         }
 
-        successMessage.data = dbResponse;
-        res.status(status.success).send(successMessage);
+        res.status(status.success).send(buildSuccess(dbResponse));
     } catch (error) {
-        errorMessage.error = "ERROR: " + error;
-        res.status(status.error).send(errorMessage);
+        sendFailure(res, 'user.controller.getAddressByAddressId', error);
     }
 };
 
@@ -83,11 +75,9 @@ const getUserProfile = async (req: Request, res: Response) => {
     try {
         const dbResponse = await userService.getUserProfile(id);
 
-        successMessage.data = dbResponse;
-        res.status(status.success).send(successMessage);
+        res.status(status.success).send(buildSuccess(dbResponse));
     } catch (error) {
-        errorMessage.error = "ERROR: " + error;
-        res.status(status.error).send(errorMessage);
+        sendFailure(res, 'user.controller.getUserProfile', error);
     }
 };
 
@@ -100,11 +90,9 @@ const updateUserProfile = async (req: Request, res: Response) => {
 
         await createLogEntry("Update", uid, dbResponse.id, "Profile");
 
-        successMessage.data = dbResponse;
-        res.status(status.success).send(successMessage);
+        res.status(status.success).send(buildSuccess(dbResponse));
     } catch (error) {
-        errorMessage.error = "ERROR: " + error;
-        res.status(status.error).send(errorMessage);
+        sendFailure(res, 'user.controller.updateUserProfile', error);
     }
 };
 
@@ -118,11 +106,9 @@ const makeAddressPrimary = async (req: Request, res: Response) => {
 
         await createLogEntry("Update", uid, dbResponse.addressId, "Address");
 
-        successMessage.data = dbResponse;
-        res.status(status.success).send(successMessage);
+        res.status(status.success).send(buildSuccess(dbResponse));
     } catch (error) {
-        errorMessage.error = "ERROR: " + error;
-        res.status(status.error).send(errorMessage);
+        sendFailure(res, 'user.controller.makeAddressPrimary', error);
     }
 };
 
@@ -135,11 +121,9 @@ const deleteAddress = async (req: Request, res: Response) => {
 
         await createLogEntry("Delete", uid, addressId, "Address");
 
-        successMessage.data = dbResponse;
-        res.status(status.success).send(successMessage);
+        res.status(status.success).send(buildSuccess(dbResponse));
     } catch (error) {
-        errorMessage.error = "ERROR: " + error;
-        res.status(status.error).send(errorMessage);
+        sendFailure(res, 'user.controller.deleteAddress', error);
     }
 };
 
@@ -177,11 +161,9 @@ const archiveUser = async (req: Request, res: Response) => {
         // Logged only after a row actually changed.
         await createLogEntry(archived ? "ARCHIVE" : "UNARCHIVE", uid, userId, "User");
 
-        successMessage.data = dbResponse;
-        res.status(status.success).send(successMessage);
+        res.status(status.success).send(buildSuccess(dbResponse));
     } catch (error) {
-        errorMessage.error = "ERROR: " + error;
-        res.status(status.error).send(errorMessage);
+        sendFailure(res, 'user.controller.archiveUser', error);
     }
 };
 
@@ -204,11 +186,9 @@ const getAddressesByUserId = async (req: Request, res: Response) => {
     try {
         const dbResponse = await addressService.getAddressesByUserId(userId);
 
-        successMessage.data = dbResponse;
-        res.status(status.success).send(successMessage);
+        res.status(status.success).send(buildSuccess(dbResponse));
     } catch (error) {
-        errorMessage.error = "ERROR: " + error;
-        res.status(status.error).send(errorMessage);
+        sendFailure(res, 'user.controller.getAddressesByUserId', error);
     }
 };
 

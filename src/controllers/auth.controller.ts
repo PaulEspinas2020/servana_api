@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { successMessage, errorMessage, status } from "../helpers/status";
+import { status } from "../helpers/status";
 import * as authService from "../services/auth.service";
 import * as firebaseFunction from "../services/firebaseFunctions.service";
 import { upsertSourceAttribution } from "../services/providerOnboardingService";

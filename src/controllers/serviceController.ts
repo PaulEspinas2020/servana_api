@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { successMessage, errorMessage, status } from "../helpers/status";
+import { status, buildSuccess, sendFailure } from "../helpers/status";
 import * as serviceService from "../services/serviceService";
 import { toCamel } from "../helpers/idGenerator";
 import { transformServiceCatalog } from "../services/serviceService";
@@ -7,11 +7,9 @@ import { transformServiceCatalog } from "../services/serviceService";
 export const listServices = async (req: Request, res: Response) => {
   try {
     const dbResponse = await serviceService.getAllServices();
-    successMessage.data = dbResponse;
-    res.status(status.success).send(successMessage);
+    res.status(status.success).send(buildSuccess(dbResponse));
   } catch (error) {
-    errorMessage.error = "" + error;
-    res.status(status.error).send(errorMessage);
+    sendFailure(res, 'serviceController.handler', error);
   }
 };
 
@@ -19,11 +17,9 @@ export const listLevel2 = async (req: Request, res: Response) => {
   try {
     const { serviceId } = req.params;
     const level2 = await serviceService.getLevel2List(Number(serviceId));
-    successMessage.data = level2;
-    res.status(status.success).send(successMessage);
+    res.status(status.success).send(buildSuccess(level2));
   } catch (error) {
-    errorMessage.error = "" + error;
-    res.status(status.error).send(errorMessage);
+    sendFailure(res, 'serviceController.handler', error);
   }
 };
 
@@ -31,11 +27,9 @@ export const listOptionsWithAddons = async (req: Request, res: Response) => {
   try {
     const { serviceId } = req.params;
     const options = await serviceService.getOptionsWithAddons(Number(serviceId));
-    successMessage.data = options;
-    res.status(status.success).send(successMessage);
+    res.status(status.success).send(buildSuccess(options));
   } catch (error) {
-    errorMessage.error = "" + error;
-    res.status(status.error).send(errorMessage);
+    sendFailure(res, 'serviceController.handler', error);
   }
 };
 
@@ -179,11 +173,9 @@ export const forceDeleteService = async (req: Request, res: Response) => {
 export const listServicesSimple = async (_req: Request, res: Response) => {
   try {
     const services = await serviceService.getServicesSimpleList();
-    successMessage.data = services;
-    res.status(status.success).send(successMessage);
+    res.status(status.success).send(buildSuccess(services));
   } catch (error) {
-    errorMessage.error = "" + error;
-    res.status(status.error).send(errorMessage);
+    sendFailure(res, 'serviceController.handler', error);
   }
 };
 
