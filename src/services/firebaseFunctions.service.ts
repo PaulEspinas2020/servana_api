@@ -16,6 +16,7 @@ import { db as dbConfig } from "../config";
 import { findLinkCollision, AccountLinkRequiredError } from "./accountLinkGuard";
 import { mergePhoneIntoExistingAccount } from "./accountLinking";
 import { provenFrom, recordProvenIdentifiers } from "./identityVerificationSync";
+import { noteRevoked } from "./tokenRevocation";
 
 const dbSchema = dbConfig.schema;
 
@@ -404,8 +405,14 @@ const sendEmailVerificationFirebase = async (email: string) => {
     }
 };
 
-const revokeTokenInFirebase = (uid: string) => {
-    return defaultAuthAdmin.revokeRefreshTokens(uid);
+const revokeTokenInFirebase = async (uid: string) => {
+    await defaultAuthAdmin.revokeRefreshTokens(uid);
+    // Drop this uid's cached revocation reading so the very next request sees
+    // the new one. Without it, the process that just performed the revocation
+    // would keep honouring its own stale cache for another minute — the one
+    // case where the delay is both avoidable and least excusable.
+    noteRevoked(uid);
+    return;
 };
 
 const signInUserAndGetTokeninFirebase = async (email: string, password: string) => {

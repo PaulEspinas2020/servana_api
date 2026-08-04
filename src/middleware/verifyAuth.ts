@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import { firebaseAdmin } from "../middleware/firebaseApp";
 import { tempId } from "../config";
 import { getAuth as getAuthAdmin } from 'firebase-admin/auth';
+import { isRevoked } from "../services/tokenRevocation";
 
 const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
 
@@ -34,6 +35,36 @@ const validateFirebaseIdToken = async (req: Request, res: Response, next: NextFu
 
     try {
       const decodedIdToken = await defaultAuthAdmin.verifyIdToken(idToken);
+
+      /**
+       * Signature and expiry are not the whole question (Command 7 §20).
+       *
+       * `revokeAllProviderSessions`, password reset and every admin security
+       * action call `revokeRefreshTokens`, which stops Firebase issuing NEW id
+       * tokens and does nothing about the ones already held. Without this
+       * check, a device that had just been signed out of every session kept
+       * full access to every protected route until its token expired — up to
+       * an hour, on the very device the provider was trying to remove.
+       *
+       * See services/tokenRevocation.ts for why this is not simply
+       * `verifyIdToken(idToken, true)`: that fetches the user record on every
+       * request, and a security fix that costs a network round trip per call
+       * is a security fix that gets reverted.
+       */
+      if (await isRevoked(decodedIdToken as any)) {
+        res.status(401).json({
+          status: "failed",
+          code: "TOKEN_REVOKED",
+          message: "You were signed out. Please sign in again.",
+          error: {
+            code: "TOKEN_REVOKED",
+            recovery: "REAUTHENTICATE",
+            retryable: false,
+          },
+        });
+        return;
+      }
+
       req.user = decodedIdToken;
       next();
     } catch (error: any) {
