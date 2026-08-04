@@ -15,6 +15,11 @@
  */
 
 import dbQuery from '../db/dbQuery';
+import {
+  refreshActivationEligibility,
+  getActivation,
+  transitionActivation,
+} from './providerActivationService';
 import { db } from '../config';
 import * as notificationService from './notification.service';
 
@@ -1206,12 +1211,17 @@ export const finalApproveProvider = async (
 
   await dbQuery.query('BEGIN');
   try {
-    // Activate provider account
-    await dbQuery.query(
-      `UPDATE ${dbSchema}.user_credentials SET account_status = 'active' WHERE uid = $1`,
-      [c.provider_uid]
-    );
-    // Transition case to approved
+    /**
+     * Approval no longer activates (Command 6 §8).
+     *
+     * This used to write account_status = 'active' directly, which made
+     * "reviewed and approved" and "cleared to work" the same event. They are
+     * not: an approved provider may still owe availability, a payout
+     * destination or a policy acknowledgement.
+     *
+     * The case transitions to approved here; activation is attempted after the
+     * commit, and succeeds only if ITS requirements are met.
+     */
     await transitionCase(caseId, 'approved', expectedVersion, adminUid);
     // Persist internal admin note if provided (never shown to provider)
     if (internalNote && String(internalNote).trim()) {
@@ -1225,6 +1235,32 @@ export const finalApproveProvider = async (
   } catch (err) {
     await dbQuery.query('ROLLBACK');
     throw err;
+  }
+
+  /**
+   * Attempt activation now that approval is committed.
+   *
+   * Deliberately AFTER the commit and deliberately non-fatal: approval is a
+   * decision that has already been made and must not be rolled back because an
+   * activation requirement is outstanding. If requirements remain, the provider
+   * sits at PENDING_REQUIREMENTS and the checklist tells them what is left —
+   * which is the state §8 exists to make expressible.
+   */
+  try {
+    const eligibility = await refreshActivationEligibility(c.provider_uid, true);
+    if (eligibility === 'READY_FOR_ACTIVATION') {
+      const current = await getActivation(c.provider_uid);
+      await transitionActivation({
+        providerUid: c.provider_uid,
+        to: 'ACTIVE',
+        expectedVersion: current.version,
+        actorType: 'admin',
+        actorUid: adminUid,
+        reason: 'approved_and_requirements_met',
+      });
+    }
+  } catch (e) {
+    console.warn('[approve] activation deferred for', c.provider_uid, e);
   }
 
   // Notify provider — failure is non-fatal (approval already committed)

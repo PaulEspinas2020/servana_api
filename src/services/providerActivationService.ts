@@ -279,6 +279,27 @@ export async function transitionActivation(opts: {
     throw new ActivationTransitionError("Version conflict", 409);
   }
 
+  /**
+   * Operational access is granted HERE and nowhere else.
+   *
+   * `account_status = 'active'` used to be written by two unrelated services —
+   * the admin approve path and `applyAutoOnline`, the latter deriving it from a
+   * completeness calculation. Two writers meant no single authority, and the
+   * derived one promoted providers nobody had reviewed.
+   *
+   * Centralising it on this transition is what makes the guard above mean
+   * something: the only way into `active` is through a check that just ran.
+   */
+  if (to === "ACTIVE") {
+    await dbQuery.query(
+      `UPDATE ${s}.user_credentials
+          SET account_status = 'active'
+        WHERE uid = $1
+          AND account_status IS DISTINCT FROM 'active'`,
+      [providerUid]
+    );
+  }
+
   await dbQuery.query(
     `INSERT INTO ${s}.provider_activation_events
        (provider_uid, prev_state, next_state, actor_type, actor_uid, reason)

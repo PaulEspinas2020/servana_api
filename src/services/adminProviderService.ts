@@ -791,6 +791,46 @@ export const updateProviderAccountStatus = async (
     throw err;
   }
 
+  /**
+   * This is an admin OVERRIDE and is deliberately still allowed — support needs
+   * a way to correct an account without walking the whole review flow.
+   *
+   * But it writes the field requireActiveProvider reads, so without this the
+   * activation dimension and the operational status could silently disagree:
+   * account_status = 'active' while activation says NOT_ELIGIBLE. The
+   * account-state endpoint would then have to arbitrate between two sources
+   * each claiming authority, which is the conflation Command 6 exists to remove.
+   *
+   * Syncing keeps one story and leaves an audit row naming the admin. Non-fatal
+   * on purpose: the override has already committed, and throwing here would
+   * report a completed change as a failure.
+   */
+  try {
+    const { getActivation, transitionActivation } = await import(
+      './providerActivationService'
+    );
+    const target =
+      newStatus === 'active'
+        ? 'ACTIVE'
+        : newStatus === 'suspended'
+          ? 'TEMPORARILY_RESTRICTED'
+          : 'NOT_ELIGIBLE';
+
+    const current = await getActivation(uid);
+    if (current.status !== target) {
+      await transitionActivation({
+        providerUid: uid,
+        to: target as any,
+        expectedVersion: current.version,
+        actorType: 'admin',
+        actorUid: adminUid,
+        reason: `admin_override:${newStatus}${reason ? ` (${reason})` : ''}`,
+      });
+    }
+  } catch (e) {
+    console.warn('[admin-override] activation sync failed for', uid, e);
+  }
+
   return res.rows[0];
 };
 

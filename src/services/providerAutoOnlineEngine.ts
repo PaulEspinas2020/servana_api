@@ -453,15 +453,27 @@ export const applyAutoOnline = async (
   ]);
   await syncProvisionalBookableServices(providerUid);
 
-  // Set account status to active if it's in a neutral pre-active state
-  await dbQuery.query(
-    `UPDATE ${s}.user_credentials
-     SET account_status = 'active', updated_at = NOW()
-     WHERE uid = $1
-       AND account_status NOT IN ('suspended', 'blocked', 'rejected', 'deactivated', 'deleted')
-       AND account_status IS DISTINCT FROM 'active'`,
-    [providerUid]
-  );
+  /**
+   * This used to set account_status = 'active' here (Command 6, T-05).
+   *
+   * It excluded only suspended/blocked/rejected/deactivated/deleted — so
+   * `pending` and `under_review` were promoted, and a provider nobody had
+   * reviewed was granted full operational access on the strength of a
+   * completeness calculation. §1 forbids exactly that: "do not infer approval
+   * from profile completeness… do not grant operational access until every
+   * required backend condition has been explicitly validated."
+   *
+   * Auto-online is an AVAILABILITY concern — whether a cleared provider is
+   * shown as online — not an APPROVAL one. The two were conflated because both
+   * ended up meaning "can take work".
+   *
+   * Operational access now has exactly one writer: the ACTIVE transition in
+   * providerActivationService, which re-checks its requirements immediately
+   * before granting and refuses a provider actor outright. Removing the write
+   * here does not strand anyone: the approve path drives that transition, and a
+   * provider whose requirements are outstanding sits at PENDING_REQUIREMENTS
+   * with a checklist rather than being silently promoted.
+   */
 
   await writeAuditEvent(providerUid, 'provider_auto_online_activated', null, { reason, actorType }, reason, actorType, actorUid);
 };
