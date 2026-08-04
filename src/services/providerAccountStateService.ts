@@ -30,6 +30,7 @@
 import dbQuery from "../db/dbQuery";
 import { db } from "../config";
 import { calculateReadiness } from "./adminOnboardingService";
+import { isProviderRole } from "../constants/providerRoles";
 import {
   previewActivationEligibility,
   getActivationRequirements,
@@ -149,8 +150,8 @@ const DENY_ALL: Capabilities = {
   canGoOffline: true,
 };
 
-/** Both 2 and 4 are provider roles. A check written as `role = 2` is wrong. */
-const PROVIDER_ROLES = new Set(["2", "4"]);
+// Both 2 and 4 are provider roles; the set lives in one file so this endpoint
+// and the route guard that enforces its answer cannot drift apart.
 
 const BLOCKED_OPERATIONAL: Record<string, OperationalState> = {
   suspended: "SUSPENDED",
@@ -291,7 +292,7 @@ export async function getProviderAccountState(
   if (operational === "CLOSED") return denied(operational, role, "ACCOUNT_CLOSED");
   if (operational === "DISABLED") return denied(operational, role, "ACCOUNT_DISABLED");
   if (operational === "UNKNOWN") return denied(operational, role, "ACCOUNT_DISABLED");
-  if (!role || !PROVIDER_ROLES.has(role)) {
+  if (!isProviderRole(role)) {
     return denied(operational, role, "ROLE_NOT_PERMITTED");
   }
 

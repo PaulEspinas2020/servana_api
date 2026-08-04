@@ -89,6 +89,22 @@ export const AUTH_ERRORS = {
     recovery: "SHOW_ACCOUNT_STATUS",
     retryable: false,
   },
+  /**
+   * Authenticated, and not a provider at all.
+   *
+   * Deliberately the same spelling as the `nextStep` code the account-state
+   * endpoint has emitted since Command 6, so a client that already routes
+   * ROLE_NOT_PERMITTED to its "wrong app" screen needs no new branch. Recovery
+   * is CONTACT_SUPPORT rather than SHOW_ACCOUNT_STATUS because there is no
+   * status to wait out — a customer account will not become a provider account
+   * by refreshing.
+   */
+  ROLE_NOT_PERMITTED: {
+    status: 403,
+    message: "This account is not a Servana provider account.",
+    recovery: "CONTACT_SUPPORT",
+    retryable: false,
+  },
   PROVIDER_SUSPENDED: {
     status: 403,
     message: "This account is suspended.",
