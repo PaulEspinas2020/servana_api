@@ -816,9 +816,24 @@ export const saveOnboardingStep = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const { step, ...payload } = req.body;
-    if (!step) return res.status(400).json({ status: "failed", message: "step is required" });
-    const data = await onboardingService.saveDraftStep(uid, step, payload);
+    /**
+     * `stepKey` is accepted as well as `step`, and this is not tidiness.
+     *
+     * The provider portal has been sending `stepKey` (provider-onboarding-api
+     * .service.ts) against a handler that only ever read `step`, so EVERY save
+     * returned 400 "step is required" and the server-side draft was never
+     * written. Submit then failed on incomplete-draft blockers, which made
+     * provider signup impossible to complete — the toast a provider saw on
+     * every step of the wizard.
+     *
+     * Accepting both here fixes browsers already holding the old bundle, which
+     * a frontend deploy alone cannot reach. The portal now sends `step`; this
+     * alias stays because removing it would re-break exactly those clients.
+     */
+    const { step, stepKey, ...payload } = req.body;
+    const stepName = step ?? stepKey;
+    if (!stepName) return res.status(400).json({ status: "failed", message: "step is required" });
+    const data = await onboardingService.saveDraftStep(uid, stepName, payload);
     return res.status(200).json({ status: "success", data: { success: true, ...data } });
   } catch (error: any) {
     const code = (error as any).statusCode;
