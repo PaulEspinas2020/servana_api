@@ -103,22 +103,47 @@ export const createBooking = async (
       `,
       [booking.id, payload.paymentMethod, quote.final]
     );
-    const email = await getEmailById(userId);
-    const firstName = await getNameByEmail(email);
-     send(email, "verify_booking_otp", {
-                first_name: firstName,
-                otp_code: booking.otp_code,
-                booking_id: booking.id,
-                booking_date: booking.schedule.toLocaleDateString("en-US", {
-                    year: "numeric",
-                    month: "long",
-                    day: "numeric",
-                }),
-                booking_time: booking.schedule.toLocaleTimeString("en-US", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                })
-    });
+    // Best-effort: the booking and its payment row are already committed above.
+    // Anything that goes wrong from here is a NOTIFICATION failure, and failing
+    // the request for it would tell the customer their booking did not happen
+    // while it sits in the database — which is exactly what used to occur.
+    //
+    // `booking.schedule` is a STRING, not a Date. dbQuery.ts installs a global
+    // node-postgres type parser (OIDs 1114/1184) that renders every timestamp as
+    // a UTC ISO 8601 string, deliberately, so no value in this codebase is ever
+    // a Date object. Calling .toLocaleDateString() straight on it threw
+    // `TypeError: booking.schedule.toLocaleDateString is not a function` — and
+    // because the argument list is evaluated BEFORE send() is invoked, the throw
+    // escaped createBooking entirely. Every booking creation returned an error
+    // to the app after having written the booking and payment rows, so customers
+    // saw a failure and retried, each retry orphaning another row.
+    try {
+      const email = await getEmailById(userId);
+      const firstName = await getNameByEmail(email);
+      send(email, "verify_booking_otp", {
+        first_name: firstName,
+        otp_code: booking.otp_code,
+        booking_id: booking.id,
+        booking_date: booking.schedule
+          ? new Date(booking.schedule).toLocaleDateString("en-US", {
+              year: "numeric",
+              month: "long",
+              day: "numeric",
+            })
+          : "",
+        booking_time: booking.schedule
+          ? new Date(booking.schedule).toLocaleTimeString("en-US", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })
+          : "",
+      });
+    } catch (mailErr) {
+      console.error(
+        `[createBooking] booking ${booking.id} created; OTP email failed:`,
+        mailErr,
+      );
+    }
 
     return {
       bookingId: booking.id,
@@ -284,6 +309,20 @@ export const getBookingById = async (
       br.name AS branch_name,
       br.address AS branch_address,
       br.city AS branch_city,
+      -- Service identity. This query joined payments, branches, addresses and
+      -- workers but never the service itself, so the detail response carried no
+      -- name for the thing being booked. The customer app reads serviceName and
+      -- falls back to an empty string, which rendered the booking detail as a
+      -- bare "Service" label with nothing beside it.
+      --
+      -- Column choice follows the existing convention rather than inventing one:
+      -- so.level_2 AS service_name matches providerController and scheduler,
+      -- so.level_3 is the specific option (what the addons query already calls
+      -- addon_name), and services.name is the family the option belongs to.
+      so.service_id,
+      so.level_2 AS service_name,
+      so.level_3 AS service_option_name,
+      s.name     AS service_category,
       COALESCE(ua.address_one, b.service_address->>'addressLine') AS address,
       COALESCE(ua.post_town,   b.service_address->>'city')        AS post_town,
       ua.country AS country,
@@ -295,6 +334,10 @@ export const getBookingById = async (
     FROM ${dbSchema}.bookings b
     LEFT JOIN ${dbSchema}.payments p
       ON p.booking_id = b.id
+    LEFT JOIN ${dbSchema}.service_options so
+      ON so.id = b.service_option_id
+    LEFT JOIN ${dbSchema}.services s
+      ON s.id = so.service_id
     LEFT JOIN ${dbSchema}.branches br
       ON br.id = b.branch_id
     LEFT JOIN ${dbSchema}.user_address ua
