@@ -20,21 +20,21 @@ jest.mock('../src/services/adminOnboardingService', () => ({
 // here so these tests exercise COMPOSITION — how the dimensions combine into
 // capabilities — rather than re-testing the transition machine through it.
 jest.mock('../src/services/providerActivationService', () => ({
-  refreshActivationEligibility: jest.fn(),
+  previewActivationEligibility: jest.fn(),
   getActivationRequirements: jest.fn(),
 }));
 
 import dbQuery from '../src/db/dbQuery';
 import { calculateReadiness } from '../src/services/adminOnboardingService';
 import {
-  refreshActivationEligibility,
+  previewActivationEligibility,
   getActivationRequirements,
 } from '../src/services/providerActivationService';
 import { getProviderAccountState } from '../src/services/providerAccountStateService';
 
 const q = dbQuery.query as jest.Mock;
 const readiness = calculateReadiness as jest.Mock;
-const activationOf = refreshActivationEligibility as jest.Mock;
+const activationOf = previewActivationEligibility as jest.Mock;
 const activationReqs = getActivationRequirements as jest.Mock;
 
 type Row = Record<string, any>;

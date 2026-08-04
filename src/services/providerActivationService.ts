@@ -106,6 +106,36 @@ export const ensureActivationSchema = (): Promise<void> => {
 
 ensureActivationSchema().catch(() => {});
 
+/**
+ * Read the stored row WITHOUT creating one.
+ *
+ * `getActivation` upserts, which is right for a transition — it needs a row and
+ * a version to lock against. It is wrong for a read: a provider merely opening
+ * a page would leave a new row behind, and a read path must not write against
+ * an existing provider's record. Returns null when nothing has been stored,
+ * which is a real answer — "no activation has ever been recorded" — and not the
+ * same as NOT_ELIGIBLE having been decided.
+ */
+export async function peekActivation(
+  providerUid: string
+): Promise<{ status: ActivationStatus; version: number; activatedAt: string | null } | null> {
+  await ensureActivationSchema();
+  const { rows } = await dbQuery.query(
+    `SELECT activation_status, version, activated_at
+       FROM ${s}.provider_activation
+      WHERE provider_uid = $1
+      LIMIT 1`,
+    [providerUid]
+  );
+  if (!rows.length) return null;
+  const r = rows[0];
+  return {
+    status: (r.activation_status as ActivationStatus) ?? "NOT_ELIGIBLE",
+    version: Number(r.version ?? 1),
+    activatedAt: r.activated_at ? new Date(r.activated_at).toISOString() : null,
+  };
+}
+
 /** Read the stored row, creating the default one on first sight. */
 export async function getActivation(
   providerUid: string
@@ -314,11 +344,60 @@ export async function transitionActivation(opts: {
 }
 
 /**
- * Recompute the non-granting states.
+ * What the activation state IS, computed without recording anything.
+ *
+ * Same decision as `refreshActivationEligibility`, minus the persistence — so a
+ * read path can report an accurate status without leaving a row, a version bump
+ * or an audit event behind on an existing provider's record. A GET that writes
+ * is a defect, and here it was a compounding one: the portal calls this on
+ * navigation, so every provider who merely signed in would have had activation
+ * state manufactured for them by the act of looking at it.
+ *
+ * Advancing activation stays where it belongs — the admin approval path and the
+ * admin override — which is also what this service's own rule requires: the
+ * move into operational access is asked for, never a side effect of a read.
+ */
+export async function previewActivationEligibility(
+  providerUid: string,
+  applicationApproved: boolean
+): Promise<ActivationStatus> {
+  const stored = await peekActivation(providerUid);
+  const current: ActivationStatus = stored?.status ?? "NOT_ELIGIBLE";
+
+  if (current === "ACTIVE" || current === "TEMPORARILY_RESTRICTED") {
+    return current;
+  }
+
+  const target: ActivationStatus = !applicationApproved
+    ? "NOT_ELIGIBLE"
+    : (await getActivationRequirements(providerUid)).every((r) => !r.blocking || r.satisfied)
+      ? "READY_FOR_ACTIVATION"
+      : "PENDING_REQUIREMENTS";
+
+  if (target === current) return current;
+
+  /**
+   * Report only what a transition could actually reach. Naming a state the
+   * machine would refuse to move to would have the read disagree with the
+   * write — the client would show a provider as ready and the transition would
+   * then decline it.
+   *
+   * A provider with no stored row has nothing to transition FROM, so the
+   * computed target stands on its own.
+   */
+  if (!stored) return target;
+  return (VALID_ACTIVATION_TRANSITIONS[current] ?? []).includes(target) ? target : current;
+}
+
+/**
+ * Recompute the non-granting states, and RECORD the result.
  *
  * Deliberately cannot reach ACTIVE. Moving into operational access is the one
  * transition that must be asked for, so this may promote a provider as far as
  * READY_FOR_ACTIVATION and no further.
+ *
+ * Writes. Callers must be actor-driven paths (approval, admin override) — a
+ * read path wanting the same answer uses `previewActivationEligibility`.
  */
 export async function refreshActivationEligibility(
   providerUid: string,

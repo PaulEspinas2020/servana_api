@@ -31,7 +31,7 @@ import dbQuery from "../db/dbQuery";
 import { db } from "../config";
 import { calculateReadiness } from "./adminOnboardingService";
 import {
-  refreshActivationEligibility,
+  previewActivationEligibility,
   getActivationRequirements,
 } from "./providerActivationService";
 
@@ -372,13 +372,16 @@ export async function getProviderAccountState(
    * path would reintroduce exactly the defect D6 exists to remove — a
    * completeness calculation quietly granting operational access.
    *
-   * `refreshActivationEligibility` is safe to call on a read: it can promote as
-   * far as READY_FOR_ACTIVATION and no further, and it will not disturb an
-   * ACTIVE or TEMPORARILY_RESTRICTED provider.
+   * `previewActivationEligibility` reports what the state is WITHOUT recording
+   * anything. It used to be `refreshActivationEligibility`, which persists: this
+   * endpoint would then create a provider_activation row, bump a version and
+   * write an audit event for every provider who merely opened a page. A read
+   * must not modify an existing provider's record, and manufactured activation
+   * history is worse than none — it reads as a decision somebody took.
    */
   let activation: ActivationState;
   try {
-    activation = (await refreshActivationEligibility(
+    activation = (await previewActivationEligibility(
       uid,
       application === "APPROVED"
     )) as ActivationState;

@@ -17,6 +17,7 @@ import {
   VALID_ACTIVATION_TRANSITIONS,
   transitionActivation,
   refreshActivationEligibility,
+  previewActivationEligibility,
   ActivationTransitionError,
   type ActivationStatus,
 } from '../src/services/providerActivationService';
@@ -35,6 +36,8 @@ const mockDb = (opts: {
   availability?: number;
   policy?: number;
   updateReturns?: boolean;
+  /** false = no provider_activation row has ever been stored for this uid. */
+  hasRow?: boolean;
 }) => {
   const {
     status,
@@ -43,6 +46,7 @@ const mockDb = (opts: {
     availability = 1,
     policy = 1,
     updateReturns = true,
+    hasRow = true,
   } = opts;
 
   q.mockReset();
@@ -52,6 +56,12 @@ const mockDb = (opts: {
     if (/INSERT INTO servana\.provider_activation \(provider_uid\)/i.test(t)) {
       return Promise.resolve({
         rows: [{ activation_status: status, version, activated_at: null }],
+      });
+    }
+    // The read-only lookup used by preview / the account-state endpoint.
+    if (/SELECT activation_status[\s\S]*FROM servana\.provider_activation/i.test(t)) {
+      return Promise.resolve({
+        rows: hasRow ? [{ activation_status: status, version, activated_at: null }] : [],
       });
     }
     if (/worker_service_applications/i.test(t)) {
@@ -204,6 +214,57 @@ describe('recomputing eligibility never grants access', () => {
     // Lifting a restriction is a decision (§14), not a recompute.
     mockDb({ status: 'TEMPORARILY_RESTRICTED' });
     expect(await refreshActivationEligibility('u1', true)).toBe('TEMPORARILY_RESTRICTED');
+  });
+});
+
+describe('reading eligibility writes nothing', () => {
+  /**
+   * The account-state endpoint is called on navigation. When it recomputed
+   * eligibility through the WRITING path, every provider who opened a page had
+   * an activation row, a version bump and an audit event manufactured for them
+   * — state that reads as a decision somebody took. A read must leave an
+   * existing provider's record exactly as it found it.
+   */
+  const writeSql = (): string[] =>
+    q.mock.calls
+      .map((c: any[]) => String(c[0]))
+      .filter((sql) => /INSERT INTO servana\.provider_activation|UPDATE servana\.provider_activation/i.test(sql));
+
+  it('issues no INSERT or UPDATE against provider_activation', async () => {
+    mockDb({ status: 'PENDING_REQUIREMENTS' });
+    await previewActivationEligibility('u1', true);
+    expect(writeSql()).toEqual([]);
+  });
+
+  it('writes nothing for a provider who has no activation row at all', async () => {
+    mockDb({ status: 'NOT_ELIGIBLE', hasRow: false });
+    await previewActivationEligibility('never-seen', true);
+    expect(writeSql()).toEqual([]);
+  });
+
+  it('reports the same answer the recompute would have recorded', async () => {
+    mockDb({ status: 'PENDING_REQUIREMENTS' });
+    expect(await previewActivationEligibility('u1', true)).toBe('READY_FOR_ACTIVATION');
+  });
+
+  it('never reports ACTIVE off its own bat', async () => {
+    mockDb({ status: 'READY_FOR_ACTIVATION' });
+    expect(await previewActivationEligibility('u1', true)).not.toBe('ACTIVE');
+  });
+
+  it('leaves an already-active provider reading as ACTIVE', async () => {
+    mockDb({ status: 'ACTIVE' });
+    expect(await previewActivationEligibility('u1', true)).toBe('ACTIVE');
+  });
+
+  it('does not quietly un-restrict a restricted provider', async () => {
+    mockDb({ status: 'TEMPORARILY_RESTRICTED' });
+    expect(await previewActivationEligibility('u1', true)).toBe('TEMPORARILY_RESTRICTED');
+  });
+
+  it('an unapproved application reads as NOT_ELIGIBLE', async () => {
+    mockDb({ status: 'PENDING_REQUIREMENTS' });
+    expect(await previewActivationEligibility('u1', false)).toBe('NOT_ELIGIBLE');
   });
 });
 
