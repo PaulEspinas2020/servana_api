@@ -16,20 +16,40 @@ jest.mock('../src/config', () => ({ db: { schema: 'servana' } }));
 jest.mock('../src/services/adminOnboardingService', () => ({
   calculateReadiness: jest.fn(),
 }));
+// Activation is a unit with its own suite (provider-activation.test.ts). Mocked
+// here so these tests exercise COMPOSITION — how the dimensions combine into
+// capabilities — rather than re-testing the transition machine through it.
+jest.mock('../src/services/providerActivationService', () => ({
+  refreshActivationEligibility: jest.fn(),
+}));
 
 import dbQuery from '../src/db/dbQuery';
 import { calculateReadiness } from '../src/services/adminOnboardingService';
+import { refreshActivationEligibility } from '../src/services/providerActivationService';
 import { getProviderAccountState } from '../src/services/providerAccountStateService';
 
 const q = dbQuery.query as jest.Mock;
 const readiness = calculateReadiness as jest.Mock;
+const activationOf = refreshActivationEligibility as jest.Mock;
 
 type Row = Record<string, any>;
 
 /** account row, then onboarding case row (readiness is mocked separately). */
-const setup = (account: Row | null, onboardingStatus?: string, ready?: any) => {
+const setup = (
+  account: Row | null,
+  onboardingStatus?: string,
+  ready?: any,
+  activation?: string
+) => {
   q.mockReset();
   readiness.mockReset();
+  activationOf.mockReset();
+
+  // Default mirrors reality: activation only becomes ACTIVE once the
+  // application is approved AND somebody has taken the explicit transition.
+  activationOf.mockResolvedValue(
+    activation ?? (onboardingStatus === 'approved' ? 'ACTIVE' : 'NOT_ELIGIBLE')
+  );
 
   readiness.mockResolvedValue(
     ready ?? {
@@ -148,10 +168,17 @@ describe('role', () => {
 
 describe('approval is not activation (§8)', () => {
   it('an approved provider with no active service cannot accept jobs', async () => {
-    setup({ ...ACTIVE_PROVIDER, account_status: 'pending' }, 'approved', {
-      blockers: [],
-      summary: { requirementsUploaded: 2, requirementsApproved: 2, activeServices: 0 },
-    });
+    setup(
+      { ...ACTIVE_PROVIDER, account_status: 'pending' },
+      'approved',
+      {
+        blockers: [],
+        summary: { requirementsUploaded: 2, requirementsApproved: 2, activeServices: 0 },
+      },
+      // Approved, but an activation requirement is outstanding — so the
+      // explicit transition into ACTIVE has not been taken.
+      'PENDING_REQUIREMENTS'
+    );
     const s = await getProviderAccountState('u1');
 
     expect(s.application.status).toBe('APPROVED');

@@ -30,6 +30,7 @@
 import dbQuery from "../db/dbQuery";
 import { db } from "../config";
 import { calculateReadiness } from "./adminOnboardingService";
+import { refreshActivationEligibility } from "./providerActivationService";
 
 const s = db.schema;
 
@@ -331,18 +332,32 @@ export async function getProviderAccountState(
     requiredCount === 0 ? 100 : Math.max(0, Math.round((1 - requiredCount / (requiredCount + 4)) * 100));
 
   // ── D6 activation ─────────────────────────────────────────────────────────
-  // Approval starts activation; it does not complete it (§8).
+  /**
+   * Read the STORED activation state; never derive it here.
+   *
+   * Approval starts activation, it does not complete it (§8), and the move into
+   * ACTIVE is an explicit transition somebody asks for. Computing it in a read
+   * path would reintroduce exactly the defect D6 exists to remove — a
+   * completeness calculation quietly granting operational access.
+   *
+   * `refreshActivationEligibility` is safe to call on a read: it can promote as
+   * far as READY_FOR_ACTIVATION and no further, and it will not disturb an
+   * ACTIVE or TEMPORARILY_RESTRICTED provider.
+   */
   let activation: ActivationState;
-  if (application !== "APPROVED") {
+  try {
+    activation = (await refreshActivationEligibility(
+      uid,
+      application === "APPROVED"
+    )) as ActivationState;
+  } catch {
+    // Unreadable activation is not permission.
     activation = "NOT_ELIGIBLE";
-  } else if (operational === "SUSPENDED") {
+  }
+
+  // A suspension outranks whatever activation says.
+  if (operational === "SUSPENDED" && activation === "ACTIVE") {
     activation = "TEMPORARILY_RESTRICTED";
-  } else if (activeServices === 0) {
-    activation = "PENDING_REQUIREMENTS";
-  } else if (operational === "ACTIVE") {
-    activation = "ACTIVE";
-  } else {
-    activation = "READY_FOR_ACTIVATION";
   }
 
   // ── Next step, by precedence ──────────────────────────────────────────────
