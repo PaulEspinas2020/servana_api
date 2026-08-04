@@ -16,7 +16,9 @@
     "_comment:ops": "Operational scripts. -r dotenv/config is REQUIRED, not decoration: src/config.ts loads '../.env', which resolves correctly for dist/app.js but points one directory above the app for anything run from the repo root — so DB_PASSWORD is undefined and pg fails with 'SASL: client password must be a string'. Preloading dotenv reads ./.env from the CWD instead.",
     "audit:identifiers": "ts-node -r dotenv/config scripts/audit-identifier-conflicts.ts",
     "backfill:identifiers": "ts-node -r dotenv/config scripts/backfill-normalized-identifiers.ts",
-    "admin:bootstrap": "ts-node -r dotenv/config scripts/create-admin-with-password.ts"
+    "admin:bootstrap": "ts-node -r dotenv/config scripts/create-admin-with-password.ts",
+    "report:provider-readiness": "ts-node -r dotenv/config scripts/report-provider-readiness.ts",
+    "backfill:verified-identifiers": "ts-node -r dotenv/config scripts/backfill-verified-identifiers.ts"
   },
   "keywords": [],
   "author": "Cla H.",

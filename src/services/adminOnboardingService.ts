@@ -1061,7 +1061,10 @@ export const calculateReadiness = async (providerUid: string) => {
 
   const [provRes, reqsRes, appsRes, servRes] = await Promise.all([
     dbQuery.query(
-      `SELECT uid, is_email_verified, account_status FROM ${dbSchema}.user_credentials WHERE uid = $1 LIMIT 1`,
+      // is_mobile_verified and the raw identifiers come back too: approval must
+      // be reachable for a provider who has no email at all. See below.
+      `SELECT uid, is_email_verified, is_mobile_verified, email, phone_number, account_status
+         FROM ${dbSchema}.user_credentials WHERE uid = $1 LIMIT 1`,
       [providerUid]
     ),
     dbQuery.query(
@@ -1093,8 +1096,33 @@ export const calculateReadiness = async (providerUid: string) => {
 
   const blockers: Array<{ code: string; severity: 'blocking' | 'warning'; label: string }> = [];
 
-  if (!prov?.is_email_verified) {
-    blockers.push({ code: 'missing_email_verification', severity: 'blocking', label: 'Email not verified' });
+  /**
+   * At least one verified identifier — not specifically an email.
+   *
+   * This asked for `is_email_verified` alone, which is unsatisfiable by
+   * construction for a provider who has no email address. Twenty-nine of the
+   * seventy production providers are exactly that: mobile-only accounts that can
+   * authenticate solely by OTP (read 2026-08-04). They could upload every
+   * document, submit every application and still carry a blocking
+   * `missing_email_verification` for ever, because there is no email to verify.
+   *
+   * The account-state endpoint already takes the broader view —
+   * `minimumRequirementMet = email VERIFIED || mobile VERIFIED` — so this was
+   * also the two engines disagreeing about the same question. They now agree.
+   *
+   * The label follows the account rather than the rule: telling someone with no
+   * email address that their email is unverified is how a support ticket starts.
+   */
+  const hasEmail = !!(prov?.email && String(prov.email).trim());
+  const emailVerified = prov?.is_email_verified === true;
+  const mobileVerified = prov?.is_mobile_verified === true;
+
+  if (!emailVerified && !mobileVerified) {
+    blockers.push({
+      code: 'missing_email_verification',
+      severity: 'blocking',
+      label: hasEmail ? 'Email not verified' : 'Mobile number not verified',
+    });
   }
 
   if (reqs.length === 0) {

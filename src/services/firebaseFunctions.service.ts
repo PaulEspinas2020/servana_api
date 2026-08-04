@@ -15,6 +15,7 @@ import dbQuery from "../db/dbQuery";
 import { db as dbConfig } from "../config";
 import { findLinkCollision, AccountLinkRequiredError } from "./accountLinkGuard";
 import { mergePhoneIntoExistingAccount } from "./accountLinking";
+import { provenFrom, recordProvenIdentifiers } from "./identityVerificationSync";
 
 const dbSchema = dbConfig.schema;
 
@@ -134,6 +135,27 @@ const firebaseAuthLogin = async (idToken: string, role: string = "2") => {
     throw new Error("Your account has been disabled. Please contact Servana support.");
   }
 
+  /**
+   * Record what this sign-in just proved.
+   *
+   * Awaited, not fired and forgotten: the client asks for /provider/account-state
+   * immediately after sign-in, and that endpoint holds anyone without a verified
+   * identifier at IDENTIFIER_VERIFICATION_REQUIRED. Deferring this would show a
+   * verification screen to someone who verified two seconds ago, and only clear
+   * it on their next sign-in.
+   *
+   * Wrapped, because failing to record a verification must never be what stops
+   * someone signing in. The worst case is that the flag lands next time.
+   */
+  try {
+    await recordProvenIdentifiers(
+      firebaseUser.uid,
+      provenFrom(decoded, firebaseUser)
+    );
+  } catch (err) {
+    console.warn("[firebase-login] could not record proven identifiers:", err);
+  }
+
   return {
     data: {
       success: true,
@@ -188,6 +210,18 @@ const firebaseProviderRegister = async (
 
   if (dbUser.isArchived) {
     throw new Error("Your account has been disabled. Please contact Servana support.");
+  }
+
+  // This route exists BECAUSE the provider just completed phone auth. Recording
+  // it only on the sign-in path would leave a freshly registered provider held
+  // at IDENTIFIER_VERIFICATION_REQUIRED until their second visit.
+  try {
+    await recordProvenIdentifiers(
+      firebaseUser.uid,
+      provenFrom(decoded, firebaseUser)
+    );
+  } catch (err) {
+    console.warn("[provider-register] could not record proven identifiers:", err);
   }
 
   return {
@@ -245,6 +279,18 @@ const customerFirebaseLogin = async (idToken: string) => {
       new Error("Your account has been disabled. Please contact Servana support."),
       { disabled: true },
     );
+  }
+
+  // Customers too. Google and Facebook assert a verified email, and the same
+  // column governs whether a recovery may use that identifier later — a rule
+  // that must not mean one thing for providers and another for customers.
+  try {
+    await recordProvenIdentifiers(
+      firebaseUser.uid,
+      provenFrom(decoded, firebaseUser)
+    );
+  } catch (err) {
+    console.warn("[customer-firebase-login] could not record proven identifiers:", err);
   }
 
   const fullname = [dbUser.firstName, dbUser.lastName].filter(Boolean).join(" ");
