@@ -30,7 +30,10 @@
 import dbQuery from "../db/dbQuery";
 import { db } from "../config";
 import { calculateReadiness } from "./adminOnboardingService";
-import { refreshActivationEligibility } from "./providerActivationService";
+import {
+  refreshActivationEligibility,
+  getActivationRequirements,
+} from "./providerActivationService";
 
 const s = db.schema;
 
@@ -195,7 +198,36 @@ export type ProviderAccountState = {
   };
   activation: { status: ActivationState };
   access: Capabilities;
+  /**
+   * The server-driven checklist (§9). Both phases in one list, each item
+   * tagged, so a client renders progress without deciding what counts.
+   *
+   * Contains only what the PROVIDER can act on. Servana's own review backlog is
+   * excluded — see INTERNAL_ONLY_BLOCKERS.
+   */
+  checklist: ChecklistItem[];
   nextStep: { code: NextStepCode; route: string; blocking: boolean };
+};
+
+export type ChecklistItem = {
+  code: string;
+  label: string;
+  phase: "approval" | "activation";
+  satisfied: boolean;
+  blocking: boolean;
+  route: string;
+};
+
+/**
+ * Where a provider goes to satisfy each approval blocker. A checklist item
+ * without a destination is a complaint, not a task.
+ */
+const BLOCKER_ROUTES: Record<string, string> = {
+  missing_email_verification: "verify-identifier",
+  missing_required_requirement: "provider-documents",
+  requirement_rejected: "provider-documents",
+  no_active_service: "services",
+  service_application_rejected: "services",
 };
 
 const APPLICATION_FROM_CASE: Record<string, ApplicationState> = {
@@ -406,6 +438,36 @@ export async function getProviderAccountState(
     canGoOnline: fullyActive,
   };
 
+  // ── Checklist (§9) ────────────────────────────────────────────────────────
+  // Approval items come from the readiness blockers a provider can act on;
+  // activation items from the activation service. An unsatisfied item always
+  // carries somewhere to go.
+  const approvalItems: ChecklistItem[] = providerFacing
+    .filter((b) => b.severity === "blocking")
+    .map((b) => ({
+      code: b.code,
+      label: b.label,
+      phase: "approval" as const,
+      satisfied: false,
+      blocking: true,
+      route: BLOCKER_ROUTES[b.code] ?? "profile-complete",
+    }));
+
+  const activationItems: ChecklistItem[] = await getActivationRequirements(uid)
+    .then((reqs) =>
+      reqs.map((r) => ({
+        code: r.code,
+        label: r.label,
+        phase: "activation" as const,
+        satisfied: r.satisfied,
+        blocking: r.blocking,
+        route: r.route,
+      }))
+    )
+    // Unreadable requirements are not satisfied requirements, but they must not
+    // take the whole response down either.
+    .catch(() => []);
+
   return {
     account: { status: operational, role },
     verification: { email, mobile, minimumRequirementMet },
@@ -424,6 +486,7 @@ export async function getProviderAccountState(
     },
     activation: { status: activation },
     access,
+    checklist: [...approvalItems, ...activationItems],
     nextStep: { code: next, route: ROUTES[next], blocking: next !== "OPERATIONAL" },
   };
 }
@@ -442,6 +505,8 @@ function denied(
     application: { status: "NOT_STARTED", submittedAt: null, reviewReference: null },
     activation: { status: "NOT_ELIGIBLE" },
     access: { ...DENY_ALL, canOpenSupportCase: true },
+    // Nothing to work through: the account itself is the blocker.
+    checklist: [],
     nextStep: { code, route: ROUTES[code], blocking: true },
   };
 }

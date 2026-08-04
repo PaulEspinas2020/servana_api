@@ -21,16 +21,21 @@ jest.mock('../src/services/adminOnboardingService', () => ({
 // capabilities — rather than re-testing the transition machine through it.
 jest.mock('../src/services/providerActivationService', () => ({
   refreshActivationEligibility: jest.fn(),
+  getActivationRequirements: jest.fn(),
 }));
 
 import dbQuery from '../src/db/dbQuery';
 import { calculateReadiness } from '../src/services/adminOnboardingService';
-import { refreshActivationEligibility } from '../src/services/providerActivationService';
+import {
+  refreshActivationEligibility,
+  getActivationRequirements,
+} from '../src/services/providerActivationService';
 import { getProviderAccountState } from '../src/services/providerAccountStateService';
 
 const q = dbQuery.query as jest.Mock;
 const readiness = calculateReadiness as jest.Mock;
 const activationOf = refreshActivationEligibility as jest.Mock;
+const activationReqs = getActivationRequirements as jest.Mock;
 
 type Row = Record<string, any>;
 
@@ -44,6 +49,10 @@ const setup = (
   q.mockReset();
   readiness.mockReset();
   activationOf.mockReset();
+  activationReqs.mockReset();
+  activationReqs.mockResolvedValue([
+    { code: 'approved_service', label: 'At least one approved service', satisfied: true, blocking: true, route: 'services' },
+  ]);
 
   // Default mirrors reality: activation only becomes ACTIVE once the
   // application is approved AND somebody has taken the explicit transition.
