@@ -1,0 +1,1778 @@
+# Servana provider API — canonical specification
+#
+# Command 3 section 3 deliverable. GENERATED from source by
+# scratchpad/genspec.py against the route inventory, so it cannot drift from
+# the routes it describes. Do not hand-edit: re-run the generator.
+#
+# SCOPE AND HONESTY NOTE
+# Request and response SCHEMAS are deliberately loose. The backend uses raw
+# pg with no ORM and no serializer layer, so a response body is whatever each
+# handler assembles inline. Publishing invented schemas would be worse than
+# publishing none: three client teams would code against them. Paths, methods,
+# auth, ownership and parameters below ARE verified from source.
+openapi: 3.1.0
+info:
+  title: Servana Provider API
+  version: '2026-08-02'
+  description: >-
+    Provider-facing surface. Every operation derives the acting provider from
+    the Firebase bearer token; none accepts a provider id from the caller.
+    See SERVANA_PROVIDER_IDENTITY_MODEL.md.
+servers:
+  - url: https://api.servana.com.ph
+    description: production
+components:
+  securitySchemes:
+    firebaseBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Firebase ID token. verifyAuth assigns the decoded token to req.user
+        verbatim; it carries no role, so role checks are a separate DB read.
+  schemas:
+    Error:
+      type: object
+      description: >-
+        Canonical envelope. NOT yet universal — eight shapes exist in
+        production. See SERVANA_PROVIDER_ERROR_CODES.md for the migration.
+      properties:
+        status: { type: string, enum: [error] }
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            fieldErrors: { type: object, additionalProperties: { type: string } }
+            retryable: { type: boolean }
+            requestId: { type: string }
+          required: [code, message]
+      required: [status, error]
+  responses:
+    Unauthorized:
+      description: No credential, or it did not verify
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Forbidden:
+      description: Authenticated but not permitted, or not the caller's record
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: No such record, or none the caller may see
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+security:
+  - firebaseBearer: []
+paths:
+  /api/additional/{id}/approve:
+    post:
+      operationId: approveRequest
+      summary: additionalController.approveRequest
+      description: >-
+        Source: routes/additional.routes.ts:33.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/additional/{id}/confirm-proceed:
+    post:
+      operationId: workerConfirmProceed
+      summary: additionalController.workerConfirmProceed
+      description: >-
+        Source: routes/additional.routes.ts:30.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/additional/{id}/payment:
+    post:
+      operationId: generatePayment
+      summary: additionalController.generatePayment
+      description: >-
+        Source: routes/additional.routes.ts:27.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/additional/{id}/withdraw:
+    post:
+      operationId: workerWithdraw
+      summary: additionalController.workerWithdraw
+      description: >-
+        Source: routes/additional.routes.ts:29.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/additional/{id}/worker-decision:
+    post:
+      operationId: workerDecision
+      summary: additionalController.workerDecision
+      description: >-
+        Source: routes/additional.routes.ts:28.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/additional/booking/{bookingId}:
+    get:
+      operationId: getByBooking
+      summary: additionalController.getByBooking
+      description: >-
+        Source: routes/additional.routes.ts:24.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/additional/request/{userId}:
+    post:
+      operationId: createRequest
+      summary: additionalController.createRequest
+      description: >-
+        Source: routes/additional.routes.ts:26.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/booking/{bookingId}/provider:
+    get:
+      operationId: getBookingProvider
+      summary: locationAccess.getBookingProvider
+      description: >-
+        Source: routes/provider.routes.ts:181.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/booking/{bookingId}/provider-location:
+    get:
+      operationId: getBookingProviderLocation
+      summary: locationAccess.getBookingProviderLocation
+      description: >-
+        Source: routes/provider.routes.ts:180.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/bookings/{bookingId}/conversation:
+    get:
+      operationId: getBookingConversation
+      summary: chat.getBookingConversation
+      description: >-
+        Source: chat/chat.routes.ts:14.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/chat/attachments/upload:
+    post:
+      operationId: uploadAttachment
+      summary: chat.uploadAttachment
+      description: >-
+        Source: chat/chat.routes.ts:31.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/chat/conversations:
+    get:
+      operationId: listConversations
+      summary: chat.listConversations
+      description: >-
+        Source: chat/chat.routes.ts:11.
+        Authentication: required.
+        Acting identity derived from: request.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/chat/conversations/{id}:
+    get:
+      operationId: getConversation
+      summary: chat.getConversation
+      description: >-
+        Source: chat/chat.routes.ts:17.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/chat/conversations/{id}/close:
+    post:
+      operationId: closeConversation
+      summary: chat.closeConversation
+      description: >-
+        Source: chat/chat.routes.ts:25.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/chat/conversations/{id}/messages:
+    get:
+      operationId: getMessages
+      summary: chat.getMessages
+      description: >-
+        Source: chat/chat.routes.ts:18.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: sendMessage
+      summary: chat.sendMessage
+      description: >-
+        Source: chat/chat.routes.ts:19.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/chat/conversations/{id}/messages/{msgId}:
+    delete:
+      operationId: deleteMessage
+      summary: chat.deleteMessage
+      description: >-
+        Source: chat/chat.routes.ts:21.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: msgId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: editMessage
+      summary: chat.editMessage
+      description: >-
+        Source: chat/chat.routes.ts:20.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: msgId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/chat/conversations/{id}/messages/{msgId}/report:
+    post:
+      operationId: reportMessage
+      summary: chat.reportMessage
+      description: >-
+        Source: chat/chat.routes.ts:28.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: msgId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/chat/conversations/{id}/read:
+    post:
+      operationId: markRead
+      summary: chat.markRead
+      description: >-
+        Source: chat/chat.routes.ts:24.
+        Authentication: required.
+        Acting identity derived from: request.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/account/deactivate:
+    post:
+      operationId: requestProviderDeactivation
+      summary: provider.requestProviderDeactivation
+      description: >-
+        Source: routes/provider.routes.ts:106.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/account/delete:
+    post:
+      operationId: requestProviderDeletion
+      summary: provider.requestProviderDeletion
+      description: >-
+        Source: routes/provider.routes.ts:107.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/additional-requests:
+    get:
+      operationId: getAdditionalRequests
+      summary: provider.getAdditionalRequests
+      description: >-
+        Source: routes/provider.routes.ts:168.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/alerts:
+    get:
+      operationId: getProviderAlerts
+      summary: provider.getProviderAlerts
+      description: >-
+        Source: routes/provider.routes.ts:49.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/alerts/{key}:
+    delete:
+      operationId: dismissAlert
+      summary: provider.dismissAlert
+      description: >-
+        Source: routes/provider.routes.ts:50.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/bookings/{id}:
+    get:
+      operationId: getProviderBookingDetail
+      summary: provider.getProviderBookingDetail
+      description: >-
+        Source: routes/provider.routes.ts:162.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/dashboard:
+    get:
+      operationId: getDashboard
+      summary: provider.getDashboard
+      description: >-
+        Source: routes/provider.routes.ts:19.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/earnings:
+    get:
+      operationId: getEarnings
+      summary: provider.getEarnings
+      description: >-
+        Source: routes/provider.routes.ts:22.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: endDate
+          in: query
+          required: false
+          schema: { type: string }
+        - name: startDate
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/earnings/{id}:
+    get:
+      operationId: getEarningById
+      summary: provider.getEarningById
+      description: >-
+        Source: routes/provider.routes.ts:24.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/earnings/summary:
+    get:
+      operationId: getEarningsSummary
+      summary: provider.getEarningsSummary
+      description: >-
+        Source: routes/provider.routes.ts:23.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: endDate
+          in: query
+          required: false
+          schema: { type: string }
+        - name: startDate
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/fcm-token:
+    post:
+      operationId: saveProviderFcmToken
+      summary: provider.saveProviderFcmToken
+      description: >-
+        Source: routes/provider.routes.ts:130.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/jobs/{id}/tracking:
+    get:
+      operationId: getProviderBookingTracking
+      summary: provider.getProviderBookingTracking
+      description: >-
+        Source: routes/provider.routes.ts:163.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/ledger:
+    get:
+      operationId: getLedger
+      summary: provider.getLedger
+      description: >-
+        Source: routes/provider.routes.ts:25.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/location/go-offline:
+    post:
+      operationId: goOffline
+      summary: provider.goOffline
+      description: >-
+        Source: routes/provider.routes.ts:16.
+        Authentication: required.
+        Acting identity derived from: request.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/location/go-online:
+    post:
+      operationId: goOnline
+      summary: provider.goOnline
+      description: >-
+        Source: routes/provider.routes.ts:15.
+        Authentication: required.
+        Acting identity derived from: request.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/location/status:
+    get:
+      operationId: getLocationStatus
+      summary: provider.getLocationStatus
+      description: >-
+        Source: routes/provider.routes.ts:14.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/notification-preferences:
+    get:
+      operationId: getNotificationPreferences
+      summary: provider.getNotificationPreferences
+      description: >-
+        Source: routes/provider.routes.ts:37.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: updateNotificationPreferences
+      summary: provider.updateNotificationPreferences
+      description: >-
+        Source: routes/provider.routes.ts:38.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/notifications:
+    get:
+      operationId: getProviderNotifications
+      summary: provider.getProviderNotifications
+      description: >-
+        Source: routes/provider.routes.ts:44.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/notifications/{key}:
+    delete:
+      operationId: dismissNotification
+      summary: provider.dismissNotification
+      description: >-
+        Source: routes/provider.routes.ts:46.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/notifications/{key}/read:
+    patch:
+      operationId: markNotificationRead
+      summary: provider.markNotificationRead
+      description: >-
+        Source: routes/provider.routes.ts:45.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/notifications/mark-all-read:
+    post:
+      operationId: markAllNotificationsRead
+      summary: provider.markAllNotificationsRead
+      description: >-
+        Source: routes/provider.routes.ts:43.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/notifications/unread-count:
+    get:
+      operationId: getNotificationsUnreadCount
+      summary: provider.getNotificationsUnreadCount
+      description: >-
+        Source: routes/provider.routes.ts:42.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/payout:
+    post:
+      operationId: registerProviderPayout
+      summary: provider.registerProviderPayout
+      description: >-
+        Source: routes/provider.routes.ts:101.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/payout/summary:
+    get:
+      operationId: getProviderPayoutSummary
+      summary: provider.getProviderPayoutSummary
+      description: >-
+        Source: routes/provider.routes.ts:99.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/payout/update-session:
+    post:
+      operationId: requestProviderPayoutUpdate
+      summary: provider.requestProviderPayoutUpdate
+      description: >-
+        Source: routes/provider.routes.ts:100.
+        Authentication: required.
+        Acting identity derived from: request.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/payouts:
+    get:
+      operationId: getPayouts
+      summary: provider.getPayouts
+      description: >-
+        Source: routes/provider.routes.ts:26.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/privacy:
+    get:
+      operationId: getProviderPrivacy
+      summary: provider.getProviderPrivacy
+      description: >-
+        Source: routes/provider.routes.ts:104.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/privacy/export:
+    post:
+      operationId: requestProviderDataExport
+      summary: provider.requestProviderDataExport
+      description: >-
+        Source: routes/provider.routes.ts:105.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/profile:
+    get:
+      operationId: getProviderProfile
+      summary: provider.getProviderProfile
+      description: >-
+        Source: routes/provider.routes.ts:10.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/safety/check-in:
+    post:
+      operationId: recordSafetyCheckIn
+      summary: provider.recordSafetyCheckIn
+      description: >-
+        Source: routes/provider.routes.ts:117.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/safety/emergency-config:
+    get:
+      operationId: getEmergencyConfig
+      summary: provider.getEmergencyConfig
+      description: >-
+        Source: routes/provider.routes.ts:87.
+        Authentication: required.
+        Acting identity derived from: request.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/safety/incidents:
+    get:
+      operationId: getSafetyIncidents
+      summary: provider.getSafetyIncidents
+      description: >-
+        Source: routes/provider.routes.ts:88.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: submitSafetyIncident
+      summary: provider.submitSafetyIncident
+      description: >-
+        Source: routes/provider.routes.ts:89.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/security:
+    get:
+      operationId: getProviderSecurity
+      summary: provider.getProviderSecurity
+      description: >-
+        Source: routes/provider.routes.ts:92.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/security/password:
+    post:
+      operationId: changeProviderPassword
+      summary: provider.changeProviderPassword
+      description: >-
+        Source: routes/provider.routes.ts:93.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/security/sessions/{id}:
+    delete:
+      operationId: revokeProviderSession
+      summary: provider.revokeProviderSession
+      description: >-
+        Source: routes/provider.routes.ts:96.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/security/sessions/revoke-all:
+    post:
+      operationId: revokeAllProviderSessions
+      summary: provider.revokeAllProviderSessions
+      description: >-
+        Source: routes/provider.routes.ts:95.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/service-preference:
+    post:
+      operationId: saveServicePreference
+      summary: provider.saveServicePreference
+      description: >-
+        Source: routes/provider.routes.ts:11.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/support/tickets:
+    get:
+      operationId: getSupportTickets
+      summary: provider.getSupportTickets
+      description: >-
+        Source: routes/provider.routes.ts:33.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: createSupportTicket
+      summary: provider.createSupportTicket
+      description: >-
+        Source: routes/provider.routes.ts:34.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/support/tickets/{ticketKey}:
+    get:
+      operationId: getSupportTicketDetail
+      summary: provider.getSupportTicketDetail
+      description: >-
+        Source: routes/provider.routes.ts:111.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: ticketKey
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/support/tickets/{ticketKey}/close:
+    post:
+      operationId: closeSupportTicket
+      summary: provider.closeSupportTicket
+      description: >-
+        Source: routes/provider.routes.ts:113.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: ticketKey
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/support/tickets/{ticketKey}/reopen:
+    post:
+      operationId: reopenSupportTicket
+      summary: provider.reopenSupportTicket
+      description: >-
+        Source: routes/provider.routes.ts:114.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: ticketKey
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/support/tickets/{ticketKey}/replies:
+    post:
+      operationId: addSupportTicketReply
+      summary: provider.addSupportTicketReply
+      description: >-
+        Source: routes/provider.routes.ts:112.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: ticketKey
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/provider/support/unread-count:
+    get:
+      operationId: getSupportUnreadCount
+      summary: provider.getSupportUnreadCount
+      description: >-
+        Source: routes/provider.routes.ts:110.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/providers/me/review-status:
+    get:
+      operationId: getReviewStatus
+      summary: provider.getReviewStatus
+      description: >-
+        Source: routes/provider.routes.ts:29.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/providers/me/submit-for-review:
+    post:
+      operationId: submitForReview
+      summary: provider.submitForReview
+      description: >-
+        Source: routes/provider.routes.ts:30.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/additional-work/{id}/confirm-proceed:
+    post:
+      operationId: confirmProceedAdditionalWork
+      summary: provider.confirmProceedAdditionalWork
+      description: >-
+        Source: routes/provider.routes.ts:75.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/additional-work/{id}/decision:
+    post:
+      operationId: workerAdditionalDecision
+      summary: provider.workerAdditionalDecision
+      description: >-
+        Source: routes/provider.routes.ts:73.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/additional-work/{id}/withdraw:
+    post:
+      operationId: withdrawAdditionalWork
+      summary: provider.withdrawAdditionalWork
+      description: >-
+        Source: routes/provider.routes.ts:74.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/availability:
+    get:
+      operationId: getWorkerAvailability
+      summary: provider.getWorkerAvailability
+      description: >-
+        Source: routes/provider.routes.ts:56.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: saveWorkerAvailability
+      summary: provider.saveWorkerAvailability
+      description: >-
+        Source: routes/provider.routes.ts:57.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/bookings/{bookingId}/accept:
+    put:
+      operationId: acceptBooking
+      summary: provider.acceptBooking
+      description: >-
+        Source: routes/provider.routes.ts:141.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/bookings/{bookingId}/arrived:
+    put:
+      operationId: markBookingArrived
+      summary: provider.markBookingArrived
+      description: >-
+        Source: routes/provider.routes.ts:144.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/bookings/{bookingId}/complete:
+    put:
+      operationId: completeBooking
+      summary: provider.completeBooking
+      description: >-
+        Source: routes/provider.routes.ts:146.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/bookings/{bookingId}/decline:
+    put:
+      operationId: declineBooking
+      summary: provider.declineBooking
+      description: >-
+        Source: routes/provider.routes.ts:142.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/bookings/{bookingId}/en-route:
+    put:
+      operationId: markBookingEnRoute
+      summary: provider.markBookingEnRoute
+      description: >-
+        Source: routes/provider.routes.ts:143.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/bookings/{bookingId}/start:
+    put:
+      operationId: startBooking
+      summary: provider.startBooking
+      description: >-
+        Source: routes/provider.routes.ts:145.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/job-cards:
+    get:
+      operationId: getWorkerJobCards
+      summary: provider.getWorkerJobCards
+      description: >-
+        Source: routes/provider.routes.ts:137.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/job-cards/{bookingId}:
+    get:
+      operationId: getWorkerJobCard
+      summary: provider.getWorkerJobCard
+      description: >-
+        Source: routes/provider.routes.ts:136.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/location:
+    post:
+      operationId: updateWorkerLocation
+      summary: provider.updateWorkerLocation
+      description: >-
+        Source: routes/provider.routes.ts:149.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/onboarding:
+    get:
+      operationId: getOnboardingState
+      summary: provider.getOnboardingState
+      description: >-
+        Source: routes/provider.routes.ts:68.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/onboarding/step:
+    post:
+      operationId: saveOnboardingStep
+      summary: provider.saveOnboardingStep
+      description: >-
+        Source: routes/provider.routes.ts:70.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/onboarding/submit:
+    post:
+      operationId: submitOnboarding
+      summary: provider.submitOnboarding
+      description: >-
+        Source: routes/provider.routes.ts:69.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/profile/photo:
+    delete:
+      operationId: deleteWorkerProfilePhoto
+      summary: provider.deleteWorkerProfilePhoto
+      description: >-
+        Source: routes/provider.routes.ts:83.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: uploadWorkerProfilePhoto
+      summary: provider.uploadWorkerProfilePhoto
+      description: >-
+        Source: routes/provider.routes.ts:82.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/requirements:
+    get:
+      operationId: getWorkerRequirementsOwn
+      summary: provider.getWorkerRequirementsOwn
+      description: >-
+        Source: routes/provider.routes.ts:64.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/requirements/{id}:
+    delete:
+      operationId: deleteWorkerRequirementOwn
+      summary: provider.deleteWorkerRequirementOwn
+      description: >-
+        Source: routes/provider.routes.ts:65.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/requirements/upload:
+    post:
+      operationId: uploadWorkerRequirement
+      summary: provider.uploadWorkerRequirement
+      description: >-
+        Source: routes/provider.routes.ts:63.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/schedule:
+    get:
+      operationId: getMySchedule
+      summary: locationAccess.getMySchedule
+      description: >-
+        Source: routes/provider.routes.ts:179.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/service-applications:
+    get:
+      operationId: getServiceApplications
+      summary: provider.getServiceApplications
+      description: >-
+        Source: routes/provider.routes.ts:120.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: submitServiceApplication
+      summary: provider.submitServiceApplication
+      description: >-
+        Source: routes/provider.routes.ts:121.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/service-applications/{applicationId}:
+    delete:
+      operationId: cancelServiceApplication
+      summary: provider.cancelServiceApplication
+      description: >-
+        Source: routes/provider.routes.ts:123.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: applicationId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/service-applications/{applicationId}/resubmit:
+    post:
+      operationId: resubmitServiceApplication
+      summary: provider.resubmitServiceApplication
+      description: >-
+        Source: routes/provider.routes.ts:122.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: applicationId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/service-area:
+    get:
+      operationId: getWorkerServiceArea
+      summary: provider.getWorkerServiceArea
+      description: >-
+        Source: routes/provider.routes.ts:78.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: saveWorkerServiceArea
+      summary: provider.saveWorkerServiceArea
+      description: >-
+        Source: routes/provider.routes.ts:79.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/services:
+    get:
+      operationId: getWorkerServices
+      summary: provider.getWorkerServices
+      description: >-
+        Source: routes/provider.routes.ts:152.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/services/{serviceId}:
+    delete:
+      operationId: removeWorkerService
+      summary: provider.removeWorkerService
+      description: >-
+        Source: routes/provider.routes.ts:153.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/services/{serviceId}/pause:
+    patch:
+      operationId: pauseWorkerService
+      summary: provider.pauseWorkerService
+      description: >-
+        Source: routes/provider.routes.ts:126.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/services/{serviceId}/reactivate:
+    patch:
+      operationId: reactivateWorkerService
+      summary: provider.reactivateWorkerService
+      description: >-
+        Source: routes/provider.routes.ts:127.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/time-off:
+    get:
+      operationId: getWorkerTimeOff
+      summary: provider.getWorkerTimeOff
+      description: >-
+        Source: routes/provider.routes.ts:58.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: createWorkerTimeOff
+      summary: provider.createWorkerTimeOff
+      description: >-
+        Source: routes/provider.routes.ts:59.
+        Authentication: required.
+        Acting identity derived from: token.
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/worker/time-off/{id}:
+    delete:
+      operationId: deleteWorkerTimeOff
+      summary: provider.deleteWorkerTimeOff
+      description: >-
+        Source: routes/provider.routes.ts:60.
+        Authentication: required.
+        Acting identity derived from: token.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Success. Body shape is handler-defined; see the source.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+# ---------------------------------------------------------------------------
+# DELIBERATELY EXCLUDED: the legacy /api/workers/* family
+# ---------------------------------------------------------------------------
+# 46 routes in technician.routes.ts are omitted from this spec.
+# 30 of them carry NO authentication and take their subject from the URL or
+# query string. They are being retired (WORKER_ROUTE_MIGRATION.md); both
+# client apps have been migrated off them. Specifying them would legitimise
+# them, and any new client written against this document must never call one.

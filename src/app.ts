@@ -3,8 +3,11 @@ import http from "http";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import formidable from "formidable";
+import { randomUUID } from "crypto";
 
 import dotenv from "dotenv";
+import { parityMiddleware } from "./middleware/parityMiddleware";
+import { requestParityMiddleware } from "./middleware/requestParityMiddleware";
 
 dotenv.config();
 
@@ -12,6 +15,7 @@ const app = express();
 const router = express.Router();
 const whitelist = [
   "http://localhost:4200",
+  "http://localhost:4201",
   "https://provider.servana.com.ph",
   "https://admin.servana.com.ph",
   "https://www.servana.com.ph",
@@ -29,9 +33,15 @@ const corsOptionsDelegate = function (req: any, callback: any) {
 
 const port = process.env.PORT;
 app.disable("x-powered-by");
-app.set("trust proxy", true);
+app.set("trust proxy", 1); // trust first hop (Nginx on same server) only — prevents IP spoofing
 app.use(cors(corsOptionsDelegate))
 app.use(cookieParser());
+
+// Stamp every request with a stable UUID for tracing and audit correlation
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  (req as any).id = randomUUID();
+  next();
+});
 app.use(
   "/api/paymongo/webhook",
   express.raw({ type: "application/json" })
@@ -52,6 +62,11 @@ app.use((req, _res, next) => {
 // 10mb covers base64-encoded images up to ~7.5 MB raw; processor outputs ≤3.5 MB (≈4.7 MB base64).
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
+
+// SWEEP request parity — enriches incoming request bodies with cross-platform field aliases
+app.use(requestParityMiddleware);
+// SWEEP response parity — enriches every JSON response with cross-platform field aliases
+app.use(parityMiddleware);
 app.use((req: Request, res: Response, next: NextFunction) => {
     if (req.is("multipart/form-data") == "multipart/form-data") {
         const form = formidable({ multiples: true, maxFileSize: 15 * 1024 * 1024 });
@@ -117,6 +132,78 @@ app.use("/api", cors(corsOptionsDelegate), locationRoutes);
 import providerCatalogRoutes from "./routes/providerCatalog.routes";
 app.use("/api", cors(corsOptionsDelegate), providerCatalogRoutes);
 
+import adminProviderRoutes from "./routes/adminProvider.routes";
+app.use("/api", cors(corsOptionsDelegate), adminProviderRoutes);
+
+import adminProviderAvailabilityRoutes from "./routes/adminProviderAvailability.routes";
+app.use("/api", cors(corsOptionsDelegate), adminProviderAvailabilityRoutes);
+
+import adminOnboardingRoutes from "./routes/adminOnboarding.routes";
+app.use("/api", cors(corsOptionsDelegate), adminOnboardingRoutes);
+
+import adminBookingRoutes from "./routes/adminBooking.routes";
+app.use("/api", cors(corsOptionsDelegate), adminBookingRoutes);
+
+import { ensureAdminCreateBookingSchema } from "./services/adminCreateBookingService";
+(async () => {
+  try {
+    await ensureAdminCreateBookingSchema();
+  } catch (err) {
+    console.error("[admin-create-booking] schema error:", err);
+  }
+})();
+
+import adminBookingDraftRoutes from "./routes/adminBookingDraft.routes";
+app.use("/api", cors(corsOptionsDelegate), adminBookingDraftRoutes);
+
+import { ensureAdminBookingDraftSchema } from "./services/adminBookingDraftService";
+(async () => {
+  try {
+    await ensureAdminBookingDraftSchema();
+  } catch (err) {
+    console.error("[admin-booking-draft] schema error:", err);
+  }
+})();
+
+import adminDashboardRoutes from "./routes/adminDashboard.routes";
+app.use("/api", cors(corsOptionsDelegate), adminDashboardRoutes);
+
+import adminAuditRoutes from "./routes/adminAudit.routes";
+app.use("/api", cors(corsOptionsDelegate), adminAuditRoutes);
+
+import adminCommunicationRoutes from "./routes/adminCommunication.routes";
+app.use("/api", cors(corsOptionsDelegate), adminCommunicationRoutes);
+
+import adminAutoOnlineRoutes from "./routes/adminAutoOnline.routes";
+app.use("/api", cors(corsOptionsDelegate), adminAutoOnlineRoutes);
+
+import adminFinanceRoutes from "./routes/adminFinance.routes";
+app.use("/api", cors(corsOptionsDelegate), adminFinanceRoutes);
+
+import adminPermissionRoutes from "./routes/adminPermission.routes";
+app.use("/api", cors(corsOptionsDelegate), adminPermissionRoutes);
+
+import adminCustomerRoutes from "./routes/adminCustomer.routes";
+app.use("/api", cors(corsOptionsDelegate), adminCustomerRoutes);
+
+import customerSupportRoutes from "./routes/customerSupport.routes";
+app.use("/api", cors(corsOptionsDelegate), customerSupportRoutes);
+
+import customerReviewRoutes from "./routes/customerReview.routes";
+app.use("/api", cors(corsOptionsDelegate), customerReviewRoutes);
+
+/**
+ * Account deletion (Google Play "Data deletion" policy).
+ *
+ * The page router is mounted WITHOUT the /api prefix and without the CORS
+ * delegate: it is a plain HTML page a Play reviewer opens directly in a
+ * browser, not an XHR target, and putting it behind the API origin allowlist
+ * would 403 exactly the person it exists for.
+ */
+import accountDeletionRoutes, { accountDeletionPageRouter } from "./routes/accountDeletion.routes";
+app.use("/api", cors(corsOptionsDelegate), accountDeletionRoutes);
+app.use(accountDeletionPageRouter);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
@@ -134,6 +221,120 @@ import { initProviderCatalogSchema, seedBuiltInOfferings } from "./services/prov
     await seedBuiltInOfferings();
   } catch (err) {
     console.error("[provider-catalog] schema/seed error:", err);
+  }
+})();
+
+import { ensureOnboardingSchema, seedReasonCodes, seedRequirementDefinitions } from "./services/adminOnboardingService";
+(async () => {
+  try {
+    await ensureOnboardingSchema();
+    await seedReasonCodes();
+    await seedRequirementDefinitions();
+  } catch (err) {
+    console.error("[admin-onboarding] schema/seed error:", err);
+  }
+})();
+
+import { ensureAttributionSchema } from "./services/adminMobileAttributionService";
+(async () => {
+  try {
+    await ensureAttributionSchema();
+  } catch (err) {
+    console.error("[mobile-attribution] schema error:", err);
+  }
+})();
+
+import { ensureProviderWebSchema } from "./services/providerOnboardingService";
+(async () => {
+  try {
+    await ensureProviderWebSchema();
+  } catch (err) {
+    console.error("[provider-web-onboarding] schema error:", err);
+  }
+})();
+
+import { ensureBookingOpsSchema } from "./services/adminBookingService";
+(async () => {
+  try {
+    await ensureBookingOpsSchema();
+  } catch (err) {
+    console.error("[booking-ops] schema error:", err);
+  }
+})();
+
+import { ensureAuditSchema } from "./services/adminAuditService";
+(async () => {
+  try {
+    await ensureAuditSchema();
+  } catch (err) {
+    console.error("[admin-audit] schema error:", err);
+  }
+})();
+
+import { ensureCommunicationSchema } from "./services/adminCommunicationService";
+(async () => {
+  try {
+    await ensureCommunicationSchema();
+  } catch (err) {
+    console.error("[admin-communication] schema error:", err);
+  }
+})();
+
+import { bootstrap as bootstrapAutoOnline } from "./services/providerAutoOnlineEngine";
+(async () => {
+  try {
+    await bootstrapAutoOnline();
+  } catch (err) {
+    console.error("[auto-online] schema error:", err);
+  }
+})();
+
+import { ensureFinanceSchema } from "./services/adminFinanceService";
+(async () => {
+  try {
+    await ensureFinanceSchema();
+  } catch (err) {
+    console.error("[admin-finance] schema error:", err);
+  }
+})();
+
+/**
+ * Identity columns MUST be ensured at boot.
+ *
+ * upsertFirebaseUser has written email_normalized / phone_normalized since
+ * f97fc0d, but this bootstrap was written and never called — so the columns did
+ * not exist in production and EVERY Firebase sign-in failed with
+ * `42703 column "email_normalized" does not exist`.
+ *
+ * It went unnoticed because email/password sign-in uses a different endpoint
+ * that never touches this table's normalized columns. Only phone auth, which
+ * goes through firebase-login, was broken — so it read as a mobile-specific bug
+ * rather than as a missing migration.
+ */
+import { ensureIdentityColumns } from "./services/identityColumns";
+(async () => {
+  try {
+    await ensureIdentityColumns();
+  } catch (err) {
+    console.error("[identity] column bootstrap failed:", err);
+  }
+})();
+
+import { ensurePermissionSchema } from "./services/adminPermissionService";
+(async () => {
+  try {
+    await ensurePermissionSchema();
+  } catch (err) {
+    console.error("[admin-permission] schema error:", err);
+  }
+})();
+
+import { ensureDashboardSchema } from "./services/adminDashboardService";
+(async () => {
+  try {
+    await ensureDashboardSchema();
+  } catch (err) {
+    console.error("[admin-dashboard] schema error:", err);
   }
 })();
 

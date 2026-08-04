@@ -2,6 +2,7 @@ declare global {
     namespace Express {
         interface Request {
             user: any;
+            id: string;
         }
         interface Response {
             user: any;
@@ -16,6 +17,7 @@ declare global {
         lastName: string;
         role: number;
         isArchived: boolean;
+        isEmailVerified?: boolean;
         createdDate: Date;
         phoneNumber?: string | null;
         fcmToken?: string;
@@ -71,6 +73,10 @@ declare global {
         photoFile?: string;
         gender?: string;
         phoneNumber?: string;
+        mobileNumber?: string;   // ServanaClient alias for phoneNumber
+        first_name?: string;     // provider portal direct field
+        last_name?: string;      // provider portal direct field
+        fullname?: string;       // ServanaClient combined name — split on write
     }
 
     interface QuoteRequest {
@@ -79,7 +85,11 @@ declare global {
         heightKey?: string;    // "2nd_floor"
         distanceKey?: string;  // "5-10km"
         addonOptionIds?: number[];
-        parts?: { part_name: string; qty: number; unit_price: number }[];
+        // `parts?: { part_name; qty; unit_price }[]` was removed: `unit_price`
+        // came from the caller and was multiplied straight into the booking
+        // total. The type is what made it look legitimate — every other priced
+        // input is resolved from the database by id. A future parts feature
+        // takes {part_id, qty} and is priced server-side, like addonOptionIds.
     };
 }
 

@@ -1,9 +1,11 @@
 import { db } from "../config";
+import { deriveNormalized } from "./identityColumns";
 import dbQuery from "../db/dbQuery";
 import bcrypt from "bcryptjs";
 const dbSchema = db.schema;
 import dayjs from "dayjs";
 import uploadInStorage from "../helpers/firebaseStorageUploader";
+import { applyParity } from "../utils/fieldParity";
 
 const now = dayjs();
 const OTP_EXPIRY_MINUTES = 10;
@@ -63,22 +65,40 @@ export const upsertFirebaseUser = async (payload: {
     role = "2",
   } = payload;
 
+  // Normalized forms are derived here rather than at the call sites, so every
+  // path that creates or updates an account maintains them. They are what the
+  // uniqueness indexes and the unified sign-in lookup key on; a row that misses
+  // them is a row that can be duplicated.
+  //
+  // Null when the raw value does not parse. That is deliberate: a number nobody
+  // can receive an SMS at should not become a lookup key (see deriveNormalized).
+  const { emailNormalized, phoneNormalized } = deriveNormalized(email, phoneNumber);
+
   const result = await dbQuery.query(
     `
     INSERT INTO ${dbSchema}.user_credentials (
       uid,
       email,
       phone_number,
+      email_normalized,
+      phone_normalized,
       first_name,
       last_name,
       "role",
       created_date
     )
-    VALUES ($1,$2,$3,$4,$5,$6,$7)
+    VALUES ($1,$2,$3,$8,$9,$4,$5,$6,$7)
     ON CONFLICT (uid)
     DO UPDATE SET
       email = COALESCE(EXCLUDED.email, user_credentials.email),
       phone_number = COALESCE(EXCLUDED.phone_number, user_credentials.phone_number),
+      -- COALESCE, matching the raw columns: signing in with a phone must not
+      -- erase the email this account already links, and vice versa. This is the
+      -- account-LINKING behaviour §13 requires, and it already worked for the
+      -- raw columns — the normalized ones have to follow the same rule or the
+      -- lookup key disagrees with the value it was derived from.
+      email_normalized = COALESCE(EXCLUDED.email_normalized, user_credentials.email_normalized),
+      phone_normalized = COALESCE(EXCLUDED.phone_normalized, user_credentials.phone_normalized),
       first_name = CASE WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name ELSE user_credentials.first_name END,
       last_name  = CASE WHEN EXCLUDED.last_name  <> '' THEN EXCLUDED.last_name  ELSE user_credentials.last_name  END
     RETURNING *;
@@ -91,26 +111,51 @@ export const upsertFirebaseUser = async (payload: {
       lastName,
       role,
       now,
+      emailNormalized,
+      phoneNormalized,
     ]
   );
   const dbResponse = formatUserCredentials(result.rows[0]);
   return dbResponse;
 };
 
+/**
+ * Re-syncs the local bcrypt hash after Firebase has accepted a password the
+ * cached hash rejected.
+ *
+ * The two stores drift whenever a password changes outside this API — the
+ * Firebase-hosted reset page being the common case. Firebase is authoritative;
+ * this column is a cache, and a stale cache locks the account out of the
+ * email/password route entirely.
+ */
+const updateUserPasswordHash = async (uid: string, passwordHash: string) => {
+    await dbQuery.query(
+        `UPDATE ${dbSchema}.user_credentials SET password = $1 WHERE uid = $2`,
+        [passwordHash, uid],
+    );
+};
+
 const getUserCredentialsByEmail = async (email: string, withPassword = false) => {
     const searchQuery = `
       Select 
-        c.uid, c.email, c.password, c.first_name, c.last_name, c.role, c.created_date, c.fcm_token
+        c.uid, c.email, c.password, c.first_name, c.last_name, c.role, c.created_date, c.fcm_token,
+        c.is_archive
       from ${dbSchema}.user_credentials c
       where c.email = $1`;
 
     try {
         const { rows } = await dbQuery.query(searchQuery, [email]);
 
-        if (!rows && rows.length == 0) {
+        if (!rows || rows.length === 0) {
             return null;
         }
-        const dbResponse = formatUserCredentials(rows[0]);
+        // is_archive is surfaced explicitly: the email/password sign-in path
+        // could not see it, so a disabled customer kept signing in while both
+        // Firebase sign-in paths refused them.
+        const dbResponse = {
+            ...formatUserCredentials(rows[0]),
+            isArchived: rows[0].is_archive === true,
+        };
 
         if (withPassword) {
             return {
@@ -134,10 +179,16 @@ const getUserCredentialsByID = async (uid: string, withPassword = false) => {
     try {
         const { rows } = await dbQuery.query(searchQuery, [uid]);
 
-        if (!rows && rows.length == 0) {
+        if (!rows || rows.length === 0) {
             return null;
         }
-        const dbResponse = formatUserCredentials(rows[0]);
+        // is_archive is surfaced explicitly: the email/password sign-in path
+        // could not see it, so a disabled customer kept signing in while both
+        // Firebase sign-in paths refused them.
+        const dbResponse = {
+            ...formatUserCredentials(rows[0]),
+            isArchived: rows[0].is_archive === true,
+        };
 
         if (withPassword) {
             return {
@@ -278,15 +329,35 @@ const getUserProfile = async (uid: string) => {
 const updateUserProfile = async (profileUpdateReq: ProfileUpdateReq) => {
     let rawUrl = null;
 
+    // COALESCE preserves existing values when null is passed (e.g. name-only updates
+    // must not wipe photo_url — the FE never sends photoFile/photoUrl for name edits).
     const upsertQuery = `INSERT INTO ${dbSchema}.user_profile (birthdate, gender, photo_url, uid)
         VALUES ($1, $2, $3, $4)
         ON CONFLICT (uid)
-            DO UPDATE SET birthdate=$1, gender=$2, photo_url=$3 returning *`;
+            DO UPDATE SET
+              birthdate = COALESCE(EXCLUDED.birthdate, user_profile.birthdate),
+              gender    = COALESCE(EXCLUDED.gender,    user_profile.gender),
+              photo_url = COALESCE(EXCLUDED.photo_url, user_profile.photo_url)
+            RETURNING *`;
 
     const { birthdate, photoUrl, photoFile, gender, id, phoneNumber } = profileUpdateReq;
-    // first_name / last_name come from the provider portal PUT /user/updateprofile body
-    const firstName: string | undefined = (profileUpdateReq as any).first_name;
-    const lastName: string | undefined = (profileUpdateReq as any).last_name;
+    // ServanaClient sends `mobileNumber`; provider portal sends `phoneNumber`. Normalize to one value.
+    // Guard: only call updateUserPhoneNumber when a phone was explicitly provided to avoid NULL wipe.
+    const resolvedPhone = phoneNumber !== undefined
+        ? phoneNumber
+        : (profileUpdateReq as any).mobileNumber as string | undefined;
+    // first_name / last_name come from the provider portal body.
+    // ServanaClient sends `fullname` (combined string) — split it when the named fields are absent.
+    let firstName: string | undefined = (profileUpdateReq as any).first_name;
+    let lastName: string | undefined = (profileUpdateReq as any).last_name;
+    if (firstName === undefined && lastName === undefined) {
+        const fullname: string | undefined = (profileUpdateReq as any).fullname;
+        if (fullname) {
+            const spaceIdx = fullname.indexOf(' ');
+            firstName = spaceIdx > 0 ? fullname.slice(0, spaceIdx).trim() : fullname.trim();
+            lastName  = spaceIdx > 0 ? fullname.slice(spaceIdx + 1).trim() : undefined;
+        }
+    }
 
     try {
         if (photoFile && photoFile != "") {
@@ -297,7 +368,10 @@ const updateUserProfile = async (profileUpdateReq: ProfileUpdateReq) => {
 
         const { rows } = await dbQuery.query(upsertQuery, [birthdate, gender, rawUrl, id]);
 
-        await updateUserPhoneNumber(phoneNumber, id);
+        // Only update phone when explicitly provided — prevents NULL wipe on name-only saves.
+        if (resolvedPhone !== undefined) {
+            await updateUserPhoneNumber(resolvedPhone, id);
+        }
 
         // Update name fields in user_credentials when provided
         if (id && (firstName || lastName)) {
@@ -336,8 +410,8 @@ const updateUserPhoneNumber = async (phoneNumber: string | undefined, uid: strin
     }
 };
 
-const formatUserCredentials = (raw: any): UserCredentials => {
-    return {
+const formatUserCredentials = (raw: any): UserCredentials & Record<string, unknown> => {
+    return applyParity({
         id: raw.uid,
         email: raw.email,
         firstName: raw.first_name,
@@ -345,19 +419,20 @@ const formatUserCredentials = (raw: any): UserCredentials => {
         role: raw.role,
         createdDate: raw.created_date,
         isArchived: raw.is_archive,
+        isEmailVerified: raw.is_email_verified ?? false,
         phoneNumber: raw.phone_number ?? null,
         fcmToken: raw.fcm_token,
-    };
+    });
 };
 
 const formatUserProfile = (raw: any) => {
     const credentials = formatUserCredentials(raw);
-    return {
+    return applyParity({
         ...credentials,
         birthdate: raw.birthdate,
         gender: raw.gender,
         photoUrl: raw.photo_url,
-    };
+    });
 };
 
 const storeEmailOtp = async (email: string, code: string) => {
@@ -473,6 +548,7 @@ const getUserInfoByBookingId = async (bookingId: number): Promise<{ email: strin
 export {
     registerUserInDB,
     getUserCredentialsByEmail,
+    updateUserPasswordHash,
     getAllUserByRole,
     getNameByEmail,
     getRoleById,

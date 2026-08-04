@@ -1,5 +1,6 @@
-import { Request, Response } from "express";
+﻿import { Request, Response } from "express";
 import { db } from "../config";
+import { providerShareOf, PROVIDER_SHARE_RATE, PROVIDER_SHARE_PERCENT } from '../services/revenueSplit';
 import dbQuery from "../db/dbQuery";
 import * as technicianService from "../services/technicianService";
 import * as userService from "../services/user.service";
@@ -8,8 +9,71 @@ import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import * as notificationService from "../services/notification.service";
 import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
 import * as serviceApplicationService from "../services/serviceApplicationService";
+import * as onboardingService from "../services/providerOnboardingService";
+import * as disbursementService from "../services/disbursement.service";
+import * as availEngine from "../services/providerAvailabilityEngine";
+import * as areaEngine from "../services/providerServiceAreaEngine";
+import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
+import * as availabilityService from "../services/providerOperationalAvailabilityService";
+import { touchProviderActivity } from "../services/adminProviderService";
+import { getProviderPerformance } from "../services/providerPerformanceService";
 
 const dbSchema = db.schema;
+
+// ── Availability bridge: Provider Web ↔ canonical engine shapes ───────────────
+
+const DAY_TO_DOW: Record<string, number> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+const DOW_TO_DAY: Record<number, string> = { 0: 'sun', 1: 'mon', 2: 'tue', 3: 'wed', 4: 'thu', 5: 'fri', 6: 'sat' };
+const WEB_ALL_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+const ENGINE_DOW_LABELS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+function bridgeToEngineSlots(schedule: any[]): availEngine.WeeklyScheduleSlot[] {
+  const slots: availEngine.WeeklyScheduleSlot[] = [];
+  for (const day of schedule) {
+    const dow = DAY_TO_DOW[day.day] ?? -1;
+    if (dow === -1) continue;
+    const dayLabel = ENGINE_DOW_LABELS[dow] ?? '';
+    if (!day.enabled || !Array.isArray(day.slots) || day.slots.length === 0) {
+      // Represent disabled day as an unavailable placeholder so the day is tracked
+      slots.push({ dayOfWeek: dow as 0|1|2|3|4|5|6, dayLabel, startTime: '09:00', endTime: '17:00', isAvailable: false, maxJobs: null });
+    } else {
+      for (const s of day.slots) {
+        if (s.startTime && s.endTime) {
+          slots.push({ dayOfWeek: dow as 0|1|2|3|4|5|6, dayLabel, startTime: s.startTime, endTime: s.endTime, isAvailable: true, maxJobs: null });
+        }
+      }
+    }
+  }
+  return slots;
+}
+
+function bridgeToWebSchedule(engineSlots: availEngine.WeeklyScheduleSlot[]): any[] {
+  const byDay: Record<string, { id: string; startTime: string; endTime: string }[]> = {};
+  for (const sl of engineSlots) {
+    if (!sl.isAvailable) continue;
+    const dayKey = DOW_TO_DAY[sl.dayOfWeek];
+    if (!dayKey) continue;
+    if (!byDay[dayKey]) byDay[dayKey] = [];
+    byDay[dayKey].push({ id: `slot-${dayKey}-${sl.startTime.replace(':', '')}`, startTime: sl.startTime, endTime: sl.endTime });
+  }
+  return WEB_ALL_DAYS.map(day => ({ day, enabled: (byDay[day]?.length ?? 0) > 0, slots: byDay[day] ?? [] }));
+}
+
+function bridgeToWebTimeOff(timeOff: availEngine.ProviderTimeOff[]): any[] {
+  return timeOff
+    .filter(t => t.status === 'active')
+    .map(t => ({
+      id:        String(t.id),
+      startDate: t.startDate,
+      endDate:   t.endDate,
+      allDay:    true,
+      startTime: null,
+      endTime:   null,
+      reason:    t.reason ?? 'other',
+      note:      null,
+      createdAt: t.createdAt,
+    }));
+}
 
 // ─── Auth/Me ──────────────────────────────────────────────────────────────────
 
@@ -42,7 +106,7 @@ export const getMe = async (req: Request, res: Response) => {
 
     return res.status(200).json({ status: "success", data: user });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -60,53 +124,43 @@ export const getLocationStatus = async (req: Request, res: Response) => {
     const doc = await collection.findOne({ uid }, { projection: { is_online: 1, updatedAt: 1 } });
     return res.status(200).json({ status: "success", data: toOnlineStatusDto(doc?.is_online ?? false, doc?.updatedAt) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
 export const goOnline = async (req: Request, res: Response) => {
   try {
-    const uid = req.user?.uid;
-    const { latitude = 0, longitude = 0 } = req.body;
-    const now = new Date();
+    const uid = req.user && req.user.uid ? req.user.uid : null;
+    if (!uid) { return res.status(401).json({ status: "failed", message: "Unauthorized" }); }
 
-    const collection = (await mongoDb).collection("worker_locations");
-    const existing = await collection.findOne({ uid }, { projection: { loc: 1 } });
+    const lat = req.body && req.body.latitude !== undefined ? Number(req.body.latitude) : 0;
+    const lng = req.body && req.body.longitude !== undefined ? Number(req.body.longitude) : 0;
 
-    await collection.updateOne(
-      { uid },
-      {
-        $set: {
-          uid,
-          is_online: true,
-          loc: existing?.loc ?? { type: "Point", coordinates: [longitude, latitude] },
-          updatedAt: now,
-        },
-      },
-      { upsert: true }
+    await availabilityService.setOnline(
+      uid,
+      'provider_explicit',
+      uid,
+      'provider',
+      null,
+      lat !== 0 || lng !== 0 ? { latitude: lat, longitude: lng } : null,
     );
 
-    return res.status(200).json({ status: "success", data: toOnlineStatusDto(true, now) });
+    return res.status(200).json({ status: "success", data: toOnlineStatusDto(true, new Date()) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
 export const goOffline = async (req: Request, res: Response) => {
   try {
-    const uid = req.user?.uid;
-    const now = new Date();
+    const uid = req.user && req.user.uid ? req.user.uid : null;
+    if (!uid) { return res.status(401).json({ status: "failed", message: "Unauthorized" }); }
 
-    const collection = (await mongoDb).collection("worker_locations");
-    await collection.updateOne(
-      { uid },
-      { $set: { is_online: false, updatedAt: now } },
-      { upsert: true }
-    );
+    await availabilityService.setOffline(uid, 'provider_explicit', uid, 'provider', null);
 
-    return res.status(200).json({ status: "success", data: toOnlineStatusDto(false, now) });
+    return res.status(200).json({ status: "success", data: toOnlineStatusDto(false, new Date()) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -116,6 +170,7 @@ const bookingCode = (id: any) => `SVN-${String(id).padStart(6, "0")}`;
 
 const toJobDto = (r: any) => ({
   id: String(r.id),
+  bookingId: String(r.id),
   bookingCode: bookingCode(r.id),
   serviceName: r.service_name || "",
   categoryName: r.category_name || "",
@@ -135,7 +190,8 @@ const toJobDto = (r: any) => ({
 
 const JOB_SELECT = (statusFilter: string) => `
   SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
-         ua.address_one, ua.post_town,
+         COALESCE(ua.address_one, b.service_address->>'addressLine') AS address_one,
+         COALESCE(ua.post_town,   b.service_address->>'city')        AS post_town,
          s.level_1 AS category_name, s.level_2 AS service_name,
          u.first_name AS customer_first, u.last_name AS customer_last,
          p.status AS payment_status
@@ -165,15 +221,44 @@ export const getDashboard = async (req: Request, res: Response) => {
       JOB_SELECT(filter).replace(/\{SCHEMA\}/g, schema) + (limit ? ` LIMIT ${limit}` : "");
 
     const [activeJobRes, upcomingRes, todayStatsRes, locationDoc] = await Promise.all([
-      dbQuery.query(jobSql("b.status = 'IN_PROGRESS'", 1), [uid]),
+      // `bookings.status` is NEVER written 'IN_PROGRESS' — startJob writes that to
+      // booking_workers only (technicianService.ts:1139). This filter therefore
+      // matched nothing, and the dashboard reported no active job while the
+      // provider was standing in the customer's house doing the work.
+      //
+      // EXISTS rather than a JOIN so JOB_SELECT keeps its single-row-per-booking
+      // shape for the three other callers.
+      dbQuery.query(
+        jobSql(
+          `EXISTS (
+             SELECT 1 FROM ${schema}.booking_workers bw
+             WHERE bw.booking_id = b.id
+               AND bw.worker_uid = $1
+               AND bw.status = 'IN_PROGRESS'
+           )`,
+          1
+        ),
+        [uid]
+      ),
       dbQuery.query(jobSql("b.status IN ('WORKER_ASSIGNED', 'CONFIRMED')", 10), [uid]),
       dbQuery.query(
+        // Earnings come from disbursements.worker_share — the authoritative
+        // 80% figure computed at completion — NOT from bookings.final_price,
+        // which is the gross the CUSTOMER paid. Summing final_price here
+        // reported the provider's take as 125% of what they are actually paid,
+        // the same defect the Worker app has in earnings_view.dart.
+        //
+        // LEFT JOIN so a completed booking with no disbursement row yet counts
+        // toward completed_today but contributes 0 to earnings, rather than
+        // dropping the job from the count entirely.
         `SELECT
-           COUNT(*) FILTER (WHERE status = 'COMPLETED' AND schedule >= $2 AND schedule <= $3) AS completed_today,
-           COALESCE(SUM(final_price) FILTER (WHERE status = 'COMPLETED' AND schedule >= $2 AND schedule <= $3), 0) AS today_earnings,
-           COALESCE(SUM(final_price) FILTER (WHERE status = 'COMPLETED'), 0) AS total_earned
-         FROM ${schema}.bookings
-         WHERE worker_uid = $1`,
+           COUNT(*) FILTER (WHERE b.status = 'COMPLETED' AND b.schedule >= $2 AND b.schedule <= $3) AS completed_today,
+           COALESCE(SUM(d.worker_share) FILTER (WHERE b.status = 'COMPLETED' AND b.schedule >= $2 AND b.schedule <= $3), 0) AS today_earnings,
+           COALESCE(SUM(d.worker_share) FILTER (WHERE b.status = 'COMPLETED'), 0) AS total_earned
+         FROM ${schema}.bookings b
+         LEFT JOIN ${schema}.disbursements d
+                ON d.booking_id = b.id AND d.worker_uid = b.worker_uid
+         WHERE b.worker_uid = $1`,
         [uid, todayStart, todayEnd]
       ),
       (async () => {
@@ -202,11 +287,19 @@ export const getDashboard = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
 // ─── Earnings ─────────────────────────────────────────────────────────────────
+
+const normalizePayoutStatus = (raw: string | null | undefined): string => {
+  if (!raw) return "pending";
+  const s = raw.toLowerCase();
+  if (s === "released") return "disbursed";
+  if (s === "failed")   return "failed_or_on_hold";
+  return s;
+};
 
 export const getEarnings = async (req: Request, res: Response) => {
   try {
@@ -217,18 +310,32 @@ export const getEarnings = async (req: Request, res: Response) => {
     const params: any[] = [uid];
 
     if (startDate && endDate) {
+      if (isNaN(Date.parse(startDate as string)) || isNaN(Date.parse(endDate as string))) {
+        return res.status(400).json({ status: "failed", message: "Invalid date range" });
+      }
       params.push(startDate, endDate);
       dateFilter = `AND b.schedule >= $2 AND b.schedule <= $3`;
     }
 
     const result = await dbQuery.query(
+      // bw.completed_at is when the provider actually finished. It is joined
+      // because completedAt below used to be populated from b.schedule — the
+      // time the job was BOOKED for. On any job that ran late, started early or
+      // was rescheduled, the earnings history showed a completion time that
+      // never happened, and it silently agreed with scheduledAt on every row.
       `SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
-              s.level_2 AS service_name,
-              p.status AS payment_status
+              so.level_2 AS service_name,
+              p.status   AS payment_status,
+              d.status   AS payout_status,
+              d.released_at,
+              d.worker_share,
+              bw.completed_at
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-       LEFT JOIN ${dbSchema}.services s ON s.id = so.service_id
        LEFT JOIN ${dbSchema}.payments p ON p.booking_id = b.id
+       LEFT JOIN ${dbSchema}.disbursements d ON d.booking_id = b.id AND d.worker_uid = $1
+       LEFT JOIN ${dbSchema}.booking_workers bw
+              ON bw.booking_id = b.id AND bw.worker_uid = $1
        WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
        ${dateFilter}
        ORDER BY b.schedule DESC`,
@@ -237,18 +344,26 @@ export const getEarnings = async (req: Request, res: Response) => {
 
     const data = result.rows.map((r: any) => {
       const gross = Number(r.final_price || 0);
+      const workerShare = r.worker_share != null
+        ? Math.round(Number(r.worker_share) * 100) / 100
+        : providerShareOf(gross);
       return {
         id: String(r.id),
+        bookingId: String(r.id),
         bookingCode: bookingCode(r.id),
         serviceName: r.service_name || "",
-        completedAt: r.schedule,
+        // Falls back to the schedule only when the assignment row carries no
+        // completion time, so the field degrades to its old value rather than
+        // to null for any historical row written before completed_at was set.
+        completedAt: r.completed_at ?? r.schedule,
         scheduledAt: r.schedule,
         bookingAmount: gross,
-        providerShareAmount: Math.round(gross * 0.8 * 100) / 100,
-        providerSharePercent: 80,
+        providerShareAmount: workerShare,
+        providerSharePercent: PROVIDER_SHARE_PERCENT,
         clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
-        bookingStatus: "completed",
-        providerPayoutStatus: "disbursed",
+        bookingStatus: r.status ? r.status.toLowerCase() : "completed",
+        providerPayoutStatus: normalizePayoutStatus(r.payout_status),
+        disbursedAt: r.released_at || null,
         paymentMethod: (r.payment_method || "cash").toLowerCase(),
         currency: "PHP",
       };
@@ -256,7 +371,61 @@ export const getEarnings = async (req: Request, res: Response) => {
 
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
+  }
+};
+
+export const getEarningById = async (req: Request, res: Response) => {
+  try {
+    const uid  = req.user?.uid;
+    const id   = Number(req.params.id);
+    if (!uid || !Number.isFinite(id)) {
+      return res.status(400).json({ status: "failed", message: "Invalid request" });
+    }
+    const result = await dbQuery.query(
+      `SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
+              so.level_2 AS service_name,
+              p.status   AS payment_status,
+              d.status   AS payout_status,
+              d.released_at,
+              d.worker_share,
+              bw.completed_at
+       FROM ${dbSchema}.bookings b
+       LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+       LEFT JOIN ${dbSchema}.payments        p  ON p.booking_id = b.id
+       LEFT JOIN ${dbSchema}.disbursements   d  ON d.booking_id = b.id AND d.worker_uid = $1
+       LEFT JOIN ${dbSchema}.booking_workers bw ON bw.booking_id = b.id AND bw.worker_uid = $1
+       WHERE b.id = $2 AND b.worker_uid = $1`,
+      [uid, id]
+    );
+    if (!result.rowCount) {
+      return res.status(404).json({ status: "failed", message: "Earning not found" });
+    }
+    const r = result.rows[0];
+    const gross = Number(r.final_price || 0);
+    const workerShareDetail = r.worker_share != null
+      ? Math.round(Number(r.worker_share) * 100) / 100
+      : providerShareOf(gross);
+    const data = {
+      id:                  String(r.id),
+      bookingId:           String(r.id),
+      bookingCode:         bookingCode(r.id),
+      serviceName:         r.service_name || "",
+      completedAt:         r.completed_at ?? r.schedule,
+      scheduledAt:         r.schedule,
+      bookingAmount:       gross,
+      providerShareAmount: workerShareDetail,
+      providerSharePercent: PROVIDER_SHARE_PERCENT,
+      clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
+      bookingStatus:       r.status ? r.status.toLowerCase() : "completed",
+      providerPayoutStatus: normalizePayoutStatus(r.payout_status),
+      disbursedAt:         r.released_at || null,
+      paymentMethod:       (r.payment_method || "cash").toLowerCase(),
+      currency:            "PHP",
+    };
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -269,6 +438,9 @@ export const getEarningsSummary = async (req: Request, res: Response) => {
     const params: any[] = [uid];
 
     if (startDate && endDate) {
+      if (isNaN(Date.parse(startDate as string)) || isNaN(Date.parse(endDate as string))) {
+        return res.status(400).json({ status: "failed", message: "Invalid date range" });
+      }
       params.push(startDate, endDate);
       dateFilter = `AND b.schedule >= $2 AND b.schedule <= $3`;
     }
@@ -276,23 +448,27 @@ export const getEarningsSummary = async (req: Request, res: Response) => {
     const result = await dbQuery.query(
       `SELECT
          COUNT(*) AS total_jobs,
-         COALESCE(SUM(final_price), 0) AS total_earned
+         COALESCE(SUM(b.final_price), 0) AS total_gross,
+         COALESCE(SUM(CASE WHEN d.status = 'RELEASED' THEN d.worker_share ELSE 0 END), 0) AS total_paid,
+         COALESCE(SUM(CASE WHEN d.status IN ('PENDING','FAILED') OR d.id IS NULL
+                           THEN b.final_price * ${PROVIDER_SHARE_RATE} ELSE 0 END), 0) AS total_pending
        FROM ${dbSchema}.bookings b
+       LEFT JOIN ${dbSchema}.disbursements d ON d.booking_id = b.id AND d.worker_uid = $1
        WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
        ${dateFilter}`,
       params
     );
 
     const s = result.rows[0] || {};
-    const gross = Number(s.total_earned ?? 0);
-    const share = Math.round(gross * 0.8 * 100) / 100;
+    const totalPaid    = Math.round(Number(s.total_paid    ?? 0) * 100) / 100;
+    const totalPending = Math.round(Number(s.total_pending ?? 0) * 100) / 100;
 
     return res.status(200).json({
       status: "success",
       data: {
-        totalEarned: share,
-        totalPaid: share,
-        totalPending: 0,
+        totalEarned:  providerShareOf(Number(s.total_gross ?? 0)),
+        totalPaid,
+        totalPending,
         totalRefunded: 0,
         periodLabel: startDate ? "Custom range" : "All time",
         currency: "PHP",
@@ -300,7 +476,7 @@ export const getEarningsSummary = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -310,10 +486,9 @@ export const getLedger = async (req: Request, res: Response) => {
 
     const result = await dbQuery.query(
       `SELECT b.id, b.schedule, b.final_price, b.payment_method, b.status,
-              s.level_2 AS service_name
+              so.level_2 AS service_name
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-       LEFT JOIN ${dbSchema}.services s ON s.id = so.service_id
        WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
        ORDER BY b.schedule DESC
        LIMIT 50`,
@@ -328,7 +503,7 @@ export const getLedger = async (req: Request, res: Response) => {
         type: "booking_earning",
         direction: "credit",
         status: "settled",
-        amountMinor: Math.round(gross * 0.8 * 100),
+        amountMinor: Math.round(providerShareOf(gross) * 100),
         currency: "PHP",
         description: `${r.service_name || "Service"} · ${code}`,
         bookingId: String(r.id),
@@ -344,13 +519,43 @@ export const getLedger = async (req: Request, res: Response) => {
 
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
+const _mapPayoutStatus = (raw: string): string => {
+  const s = (raw || "").toUpperCase();
+  if (s === "RELEASED")   return "paid";
+  if (s === "FAILED")     return "failed";
+  if (s === "PROCESSING") return "pending";
+  return "pending";
+};
+
 export const getPayouts = async (req: Request, res: Response) => {
-  // Payout disbursement records — not yet in DB schema, return empty
-  return res.status(200).json({ status: "success", data: [] });
+  try {
+    const uid = req.user?.uid;
+    const rows = await disbursementService.listDisbursements({ workerUid: uid });
+    // Map to ProviderPayoutDto shape; exclude internal fields (servana_share, payout_error)
+    const data = rows.map((r: any) => ({
+      id:                String(r.id),
+      amountMinor:       Math.round(Number(r.worker_share || 0) * 100),
+      currency:          "PHP",
+      status:            _mapPayoutStatus(r.status),
+      payoutMethodSummary: null,
+      initiatedAt:       r.created_at    ? new Date(r.created_at).toISOString()    : null,
+      expectedArrivalAt: r.release_after ? new Date(r.release_after).toISOString() : null,
+      completedAt:       r.released_at   ? new Date(r.released_at).toISOString()   : null,
+      failedAt:          null,
+      failureMessage:    null,
+      transactionCount:  1,
+      reference:         r.paymongo_payout_id ?? null,
+      events:            [],
+      includedTransactionSummaries: [],
+    }));
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: "Server error" });
+  }
 };
 
 // ─── Review Status ────────────────────────────────────────────────────────────
@@ -397,7 +602,7 @@ export const getReviewStatus = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -422,27 +627,24 @@ export const submitForReview = async (req: Request, res: Response) => {
       data: { reviewStatus: "under_review", message: "Submitted for review." },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
-// ─── Availability (MongoDB — worker_availability / worker_time_off) ───────────
-
-const DEFAULT_DAYS = ['mon','tue','wed','thu','fri','sat','sun'];
+// ─── Availability (canonical PostgreSQL engine — shared with mobile + admin) ──
 
 export const getWorkerAvailability = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const col = (await mongoDb).collection("worker_availability");
-    const doc = await col.findOne({ uid }, { projection: { _id: 0, uid: 0 } });
-    const schedule = doc?.schedule ?? DEFAULT_DAYS.map(day => ({ day, enabled: false, slots: [] }));
+    const profile = await availEngine.getAvailabilityProfile(uid);
+    const schedule = bridgeToWebSchedule(profile.weeklySchedule);
     return res.status(200).json({
       status: "success",
-      data: { schedule, timezone: doc?.timezone ?? "Asia/Manila", updatedAt: doc?.updatedAt ?? null },
+      data: { schedule, timezone: profile.timezone, updatedAt: profile.updatedAt },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -454,16 +656,12 @@ export const saveWorkerAvailability = async (req: Request, res: Response) => {
     if (!Array.isArray(schedule)) {
       return res.status(400).json({ status: "failed", message: "schedule must be an array" });
     }
-    const now = new Date();
-    const col = (await mongoDb).collection("worker_availability");
-    await col.updateOne(
-      { uid },
-      { $set: { uid, schedule, timezone: timezone ?? "Asia/Manila", updatedAt: now } },
-      { upsert: true }
-    );
-    return res.status(200).json({ status: "success", data: { success: true, updatedAt: now.toISOString() } });
+    const engineSlots = bridgeToEngineSlots(schedule);
+    const result = await availEngine.saveWeeklySchedule(uid, engineSlots, timezone ?? "Asia/Manila", uid);
+    return res.status(200).json({ status: "success", data: { success: true, updatedAt: result.updatedAt } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    const code = error?.statusCode ?? 500;
+    return res.status(code).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -471,11 +669,10 @@ export const getWorkerTimeOff = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const col = (await mongoDb).collection("worker_time_off");
-    const docs = await col.find({ uid }, { projection: { _id: 0, uid: 0 } }).toArray();
-    return res.status(200).json({ status: "success", data: { timeOff: docs } });
+    const timeOff = await availEngine.listTimeOff(uid);
+    return res.status(200).json({ status: "success", data: { timeOff: bridgeToWebTimeOff(timeOff) } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -483,26 +680,26 @@ export const createWorkerTimeOff = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const { startDate, endDate, allDay, startTime, endTime, reason, note } = req.body;
+    const { startDate, endDate, reason, allDay, startTime, endTime, note } = req.body;
     if (!startDate || !endDate || !reason) {
       return res.status(400).json({ status: "failed", message: "startDate, endDate, and reason are required" });
     }
-    const id = `toff-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-    const record = {
-      uid, id, startDate, endDate,
-      allDay: allDay ?? true,
+    const record = await availEngine.createTimeOff(uid, { startDate, endDate, reason }, uid);
+    const dto = {
+      id:        String(record.id),
+      startDate: record.startDate,
+      endDate:   record.endDate,
+      allDay:    allDay ?? true,
       startTime: startTime ?? null,
-      endTime: endTime ?? null,
-      reason,
-      note: note ?? null,
-      createdAt: new Date().toISOString(),
+      endTime:   endTime ?? null,
+      reason:    record.reason ?? reason,
+      note:      note ?? null,
+      createdAt: record.createdAt,
     };
-    const col = (await mongoDb).collection("worker_time_off");
-    await col.insertOne(record);
-    const { uid: _u, ...dto } = record;
     return res.status(201).json({ status: "success", data: dto });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    const code = error?.statusCode ?? 500;
+    return res.status(code).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -512,14 +709,15 @@ export const deleteWorkerTimeOff = async (req: Request, res: Response) => {
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
     const { id } = req.params;
     if (!id) return res.status(400).json({ status: "failed", message: "id is required" });
-    const col = (await mongoDb).collection("worker_time_off");
-    const result = await col.deleteOne({ uid, id });
-    if (!result.deletedCount) {
-      return res.status(404).json({ status: "failed", message: "Time-off period not found or does not belong to this provider" });
+    const numericId = Number(id);
+    if (!Number.isInteger(numericId) || numericId <= 0) {
+      return res.status(404).json({ status: "failed", message: "Time-off period not found" });
     }
+    await availEngine.cancelTimeOff(uid, numericId, uid);
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    const code = error?.statusCode ?? 500;
+    return res.status(code).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -531,7 +729,7 @@ export const uploadWorkerRequirement = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const { file, name } = req.body;
+    const { file, name, requirementType } = req.body;
     if (!file || !name) {
       return res.status(400).json({ status: "failed", message: "file (data URI) and name are required" });
     }
@@ -543,15 +741,22 @@ export const uploadWorkerRequirement = async (req: Request, res: Response) => {
       return res.status(422).json({ status: "failed", message: "File type not allowed. Use JPG, PNG, WebP, or PDF." });
     }
     const sanitizedName = String(name).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
+    const sanitizedType = requirementType ? String(requirementType).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 50) : undefined;
     const fileUrl = await uploadFileToStorage("provider-requirements", `${uid}_${Date.now()}`, file);
-    const inserted = await technicianService.addWorkerRequirements(uid, [{ fileUrl, fileName: sanitizedName }]);
+    const inserted = await technicianService.addWorkerRequirements(uid, [{ fileUrl, fileName: sanitizedName, requirementType: sanitizedType }]);
     const row = inserted[0];
+    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
     return res.status(201).json({
       status: "success",
-      data: { requirementId: String(row.id), status: "pending_review", uploadedAt: row.uploadedAt },
+      data: {
+        requirementId: String(row.id),
+        status: "pending_review",
+        uploadedAt: row.uploadedAt,
+        requirementType: sanitizedType ?? null,
+      },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -562,7 +767,7 @@ export const getWorkerRequirementsOwn = async (req: Request, res: Response) => {
     const requirements = await technicianService.getWorkerRequirements(uid);
     return res.status(200).json({ status: "success", data: requirements });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -573,51 +778,24 @@ export const deleteWorkerRequirementOwn = async (req: Request, res: Response) =>
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ status: "failed", message: "Invalid id" });
     await technicianService.deleteWorkerRequirement(uid, id);
+    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Requirement not found" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
-// ─── Onboarding (maps review-status + requirements to onboarding state) ───────
+// ─── Onboarding ───────────────────────────────────────────────────────────────
 
 export const getOnboardingState = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-
-    const [workerRes, reqRes] = await Promise.all([
-      dbQuery.query(
-        `SELECT is_email_verified, is_archive FROM ${dbSchema}.user_credentials WHERE uid = $1`,
-        [uid]
-      ),
-      dbQuery.query(
-        `SELECT COUNT(*) AS count FROM ${dbSchema}.worker_requirements WHERE worker_uid = $1`,
-        [uid]
-      ),
-    ]);
-
-    if (!workerRes.rowCount) return res.status(404).json({ status: "failed", message: "Provider not found" });
-
-    const worker = workerRes.rows[0];
-    const reqCount = Number(reqRes.rows[0].count);
-    const emailVerified: boolean = worker.is_email_verified;
-    const hasRequirements = reqCount > 0;
-
-    const completedSteps: string[] = [];
-    if (emailVerified) completedSteps.push("personal_info");
-    if (hasRequirements) completedSteps.push("requirements");
-
-    let status = "in_progress";
-    let currentStep = emailVerified ? "requirements" : "personal_info";
-    if (emailVerified && hasRequirements) { status = "pending_review"; currentStep = "submitted"; }
-
-    return res.status(200).json({
-      status: "success",
-      data: { status, currentStep, completedSteps },
-    });
+    const data = await onboardingService.getOnboardingAggregate(uid);
+    return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    const code = (error as any).statusCode;
+    return res.status(code ?? 500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -625,35 +803,36 @@ export const submitOnboarding = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-
-    const reqRes = await dbQuery.query(
-      `SELECT COUNT(*) AS count FROM ${dbSchema}.worker_requirements WHERE worker_uid = $1`,
-      [uid]
-    );
-    if (Number(reqRes.rows[0].count) === 0) {
-      return res.status(400).json({
-        status: "failed",
-        message: "Please upload at least one requirement document before submitting.",
-      });
-    }
-
-    return res.status(200).json({
-      status: "success",
-      data: {
-        status: "pending_review",
-        currentStep: "submitted",
-        completedSteps: ["personal_info", "requirements"],
-        submittedAt: new Date().toISOString(),
-      },
-    });
+    const data = await onboardingService.submitOnboarding(uid);
+    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
+    return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    const code = (error as any).statusCode;
+    return res.status(code ?? 500).json({ status: "failed", message: "Server error" });
   }
 };
 
 export const saveOnboardingStep = async (req: Request, res: Response) => {
-  // Scaffold — step data persisted via their respective dedicated endpoints.
-  return res.status(200).json({ status: "success", data: { success: true } });
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const { step, ...payload } = req.body;
+    if (!step) return res.status(400).json({ status: "failed", message: "step is required" });
+    const data = await onboardingService.saveDraftStep(uid, step, payload);
+    return res.status(200).json({ status: "success", data: { success: true, ...data } });
+  } catch (error: any) {
+    const code = (error as any).statusCode;
+    return res.status(code ?? 500).json({ status: "failed", message: "Server error" });
+  }
+};
+
+export const getProviderReconciliationReport = async (req: Request, res: Response) => {
+  try {
+    const data = await onboardingService.getReconciliationReport();
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: "Server error" });
+  }
 };
 
 // ─── Additional work — provider-specific actions ───────────────────────────────
@@ -687,7 +866,7 @@ export const workerAdditionalDecision = async (req: Request, res: Response) => {
 
     return res.status(200).json({ status: "success", data: { success: true, decision } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -715,7 +894,7 @@ export const withdrawAdditionalWork = async (req: Request, res: Response) => {
     }
     return res.status(200).json({ status: "success", data: { success: true, status: result.rows[0].status } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -751,7 +930,7 @@ export const confirmProceedAdditionalWork = async (req: Request, res: Response) 
 
     return res.status(200).json({ status: "success", data: { success: true, status: result.rows[0].status } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -797,7 +976,7 @@ export const getProviderProfile = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -822,7 +1001,7 @@ export const saveServicePreference = async (req: Request, res: Response) => {
 
     return res.status(200).json({ status: "success", data: { service_category: safeCategory } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -850,7 +1029,7 @@ export const getProviderSecurity = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1130,7 +1309,7 @@ export const submitSafetyIncident = async (req: Request, res: Response) => {
       data: { caseKey: incidentId, providerSafeReference: ref, state: 'submitted' },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1146,7 +1325,7 @@ export const getSafetyIncidents = async (req: Request, res: Response) => {
       .toArray();
     return res.status(200).json({ status: "success", data: docs.map(toSafetyCaseSummary) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1168,7 +1347,7 @@ export const changeProviderPassword = async (req: Request, res: Response) => {
     await revokeTokenInFirebase(uid);
     return res.status(200).json({ status: "success", data: null, message: "Password updated. Please sign in again." });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1180,7 +1359,7 @@ export const revokeProviderSession = async (req: Request, res: Response) => {
     await revokeTokenInFirebase(uid);
     return res.status(200).json({ status: "success", data: null, message: "Session revoked." });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1191,44 +1370,42 @@ export const revokeAllProviderSessions = async (req: Request, res: Response) => 
     await revokeTokenInFirebase(uid);
     return res.status(200).json({ status: "success", data: null, message: "All other sessions revoked." });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
-// ─── Service Area (MongoDB — worker_service_areas) ────────────────────────────
-
-const CITY_NAMES: Record<string, string> = {
-  manila: 'City of Manila', quezon: 'Quezon City', makati: 'Makati City',
-  taguig: 'Taguig City', pasig: 'Pasig City', mandaluyong: 'Mandaluyong City',
-  marikina: 'Marikina City', caloocan: 'Caloocan City', malabon: 'Malabon City',
-  navotas: 'Navotas City', valenzuela: 'Valenzuela City', 'las-pinas': 'Las Piñas City',
-  muntinlupa: 'Muntinlupa City', paranaque: 'Parañaque City', pasay: 'Pasay City',
-  pateros: 'Pateros', 'san-juan': 'San Juan City',
-  bacoor: 'Bacoor City', imus: 'Imus City', antipolo: 'Antipolo City',
-  'san-jose-del-monte': 'San Jose del Monte',
-};
-
-const VALID_CITY_IDS = new Set(Object.keys(CITY_NAMES));
-
-function buildAreaLabel(cityIds: string[]): string {
-  if (cityIds.length === 0) return '';
-  const names = cityIds.slice(0, 3).map(id => CITY_NAMES[id] || id);
-  const suffix = cityIds.length > 3 ? ` + ${cityIds.length - 3} more` : '';
-  return names.join(', ') + suffix;
-}
+// ─── Service Area (canonical PostgreSQL engine — shared with mobile + admin) ──
 
 export const getWorkerServiceArea = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const col = (await mongoDb).collection("worker_service_areas");
-    const doc = await col.findOne({ uid }, { projection: { _id: 0, uid: 0 } });
+    const profile = await areaEngine.getServiceAreaProfile(uid);
     return res.status(200).json({
       status: "success",
-      data: { cityIds: doc?.cityIds || [], label: doc?.label || '', updatedAt: doc?.updatedAt || null },
+      data: { cityIds: profile.cityIds, label: profile.label ?? '', updatedAt: profile.updatedAt },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
+  }
+};
+
+/**
+ * GET /provider/performance
+ *
+ * Scoped to the caller's own uid from the verified token — there is no :uid
+ * parameter, so one provider cannot read another's performance by guessing an
+ * identifier (§11, §12).
+ */
+export const getProviderPerformanceMetrics = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const data = await getProviderPerformance(uid);
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    console.error("[providerController] getProviderPerformanceMetrics error:", error?.message ?? error);
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1240,16 +1417,11 @@ export const saveWorkerServiceArea = async (req: Request, res: Response) => {
     if (!Array.isArray(cityIds)) {
       return res.status(400).json({ status: "failed", message: "cityIds must be an array" });
     }
-    const clean: string[] = cityIds
-      .filter((id: any) => typeof id === 'string' && VALID_CITY_IDS.has(id))
-      .slice(0, 21);
-    const now = new Date().toISOString();
-    const label = buildAreaLabel(clean);
-    const col = (await mongoDb).collection("worker_service_areas");
-    await col.updateOne({ uid }, { $set: { uid, cityIds: clean, label, updatedAt: now } }, { upsert: true });
-    return res.status(200).json({ status: "success", data: { success: true, updatedAt: now, label } });
+    const result = await areaEngine.saveServiceArea(uid, { coverageMode: 'city', cityIds }, uid);
+    return res.status(200).json({ status: "success", data: { success: true, updatedAt: result.updatedAt } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    const code = error?.statusCode ?? 500;
+    return res.status(code).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1313,17 +1485,89 @@ export const uploadWorkerProfilePhoto = async (req: Request, res: Response) => {
     return res.status(200).json({ status: "success", data: { safeUrl, uploadedAt } });
   } catch (error: any) {
     console.error("[uploadWorkerProfilePhoto] 500:", error?.message ?? error);
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
+  }
+};
+
+export const deleteWorkerProfilePhoto = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    await ensureProfileTable();
+    // Read current URL so we can delete the file from Firebase Storage.
+    const existing = await dbQuery.query(
+      `SELECT photo_url FROM ${dbSchema}.user_profile WHERE uid = $1 LIMIT 1`,
+      [uid]
+    );
+    const photoUrl: string | null = existing.rows[0]?.photo_url ?? null;
+    // Clear the DB record first — UI can update immediately.
+    await dbQuery.query(
+      `INSERT INTO ${dbSchema}.user_profile (uid, photo_url, updated_at)
+       VALUES ($1, NULL, NOW())
+       ON CONFLICT (uid) DO UPDATE SET photo_url = NULL, updated_at = NOW()`,
+      [uid]
+    );
+    // Best-effort: delete the object from Firebase Storage.
+    if (photoUrl && photoUrl.includes('firebasestorage.googleapis.com')) {
+      try {
+        const match = photoUrl.match(/\/o\/([^?]+)/);
+        if (match) {
+          const filePath = decodeURIComponent(match[1]);
+          const bucket = (await import('../middleware/firebaseApp')).firebaseAdmin.storage().bucket();
+          await bucket.file(filePath).delete().catch(() => {/* file may not exist */});
+        }
+      } catch {
+        /* non-fatal — DB record is already cleared */
+      }
+    }
+    return res.status(200).json({ status: "success", data: null });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
 // ─── Payout Settings (MongoDB — worker_payout_methods) ───────────────────────
 
+// PayMongo bank_code → display label mapping (all supported channels)
 const PAYOUT_TYPE_LABELS: Record<string, string> = {
-  gcash: 'GCash', maya: 'Maya', bdo: 'BDO Unibank',
-  bpi: 'Bank of the Philippine Islands', unionbank: 'UnionBank',
-  landbank: 'Landbank of the Philippines', other: 'Other',
+  gcash:         'GCash',
+  maya:          'Maya (PayMaya)',
+  bdo:           'BDO Unibank',
+  bpi:           'BPI',
+  unionbank:     'UnionBank',
+  landbank:      'Landbank of the Philippines',
+  metrobank:     'Metrobank',
+  pnb:           'Philippine National Bank',
+  rcbc:          'RCBC',
+  china_bank:    'China Banking Corporation',
+  security_bank: 'Security Bank',
+  maybank:       'Maybank Philippines',
+  ew_bank:       'EastWest Bank',
+  ps_bank:       'PSBank',
 };
+
+// Map FE type key → PayMongo bank_code for Disbursements API
+const PAYMONGO_BANK_CODE: Record<string, string> = {
+  gcash:         'GCASH',
+  maya:          'PAYMAYA',
+  bdo:           'BDO',
+  bpi:           'BPI',
+  unionbank:     'UNIONBANK',
+  landbank:      'LANDBANK',
+  metrobank:     'METROBANK',
+  pnb:           'PNB',
+  rcbc:          'RCBC',
+  china_bank:    'CHINA_BANK',
+  security_bank: 'SECURITY_BANK',
+  maybank:       'MAYBANK',
+  ew_bank:       'EW_BANK',
+  ps_bank:       'PS_BANK',
+};
+
+const EWALLET_TYPES  = new Set<string>(['gcash', 'maya']);
+const PH_MOBILE_RE   = /^(09\d{9}|(\+63)9\d{9})$/;
+const BANK_ACCT_RE   = /^\d{8,16}$/;
+const ACCT_NAME_RE   = /^[A-Za-zÀ-ÖØ-öø-ÿ .'\-]{2,100}$/;
 const PAYOUT_STATUS_LABELS: Record<string, string> = {
   verified: 'Verified', unverified: 'Unverified', pending: 'Pending review',
   failed: 'Verification failed', missing: 'Not set up',
@@ -1347,17 +1591,18 @@ export const getProviderPayoutSummary = async (req: Request, res: Response) => {
     return res.status(200).json({
       status: "success",
       data: {
-        hasPayoutMethod: true,
-        type: doc.type,
-        typeLabel: PAYOUT_TYPE_LABELS[doc.type] || doc.type,
+        hasPayoutMethod:  true,
+        type:             doc.type,
+        typeLabel:        PAYOUT_TYPE_LABELS[doc.type] || doc.type,
+        accountName:      doc.accountName || null,
         maskedIdentifier: doc.maskedIdentifier || null,
-        status: doc.status || 'pending',
-        statusLabel: PAYOUT_STATUS_LABELS[doc.status] || 'Pending review',
-        lastUpdated: doc.updatedAt || null,
+        status:           doc.status || 'pending',
+        statusLabel:      PAYOUT_STATUS_LABELS[doc.status] || 'Pending review',
+        lastUpdated:      doc.updatedAt || null,
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1374,39 +1619,74 @@ export const registerProviderPayout = async (req: Request, res: Response) => {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
 
-    const { type, identifier } = req.body;
-    const VALID_TYPES = ['gcash', 'maya', 'bdo', 'bpi', 'unionbank', 'landbank', 'other'];
-    if (!type || !VALID_TYPES.includes(type)) {
-      return res.status(400).json({ status: "failed", message: "Invalid payout type" });
-    }
-    if (!identifier || String(identifier).trim().length < 4) {
-      return res.status(400).json({ status: "failed", message: "Account number must be at least 4 characters" });
+    const { type, accountNumber, accountName } = req.body;
+
+    if (!type || !PAYMONGO_BANK_CODE[type]) {
+      return res.status(400).json({ status: "failed", message: "Invalid payout type. Choose a supported bank or e-wallet." });
     }
 
-    const trimmed = String(identifier).trim();
-    const maskedIdentifier = '•••• ' + trimmed.slice(-4);
+    const trimmedName   = String(accountName   ?? '').trim();
+    const trimmedNumber = String(accountNumber ?? '').trim();
 
-    const col = (await mongoDb).collection("worker_payout_methods");
-    await col.updateOne(
-      { uid },
-      { $set: { uid, type, maskedIdentifier, status: 'pending', updatedAt: new Date() } },
-      { upsert: true }
-    );
+    if (!ACCT_NAME_RE.test(trimmedName)) {
+      return res.status(400).json({ status: "failed", message: "Account name must be 2–100 characters (letters and spaces only)." });
+    }
+
+    const isEwallet = EWALLET_TYPES.has(type);
+    if (isEwallet) {
+      if (!PH_MOBILE_RE.test(trimmedNumber)) {
+        return res.status(400).json({ status: "failed", message: "Enter a valid Philippine mobile number (e.g. 09171234567)." });
+      }
+    } else {
+      if (!BANK_ACCT_RE.test(trimmedNumber)) {
+        return res.status(400).json({ status: "failed", message: "Account number must be 8–16 digits." });
+      }
+    }
+
+    // Normalize mobile: +639XXXXXXXXX → 09XXXXXXXXX for consistent storage
+    const normalizedNumber = trimmedNumber.startsWith('+63')
+      ? '0' + trimmedNumber.slice(3)
+      : trimmedNumber;
+
+    const bankCode = PAYMONGO_BANK_CODE[type];
+    const maskedIdentifier = '•••• ' + normalizedNumber.slice(-4);
+
+    // Store full PayMongo-ready details in PostgreSQL (used by disbursement engine)
+    await technicianService.upsertWorkerBankAccount(uid, {
+      bankCode,
+      accountNumber: normalizedNumber,
+      accountName:   trimmedName,
+    });
+
+    // Store display record in MongoDB (masked, for provider UI).
+    // If MongoDB write fails, best-effort rollback of the PG record to avoid split state.
+    try {
+      const col = (await mongoDb).collection("worker_payout_methods");
+      await col.updateOne(
+        { uid },
+        { $set: { uid, type, accountName: trimmedName, maskedIdentifier, status: 'pending', updatedAt: new Date() } },
+        { upsert: true }
+      );
+    } catch (mongoErr: any) {
+      await technicianService.deleteWorkerBankAccount(uid).catch(() => {});
+      throw mongoErr;
+    }
 
     return res.status(200).json({
       status: "success",
       data: {
         hasPayoutMethod: true,
         type,
-        typeLabel: PAYOUT_TYPE_LABELS[type] || type,
+        typeLabel:        PAYOUT_TYPE_LABELS[type] || type,
+        accountName:      trimmedName,
         maskedIdentifier,
-        status: 'pending',
-        statusLabel: 'Pending review',
-        lastUpdated: new Date().toISOString(),
+        status:           'pending',
+        statusLabel:      'Pending review',
+        lastUpdated:      new Date().toISOString(),
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1440,7 +1720,7 @@ export const getProviderPrivacy = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1461,7 +1741,7 @@ export const requestProviderDataExport = async (req: Request, res: Response) => 
       message: "Export request submitted. You will be notified when your data is ready.",
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1483,7 +1763,7 @@ export const requestProviderDeactivation = async (req: Request, res: Response) =
       message: "Deactivation request submitted. Our team will review and contact you.",
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1518,7 +1798,7 @@ export const requestProviderDeletion = async (req: Request, res: Response) => {
       message: "Deletion request submitted. Your account will be permanently deleted within 30 days.",
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1533,7 +1813,7 @@ export const getSupportTicketDetail = async (req: Request, res: Response) => {
     if (!ticket) return res.status(404).json({ status: "failed", message: "Ticket not found" });
     return res.status(200).json({ status: "success", data: ticket });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1553,7 +1833,7 @@ export const addSupportTicketReply = async (req: Request, res: Response) => {
     }
     return res.status(200).json({ status: "success", data: result });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1566,7 +1846,7 @@ export const closeSupportTicket = async (req: Request, res: Response) => {
     if (!result) return res.status(404).json({ status: "failed", message: "Ticket not found or cannot be closed in its current state" });
     return res.status(200).json({ status: "success", data: result });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1579,7 +1859,7 @@ export const reopenSupportTicket = async (req: Request, res: Response) => {
     if (!result) return res.status(404).json({ status: "failed", message: "Ticket not found or not eligible for reopen" });
     return res.status(200).json({ status: "success", data: result });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1590,7 +1870,7 @@ export const getSupportUnreadCount = async (req: Request, res: Response) => {
     const count = await notificationService.countUnreadSupportReplies(uid);
     return res.status(200).json({ status: "success", data: { count } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1617,7 +1897,7 @@ export const recordSafetyCheckIn = async (req: Request, res: Response) => {
     await col.insertOne({ uid, bookingId: String(bookingId), stage: String(stage), checkedInAt });
     return res.status(201).json({ status: "success", data: { success: true, stage, checkedInAt } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -1644,7 +1924,7 @@ export const getServiceApplications = async (req: Request, res: Response) => {
     const applications = await serviceApplicationService.getApplicationsByWorker(uid);
     return res.json({ success: true, applications: applications.map(toApplicationDto) });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message || "Failed to fetch applications" });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
@@ -1659,6 +1939,7 @@ export const submitServiceApplication = async (req: Request, res: Response) => {
     }
 
     const app = await serviceApplicationService.submitApplication(uid, serviceId);
+    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
     return res.status(201).json({ success: true, application: toApplicationDto(app) });
   } catch (error: any) {
     const status = error.statusCode ?? 500;
@@ -1680,6 +1961,7 @@ export const cancelServiceApplication = async (req: Request, res: Response) => {
     if (!applicationId) return res.status(400).json({ success: false, message: "applicationId is required" });
 
     const app = await serviceApplicationService.cancelApplication(applicationId, uid);
+    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
     return res.json({ success: true, application: toApplicationDto(app) });
   } catch (error: any) {
     const status = error.statusCode ?? 500;
@@ -1691,7 +1973,107 @@ export const cancelServiceApplication = async (req: Request, res: Response) => {
   }
 };
 
+export const resubmitServiceApplication = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const { applicationId } = req.params as { applicationId: string };
+    if (!applicationId) return res.status(400).json({ success: false, message: "applicationId is required" });
+
+    const app = await serviceApplicationService.resubmitApplication(applicationId, uid);
+    return res.json({ success: true, application: toApplicationDto(app) });
+  } catch (error: any) {
+    const status = error.statusCode ?? 500;
+    return res.status(status).json({
+      success: false,
+      code: error.code ?? "INTERNAL_ERROR",
+      message: error.message || "Failed to resubmit application",
+    });
+  }
+};
+
+export const pauseWorkerService = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const serviceId = Number(req.params.serviceId);
+    if (!Number.isInteger(serviceId) || serviceId <= 0) {
+      return res.status(400).json({ success: false, message: "serviceId must be a positive integer" });
+    }
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() || undefined : undefined;
+
+    const row = await technicianService.pauseService(uid, serviceId, reason);
+    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
+    return res.json({ success: true, service: { serviceId: Number(row.service_id), status: row.status, pauseReason: row.pause_reason ?? null } });
+  } catch (error: any) {
+    const status = error.statusCode ?? 500;
+    return res.status(status).json({ success: false, code: error.code ?? "INTERNAL_ERROR", message: error.message || "Failed to pause service" });
+  }
+};
+
+export const reactivateWorkerService = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const serviceId = Number(req.params.serviceId);
+    if (!Number.isInteger(serviceId) || serviceId <= 0) {
+      return res.status(400).json({ success: false, message: "serviceId must be a positive integer" });
+    }
+
+    const row = await technicianService.reactivateService(uid, serviceId);
+    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
+    return res.json({ success: true, service: { serviceId: Number(row.service_id), status: row.status, pauseReason: null } });
+  } catch (error: any) {
+    const status = error.statusCode ?? 500;
+    return res.status(status).json({ success: false, code: error.code ?? "INTERNAL_ERROR", message: error.message || "Failed to reactivate service" });
+  }
+};
+
 // ─── FCM Token ────────────────────────────────────────────────────────────────
+
+/**
+ * DELETE /api/provider/fcm-token — release this device on sign-out.
+ *
+ * Without this, signing out leaves the handset addressable as the provider who
+ * just left. The next push carries their booking details to a phone they have
+ * handed back, put down, or sold.
+ *
+ * Scoped to the caller AND to the token they present, so one device signing out
+ * cannot silently unsubscribe the same provider's other devices.
+ *
+ * Idempotent: releasing a token that is already gone is a success, because a
+ * sign-out must never be blocked by the state of a push registration.
+ */
+export const deleteProviderFcmToken = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+
+    const { token } = req.body ?? {};
+    if (token && typeof token === "string" && token.trim().length >= 10) {
+      await dbQuery.query(
+        `UPDATE ${dbSchema}.user_credentials
+         SET fcm_token = NULL
+         WHERE uid = $1 AND fcm_token = $2`,
+        [uid, token.trim()]
+      );
+    } else {
+      // No token supplied — the client lost it, or never had one. Release
+      // whatever this provider currently holds rather than refusing: a
+      // sign-out that leaves a live registration behind is the worse outcome.
+      await dbQuery.query(
+        `UPDATE ${dbSchema}.user_credentials SET fcm_token = NULL WHERE uid = $1`,
+        [uid]
+      );
+    }
+    return res.status(200).json({ status: "success", data: { released: true } });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: "Server error" });
+  }
+};
 
 export const saveProviderFcmToken = async (req: Request, res: Response) => {
   try {
@@ -1701,12 +2083,337 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
     if (!token || typeof token !== 'string' || token.trim().length < 10) {
       return res.status(400).json({ status: "failed", message: "token is required" });
     }
+    const value = token.trim();
+
+    // A push token identifies a DEVICE, not a person, and providers share
+    // devices. Binding it to the caller without releasing it from whoever held
+    // it before leaves the previous provider still addressable at a handset
+    // someone else is now carrying — so a booking notification meant for A
+    // arrives on the phone B is holding, with A's customer's name in it.
+    //
+    // One token, one owner. Released first, in the same statement chain, so
+    // there is no window where two rows claim the same device.
+    await dbQuery.query(
+      `UPDATE ${dbSchema}.user_credentials
+       SET fcm_token = NULL
+       WHERE fcm_token = $1 AND uid <> $2`,
+      [value, uid]
+    );
+
     await dbQuery.query(
       `UPDATE ${dbSchema}.user_credentials SET fcm_token = $1 WHERE uid = $2`,
-      [token.trim(), uid]
+      [value, uid]
     );
     return res.status(200).json({ status: "success", data: { saved: true } });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error?.message || "Server error" });
+    return res.status(500).json({ status: "failed", message: "Server error" });
+  }
+};
+
+// ─── Job cards — web portal (UID from Firebase token, not URL param) ──────────
+
+// Shared formatter to avoid duplication between list and single-card endpoints
+function formatJobCard(job: any) {
+  return {
+    bookingId:    job.booking_id,
+    status:       job.status,
+    scheduleAt:   job.schedule,
+    customer:     { uid: job.customer_id, name: `${job.first_name} ${job.last_name}`, phone: job.phone_number },
+    address:      { addressOne: job.address_one, addressTwo: job.address_two, city: job.post_town, zipCode: job.zip_code, country: job.country, label: job.label },
+    service:      { name: job.service_name, type: job.service_type },
+    addOns:       job.pricing_breakdown,
+    workerStatus: job.worker_status,
+    assignedAt:   job.assigned_at,
+    startedAt:    job.started_at,
+    completedAt:  job.completed_at,
+  };
+}
+
+export const getWorkerJobCards = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const jobs = await technicianService.getJobCardsByWorker(uid);
+    return res.json(jobs.map(formatJobCard));
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ─── Single job card by bookingId (AR-P1-02) ─────────────────────────────────
+// Avoids full-list client-side filter in the live-job screen.
+export const getWorkerJobCard = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
+    const jobs = await technicianService.getJobCardsByWorker(uid);
+    const job = jobs.find((j: any) => j.booking_id === bookingId);
+    if (!job) return res.status(404).json({ success: false, message: "Job not found" });
+    return res.json(formatJobCard(job));
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ─── Booking lifecycle — web portal (UID from Firebase token; BOLA enforced in service via SQL WHERE) ──
+
+export const acceptBooking = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId) return res.status(400).json({ success: false, message: "bookingId is required" });
+    const result = await technicianService.acceptJob(bookingId, uid);
+    touchProviderActivity(uid).catch(() => {});
+    return res.json({ success: true, message: "Job accepted", data: result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const declineBooking = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId) return res.status(400).json({ success: false, message: "bookingId is required" });
+    const result = await technicianService.declineJob(bookingId, uid);
+    return res.json({
+      success: true,
+      message: result.reassignment?.assigned
+        ? "Job declined — a new worker has been assigned"
+        : "Job declined — no available worker found, booking returned to queue",
+      data: result,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/**
+ * PUT /api/worker/bookings/:bookingId/en-route
+ * PUT /api/worker/bookings/:bookingId/arrived
+ *
+ * The two arrival stages. Both are OPTIONAL — a provider who never taps either
+ * can still start the job, and an older app build is unaffected.
+ *
+ * Provider comes from the token, never from the request, like every other route
+ * in this family.
+ */
+const arrivalHandler = (
+  advance: (bookingId: number, uid: string) => Promise<any>,
+  successMessage: string
+) => async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId) return res.status(400).json({ success: false, message: "bookingId is required" });
+
+    const result = await advance(bookingId, uid);
+    touchProviderActivity(uid).catch(() => {});
+    return res.json({ success: true, message: successMessage, data: result });
+  } catch (error: any) {
+    // The guard rejects an out-of-order call by matching no row, which is a
+    // client-state problem rather than a server fault — 409, not 500, so the
+    // client can refetch instead of retrying blindly.
+    if (/cannot move to/i.test(error?.message || "")) {
+      return res.status(409).json({
+        success: false,
+        code: "INVALID_TRANSITION",
+        message: error.message,
+      });
+    }
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const markBookingEnRoute = arrivalHandler(
+  technicianService.markEnRoute,
+  "Marked on the way"
+);
+
+export const markBookingArrived = arrivalHandler(
+  technicianService.markArrived,
+  "Marked arrived"
+);
+
+export const startBooking = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId) return res.status(400).json({ success: false, message: "bookingId is required" });
+    const workerCode = req.query.workerCode as string | undefined;
+    const result = await technicianService.startJob(bookingId, uid, workerCode);
+    return res.json({ success: true, message: "Job started", data: result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const completeBooking = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId) return res.status(400).json({ success: false, message: "bookingId is required" });
+    const result = await technicianService.completeJob(bookingId, uid);
+    touchProviderActivity(uid).catch(() => {});
+    return res.json({ success: true, message: "Job completed successfully", data: result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ─── Location update (auth-scoped; uid from Firebase token, not request body) ─
+// Web-portal equivalent of the unauthenticated POST /workers/location mobile route.
+// Mobile route remains unchanged — this additive endpoint enforces token-based identity.
+export const updateWorkerLocation = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const { latitude, longitude, isOnline } = req.body;
+    if (latitude === undefined || longitude === undefined) {
+      return res.status(400).json({ success: false, message: "latitude and longitude are required" });
+    }
+    if (isOnline === undefined) {
+      return res.status(400).json({ success: false, message: "isOnline is required" });
+    }
+    const worker = await technicianService.getWorkerByUid(uid);
+    if (!worker) return res.status(404).json({ success: false, message: "Worker not found" });
+    await technicianService.upsertWorkerLocation({ uid, latitude: Number(latitude), longitude: Number(longitude), is_online: Boolean(isOnline) });
+    return res.json({ success: true, message: "Worker location updated successfully" });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ─── Worker services (auth-scoped; BOLA enforced; uid from Firebase token) ────
+// Web-portal equivalents of the unauthenticated /workers/:uid/services mobile routes.
+export const getWorkerServices = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const services = await technicianService.getServicesByEmployee(uid);
+    return res.json({ success: true, services });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const removeWorkerService = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const serviceId = Number(req.params.serviceId);
+    if (!serviceId) return res.status(400).json({ success: false, message: "serviceId is required" });
+    const result = await technicianService.removeServiceFromEmployee(uid, serviceId);
+    autoOnlineEngine.evaluateProvider(uid, 'system', null).catch(() => {});
+    return res.json({ success: true, removed: result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ─── Authenticated booking detail — LEAK-BE-P0-01 web-portal equivalent ────────
+// Web portal uses Firebase JWT; uid from token enforces BOLA ownership.
+// Mobile uses GET /bookings/:id (no auth) — that route is a protected contract, left unchanged.
+export const getProviderBookingDetail = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const bookingId = Number(req.params.id);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ status: "failed", message: "Invalid booking ID" });
+    }
+    const result = await dbQuery.query(
+      `SELECT b.*, p.status AS payment_status, p.method AS payment_method_used,
+              p.reference_no, p.proof_url,
+              COALESCE(ua.address_one, b.service_address->>'addressLine') AS address,
+              COALESCE(ua.post_town, b.service_address->>'city') AS post_town,
+              ua.country, ua.zip_code,
+              bw.status AS worker_status,
+              bw.assigned_at, bw.started_at, bw.completed_at
+       FROM ${dbSchema}.bookings b
+       LEFT JOIN ${dbSchema}.payments p ON p.booking_id = b.id
+       LEFT JOIN ${dbSchema}.user_address ua ON ua.address_id = b.user_address_id
+       LEFT JOIN ${dbSchema}.booking_workers bw ON bw.booking_id = b.id
+         AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
+       WHERE b.id = $1 AND b.worker_uid = $2`,
+      [bookingId, uid]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ status: "failed", message: "Booking not found" });
+    }
+    const addons = await dbQuery.query(
+      `SELECT ba.id, ba.addon_option_id, ba.qty, ba.unit_price, so.level_3 AS addon_name
+       FROM ${dbSchema}.booking_addons ba
+       JOIN ${dbSchema}.service_options so ON so.id = ba.addon_option_id
+       WHERE ba.booking_id = $1 ORDER BY ba.id ASC`,
+      [bookingId]
+    );
+    return res.status(200).json({ success: true, data: { ...result.rows[0], addons: addons.rows } });
+  } catch (err: any) {
+    return res.status(500).json({ status: "failed", message: err?.message || "Failed to fetch booking" });
+  }
+};
+
+// ─── Authenticated booking tracking — LEAK-BE-P0-05 web-portal equivalent ───────
+// Web portal uses Firebase JWT; uid from token enforces BOLA ownership.
+// Mobile uses GET /bookings/:id/tracking (no auth) — that route is a protected contract, left unchanged.
+export const getProviderBookingTracking = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const bookingId = Number(req.params.id);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ status: "failed", message: "Invalid booking ID" });
+    }
+    const ownerCheck = await dbQuery.query(
+      `SELECT id FROM ${dbSchema}.bookings WHERE id = $1 AND worker_uid = $2`,
+      [bookingId, uid]
+    );
+    if (!ownerCheck.rowCount) {
+      return res.status(404).json({ status: "failed", message: "Booking not found" });
+    }
+    const tracking = await dbQuery.query(
+      `SELECT status, note, created_at
+       FROM ${dbSchema}.booking_tracking
+       WHERE booking_id = $1
+       ORDER BY created_at ASC`,
+      [bookingId]
+    );
+    return res.status(200).json({ success: true, data: tracking.rows });
+  } catch (err: any) {
+    return res.status(500).json({ status: "failed", message: err?.message || "Failed to fetch tracking" });
+  }
+};
+
+// ─── Additional requests for authenticated worker — ST-P1-01 ──────────────────
+// Returns all additional work requests across all bookings assigned to this provider.
+// Shape matches BackendAdditionalWork so adaptAdditionalWorkList() works client-side.
+export const getAdditionalRequests = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const result = await dbQuery.query(
+      `SELECT bar.id, bar.booking_id, bar.status,
+              bar.total_amount AS amount,
+              bar.created_at, bar.updated_at, bar.decided_at
+       FROM ${dbSchema}.booking_additional_requests bar
+       JOIN ${dbSchema}.bookings b ON b.id = bar.booking_id
+       WHERE b.worker_uid = $1
+       ORDER BY bar.created_at DESC
+       LIMIT 50`,
+      [uid]
+    );
+    return res.status(200).json({ success: true, data: result.rows });
+  } catch (err: any) {
+    return res.status(500).json({ status: "failed", message: err?.message || "Failed to fetch additional requests" });
   }
 };

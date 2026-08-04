@@ -2,6 +2,16 @@ import { Request, Response } from "express";
 import * as technician from "../services/technicianService";
 import { toCamel } from "../helpers/idGenerator";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
+import { logProviderClientActivity } from "../services/adminMobileAttributionService";
+import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
+import { touchProviderActivity } from "../services/adminProviderService";
+import mongoDb from "../db/mongodbQuery";
+import {
+  projectProviderProfile,
+  resolveProviderAudience,
+} from "../services/providerProfileProjection";
+import dbQuery from "../db/dbQuery";
+import { db as dbCfg } from "../config";
 
 export const listByRole = async (req: Request, res: Response) => {
   try {
@@ -64,14 +74,26 @@ export const getByUid = async (req: Request, res: Response) => {
       });
     }
 
+    // Project by the caller's relationship to this provider. The full payload
+    // carries compliance documents, booking history naming every customer they
+    // have served, disbursements and earnings — a customer asking who is coming
+    // to their house needs a name and a phone number, not a ledger.
     const { addresses, services, ...rest } = worker;
+    const full = {
+      ...toCamel(rest),
+      addresses,
+      services,
+    };
+
+    // Project the assembled response, not the raw row — `rest` still carries
+    // requirements, bookingHistory, disbursementHistory and earningsSummary, so
+    // camel-casing first is what the client would actually have received.
+    const actorUid = (req as any).user?.uid as string | undefined;
+    const audience = await resolveProviderAudience(actorUid, uid);
+
     return res.json({
       success: true,
-      worker: {
-        ...toCamel(rest),
-        addresses,
-        services,
-      },
+      worker: projectProviderProfile(full, audience),
     });
   } catch (error: any) {
     return res.status(500).json({
@@ -122,6 +144,7 @@ export const updateLocation = async (req: Request, res: Response) => {
       is_online: Boolean(isOnline),
     });
 
+    logProviderClientActivity(uid, 'location_update', 'mobile');
     return res.json({
       success: true,
       message: "Worker location updated successfully",
@@ -219,6 +242,7 @@ export const getJobCards = async (req: Request, res: Response) => {
             zipCode: job.zip_code,
             country: job.country,
             label: job.label,
+            instructions: job.delivery_instructions ?? null,
           },
 
           service: {
@@ -316,6 +340,7 @@ export const assignEmployeeServices = async (req: Request, res: Response) => {
     }
 
     const result = await technician.assignServicesToEmployee(uid, serviceIds);
+    autoOnlineEngine.evaluateProvider(uid, 'system', null).catch(() => {});
     return res.json({ success: true, assigned: result });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to assign services" });
@@ -331,6 +356,7 @@ export const removeEmployeeService = async (req: Request, res: Response) => {
     }
 
     const result = await technician.removeServiceFromEmployee(uid, Number(serviceId));
+    autoOnlineEngine.evaluateProvider(uid, 'system', null).catch(() => {});
     return res.json({ success: true, removed: toCamel(result) });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to remove service" });
@@ -395,9 +421,22 @@ export const upsertBankAccount = async (req: Request, res: Response) => {
       accountName,
     });
 
+    // Mirror to MongoDB so provider portal reads consistent payout method display data
+    try {
+      const col = (await mongoDb).collection("worker_payout_methods");
+      const maskedIdentifier = "•••• " + String(accountNumber).slice(-4);
+      await col.updateOne(
+        { uid },
+        { $set: { uid, type: bankCode.toLowerCase(), accountName, maskedIdentifier, status: "pending", updatedAt: new Date() } },
+        { upsert: true }
+      );
+    } catch (mongoErr: any) {
+      console.error(`[upsertBankAccount] MongoDB sync failed for uid=${uid}:`, mongoErr.message);
+    }
+
     return res.json({ status: "success", data: toCamel(account) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error.message });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -412,7 +451,7 @@ export const getBankAccount = async (req: Request, res: Response) => {
 
     return res.json({ status: "success", data: toCamel(account) });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: error.message });
+    return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };
 
@@ -422,7 +461,7 @@ export const deleteBankAccount = async (req: Request, res: Response) => {
     const account = await technician.deleteWorkerBankAccount(uid);
     return res.json({ status: "success", data: toCamel(account) });
   } catch (error: any) {
-    return res.status(400).json({ status: "failed", message: error.message });
+    return res.status(400).json({ status: "failed", message: "Failed to delete bank account" });
   }
 };
 
@@ -456,10 +495,37 @@ export const assignWorker = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * The worker performing a lifecycle action on their own job.
+ *
+ * These four handlers used to read `req.query.workerUid` on routes with no auth
+ * middleware at all — one of them still carried the comment "or from auth
+ * token", which is where this should always have come from. Anyone able to
+ * reach the API could accept, start, complete or decline any booking while
+ * claiming to be any worker, which moves money: completion is what makes a job
+ * payable.
+ *
+ * assignWorker deliberately does NOT use this. It is admin-only and assigns a
+ * DIFFERENT worker, so there the query parameter is the subject rather than a
+ * claim about the caller (§7 — identity comes from the token; a subject does
+ * not).
+ */
+const actingWorkerUid = (req: Request): string | null => {
+  const fromToken = (req as any).user?.uid as string | undefined;
+  const claimed = req.query.workerUid as string | undefined;
+  if (fromToken && claimed && claimed !== fromToken) {
+    // Not fatal — the token wins regardless. Logged without either value so the
+    // line carries no PII (§58); the point is to see whether a released client
+    // still sends the parameter before it is removed.
+    console.warn('[worker-lifecycle] ignoring a ?workerUid that does not match the caller');
+  }
+  return fromToken ?? null;
+};
+
 export const declineJob = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
-    const workerUid = req.query.workerUid as string;
+    const workerUid = actingWorkerUid(req);
 
     if (!bookingId || !workerUid) {
       return res.status(400).json({
@@ -488,7 +554,7 @@ export const declineJob = async (req: Request, res: Response) => {
 export const acceptJob = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
-   const workerUid = req.query.workerUid as string; // or from auth token
+    const workerUid = actingWorkerUid(req);
 
     if (!bookingId || !workerUid) {
       return res.status(400).json({
@@ -498,6 +564,8 @@ export const acceptJob = async (req: Request, res: Response) => {
     }
 
     const result = await technician.acceptJob(bookingId, workerUid);
+
+    touchProviderActivity(workerUid).catch(() => {});
 
     return res.json({
       success: true,
@@ -515,7 +583,7 @@ export const acceptJob = async (req: Request, res: Response) => {
 export const startJob = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
-    const workerUid = req.query.workerUid as string;
+    const workerUid = actingWorkerUid(req);
     const workerCode = req.query.workerCode as string; // or from auth token
 
     if (!bookingId || !workerUid) {
@@ -543,7 +611,7 @@ export const startJob = async (req: Request, res: Response) => {
 export const completeJob = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
-    const workerUid = req.query.workerUid as string;
+    const workerUid = actingWorkerUid(req);
 
     if (!bookingId || !workerUid) {
       return res.status(400).json({
@@ -553,6 +621,8 @@ export const completeJob = async (req: Request, res: Response) => {
     }
 
     const result = await technician.completeJob(bookingId, workerUid);
+
+    touchProviderActivity(workerUid).catch(() => {});
 
     return res.json({
       success: true,
@@ -640,6 +710,7 @@ export const uploadRequirements = async (req: Request, res: Response) => {
 
     const requirements = await technician.addWorkerRequirements(uid, uploaded);
 
+    logProviderClientActivity(uid, 'requirement_upload', 'mobile', { count: uploaded.length });
     return res.json({ success: true, requirements });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to upload requirements" });
@@ -740,6 +811,7 @@ export const goOnline = async (req: Request, res: Response) => {
     const { uid } = req.params as { uid: string };
     if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
     const data = await technician.setWorkerOnlineStatus(uid, true);
+    logProviderClientActivity(uid, 'go_online', 'mobile');
     return res.json({ success: true, ...data });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to go online" });
@@ -751,6 +823,7 @@ export const goOffline = async (req: Request, res: Response) => {
     const { uid } = req.params as { uid: string };
     if (!uid) return res.status(400).json({ success: false, message: "uid is required" });
     const data = await technician.setWorkerOnlineStatus(uid, false);
+    logProviderClientActivity(uid, 'go_offline', 'mobile');
     return res.json({ success: true, ...data });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message || "Failed to go offline" });
@@ -968,3 +1041,16 @@ export const saveNotificationPreferences = async (req: Request, res: Response) =
     return res.status(500).json({ success: false, message: error.message || "Failed to save notification preferences" });
   }
 };
+
+/**
+ * Who is asking about this provider?
+ *
+ * `self` and `admin` see the whole record; everyone else — every customer —
+ * gets the public projection. Unknown or absent actors fall through to `other`,
+ * which is the closed direction (§11).
+ */
+// resolveProviderAudience moved to services/providerProfileProjection so it
+// can be imported without dragging this controller — and the Mongo client it
+// loads — into a test that only wants the projection. Re-exported so existing
+// callers are unaffected.
+export { resolveProviderAudience };

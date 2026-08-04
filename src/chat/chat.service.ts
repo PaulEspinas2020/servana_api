@@ -171,6 +171,21 @@ export const sendMessage = async (
   return full;
 };
 
+/**
+ * Idempotent system message. Uses `eventKey` stored in `metadata.eventKey`
+ * as the deduplication key — safe to call on every booking status transition.
+ */
+export const postSystemMessageOnce = async (
+  conversationId: number,
+  eventKey: string,
+  body: string,
+  metadata: any = {}
+) => {
+  const existing = await repo.findSystemMessage(conversationId, eventKey);
+  if (existing) return existing;
+  return postSystemMessage(conversationId, body, { ...metadata, eventKey });
+};
+
 /** System message helper — call from booking lifecycle code. */
 export const postSystemMessage = async (
   conversationId: number,

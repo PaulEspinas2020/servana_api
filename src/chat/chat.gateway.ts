@@ -14,9 +14,27 @@ const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
  * Initialize Socket.IO on the /chat namespace.
  * Call once from app.ts with the http.Server instance.
  */
+const ALLOWED_ORIGINS = [
+  "http://localhost:4200",
+  "http://localhost:4201",
+  "https://provider.servana.com.ph",
+  "https://admin.servana.com.ph",
+  "https://www.servana.com.ph",
+  "https://servana.com.ph",
+];
+
 export const initChatSocket = (httpServer: HttpServer) => {
   const io = new Server(httpServer, {
-    cors: { origin: "*" }, // tighten to your frontend origin(s) in production
+    cors: {
+      origin: (origin, callback) => {
+        // Allow requests with no origin (mobile apps, server-side, same-origin)
+        if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error("Not allowed by CORS"));
+        }
+      },
+    },
   });
 
   setIo(io); // let the service layer broadcast
@@ -99,13 +117,20 @@ export const initChatSocket = (httpServer: HttpServer) => {
       }
     });
 
-    // Ephemeral typing indicator (not persisted).
-    socket.on("message:typing", ({ conversationId, isTyping }) => {
-      socket.to(roomName(Number(conversationId))).emit("typing", {
-        conversationId: Number(conversationId),
-        userUid: actor.uid,
-        isTyping: !!isTyping,
-      });
+    // Ephemeral typing indicator (not persisted). Authorization is verified
+    // before relaying so unauthenticated actors cannot spam rooms they don't belong to.
+    socket.on("message:typing", async ({ conversationId, isTyping }) => {
+      try {
+        const { access } = await chatService.resolveAccessForConversation(actor, Number(conversationId));
+        if (!access.allowed) return;
+        socket.to(roomName(Number(conversationId))).emit("typing", {
+          conversationId: Number(conversationId),
+          userUid: actor.uid,
+          isTyping: !!isTyping,
+        });
+      } catch (_) {
+        // Swallow — typing indicators are best-effort
+      }
     });
   });
 

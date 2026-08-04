@@ -264,7 +264,9 @@ function verifySignature(rawBody: Buffer, signatureHeader: string): boolean {
   for (const part of parts) {
     const [key, value] = part.split("=");
     if (key === "t") timestamp = value;
-    if (key === "te") signature = value;
+    // PayMongo sends "li" (live) or "te" (test) — accept both so live webhooks verify correctly.
+    if (key === "li") signature = value;
+    if (key === "te" && !signature) signature = value; // fall back to test key only if live absent
   }
 
   const payload = `${timestamp}.${rawBody.toString("utf8")}`;
@@ -372,7 +374,7 @@ export const createPayment = async (request: any) => {
   return checkoutUrl;
 };
 
-export const processWebhook = async (req: Request, res: Response) => {
+export const processWebhook = async (req: Request, _res: Response) => {
   const rawBody = (req as any).rawBody as Buffer;
 
   if (!rawBody) {
@@ -385,8 +387,10 @@ export const processWebhook = async (req: Request, res: Response) => {
     throw new Error("Missing signature header");
   }
 
+  // Throw so the controller sends exactly one response — previously this called res.send()
+  // directly which caused a double-response (ERR_HTTP_HEADERS_SENT) on the 200 path.
   if (!verifySignature(rawBody, signatureHeader)) {
-    return res.status(400).send("Invalid signature");
+    throw new Error("Invalid signature");
   }
 
 
@@ -395,7 +399,6 @@ export const processWebhook = async (req: Request, res: Response) => {
   const eventType = payload?.data?.attributes?.type;
   const eventData = payload?.data?.attributes?.data;
   const providerPaymentId = eventData?.id;
-  console.log({ eventId, eventType, providerPaymentId });
   if (!eventId || !eventType || !providerPaymentId) {
     throw new Error("Invalid webhook payload");
   }
@@ -421,7 +424,6 @@ export const processWebhook = async (req: Request, res: Response) => {
 
     const checkoutSessionId = payload.data.attributes.data.id;
     const attributes = checkoutSession?.attributes;
-    console.log({ checkoutSessionId, attributes });
     if (!checkoutSessionId) {
       throw new Error("Missing checkout_session_id");
     }
@@ -442,7 +444,6 @@ export const processWebhook = async (req: Request, res: Response) => {
     if (!r.rowCount) return;
 
     const payment = r.rows[0];
-    console.log({ payment });
     // ======================
     // ADDITIONAL REQUEST
     // ======================

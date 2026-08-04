@@ -1,14 +1,110 @@
 import { Request, Response } from "express";
+import {
+  assertBookingAccess,
+  sendBookingAccessError,
+} from "../services/bookingAccessService";
 import * as bookingService from "../services/bookingService";
-import { toCamel } from "../helpers/idGenerator";
+import { formatBooking, formatBookings } from "../services/bookingService";
+import {
+  normaliseIdempotencyKey,
+  findBookingByIdempotencyKey,
+  recordIdempotentBooking,
+} from "../services/bookingIdempotency";
+import { createCustomerNotification } from "../services/notification.service";
 export const createBooking = async (req: any, res: any) => {
   try {
-    const userId = req.query.userId as string;
-    console.log("Creating booking for user", userId);
+    // Identity comes from the verified token, never from the query string.
+    // `?userId=` was previously authoritative, which let any caller create a
+    // booking in any customer's name (§7: route params are not identity).
+    // The parameter is still accepted and ignored so existing clients keep
+    // working; a mismatch is logged without PII so drift stays visible.
+    const userId = (req as any).user?.uid as string;
+    const claimedUserId = req.query.userId as string | undefined;
+    if (claimedUserId && claimedUserId !== userId) {
+      console.warn(
+        "[booking.create] ignoring ?userId= that does not match the token subject",
+      );
+    }
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        code: "UNAUTHENTICATED",
+        message: "Authentication is required",
+      });
+    }
+    // Duplicate-submission protection.
+    //
+    // ServanaClient generates a key per booking draft and sends it as
+    // X-Idempotency-Key, holding it until the backend confirms
+    // (draft_repository.getOrCreateIdempotencyKey). This endpoint read it
+    // nowhere, so a retried submit created a SECOND booking and a second
+    // payment row — and the client's whole recovery layer exists because
+    // requests on Philippine mobile networks are expected to time out and be
+    // retried. A timeout that had actually succeeded charged the customer twice
+    // and dispatched two providers.
+    //
+    // The key is optional: older clients do not send one, and rejecting those
+    // would break every shipped app in order to fix a duplicate-submission bug.
+    // A caller without a key simply gets no protection, exactly as before.
+    const idempotencyKey = normaliseIdempotencyKey(
+      req.header('X-Idempotency-Key'),
+    );
+
+    const alreadyCreated = await findBookingByIdempotencyKey(
+      idempotencyKey,
+      userId,
+    );
+    if (alreadyCreated) {
+      // Return the ORIGINAL booking, not an error. A retry is the client
+      // asking "did that land?", and the honest answer is the booking it
+      // created. 200 with the same body makes the retry indistinguishable from
+      // the first success, which is the point of idempotency (§17).
+      const existing = await bookingService.getBookingById(alreadyCreated);
+      if (existing) {
+        return res.json({
+          success: true,
+          booking: formatBooking(existing),
+          idempotentReplay: true,
+        });
+      }
+      // The row is recorded but the booking is gone — deleted, or a partial
+      // write. Falling through to create is wrong (it would duplicate) and so
+      // is pretending success. Say so.
+      return res.status(409).json({
+        success: false,
+        code: 'IDEMPOTENCY_KEY_REUSED',
+        message:
+          'This request was already processed but its booking is no longer available.',
+      });
+    }
+
     const booking = await bookingService.createBooking(
       userId,
       req.body
     );
+
+    // Record only after a booking exists, so a failed create leaves the key
+    // free to be retried rather than permanently poisoned.
+    await recordIdempotentBooking(
+      idempotencyKey,
+      userId,
+      (booking as any)?.id ?? (booking as any)?.bookingId ?? null,
+    );
+
+    // Non-blocking: notify the customer that their booking was received
+    if (userId && booking) {
+      const bookingId = (booking as any)?.id ?? (booking as any)?.bookingId ?? '';
+      createCustomerNotification(userId, {
+        type: 'booking_created',
+        severity: 'info',
+        title: 'Booking received',
+        safeBody: `Your booking has been placed. We'll notify you when a provider is assigned.`,
+        route: bookingId
+          ? { routeKey: 'BOOKING_DETAILS', resourceId: String(bookingId) }
+          : null,
+        canOpenDetail: !!bookingId,
+      }).catch(() => {});
+    }
 
     res.json({ success: true, booking });
   } catch (e: any) {
@@ -29,12 +125,45 @@ export const confirmOtp = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "otp is required" });
     }
 
-    // If you have auth: const userId = (req as any).user?.uid;
-    const booking = await bookingService.confirmOtp(bookingId, otp /*, userId */);
+    // The OTP proves the customer is present; it does not prove the caller is
+    // entitled to this booking. Check both (§11).
+    await assertBookingAccess(bookingId, (req as any).user?.uid);
 
-    return res.json({ success: true, booking: toCamel(booking) });
+    const booking = await bookingService.confirmOtp(bookingId, otp);
+
+    return res.json({ success: true, booking: formatBooking(booking) });
   } catch (e: any) {
     return res.status(400).json({ success: false, message: e.message });
+  }
+};
+
+/**
+ * POST /api/:bookingId/resend-otp
+ *
+ * The OTP screen's Resend button has always called this; it did not exist. A
+ * customer whose verification email never arrived had no recovery — the booking
+ * sat in PENDING_OTP and the only way forward was a code they never received.
+ */
+export const resendOtp = async (req: Request, res: Response) => {
+  try {
+    const bookingId = Number(req.params.bookingId ?? req.params.id);
+
+    if (!bookingId || Number.isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid booking id" });
+    }
+
+    // Same authorization as every other booking route: possession of an id is
+    // not entitlement (§11). Without this, anyone could rotate the OTP on any
+    // booking and lock the real customer out of confirming it.
+    await assertBookingAccess(bookingId, (req as any).user?.uid);
+
+    const result = await bookingService.resendBookingOtp(bookingId);
+    return res.json({ success: true, ...result });
+  } catch (e: any) {
+    if (sendBookingAccessError(res, e)) return;
+    return res
+      .status(e?.statusCode === 409 ? 409 : 400)
+      .json({ success: false, message: e.message });
   }
 };
 
@@ -46,24 +175,30 @@ export const getBooking = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid booking id" });
     }
 
-    // If you have auth: const userId = (req as any).user?.uid;
-    const booking = await bookingService.getBookingById(bookingId /*, userId */);
+    // Authorization before retrieval: booking ids are sequential integers,
+    // so an unscoped read here exposed every customer's name, phone and
+    // address by enumeration (§11).
+    await assertBookingAccess(bookingId, (req as any).user?.uid);
+
+    const booking = await bookingService.getBookingById(bookingId);
 
     if (!booking) {
       return res.status(404).json({ success: false, message: "Booking not found" });
     }
 
-    return res.json({ success: true, booking: toCamel(booking) });
+    return res.json({ success: true, booking: formatBooking(booking) });
   } catch (e: any) {
+    if (sendBookingAccessError(res, e)) return;
     return res.status(500).json({ success: false, message: e.message });
   }
 };
 
-export const listAllBookings = async (_req: Request, res: Response) => {
+export const listAllBookings = async (req: Request, res: Response) => {
   try {
-    const bookings = await bookingService.getAllBookings();
-    const toCamelRows = (rows: any[]) => rows.map(toCamel);
-    res.json({ success: true, bookings: toCamelRows(bookings) });
+    const from = req.query.from as string | undefined;
+    const to   = req.query.to   as string | undefined;
+    const bookings = await bookingService.getAllBookings(from, to);
+    res.json({ success: true, bookings: formatBookings(bookings) });
   } catch (error: any) {
     res.status(500).json({
       success: false,
@@ -83,10 +218,27 @@ export const listUserBookings = async (req: Request, res: Response) => {
       });
     }
 
-    const bookings = await bookingService.getBookingsByUserId(userId);
+    // Fail closed: the actor must be present AND match.
+    //
+    // This previously required the actor to exist before comparing, so a missing
+    // actor skipped ownership entirely. That was safe only for as long as the
+    // route in front stayed authenticated — an invariant held in a comment
+    // rather than in code. The same shape one layer down, in
+    // customerCancelBooking, was NOT safe: it keyed on a booking owner that is
+    // NULL for guest bookings, and let any authenticated user cancel any guest
+    // booking. Removing verifyAuthOptional in bd8c355 removed the carrier of
+    // this pattern, not the pattern.
+    //
+    // The "mobile calls without a token" note that used to sit here was wrong:
+    // ServanaClient attaches a bearer token to every request
+    // (servana_api_client.dart:37-47).
+    const actor = (req as any).user;
+    if (!actor?.uid || actor.uid !== userId) {
+      return res.status(403).json({ success: false, message: "Access denied" });
+    }
 
-    const toCamelRows = (rows: any[]) => rows.map(toCamel);
-    res.json({ success: true, bookings: toCamelRows(bookings) });
+    const bookings = await bookingService.getBookingsByUserId(userId);
+    res.json({ success: true, bookings: formatBookings(bookings) });
   } catch (error: any) {
     res.status(500).json({
       success: false,
@@ -99,15 +251,17 @@ export const getTracking = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.id);
 
+    await assertBookingAccess(bookingId, (req as any).user?.uid);
+
     if (!bookingId || Number.isNaN(bookingId)) {
       return res.status(400).json({ success: false, message: "Invalid booking id" });
     }
 
     // If you have auth: const userId = (req as any).user?.uid;
     const tracking = await bookingService.getTracking(bookingId /*, userId */);
-    const toCamelRows = (rows: any[]) => rows.map(toCamel);
-    return res.json({ success: true, tracking: toCamelRows(tracking) });
+    return res.json({ success: true, tracking: formatBookings(tracking) });
   } catch (e: any) {
+    if (sendBookingAccessError(res, e)) return;
     return res.status(500).json({ success: false, message: e.message });
   }
 };
@@ -125,5 +279,30 @@ export const getAnalytics = async (_req: Request, res: Response) => {
       success: false,
       message: error.message || "Failed to fetch analytics",
     });
+  }
+};
+
+// BACKEND_GAP-C15-001: customer self-cancellation (previously admin-only)
+export const cancelBooking = async (req: Request, res: Response) => {
+  try {
+    const bookingId = Number(req.params.id);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: 'Invalid booking id' });
+    }
+
+    const { reason, reasonCode } = req.body;
+    if (!reason?.trim()) {
+      return res.status(400).json({ success: false, message: 'reason is required' });
+    }
+
+    const customerUid = (req as any).user?.uid ?? null;
+    const booking = await bookingService.customerCancelBooking(
+      bookingId, reason, customerUid, reasonCode,
+    );
+
+    return res.json({ success: true, booking: formatBooking(booking) });
+  } catch (e: any) {
+    const status = e.statusCode === 403 ? 403 : 400;
+    return res.status(status).json({ success: false, message: e.message || 'Cancellation failed' });
   }
 };

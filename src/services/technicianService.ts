@@ -3,10 +3,14 @@ import dbQuery from "../db/dbQuery";
 import mongoDb from "../db/mongodbQuery";
 import { generateOTP } from "../helpers/otp";
 import { send } from "../helpers/mailer";
+import { getAutoBookableProviderUids } from "./providerAutoOnlineEngine";
+import { filterUidsAvailableAt } from "./providerAvailabilityEngine";
 import { getUserInfoByBookingId } from "./user.service";
 import { computeTranspoFee } from "./pricingService";
 import { createNotification } from "./notification.service";
 import { createDisbursement } from "./disbursement.service";
+import { getOrCreateConversation, postSystemMessageOnce } from "../chat/chat.service";
+import { findExistingConversationByBookingId } from "../chat/chat.repository";
 
 const dbSchema = db.schema;
 
@@ -277,32 +281,68 @@ export const getWorkerRequirements = async (workerUid: string) => {
   await ensureRequirementTypeColumn();
   const res = await dbQuery.query(
     `
-    SELECT id, file_url, file_name, uploaded_at, requirement_type
-    FROM ${dbSchema}.worker_requirements
-    WHERE worker_uid = $1
-    ORDER BY uploaded_at ASC
+    SELECT wr.id, wr.file_url, wr.file_name, wr.uploaded_at, wr.requirement_type,
+           COALESCE(ld.decision, 'pending_review')          AS current_decision,
+           ld.provider_message,
+           ld.decided_at                                     AS reviewed_at
+    FROM ${dbSchema}.worker_requirements wr
+    LEFT JOIN LATERAL (
+      SELECT decision, provider_message, decided_at
+      FROM ${dbSchema}.provider_requirement_decisions
+      WHERE worker_requirement_id = wr.id AND NOT is_superseded
+      ORDER BY decided_at DESC LIMIT 1
+    ) ld ON true
+    WHERE wr.worker_uid = $1
+    ORDER BY wr.uploaded_at ASC
     `,
     [workerUid]
-  );
+  ).catch((err: any) => {
+    // Only suppress "relation does not exist" (42P01) and "column does not exist" (42703)
+    if (err?.code !== '42P01' && err?.code !== '42703') throw err;
+    return dbQuery.query(
+      `SELECT id, file_url, file_name, uploaded_at, requirement_type FROM ${dbSchema}.worker_requirements WHERE worker_uid = $1 ORDER BY uploaded_at ASC`,
+      [workerUid]
+    );
+  });
   return res.rows.map((f: any) => ({
     id: f.id,
     fileUrl: f.file_url,
     fileName: f.file_name,
     uploadedAt: f.uploaded_at,
     requirementType: f.requirement_type ?? null,
+    currentDecision: f.current_decision ?? 'pending_review',
+    providerMessage: f.provider_message ?? null,
+    reviewedAt: f.reviewed_at ?? null,
   }));
 };
 
 export const deleteWorkerRequirement = async (workerUid: string, id: number) => {
+  const check = await dbQuery.query(
+    `SELECT wr.id, COALESCE(ld.decision, 'pending_review') AS current_decision
+     FROM ${dbSchema}.worker_requirements wr
+     LEFT JOIN LATERAL (
+       SELECT decision FROM ${dbSchema}.provider_requirement_decisions
+       WHERE worker_requirement_id = wr.id AND NOT is_superseded
+       ORDER BY decided_at DESC LIMIT 1
+     ) ld ON true
+     WHERE wr.id = $1 AND wr.worker_uid = $2 LIMIT 1`,
+    [id, workerUid]
+  ).catch((err: any) => {
+    if (err?.code !== '42P01' && err?.code !== '42703') throw err;
+    return dbQuery.query(
+      `SELECT id, 'pending_review'::text AS current_decision FROM ${dbSchema}.worker_requirements WHERE id = $1 AND worker_uid = $2 LIMIT 1`,
+      [id, workerUid]
+    );
+  });
+  if (!check.rowCount) throw Object.assign(new Error('Requirement not found for this worker'), { statusCode: 404 });
+  if (check.rows[0].current_decision === 'approved') {
+    throw Object.assign(new Error('Approved documents cannot be deleted. Contact support if you need to replace an approved document.'), { statusCode: 409 });
+  }
   const res = await dbQuery.query(
-    `
-    DELETE FROM ${dbSchema}.worker_requirements
-    WHERE id = $1 AND worker_uid = $2
-    RETURNING id, file_name
-    `,
+    `DELETE FROM ${dbSchema}.worker_requirements WHERE id = $1 AND worker_uid = $2 RETURNING id, file_name`,
     [id, workerUid]
   );
-  if (!res.rowCount) throw new Error("Requirement not found for this worker");
+  if (!res.rowCount) throw Object.assign(new Error('Requirement not found for this worker'), { statusCode: 404 });
   return res.rows[0];
 };
 
@@ -400,6 +440,7 @@ export const listOnlineWorkersByService = async (serviceId: number) => {
     SELECT employee_uid
     FROM ${dbSchema}.employee_services
     WHERE service_id = $1
+      AND COALESCE(status, 'active') = 'active'
     `,
     [serviceId]
   );
@@ -453,8 +494,6 @@ const applyNearestWorkerTranspoFee = async (
     const transpoFee = computeTranspoFee(nearest.distanceKm);
     const roundedDist = Math.round(nearest.distanceKm * 100) / 100;
 
-    console.log(`No worker assigned — using nearest DB worker distance ${roundedDist} km → transpo_fee ${transpoFee}`);
-
     await dbQuery.query(
       `
       UPDATE ${dbSchema}.bookings
@@ -489,6 +528,25 @@ const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => 
   return 2 * R * Math.asin(Math.sqrt(a));
 };
 
+// Merge auto-bookable providers who may only be in worker_service_applications (not employee_services)
+const mergeAutoBookableProviders = async (existing: any[], serviceId: number | null | undefined): Promise<any[]> => {
+  try {
+    const autoUids = await getAutoBookableProviderUids(serviceId ?? undefined);
+    if (!autoUids.length) return existing;
+    const existingSet = new Set(existing.map((w: any) => w.uid));
+    const missing = autoUids.filter(uid => !existingSet.has(uid));
+    if (!missing.length) return existing;
+    const col = (await mongoDb).collection('worker_locations');
+    const docs = await col.find(
+      { uid: { $in: missing }, is_online: true, loc: { $exists: true } },
+      { projection: { uid: 1, loc: 1, updatedAt: 1 } }
+    ).toArray();
+    return [...existing, ...docs];
+  } catch {
+    return existing;
+  }
+};
+
 export const assignNearestWorker = async (
   bookingId: number,
   userLat: number,
@@ -501,8 +559,6 @@ export const assignNearestWorker = async (
     `SELECT schedule FROM ${dbSchema}.bookings WHERE id = $1`,
     [bookingId]
   );
-
-  console.log("Booking schedule:", bookingRes.rows[0]?.schedule);
 
   if (!bookingRes.rowCount) {
     throw new Error("Booking not found");
@@ -527,20 +583,60 @@ export const assignNearestWorker = async (
   const busyUids = new Set(busyRes.rows.map((r: any) => r.worker_uid));
 
   // 3. Get online workers qualified for this service, filter out busy ones
-  const onlineWorkers = serviceId
+  // Merge auto-bookable providers who may only be in worker_service_applications
+  const rawOnline = serviceId
     ? await listOnlineWorkersByService(serviceId)
     : await listOnlineWorkers();
+  const onlineWorkers = await mergeAutoBookableProviders(rawOnline, serviceId);
 
   if (!onlineWorkers.length) {
     await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);
     return { assigned: false, reason: "NO_WORKER_ONLINE" };
   }
-  console.log(`Found ${onlineWorkers.length} online workers${serviceId ? ` for service ${serviceId}` : ""}`);
-  const availableWorkers = onlineWorkers.filter((w: any) => !busyUids.has(w.uid));
-  console.log(`After filtering busy workers, ${availableWorkers.length} available workers remain`);
-  if (!availableWorkers.length) {
+  const notBusyWorkers = onlineWorkers.filter((w: any) => !busyUids.has(w.uid));
+  if (!notBusyWorkers.length) {
     await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);
     return { assigned: false, reason: "NO_WORKER_AVAILABLE" };
+  }
+
+  // 3b. Honour the provider's own weekly schedule and time-off.
+  //
+  // Step 2 only rules out providers already booked elsewhere; it never asked
+  // whether the provider said they work at this hour at all, so auto-assignment
+  // could hand someone a job on their day off.
+  //
+  // missingScheduleIsAvailable is deliberately true: most providers have never
+  // saved a schedule, and treating "not configured" as "not available" would
+  // silently shrink the candidate pool to almost nobody. Absence of a
+  // declaration is not a declaration of unavailability (§28). Only a provider
+  // who HAS a schedule that excludes this window is filtered out, which makes
+  // this change strictly narrowing and safe to ship against live data.
+  let scheduleEligible = notBusyWorkers;
+  try {
+    const { eligible, excluded } = await filterUidsAvailableAt(
+      notBusyWorkers.map((w: any) => w.uid),
+      schedule.toISOString(),
+      new Date(schedule.getTime() + 60 * 60 * 1000).toISOString(),
+      { missingScheduleIsAvailable: true },
+    );
+    if (excluded.length) {
+      console.info(
+        `[assignNearestWorker] booking ${bookingId}: ${excluded.length} provider(s) excluded by schedule/time-off:`,
+        excluded.map(e => `${e.uid}:${e.reason}`).join(", ")
+      );
+    }
+    const eligibleSet = new Set(eligible);
+    scheduleEligible = notBusyWorkers.filter((w: any) => eligibleSet.has(w.uid));
+  } catch (e: any) {
+    // Availability is an additional filter, not the assignment's source of
+    // truth. If it fails, assign as before rather than stranding the booking.
+    console.error(`[assignNearestWorker] availability filter failed, proceeding unfiltered:`, e?.message ?? e);
+  }
+
+  const availableWorkers = scheduleEligible;
+  if (!availableWorkers.length) {
+    await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);
+    return { assigned: false, reason: "NO_WORKER_AVAILABLE_IN_SCHEDULE" };
   }
 
   // 4. Rank available workers by distance and pick the nearest
@@ -555,14 +651,12 @@ export const assignNearestWorker = async (
     .sort((a, b) => a.distanceKm - b.distanceKm);
 
   const best = ranked[0];
-    console.log(`Nearest worker: ${best.uid} at ${best.distanceKm.toFixed(2)} km`);
   const avgSpeedKph = 30;
   const etaMinutes = Math.floor(
     Math.max(5, Math.ceil((best.distanceKm / avgSpeedKph) * 60))
   );
   const otpCode = generateOTP();
   const transpoFee = computeTranspoFee(best.distanceKm);
-  console.log(`Computed ETA: ${etaMinutes} minutes, OTP: ${otpCode}, Transpo Fee: ${transpoFee}`);
   // Apply transpo fee: add to final_price and persist into pricing_breakdown
   await dbQuery.query(
     `
@@ -650,10 +744,10 @@ export const getWorkerSchedule = async (workerId: string) => {
       b.status,
       b.schedule,
       b.user_address_id,
-      ua.address_one,
+      COALESCE(ua.address_one, b.service_address->>'addressLine') AS address_one,
       ua.address_two,
       ua.zip_code,
-      ua.post_town,
+      COALESCE(ua.post_town, b.service_address->>'city')          AS post_town,
       ua.country,
       b.created_at,
       p.status AS payment_status,
@@ -685,17 +779,23 @@ export const getJobCardsByWorker = async (workerId: string) => {
       b.status,
       b.schedule,
 
+      -- Customer: for admin-created guest bookings user_id is NULL; LEFT JOIN
+      -- still works, customer fields will be null and the mobile app must handle that.
       u.uid AS customer_id,
       u.first_name,
       u.last_name,
       u.phone_number,
 
-      ua.address_one,
+      -- Address: admin-created bookings store address in service_address JSONB
+      -- rather than a user_address row.  COALESCE falls back to the JSONB so the
+      -- provider mobile app always receives a readable address.
+      COALESCE(ua.address_one,  b.service_address->>'addressLine') AS address_one,
       ua.address_two,
-      ua.post_town,
+      COALESCE(ua.post_town,    b.service_address->>'city')        AS post_town,
       ua.zip_code,
       ua.country,
       ua.label,
+      b.service_address->>'instructions' AS delivery_instructions,
 
       s.level_2 AS service_name,
       s.level_3 AS service_type,
@@ -721,7 +821,7 @@ export const getJobCardsByWorker = async (workerId: string) => {
       ON bw.booking_id = b.id AND bw.worker_uid = $1
 
     WHERE b.worker_uid = $1
-    AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','DECLINED')
+    AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
     ORDER BY b.schedule ASC
     `,
     [workerId]
@@ -938,6 +1038,22 @@ export const acceptJob = async (bookingId: number, workerUid: string) => {
     console.error("booking_accepted email failed:", emailErr);
   }
 
+  // AUTO GROUP CHAT: create (or find) the canonical booking conversation and
+  // post an idempotent system message. Fire-and-forget — never blocks job acceptance.
+  (async () => {
+    try {
+      const conv = await getOrCreateConversation(bookingId);
+      await postSystemMessageOnce(
+        conv.id,
+        `provider_accepted_${bookingId}`,
+        'Your service provider has accepted the booking. You can now message them here.',
+        { bookingId, providerUid: workerUid, eventType: 'provider_accepted' }
+      );
+    } catch (chatErr) {
+      console.error('auto group-chat creation failed (acceptJob):', chatErr);
+    }
+  })();
+
   return res.rows[0];
 };
 
@@ -965,6 +1081,7 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
     SELECT
       b.schedule,
       b.user_address_id,
+      b.service_address,
       ua.location_id,
       so.service_id
     FROM ${dbSchema}.bookings b
@@ -1007,14 +1124,38 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
   if (row.location_id) {
     const { getLatLonByLocationId } = await import("./address.service");
     const [lon, lat] = await getLatLonByLocationId(String(row.location_id));
-
     reassignment = await assignNearestWorker(
       bookingId,
       Number(lat),
       Number(lon),
       row.service_id ? Number(row.service_id) : null
     );
+  } else if (row.service_address && row.service_address.lat && row.service_address.lon) {
+    // Admin-created booking: no location_id, fall back to JSONB lat/lon
+    reassignment = await assignNearestWorker(
+      bookingId,
+      Number(row.service_address.lat),
+      Number(row.service_address.lon),
+      row.service_id ? Number(row.service_id) : null
+    );
   }
+
+  // Post a system message (non-blocking, non-creating — only if chat already open)
+  (async () => {
+    try {
+      const existing = await findExistingConversationByBookingId(bookingId);
+      if (existing) {
+        await postSystemMessageOnce(
+          existing.id,
+          `provider_declined_${bookingId}_${workerUid}`,
+          'The assigned provider was unable to accept this booking. We are finding a new provider for you.',
+          { bookingId, providerUid: workerUid, eventType: 'provider_declined' }
+        );
+      }
+    } catch (chatErr) {
+      console.error('system message failed (declineJob):', chatErr);
+    }
+  })();
 
   return {
     declined: true,
@@ -1023,6 +1164,136 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
     reassignment,
   };
 };
+
+/**
+ * ACCEPTED -> EN_ROUTE, and EN_ROUTE -> ARRIVED.
+ *
+ * These two stages did not exist. `EN_ROUTE` and `ARRIVED` were read in
+ * `serviceService.ts:125` and mapped by both mobile apps, but nothing anywhere
+ * ever wrote them — the customer app even branches on them in three places
+ * (booking_action_resolver, bookings_screen, booking_detail_screen), so it was
+ * carrying UI for a journey stage the platform could not express. A customer
+ * watching the tracking screen saw the provider accept and then nothing until
+ * work started.
+ *
+ * Written to `booking_workers.status`, because that is where provider state
+ * lives (SERVANA_PROVIDER_STATUS_MATRIX.md), and cascaded to `bookings.status`
+ * so the customer's booking view can show it — the same shape `completeJob`
+ * already uses for COMPLETED.
+ *
+ * Guarded like every other transition: the UPDATE carries the expected current
+ * status, so an out-of-order call changes nothing rather than corrupting state,
+ * and a duplicate tap is a no-op instead of a second event. That makes these
+ * idempotent in effect, which is the standard the rest of the lifecycle meets.
+ *
+ * Both stages remain OPTIONAL. `startJob` still accepts a booking sitting at
+ * ACCEPTED, so a provider who never taps "on my way" can still start the job and
+ * an older app build keeps working unchanged.
+ */
+/**
+ * Adds the two arrival timestamp columns.
+ *
+ * Additive and nullable, so every existing row and every shipped client is
+ * unaffected — a build that has never heard of these stages reads the same
+ * fields it always did.
+ */
+let arrivalColumnsReady: Promise<void> | null = null;
+
+const ensureArrivalColumns = (): Promise<void> => {
+  // Memoised: this runs on the first arrival transition rather than at boot, so
+  // it must not issue a DDL statement on every tap.
+  arrivalColumnsReady ??= dbQuery
+    .query(
+      `ALTER TABLE ${dbSchema}.booking_workers
+         ADD COLUMN IF NOT EXISTS en_route_at TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS arrived_at  TIMESTAMPTZ`,
+      []
+    )
+    .then(() => undefined)
+    .catch((e: any) => {
+      // Reset so a transient failure can be retried rather than poisoning the
+      // process for its lifetime.
+      arrivalColumnsReady = null;
+      throw e;
+    });
+  return arrivalColumnsReady;
+};
+
+const advanceArrivalStage = async (
+  bookingId: number,
+  workerUid: string,
+  from: string,
+  to: string,
+  timestampColumn: string,
+  trackingNote: string
+) => {
+  await ensureArrivalColumns();
+
+  const res = await dbQuery.query(
+    `
+    UPDATE ${dbSchema}.booking_workers
+    SET status = $4,
+        ${timestampColumn} = NOW()
+    WHERE booking_id = $1
+      AND worker_uid = $2
+      AND status = $3
+    RETURNING *
+    `,
+    [bookingId, workerUid, from, to]
+  );
+
+  if (!res.rowCount) {
+    throw new Error(`Job cannot move to ${to}`);
+  }
+
+  // Cascade so the customer's booking view reflects it. Scoped to this worker's
+  // booking and to the statuses this transition can legally follow, so a
+  // concurrent admin action cannot be clobbered.
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.bookings
+     SET status = $2
+     WHERE id = $1 AND worker_uid = $3`,
+    [bookingId, to, workerUid]
+  );
+
+  // Customer-facing timeline. booking_tracking previously carried only four
+  // event kinds and nothing between assignment and completion.
+  try {
+    await dbQuery.query(
+      `INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note)
+       VALUES ($1, $2, $3)`,
+      [bookingId, to, trackingNote]
+    );
+  } catch (e: any) {
+    // A timeline row is not worth failing the transition over — the state
+    // change is already committed and is the thing that matters.
+    console.warn(`[arrival] tracking insert failed for booking ${bookingId}: ${e.message}`);
+  }
+
+  return res.rows[0];
+};
+
+/** The provider is travelling to the customer. */
+export const markEnRoute = (bookingId: number, workerUid: string) =>
+  advanceArrivalStage(
+    bookingId,
+    workerUid,
+    "ACCEPTED",
+    "EN_ROUTE",
+    "en_route_at",
+    "Provider is on the way"
+  );
+
+/** The provider has reached the address and has not yet started work. */
+export const markArrived = (bookingId: number, workerUid: string) =>
+  advanceArrivalStage(
+    bookingId,
+    workerUid,
+    "EN_ROUTE",
+    "ARRIVED",
+    "arrived_at",
+    "Provider has arrived"
+  );
 
 export const startJob = async (
   bookingId: number,
@@ -1041,7 +1312,11 @@ export const startJob = async (
     FROM ${dbSchema}.bookings b
     WHERE bw.booking_id = $1
       AND bw.worker_uid = $2
-      AND bw.status = 'ACCEPTED'
+      -- ACCEPTED plus the two optional arrival stages. Requiring ACCEPTED
+      -- alone would mean a provider who tapped "on my way" could never start
+      -- the job — the arrival stages advance the status, so demanding the
+      -- pre-arrival value would strand them one tap from the work.
+      AND bw.status IN ('ACCEPTED', 'EN_ROUTE', 'ARRIVED')
       AND bw.booking_id = b.id
       AND b.worker_code = $3
     RETURNING bw.*
@@ -1076,6 +1351,23 @@ export const startJob = async (
   } catch (emailErr) {
     console.error("booking_started email failed:", emailErr);
   }
+
+  // System message: service started
+  (async () => {
+    try {
+      const existing = await findExistingConversationByBookingId(bookingId);
+      if (existing) {
+        await postSystemMessageOnce(
+          existing.id,
+          `service_started_${bookingId}`,
+          'Your service provider is on the way. Service has started.',
+          { bookingId, providerUid: workerUid, eventType: 'service_started' }
+        );
+      }
+    } catch (chatErr) {
+      console.error('system message failed (startJob):', chatErr);
+    }
+  })();
 
   return res.rows[0];
 };
@@ -1141,12 +1433,53 @@ export const completeJob = async (bookingId: number, workerUid: string) => {
     console.error("booking_completed email failed:", emailErr);
   }
 
+  // System message: service completed
+  (async () => {
+    try {
+      const existing = await findExistingConversationByBookingId(bookingId);
+      if (existing) {
+        await postSystemMessageOnce(
+          existing.id,
+          `service_completed_${bookingId}`,
+          'Service has been completed. Thank you for using Servana! This chat will remain available for 48 hours.',
+          { bookingId, providerUid: workerUid, eventType: 'service_completed' }
+        );
+      }
+    } catch (chatErr) {
+      console.error('system message failed (completeJob):', chatErr);
+    }
+  })();
+
   return res.rows[0];
 };
 
 // ---------------------------------------------------------------------------
 // Employee ↔ Services
 // ---------------------------------------------------------------------------
+
+let _esColumnsReady: Promise<void> | null = null;
+
+const ensureEmployeeServicesColumns = (): Promise<void> => {
+  if (_esColumnsReady) return _esColumnsReady;
+  _esColumnsReady = (async () => {
+    await dbQuery.query(`ALTER TABLE ${dbSchema}.employee_services ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`);
+    await dbQuery.query(`ALTER TABLE ${dbSchema}.employee_services ADD COLUMN IF NOT EXISTS pause_reason TEXT`);
+    await dbQuery.query(`ALTER TABLE ${dbSchema}.employee_services ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+    await dbQuery.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'employee_services_status_check'
+        ) THEN
+          ALTER TABLE ${dbSchema}.employee_services
+          ADD CONSTRAINT employee_services_status_check
+          CHECK (status IN ('active', 'paused'));
+        END IF;
+      END $$
+    `);
+  })().catch((err) => { _esColumnsReady = null; throw err; });
+  return _esColumnsReady;
+};
 
 export const assignServicesToEmployee = async (employeeUid: string, serviceIds: number[]) => {
   if (!serviceIds.length) throw new Error("serviceIds must not be empty");
@@ -1184,9 +1517,11 @@ export const removeServiceFromEmployee = async (employeeUid: string, serviceId: 
 };
 
 export const getServicesByEmployee = async (employeeUid: string) => {
+  await ensureEmployeeServicesColumns();
   const res = await dbQuery.query(
     `
-    SELECT s.id, s.name, s.category, es.created_at AS assigned_at
+    SELECT s.id, s.name, s.category, es.created_at AS assigned_at,
+           COALESCE(es.status, 'active') AS status, es.pause_reason
     FROM ${dbSchema}.employee_services es
     JOIN ${dbSchema}.services s ON s.id = es.service_id
     WHERE es.employee_uid = $1
@@ -1196,6 +1531,54 @@ export const getServicesByEmployee = async (employeeUid: string) => {
   );
 
   return res.rows;
+};
+
+export const pauseService = async (workerUid: string, serviceId: number, reason?: string) => {
+  await ensureEmployeeServicesColumns();
+  const res = await dbQuery.query(
+    `UPDATE ${dbSchema}.employee_services
+     SET status = 'paused', pause_reason = $3, updated_at = NOW()
+     WHERE employee_uid = $1 AND service_id = $2 AND COALESCE(status, 'active') = 'active'
+     RETURNING *`,
+    [workerUid, serviceId, reason ?? null],
+  );
+  if (res.rowCount) return res.rows[0];
+
+  const check = await dbQuery.query(
+    `SELECT COALESCE(status, 'active') AS status FROM ${dbSchema}.employee_services
+     WHERE employee_uid = $1 AND service_id = $2 LIMIT 1`,
+    [workerUid, serviceId],
+  );
+  if (!check.rowCount) {
+    const err: any = new Error('Service not assigned to this worker.');
+    err.code = 'SERVICE_NOT_FOUND'; err.statusCode = 404; throw err;
+  }
+  const err: any = new Error('Service is already paused.');
+  err.code = 'SERVICE_ALREADY_PAUSED'; err.statusCode = 409; throw err;
+};
+
+export const reactivateService = async (workerUid: string, serviceId: number) => {
+  await ensureEmployeeServicesColumns();
+  const res = await dbQuery.query(
+    `UPDATE ${dbSchema}.employee_services
+     SET status = 'active', pause_reason = NULL, updated_at = NOW()
+     WHERE employee_uid = $1 AND service_id = $2 AND COALESCE(status, 'active') = 'paused'
+     RETURNING *`,
+    [workerUid, serviceId],
+  );
+  if (res.rowCount) return res.rows[0];
+
+  const check = await dbQuery.query(
+    `SELECT COALESCE(status, 'active') AS status FROM ${dbSchema}.employee_services
+     WHERE employee_uid = $1 AND service_id = $2 LIMIT 1`,
+    [workerUid, serviceId],
+  );
+  if (!check.rowCount) {
+    const err: any = new Error('Service not assigned to this worker.');
+    err.code = 'SERVICE_NOT_FOUND'; err.statusCode = 404; throw err;
+  }
+  const err: any = new Error('Service is not paused.');
+  err.code = 'SERVICE_NOT_PAUSED'; err.statusCode = 409; throw err;
 };
 
 export const getWorkersByService = async (serviceId: number) => {
@@ -1224,10 +1607,24 @@ export const getWorkersByService = async (serviceId: number) => {
 // Worker Bank Account CRUD
 // ---------------------------------------------------------------------------
 
+const ensureWorkerBankAccountsTable = async () => {
+  await dbQuery.query(
+    `CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_bank_accounts (
+       worker_uid     TEXT PRIMARY KEY,
+       bank_code      TEXT NOT NULL,
+       account_number TEXT NOT NULL,
+       account_name   TEXT NOT NULL,
+       updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    []
+  );
+};
+
 export const upsertWorkerBankAccount = async (
   workerUid: string,
   payload: { bankCode: string; accountNumber: string; accountName: string }
 ) => {
+  await ensureWorkerBankAccountsTable();
   const res = await dbQuery.query(
     `
     INSERT INTO ${dbSchema}.worker_bank_accounts
@@ -1247,6 +1644,7 @@ export const upsertWorkerBankAccount = async (
 };
 
 export const getWorkerBankAccount = async (workerUid: string) => {
+  await ensureWorkerBankAccountsTable();
   const res = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.worker_bank_accounts WHERE worker_uid = $1`,
     [workerUid]
@@ -1256,6 +1654,7 @@ export const getWorkerBankAccount = async (workerUid: string) => {
 };
 
 export const deleteWorkerBankAccount = async (workerUid: string) => {
+  await ensureWorkerBankAccountsTable();
   const res = await dbQuery.query(
     `DELETE FROM ${dbSchema}.worker_bank_accounts WHERE worker_uid = $1 RETURNING *`,
     [workerUid]
@@ -1285,7 +1684,10 @@ export const getWorkerBookingHistory = async (workerUid: string) => {
       bw.assigned_at,
       bw.started_at,
       bw.completed_at,
-      uc.first_name || ' ' || uc.last_name AS customer_name,
+      COALESCE(
+        NULLIF(TRIM(COALESCE(uc.first_name,'') || ' ' || COALESCE(uc.last_name,'')), ''),
+        TRIM(COALESCE(gc.first_name,'') || ' ' || COALESCE(gc.last_name,''))
+      )                   AS customer_name,
       p.status            AS payment_status,
       p.method            AS payment_provider,
       p.paid_at
@@ -1294,8 +1696,10 @@ export const getWorkerBookingHistory = async (workerUid: string) => {
       ON b.id = bw.booking_id
     JOIN ${dbSchema}.service_options so
       ON so.id = b.service_option_id
-    JOIN ${dbSchema}.user_credentials uc
+    LEFT JOIN ${dbSchema}.user_credentials uc
       ON uc.uid = b.user_id
+    LEFT JOIN ${dbSchema}.guest_customers gc
+      ON gc.guest_customer_id = b.guest_customer_id
     LEFT JOIN ${dbSchema}.payments p
       ON p.booking_id = b.id AND p.additional_request_id IS NULL
     WHERE bw.worker_uid = $1
@@ -1584,9 +1988,18 @@ export const updateWorkerPhotoUrl = async (uid: string, photoUrl: string) => {
 export const getWorkerDashboard = async (uid: string) => {
   const [historyRes, pendingRes, onlineDoc] = await Promise.all([
     dbQuery.query(
+      // booking_workers is only ever written 'CANCELED' (single L) — see
+      // bookingService.ts:659 and adminBookingService.ts:942. The parent
+      // bookings row uses 'CANCELLED' (double L). This counted the parent's
+      // spelling against the child's table, so `cancelled` was permanently 0.
+      //
+      // Both spellings are matched rather than just the correct one: the split
+      // is real across the schema, and a counter that silently reads zero is
+      // worse than one that over-matches. Normalising the two spellings is
+      // tracked separately — it is a data migration, not a query fix.
       `SELECT COUNT(*) AS total_jobs,
               COALESCE(SUM(CASE WHEN bw.status = 'COMPLETED' THEN 1 ELSE 0 END), 0) AS completed,
-              COALESCE(SUM(CASE WHEN bw.status = 'CANCELLED' THEN 1 ELSE 0 END), 0) AS cancelled
+              COALESCE(SUM(CASE WHEN bw.status IN ('CANCELED', 'CANCELLED') THEN 1 ELSE 0 END), 0) AS cancelled
        FROM ${dbSchema}.booking_workers bw WHERE bw.worker_uid = $1`,
       [uid]
     ),
@@ -1762,4 +2175,25 @@ export const saveWorkerNotificationPrefs = async (
     ]
   );
   return { success: true };
+};
+/**
+ * The provider currently serving a booking, or null when none is assigned.
+ *
+ * "Currently" excludes DECLINED and CANCELED assignments, so a provider who
+ * turned the job down — or was reassigned away — is not reported as the one on
+ * their way (§22). Used by the booking-scoped location endpoint so a customer
+ * can only ever be told about the provider actually attached to their booking.
+ */
+export const getAssignedWorkerUid = async (
+  bookingId: number,
+): Promise<string | null> => {
+  const { rows } = await dbQuery.query(
+    `SELECT worker_uid FROM ${dbSchema}.booking_workers
+      WHERE booking_id = $1
+        AND status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED')
+      ORDER BY assigned_at DESC NULLS LAST
+      LIMIT 1`,
+    [bookingId],
+  );
+  return rows.length ? (rows[0].worker_uid as string) ?? null : null;
 };

@@ -15,6 +15,31 @@ export const getOfferingsForProvider = async (req: Request, res: Response) => {
   }
 };
 
+// ─── Admin — Offering Providers ──────────────────────────────────────────────
+
+// GET /admin/provider-catalog/offerings/:offeringId/providers
+export const getOfferingProviders = async (req: Request, res: Response) => {
+  try {
+    const offeringId = Number(req.params.offeringId);
+    const data = await svc.getOfferingProviders(offeringId);
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
+  }
+};
+
+// ─── Admin — Service Families ─────────────────────────────────────────────────
+
+// GET /admin/provider-catalog/service-families
+export const listServiceFamilies = async (req: Request, res: Response) => {
+  try {
+    const data = await svc.listServiceFamilies();
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
+  }
+};
+
 // ─── Admin — Offerings ────────────────────────────────────────────────────────
 
 // GET /admin/provider-catalog/offerings
@@ -34,8 +59,15 @@ export const createOffering = async (req: Request, res: Response) => {
     const data = await svc.createOffering(req.body, adminUid);
     return res.status(201).json({ status: "success", data });
   } catch (error: any) {
-    const is409 = error.code === "23505"; // unique violation
-    return res.status(is409 ? 409 : 400).json({ status: "failed", message: error?.message ?? "Bad request" });
+    if ((error as any).code === "CATALOG_KEY_ALREADY_EXISTS") {
+      return res.status(409).json({
+        status: "error",
+        code: "CATALOG_KEY_ALREADY_EXISTS",
+        message: error.message,
+        existingOfferingId: (error as any).existingOfferingId ?? null,
+      });
+    }
+    return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
   }
 };
 
@@ -78,6 +110,26 @@ export const updateOfferingStatus = async (req: Request, res: Response) => {
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
     return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
+  }
+};
+
+// ─── Admin — Cross-Offering Specific Services List ────────────────────────────
+
+// GET /admin/provider-catalog/specific-services
+export const listAllSpecificServicesAdmin = async (req: Request, res: Response) => {
+  try {
+    const data = await svc.listAllSpecificServices({
+      search:     req.query.search     as string | undefined,
+      offeringId: req.query.offeringId ? Number(req.query.offeringId) : undefined,
+      isActive:   req.query.isActive   as string | undefined,
+      sortBy:     req.query.sortBy     as string | undefined,
+      sortOrder:  req.query.sortOrder  as string | undefined,
+      page:       req.query.page       ? Number(req.query.page)  : undefined,
+      limit:      req.query.limit      ? Number(req.query.limit) : undefined,
+    });
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
   }
 };
 
@@ -160,7 +212,8 @@ export const updateSpecificServiceStatus = async (req: Request, res: Response) =
   try {
     const id = Number(req.params.serviceOptionId);
     const isActive = req.body.isActive === true || req.body.isActive === "true";
-    const data = await svc.updateSpecificServiceStatus(id, isActive);
+    const adminUid = (req as any).user?.uid ?? "system";
+    const data = await svc.updateSpecificServiceStatus(id, isActive, adminUid);
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
     return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
@@ -216,9 +269,130 @@ export const updateAddonStatus = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.addonOptionId);
     const isActive = req.body.isActive === true || req.body.isActive === "true";
-    const data = await svc.updateAddonStatus(id, isActive);
+    const adminUid = (req as any).user?.uid ?? "system";
+    const data = await svc.updateAddonStatus(id, isActive, adminUid);
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
+    return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
+  }
+};
+
+// ─── Admin — Catalog Overview ─────────────────────────────────────────────────
+
+// GET /admin/provider-catalog/overview
+export const getCatalogOverview = async (req: Request, res: Response) => {
+  try {
+    const filter = {
+      search: req.query.search as string | undefined,
+      status: req.query.status as string | undefined,
+      mobileProtected: req.query.mobileProtected !== undefined
+        ? req.query.mobileProtected === "true"
+        : undefined,
+    };
+    const data = await svc.getCatalogOverview(filter);
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
+  }
+};
+
+// ─── Admin — Catalog Audit Trail ─────────────────────────────────────────────
+
+// GET /admin/provider-catalog/audit
+export const getCatalogAuditTrail = async (req: Request, res: Response) => {
+  try {
+    const filter = {
+      entityType: req.query.entityType as string | undefined,
+      entityId: req.query.entityId as string | undefined,
+      limit: req.query.limit ? Number(req.query.limit) : undefined,
+      offset: req.query.offset ? Number(req.query.offset) : undefined,
+    };
+    const data = await svc.getCatalogAuditTrail(filter);
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
+  }
+};
+
+// ─── Admin — Offering Mappings ────────────────────────────────────────────────
+
+// POST /admin/provider-catalog/offerings/:offeringId/mappings
+export const createOfferingMapping = async (req: Request, res: Response) => {
+  try {
+    const offeringId = Number(req.params.offeringId);
+    if (!offeringId) return res.status(400).json({ status: "failed", message: "Invalid offeringId" });
+    const adminUid = (req as any).user?.uid ?? "system";
+    const data = await svc.createOfferingMapping(
+      offeringId,
+      { serviceId: Number(req.body.serviceId), level2: req.body.level2, displayOrder: req.body.displayOrder },
+      adminUid
+    );
+    return res.status(201).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
+  }
+};
+
+// PATCH /admin/provider-catalog/mappings/:mappingId
+export const updateOfferingMapping = async (req: Request, res: Response) => {
+  try {
+    const mappingId = Number(req.params.mappingId);
+    if (!mappingId) return res.status(400).json({ status: "failed", message: "Invalid mappingId" });
+    const adminUid = (req as any).user?.uid ?? "system";
+    const data = await svc.updateOfferingMapping(
+      mappingId,
+      { displayOrder: req.body.displayOrder, isActive: req.body.isActive },
+      adminUid
+    );
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
+  }
+};
+
+// DELETE /admin/provider-catalog/mappings/:mappingId
+export const archiveOfferingMapping = async (req: Request, res: Response) => {
+  try {
+    const mappingId = Number(req.params.mappingId);
+    if (!mappingId) return res.status(400).json({ status: "failed", message: "Invalid mappingId" });
+    const adminUid = (req as any).user?.uid ?? "system";
+    const data = await svc.archiveOfferingMapping(mappingId, adminUid);
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
+  }
+};
+
+// ─── Admin — Publish Preview + Publish ───────────────────────────────────────
+
+// POST /admin/provider-catalog/offerings/:offeringId/publish-preview
+export const publishPreviewOffering = async (req: Request, res: Response) => {
+  try {
+    const offeringId = Number(req.params.offeringId);
+    if (!offeringId) return res.status(400).json({ status: "failed", message: "Invalid offeringId" });
+    const data = await svc.getPublishPreview(offeringId);
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
+  }
+};
+
+// POST /admin/provider-catalog/offerings/:offeringId/publish
+export const publishOffering = async (req: Request, res: Response) => {
+  try {
+    const offeringId = Number(req.params.offeringId);
+    if (!offeringId) return res.status(400).json({ status: "failed", message: "Invalid offeringId" });
+    const adminUid = (req as any).user?.uid ?? "system";
+    const data = await svc.publishOffering(offeringId, adminUid);
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    if ((error as any).code === "VALIDATION") {
+      return res.status(422).json({
+        status: "failed",
+        message: error?.message ?? "Validation failed",
+        blockers: (error as any).blockers ?? [],
+      });
+    }
     return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
   }
 };

@@ -37,12 +37,16 @@ const addUserAddress = async (userAddressReq: UserAddressReq, uid: string) => {
 
         if (!rows || rows.length == 0) throw "Failed to insert address";
 
-        // Only sync to MongoDB when coordinates are available
+        // Sync to MongoDB (fire-and-forget — failure must not roll back the PostgreSQL save)
         if (locationId && lat != null && lon != null) {
-            await addLocationInDB(locationId, addressId, lat, lon);
+            addLocationInDB(locationId, addressId, lat, lon).catch((e: any) => {
+                console.error('[address.service] MongoDB location write failed (MSP-BUG-029):', e?.message ?? e);
+            });
         }
 
-        const dbResponse = await formattedAddress(rows[0]);
+        // Pass known coords so formattedAddress skips the MongoDB read (avoids post-fire-and-forget race)
+        const knownCoords = (lat != null && lon != null) ? { lat, lon } : null;
+        const dbResponse = await formattedAddress(rows[0], knownCoords);
         return dbResponse;
     } catch (error) {
         throw error;
@@ -50,10 +54,17 @@ const addUserAddress = async (userAddressReq: UserAddressReq, uid: string) => {
 };
 
 const updateUserAddress = async (userAddressReq: UserAddressReq, uid: string, addressId: string) => {
+    // `AND uid = $12` is the ownership predicate. Without it any authenticated
+    // caller could rewrite another customer's street address, label, primary
+    // flag and location_id by supplying their addressId — and because
+    // location_id drives coverage checks and worker-distance pricing at booking
+    // time, that was a booking-corruption vector, not only a privacy one.
+    // makeAddressPrimary and deleteAddress were already scoped this way; this
+    // one was missed (§11, §12).
     const updateQuery = `UPDATE ${dbSchema}.user_address
         SET location_id = $1, address_one = $2, address_two = $3, zip_code = $4, post_town = $5,
             country = $6, updated_at = $7, updated_by = $8, label = $9, is_primary = $10
-        WHERE address_id = $11 returning *`;
+        WHERE address_id = $11 AND uid = $12 returning *`;
 
     const { locationId, addressOne, addressTwo, zipCode, postTown, country, label, isPrimary, lat, lon } =
         userAddressReq;
@@ -73,16 +84,24 @@ const updateUserAddress = async (userAddressReq: UserAddressReq, uid: string, ad
             label,
             isPrimary,
             addressId,
+            uid,
         ]);
 
+        // Zero rows means either no such address or it is not this caller's.
+        // Both fail closed with the same message so the response cannot be used
+        // to probe which address ids exist (§11 fail closed, §21 safe errors).
         if (!rows || rows.length == 0) throw "Failed to update address";
 
-        // Only sync to MongoDB when coordinates are available
+        // Sync to MongoDB (fire-and-forget — failure must not roll back the PostgreSQL save)
         if (locationId && lat != null && lon != null) {
-            await updateLocationInDB(locationId, addressId, lat, lon);
+            updateLocationInDB(locationId, addressId, lat, lon).catch((e: any) => {
+                console.error('[address.service] MongoDB location update failed (MSP-BUG-029):', e?.message ?? e);
+            });
         }
 
-        const dbResponse = await formattedAddress(rows[0]);
+        // Pass known coords so formattedAddress skips the MongoDB read (avoids post-fire-and-forget race)
+        const knownCoords = (lat != null && lon != null) ? { lat, lon } : null;
+        const dbResponse = await formattedAddress(rows[0], knownCoords);
         return dbResponse;
     } catch (error) {
         throw error;
@@ -142,10 +161,8 @@ const updateLocationInDB = async (locationId: string, addressId: string, lat: nu
 const getAllAddressesOfUser = async (userId: string, role: string) => {
     let searchQuery: string;
     let params: any[];
-    console.log("with role", role);
     if (role === '1' || role === '0') {
         // Admin: fetch addresses of all users with role 3
-        console.log("Admin fetching all addresses of users with role 3");
         searchQuery = `
             SELECT ua.* FROM ${dbSchema}.user_address ua
             INNER JOIN ${dbSchema}.user_credentials u ON u.uid = ua.uid
@@ -162,7 +179,6 @@ const getAllAddressesOfUser = async (userId: string, role: string) => {
 
     try {
         const { rows } = await dbQuery.query(searchQuery, params);
-        console.log("Fetched addresses from DB for user", userId, "with role", role, ":", rows);
 
         if (!rows || rows.length === 0) return [];
 
@@ -187,13 +203,14 @@ const getAddressByAddressId = async (addressId: string) => {
     }
 };
 
-const makeAddressPrimary = async (addressId: string) => {
-    const searchQuery = `UPDATE ${dbSchema}.user_address SET is_primary = true WHERE address_id = $1 returning *`;
+const makeAddressPrimary = async (addressId: string, ownerUid: string) => {
+    // ownerUid enforces ownership at the DB level — prevents one user making another's address primary.
+    const searchQuery = `UPDATE ${dbSchema}.user_address SET is_primary = true WHERE address_id = $1 AND uid = $2 returning *`;
 
     try {
-        const { rows } = await dbQuery.query(searchQuery, [addressId]);
+        const { rows } = await dbQuery.query(searchQuery, [addressId, ownerUid]);
 
-        if (!rows || rows.length == 0) throw "Failed to update address";
+        if (!rows || rows.length == 0) throw "Address not found or access denied";
 
         const dbResponse = await formattedAddress(rows[0]);
         return dbResponse;
@@ -213,11 +230,13 @@ const makeOtherAddressNotPrimary = async (addressId: string, userId: string) => 
     }
 };
 
-const deleteAddress = async (addressId: string) => {
-    const searchQuery = `DELETE FROM ${dbSchema}.user_address WHERE address_id = $1`;
+const deleteAddress = async (addressId: string, ownerUid: string) => {
+    // ownerUid enforces ownership at the DB level — prevents one user deleting another's address.
+    const searchQuery = `DELETE FROM ${dbSchema}.user_address WHERE address_id = $1 AND uid = $2`;
 
     try {
-        await dbQuery.query(searchQuery, [addressId]);
+        const result = await dbQuery.query(searchQuery, [addressId, ownerUid]);
+        if ((result.rowCount ?? 0) === 0) throw "Address not found or access denied";
         return "success";
     } catch (error) {
         throw error;
@@ -236,9 +255,12 @@ const getLatLonByLocationId = async (locationId: string) => {
     }
 }
 
-const formattedAddress = async (raw: any) => {
+const formattedAddress = async (raw: any, knownCoords?: { lat: number; lon: number } | null) => {
     let coordinates: any[] | null = null;
-    if (raw.location_id) {
+    if (knownCoords != null) {
+        // Caller already has the coordinates — skip MongoDB read to avoid post-fire-and-forget race
+        coordinates = [knownCoords.lon, knownCoords.lat];
+    } else if (raw.location_id) {
         try {
             coordinates = await getLatLonByLocationId(raw.location_id);
         } catch {
@@ -275,7 +297,7 @@ const getAddressesByUserId = async (userId: string) => {
     try {
         const { rows } = await dbQuery.query(searchQuery, [userId]);
         if (!rows || rows.length === 0) return [];
-        return Promise.all(rows.map(formattedAddress));
+        return Promise.all(rows.map((row: any) => formattedAddress(row)));
     } catch (error) {
         throw error;
     }
