@@ -16,6 +16,7 @@ import * as areaEngine from "../services/providerServiceAreaEngine";
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 import * as availabilityService from "../services/providerOperationalAvailabilityService";
 import { touchProviderActivity } from "../services/adminProviderService";
+import { getProviderPerformance } from "../services/providerPerformanceService";
 
 const dbSchema = db.schema;
 
@@ -1385,6 +1386,25 @@ export const getWorkerServiceArea = async (req: Request, res: Response) => {
       data: { cityIds: profile.cityIds, label: profile.label ?? '', updatedAt: profile.updatedAt },
     });
   } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: "Server error" });
+  }
+};
+
+/**
+ * GET /provider/performance
+ *
+ * Scoped to the caller's own uid from the verified token — there is no :uid
+ * parameter, so one provider cannot read another's performance by guessing an
+ * identifier (§11, §12).
+ */
+export const getProviderPerformanceMetrics = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const data = await getProviderPerformance(uid);
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    console.error("[providerController] getProviderPerformanceMetrics error:", error?.message ?? error);
     return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };

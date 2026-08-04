@@ -31,6 +31,8 @@ router.get("/provider/earnings/summary", verifyAuth, provider.getEarningsSummary
 router.get("/provider/earnings/:id", verifyAuth, provider.getEarningById);
 router.get("/provider/ledger", verifyAuth, provider.getLedger);
 router.get("/provider/payouts", verifyAuth, provider.getPayouts);
+// Performance metrics for the portal's Performance page (own uid from token).
+router.get("/provider/performance", verifyAuth, provider.getProviderPerformanceMetrics);
 
 // Review / onboarding
 router.get("/providers/me/review-status", verifyAuth, provider.getReviewStatus);
