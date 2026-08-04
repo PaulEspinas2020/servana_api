@@ -1,6 +1,7 @@
 import express from "express";
 import requireActiveProvider from "../middleware/requireActiveProvider";
 import requireProviderRole from "../middleware/requireProviderRole";
+import requireCapability from "../middleware/requireCapability";
 import verifyAuth from "../middleware/verifyAuth";
 import verifyRoles from "../middleware/verifyRoles";
 import * as provider from "../controllers/providerController";
@@ -44,11 +45,11 @@ router.post("/provider/location/go-offline", verifyAuth, requireProviderRole, pr
 router.get("/provider/dashboard", verifyAuth, requireProviderRole, provider.getDashboard);
 
 // Earnings
-router.get("/provider/earnings", verifyAuth, requireProviderRole, provider.getEarnings);
-router.get("/provider/earnings/summary", verifyAuth, requireProviderRole, provider.getEarningsSummary);
-router.get("/provider/earnings/:id", verifyAuth, requireProviderRole, provider.getEarningById);
-router.get("/provider/ledger", verifyAuth, requireProviderRole, provider.getLedger);
-router.get("/provider/payouts", verifyAuth, requireProviderRole, provider.getPayouts);
+router.get("/provider/earnings", verifyAuth, requireProviderRole, requireCapability("canViewEarnings"), provider.getEarnings);
+router.get("/provider/earnings/summary", verifyAuth, requireProviderRole, requireCapability("canViewEarnings"), provider.getEarningsSummary);
+router.get("/provider/earnings/:id", verifyAuth, requireProviderRole, requireCapability("canViewEarnings"), provider.getEarningById);
+router.get("/provider/ledger", verifyAuth, requireProviderRole, requireCapability("canViewEarnings"), provider.getLedger);
+router.get("/provider/payouts", verifyAuth, requireProviderRole, requireCapability("canViewEarnings"), provider.getPayouts);
 // Performance metrics for the portal's Performance page (own uid from token).
 router.get("/provider/performance", verifyAuth, requireProviderRole, provider.getProviderPerformanceMetrics);
 
@@ -123,7 +124,7 @@ router.post("/provider/security/sessions/revoke-all", verifyAuth, requireProvide
 router.delete("/provider/security/sessions/:id", verifyAuth, requireProviderRole, provider.revokeProviderSession);
 
 // Payout settings (P1)
-router.get("/provider/payout/summary", verifyAuth, requireProviderRole, provider.getProviderPayoutSummary);
+router.get("/provider/payout/summary", verifyAuth, requireProviderRole, requireCapability("canViewEarnings"), provider.getProviderPayoutSummary);
 router.post("/provider/payout/update-session", verifyAuth, requireProviderRole, provider.requestProviderPayoutUpdate);
 router.post("/provider/payout", verifyAuth, requireProviderRole, requireActiveProvider, provider.registerProviderPayout);
 
