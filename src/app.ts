@@ -329,6 +329,7 @@ import { ensurePermissionSchema } from "./services/adminPermissionService";
   }
 })();
 
+import { assertContinueUrlsAreUsable } from "./constants/platformContinueUrls";
 import { ensureDashboardSchema } from "./services/adminDashboardService";
 (async () => {
   try {
@@ -337,6 +338,20 @@ import { ensureDashboardSchema } from "./services/adminDashboardService";
     console.error("[admin-dashboard] schema error:", err);
   }
 })();
+
+/**
+ * Refuse to start on a Firebase continue URL that could never work.
+ *
+ * These URLs are only ever exercised by an email somebody receives, so a typo
+ * in `CUSTOMER_RESET_URL` is the kind of defect that surfaces as a locked-out
+ * customer that support cannot explain. Checking at boot is the last cheap
+ * moment; the alternative is finding out from the person it happened to.
+ *
+ * Deliberately before `listen`, and deliberately fatal. A process that starts
+ * and silently emails broken password-reset links is worse than one that
+ * refuses to start and names the variable that is wrong.
+ */
+assertContinueUrlsAreUsable();
 
 httpServer.listen(port, () => {
     console.log(`Magic is running on port ${port}`);

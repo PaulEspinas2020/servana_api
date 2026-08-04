@@ -17,6 +17,7 @@ import { findLinkCollision, AccountLinkRequiredError } from "./accountLinkGuard"
 import { mergePhoneIntoExistingAccount } from "./accountLinking";
 import { provenFrom, recordProvenIdentifiers } from "./identityVerificationSync";
 import { noteRevoked } from "./tokenRevocation";
+import { toActionCodeSettings } from "../constants/platformContinueUrls";
 
 const dbSchema = dbConfig.schema;
 
@@ -406,8 +407,10 @@ const registerNewUserInFirebase = async (user: any) => {
  */
 const sendEmailVerificationFirebase = async (email: string, continueUrl?: string) => {
     try {
-        const actionCodeSettings = continueUrl ? { url: continueUrl } : undefined;
-        const link = await defaultAuthAdmin.generateEmailVerificationLink(email, actionCodeSettings);
+        const link = await defaultAuthAdmin.generateEmailVerificationLink(
+            email,
+            toActionCodeSettings(continueUrl),
+        );
         return link;
     } catch (err: any) {
         console.error('sendEmailVerificationFirebase failed:', err?.code || err?.message || err);
@@ -478,8 +481,7 @@ const deleteFirebaseUser = async (uid: string) => {
 };
 
 const generatePasswordResetLink = async (email: string, continueUrl?: string): Promise<string> => {
-    const actionCodeSettings = continueUrl ? { url: continueUrl } : undefined;
-    return defaultAuthAdmin.generatePasswordResetLink(email, actionCodeSettings);
+    return defaultAuthAdmin.generatePasswordResetLink(email, toActionCodeSettings(continueUrl));
 };
 
 const updateFirebasePassword = async (uid: string, newPassword: string): Promise<void> => {
