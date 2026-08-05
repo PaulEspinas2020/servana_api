@@ -46,8 +46,8 @@ journey simply ended on a page that was not Servana. But they still start
 somewhere that is not Servana, and `/reset-password` never receives the
 `oobCode`.
 
-To have them land **directly** on Servana's own page holding the `oobCode`, the
-project's action URL must be repointed. Then the same link becomes:
+Landing them **directly** on a Servana page holding the `oobCode` would require
+the project's action URL to be repointed, producing:
 
 ```
 https://servana.com.ph/reset-password
@@ -59,48 +59,52 @@ https://servana.com.ph/reset-password
 
 which is the shape both Servana reset pages already parse.
 
+**Do not do this.** See below.
+
 ---
 
-## The console procedure
+## Do NOT repoint the console action URL
 
-Firebase project **`servana-59bee`** — the only Servana Firebase project. SMS
-quota, test numbers and region policy are shared across every app in it, so
-changes here are platform-wide.
+An earlier revision of this document recommended repointing it at the customer
+portal. That recommendation is **withdrawn**, because it breaks a hard rule:
 
-1. Firebase console → **Authentication** → **Templates**.
-2. Pick **Password reset**. Click the pencil, then **customise action URL**.
-3. Set it to the page that will handle the code.
-4. Repeat for **Email address verification**.
-5. Save, then send yourself one of each and open them.
+> Never change a Firebase console setting to solve a per-platform problem. Action
+> URLs, email templates, project config and SMS region policy are project-wide
+> across `servana-59bee` and affect every app. Drive per-platform behaviour
+> through code — `actionCodeSettings` per request — instead.
 
-### The decision that has to be made first
+The reason is visible in the problem itself. There is **one** action URL per
+project and **two** portals that want it: customer (`servana.com.ph`) and
+provider (`provider.servana.com.ph`). Setting it for one silently changes where
+the *other* one's links land. That is a cross-platform side effect produced by a
+per-platform fix, which is exactly the shape the rule exists to prevent — and it
+would be invisible until a provider reported that reset stopped working.
 
-There is **one** action URL per project, and **two** portals that want it —
-customer (`servana.com.ph`) and provider (`provider.servana.com.ph`). They
-cannot both have it.
+Repointing it at the provider portal is worse still: the provider portal has no
+`verify-email` route, so email verification would end on a 404.
 
-Options, in the order they are worth considering:
+### What to do instead
 
-- **Point it at the customer portal.** The customer portal has both
-  `/reset-password` and `/verify-email` built and tested. The provider portal
-  keeps today's behaviour (Firebase's page plus a "Continue" link home), which
-  is what it has always had. Lowest risk, and it is the portal with the larger
-  expected audience.
-- **Point it at a small shared handler** that reads `continueUrl` and forwards
-  to the right portal. Correct for both, but it is a new deployable that does not
-  exist.
-- **Leave it on the default.** Everyone gets a "Continue" link home. Nothing
-  breaks; nothing improves beyond what the code change already delivered.
+1. **Nothing (current state).** Per-request `continueUrl` is already in place and
+   is the rule-compliant mechanism. Everyone completes their action on Firebase's
+   page and reaches Servana by a "Continue" link that now points somewhere real
+   for every platform. This is a working flow, not a broken one.
+2. **If direct landing is genuinely wanted**, build a small shared action handler
+   — one route that reads `mode`, `oobCode` and `continueUrl` and forwards to the
+   right portal. Then the console value serves all platforms rather than
+   privileging one, and the rule is satisfied. It is a new deployable that does
+   not exist, and it is the only correct way to get direct landing.
 
-Do **not** point it at the provider portal today: the provider portal has no
-`verify-email` route, so email verification would land on a 404.
+Option 2 is the only circumstance in which the console value should ever be
+changed, and the handler must exist and be deployed **first**.
 
-### After repointing
+### A property to preserve if option 2 is ever built
 
 The receiving page must tolerate arriving **without** an `oobCode` — Firebase
 also uses the action URL for modes the page does not handle. Both Servana pages
 already do: the customer portal's `/reset-password` renders a "request a new
-link" state, and the provider portal's bails to `invalid_token`.
+link" state, and the provider portal's bails to `invalid_token`. A shared
+handler must not regress that.
 
 ---
 
@@ -147,13 +151,14 @@ Use a synthetic account. Never a real customer's address.
 1. `POST /api/auth/forgot-password` with `{ "email": "...", "platform": "customer" }`.
 2. Open the email. The link's `continueUrl` query parameter should be the
    customer reset URL.
-3. If the action URL has been repointed, you land on `servana.com.ph/reset-password`
-   with an `oobCode`. If it has not, you land on Firebase's page and reach
-   Servana by "Continue". **Both are expected** — which one you see is the test
-   of whether the console change has been made.
-4. Repeat with `"platform": "provider"`, and with the field omitted. Omitted must
-   produce a link with **no** `continueUrl` — that is the case that proves the
-   mobile apps are unaffected.
+3. You land on Firebase's page, reset there, and reach Servana by "Continue".
+   That is the **expected and correct** end state — see "Do NOT repoint" above.
+4. Repeat with `"platform": "provider"`. The `continueUrl` must be
+   `https://provider.servana.com.ph/provider/reset-password`, and it must load.
+   `servana.com.ph/provider/reset-password` **404s** — that was the live defect
+   fixed on 2026-08-05.
+5. Repeat with the field omitted. Omitted must produce a link with **no**
+   `continueUrl` — that is the case that proves the mobile apps are unaffected.
 
 ---
 
