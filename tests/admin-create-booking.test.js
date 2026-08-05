@@ -6,11 +6,11 @@
 const fs   = require('fs');
 const path = require('path');
 
-const svcSrc    = fs.readFileSync(path.join(__dirname, '../src/services/adminCreateBookingService.ts'), 'utf-8');
-const ctrlSrc   = fs.readFileSync(path.join(__dirname, '../src/controllers/adminBookingController.ts'), 'utf-8');
-const routeSrc  = fs.readFileSync(path.join(__dirname, '../src/routes/adminBooking.routes.ts'), 'utf-8');
-const permSrc   = fs.readFileSync(path.join(__dirname, '../src/services/adminPermissionService.ts'), 'utf-8');
-const appSrc    = fs.readFileSync(path.join(__dirname, '../src/app.ts'), 'utf-8');
+const svcSrc    = fs.readFileSync(path.join(__dirname, '../src/services/adminCreateBookingService.ts'), 'utf-8').replace(/\r\n/g, '\n');
+const ctrlSrc   = fs.readFileSync(path.join(__dirname, '../src/controllers/adminBookingController.ts'), 'utf-8').replace(/\r\n/g, '\n');
+const routeSrc  = fs.readFileSync(path.join(__dirname, '../src/routes/adminBooking.routes.ts'), 'utf-8').replace(/\r\n/g, '\n');
+const permSrc   = fs.readFileSync(path.join(__dirname, '../src/services/adminPermissionService.ts'), 'utf-8').replace(/\r\n/g, '\n');
+const appSrc    = fs.readFileSync(path.join(__dirname, '../src/app.ts'), 'utf-8').replace(/\r\n/g, '\n');
 
 // Isolate the createBooking transaction function body (full function, generous slice)
 const txStart = svcSrc.indexOf('adminCreateBooking =');
@@ -362,7 +362,7 @@ describe('adminCreateBooking — instructions field', () => {
   it('convertDraft forwards instructions from addressPayload', () => {
     const draftSrc = require('fs').readFileSync(
       require('path').join(__dirname, '../src/services/adminBookingDraftService.ts'), 'utf-8'
-    );
+    ).replace(/\r\n/g, '\n');
     // Search whole file — instructions is forwarded inside convertDraft's adminCreateBooking call
     expect(draftSrc).toContain('addr.instructions');
     expect(draftSrc).toContain('instructions:');
@@ -371,7 +371,7 @@ describe('adminCreateBooking — instructions field', () => {
   it('convertDraft uses Number.isFinite guard for servanaLocationId (NaN guard)', () => {
     const draftSrc = require('fs').readFileSync(
       require('path').join(__dirname, '../src/services/adminBookingDraftService.ts'), 'utf-8'
-    );
+    ).replace(/\r\n/g, '\n');
     // NaN guard: Number(non-numeric string) = NaN which would corrupt locationId.
     // The fix: Number.isFinite() rejects NaN/Infinity and falls back to null.
     expect(draftSrc).toContain('Number.isFinite(Number(addr.servanaLocationId))');
@@ -381,10 +381,10 @@ describe('adminCreateBooking — instructions field', () => {
 describe('job-card — instructions surface to provider (STITCH-003)', () => {
   const techSvcSrc = require('fs').readFileSync(
     require('path').join(__dirname, '../src/services/technicianService.ts'), 'utf-8'
-  );
+  ).replace(/\r\n/g, '\n');
   const techCtrlSrc = require('fs').readFileSync(
     require('path').join(__dirname, '../src/controllers/technicianController.ts'), 'utf-8'
-  );
+  ).replace(/\r\n/g, '\n');
 
   it('getJobCardsByWorker SELECT includes delivery_instructions from service_address JSONB', () => {
     const fnIdx = techSvcSrc.indexOf('getJobCardsByWorker');
@@ -404,7 +404,7 @@ describe('job-card — instructions surface to provider (STITCH-003)', () => {
 describe('adminBookingDraftService — DRAFT-002: customerName storage (2026-07-25)', () => {
   const draftSrc = require('fs').readFileSync(
     require('path').join(__dirname, '../src/services/adminBookingDraftService.ts'), 'utf-8'
-  );
+  ).replace(/\r\n/g, '\n');
 
   it('ensureAdminBookingDraftSchema adds customer_name column via additive ALTER TABLE', () => {
     expect(draftSrc).toContain('ADD COLUMN IF NOT EXISTS customer_name VARCHAR(256)');
@@ -440,7 +440,7 @@ describe('adminBookingDraftService — DRAFT-002: customerName storage (2026-07-
 describe('LEAK-M001: providerController.ts — no raw DB error messages exposed (2026-07-25)', () => {
   const ctrlSrc = require('fs').readFileSync(
     require('path').join(__dirname, '../src/controllers/providerController.ts'), 'utf-8'
-  );
+  ).replace(/\r\n/g, '\n');
 
   it('does not forward error.message in pure 500 catch blocks for job-card operations', () => {
     // All "Failed to X" patterns in pure res.status(500) blocks must be replaced
@@ -463,7 +463,7 @@ describe('LEAK-M001: providerController.ts — no raw DB error messages exposed 
 describe('adminBookingDraftService — DRAFT BOOKINGS audit fixes (2026-07-25)', () => {
   const draftSrc = require('fs').readFileSync(
     require('path').join(__dirname, '../src/services/adminBookingDraftService.ts'), 'utf-8'
-  );
+  ).replace(/\r\n/g, '\n');
 
   it('getDraft enforces expiry — transitions expired mutable drafts to status=expired', () => {
     // Must check expires_at against current time for editing/ready_for_review drafts

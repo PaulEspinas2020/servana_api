@@ -16,7 +16,7 @@ import fs from 'fs';
 import path from 'path';
 
 const SRC = path.join(__dirname, '..', 'src');
-const read = (rel: string) => fs.readFileSync(path.join(SRC, rel), 'utf8');
+const read = (rel: string) => fs.readFileSync(path.join(SRC, rel), 'utf8').replace(/\r\n/g, '\n');
 const flat = (s: string) => s.replace(/\s+/g, ' ');
 const code = (s: string) =>
   s.split('\n').map((l) => l.replace(/--.*/, '').replace(/^\s*\/\/.*/, '')).join('\n');

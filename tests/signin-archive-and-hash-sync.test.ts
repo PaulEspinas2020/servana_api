@@ -24,7 +24,7 @@ import fs from 'fs';
 import path from 'path';
 
 const SRC = path.join(__dirname, '..', 'src');
-const read = (...p: string[]) => fs.readFileSync(path.join(SRC, ...p), 'utf8');
+const read = (...p: string[]) => fs.readFileSync(path.join(SRC, ...p), 'utf8').replace(/\r\n/g, '\n');
 
 const auth = read('services', 'auth.service.ts');
 const users = read('services', 'user.service.ts');

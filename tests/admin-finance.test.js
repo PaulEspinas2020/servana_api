@@ -34,7 +34,7 @@ describe('C17 Finance — new files exist', () => {
 
 describe('C17 Finance — app.ts registers finance route and schema', () => {
   let app;
-  beforeAll(() => { app = fs.readFileSync(APP, 'utf8'); });
+  beforeAll(() => { app = fs.readFileSync(APP, 'utf8').replace(/\r\n/g, '\n'); });
 
   it('imports adminFinanceRoutes from routes/adminFinance.routes', () => {
     expect(app).toContain("adminFinance.routes");
@@ -54,7 +54,7 @@ describe('C17 Finance — app.ts registers finance route and schema', () => {
 
 describe('C17 Finance — ensureFinanceSchema is additive (no DROP, no breaking ALTER)', () => {
   let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8'); });
+  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it('does not drop any table', () => {
     expect(svc.toUpperCase()).not.toContain('DROP TABLE');
@@ -78,7 +78,7 @@ describe('C17 Finance — ensureFinanceSchema is additive (no DROP, no breaking 
 
 describe('C17 Finance — ensureFinanceSchema creates required tables', () => {
   let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8'); });
+  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it('creates finance_ledger_entries table', () => {
     expect(svc).toContain('finance_ledger_entries');
@@ -107,7 +107,7 @@ describe('C17 Finance — ensureFinanceSchema creates required tables', () => {
 
 describe('C17 Finance — adminFinanceService exports required functions', () => {
   let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8'); });
+  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   const expected = [
     'ensureFinanceSchema',
@@ -150,7 +150,7 @@ describe('C17 Finance — adminFinanceService exports required functions', () =>
 
 describe('C17 Finance — adminFinanceService fires audit events', () => {
   let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8'); });
+  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it('imports auditFire from adminAuditService', () => {
     expect(svc).toContain("import { auditFire } from './adminAuditService'");
@@ -203,7 +203,7 @@ describe('C17 Finance — adminFinanceService fires audit events', () => {
 
 describe('C17 Finance — payment approval business rules', () => {
   let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8'); });
+  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it('approveGcashPayment checks payment method = GCASH', () => {
     const idx     = svc.indexOf("export async function approveGcashPayment");
@@ -221,7 +221,7 @@ describe('C17 Finance — payment approval business rules', () => {
   });
 
   it('rejectGcashPayment requires non-empty rejectionReason', () => {
-    const ctrl = fs.readFileSync(CTRL('adminFinanceController.ts'), 'utf8');
+    const ctrl = fs.readFileSync(CTRL('adminFinanceController.ts'), 'utf8').replace(/\r\n/g, '\n');
     const idx   = ctrl.indexOf('export async function rejectGcashPayment');
     const seg   = ctrl.slice(idx, idx + 400);
     expect(seg).toContain('rejectionReason');
@@ -245,7 +245,7 @@ describe('C17 Finance — payment approval business rules', () => {
 
 describe('C17 Finance — internal fixer revenue model', () => {
   let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8'); });
+  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it('computeRevenueSplit applies 80/20 to internal fixers like everyone else', () => {
     // INVERTED, deliberately. This asserted that an internal fixer yields
@@ -302,7 +302,7 @@ describe('C17 Finance — internal fixer revenue model', () => {
 
 describe('C17 Finance — payout safety guards', () => {
   let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8'); });
+  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it('retryPayout checks status=FAILED before resetting to PENDING', () => {
     const idx     = svc.indexOf("export async function retryPayout");
@@ -328,7 +328,7 @@ describe('C17 Finance — payout safety guards', () => {
 
 describe('C17 Finance — reconciliation detects required exception codes', () => {
   let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8'); });
+  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   const codes = [
     'GCASH_PENDING_REVIEW_OVER_SLA',
@@ -360,7 +360,7 @@ describe('C17 Finance — reconciliation detects required exception codes', () =
 
 describe('C17 Finance — all finance routes require admin role', () => {
   let routes;
-  beforeAll(() => { routes = fs.readFileSync(ROUTE('adminFinance.routes.ts'), 'utf8'); });
+  beforeAll(() => { routes = fs.readFileSync(ROUTE('adminFinance.routes.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it('imports verifyAuth and verifyRoles', () => {
     expect(routes).toContain('verifyAuth');
@@ -402,53 +402,53 @@ describe('C17 Finance — all finance routes require admin role', () => {
 
 describe('C17 Finance — protected contracts: Customer Mobile endpoints UNCHANGED', () => {
   it('adminFinanceService does not reference /api/:bookingId/approve', () => {
-    const svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8');
+    const svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n');
     expect(svc).not.toContain("/:bookingId/approve");
   });
   it('adminFinanceService does not reference /api/:bookingId/mark-cash-paid', () => {
-    const svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8');
+    const svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n');
     expect(svc).not.toContain('mark-cash-paid');
   });
   it('adminFinanceRoutes does not define /:bookingId/approve', () => {
-    const routes = fs.readFileSync(ROUTE('adminFinance.routes.ts'), 'utf8');
+    const routes = fs.readFileSync(ROUTE('adminFinance.routes.ts'), 'utf8').replace(/\r\n/g, '\n');
     expect(routes).not.toContain("/:bookingId/approve");
   });
   it('payment.routes.ts is unchanged (customer approve route preserved)', () => {
-    const paymentRoutes = fs.readFileSync(ROUTE('payment.routes.ts'), 'utf8');
+    const paymentRoutes = fs.readFileSync(ROUTE('payment.routes.ts'), 'utf8').replace(/\r\n/g, '\n');
     expect(paymentRoutes).toContain('/:bookingId/approve');
   });
 });
 
 describe('C17 Finance — protected contracts: Provider Mobile worker endpoints UNCHANGED', () => {
   it('adminFinanceService does not modify /api/workers/:uid/job-cards', () => {
-    const svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8');
+    const svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n');
     expect(svc).not.toContain('job-cards');
   });
   it('adminFinanceRoutes does not define /workers/* routes', () => {
-    const routes = fs.readFileSync(ROUTE('adminFinance.routes.ts'), 'utf8');
+    const routes = fs.readFileSync(ROUTE('adminFinance.routes.ts'), 'utf8').replace(/\r\n/g, '\n');
     expect(routes).not.toContain('/workers/');
   });
   it('adminFinanceService does not reference /workers/:uid/bookings', () => {
-    const svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8');
+    const svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n');
     expect(svc).not.toContain('/workers/:uid/bookings');
   });
 });
 
 describe('C17 Finance — protected contracts: Provider Web earnings endpoints UNCHANGED', () => {
   it('adminFinanceRoutes does not define /provider/earnings', () => {
-    const routes = fs.readFileSync(ROUTE('adminFinance.routes.ts'), 'utf8');
+    const routes = fs.readFileSync(ROUTE('adminFinance.routes.ts'), 'utf8').replace(/\r\n/g, '\n');
     expect(routes).not.toContain('/provider/earnings');
   });
   it('adminFinanceRoutes does not define /provider/ledger', () => {
-    const routes = fs.readFileSync(ROUTE('adminFinance.routes.ts'), 'utf8');
+    const routes = fs.readFileSync(ROUTE('adminFinance.routes.ts'), 'utf8').replace(/\r\n/g, '\n');
     expect(routes).not.toContain('/provider/ledger');
   });
   it('adminFinanceRoutes does not define /provider/payouts', () => {
-    const routes = fs.readFileSync(ROUTE('adminFinance.routes.ts'), 'utf8');
+    const routes = fs.readFileSync(ROUTE('adminFinance.routes.ts'), 'utf8').replace(/\r\n/g, '\n');
     expect(routes).not.toContain('/provider/payouts');
   });
   it('adminFinanceController does not reference /provider-catalog/v1/offerings', () => {
-    const ctrl = fs.readFileSync(CTRL('adminFinanceController.ts'), 'utf8');
+    const ctrl = fs.readFileSync(CTRL('adminFinanceController.ts'), 'utf8').replace(/\r\n/g, '\n');
     expect(ctrl).not.toContain('/provider-catalog/v1/offerings');
   });
 });
@@ -458,8 +458,8 @@ describe('C17 Finance — protected contracts: Provider Web earnings endpoints U
 describe('C17 Finance — security: sensitive data not exposed', () => {
   let svc, ctrl;
   beforeAll(() => {
-    svc  = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8');
-    ctrl = fs.readFileSync(CTRL('adminFinanceController.ts'), 'utf8');
+    svc  = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n');
+    ctrl = fs.readFileSync(CTRL('adminFinanceController.ts'), 'utf8').replace(/\r\n/g, '\n');
   });
 
   it('service does not return raw PayMongo secret key', () => {
@@ -486,7 +486,7 @@ describe('C17 Finance — security: sensitive data not exposed', () => {
 
 describe('C17 Finance — adminAuditService updated with finance types', () => {
   let audit;
-  beforeAll(() => { audit = fs.readFileSync(SVC('adminAuditService.ts'), 'utf8'); });
+  beforeAll(() => { audit = fs.readFileSync(SVC('adminAuditService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it("AuditCategory includes 'finance'", () => {
     expect(audit).toContain("'finance'");

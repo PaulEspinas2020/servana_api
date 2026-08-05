@@ -13,7 +13,7 @@ const CTRL    = path.resolve(__dirname, '../src/controllers/adminProviderControl
 const SVC     = path.resolve(__dirname, '../src/services/adminProviderService.ts');
 const PERMS   = path.resolve(__dirname, '../src/services/adminPermissionService.ts');
 
-function read(f) { return fs.readFileSync(f, 'utf8'); }
+function read(f) { return fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n'); }
 
 // ── Route registration ─────────────────────────────────────────────────────────
 

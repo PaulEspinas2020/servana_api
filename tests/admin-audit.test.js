@@ -335,7 +335,7 @@ describe('adminAudit.routes.ts contract', function () {
   var routeSrc = fs.readFileSync(
     path.resolve(__dirname, '../src/routes/adminAudit.routes.ts'),
     'utf8'
-  );
+  ).replace(/\r\n/g, '\n');
 
   it('all GET/POST routes use /admin/audit-logs prefix', function () {
     var lines = routeSrc.split('\n').filter(function (l) {
@@ -402,7 +402,7 @@ describe('compatibility guard — protected integrations unchanged', function ()
 
   protectedRoutes.forEach(function (rel) {
     it('does NOT import adminAuditService in ' + path.basename(rel), function () {
-      var content = fs.readFileSync(path.resolve(__dirname, rel), 'utf8');
+      var content = fs.readFileSync(path.resolve(__dirname, rel), 'utf8').replace(/\r\n/g, '\n');
       expect(content).not.toContain('adminAuditService');
     });
   });
@@ -411,7 +411,7 @@ describe('compatibility guard — protected integrations unchanged', function ()
     var src = fs.readFileSync(
       path.resolve(__dirname, '../src/controllers/adminBookingController.ts'),
       'utf8'
-    );
+    ).replace(/\r\n/g, '\n');
     expect(src).toContain('adminAuditService');
     var importLine = src.split('\n').find(function (l) { return l.indexOf('adminAuditService') !== -1; });
     expect(importLine).toBeDefined();
@@ -422,7 +422,7 @@ describe('compatibility guard — protected integrations unchanged', function ()
     var src = fs.readFileSync(
       path.resolve(__dirname, '../src/controllers/adminOnboardingController.ts'),
       'utf8'
-    );
+    ).replace(/\r\n/g, '\n');
     expect(src).toContain('adminAuditService');
     expect(src).toContain('auditFire');
     expect(src).toContain('writeSuccess');
@@ -432,7 +432,7 @@ describe('compatibility guard — protected integrations unchanged', function ()
     var src = fs.readFileSync(
       path.resolve(__dirname, '../src/controllers/adminProviderController.ts'),
       'utf8'
-    );
+    ).replace(/\r\n/g, '\n');
     expect(src).toContain('adminAuditService');
   });
 });
@@ -445,15 +445,15 @@ describe('audit write integration points', function () {
   var onboardingSrc = fs.readFileSync(
     path.resolve(__dirname, '../src/controllers/adminOnboardingController.ts'),
     'utf8'
-  );
+  ).replace(/\r\n/g, '\n');
   var bookingSrc = fs.readFileSync(
     path.resolve(__dirname, '../src/controllers/adminBookingController.ts'),
     'utf8'
-  );
+  ).replace(/\r\n/g, '\n');
   var providerSrc = fs.readFileSync(
     path.resolve(__dirname, '../src/controllers/adminProviderController.ts'),
     'utf8'
-  );
+  ).replace(/\r\n/g, '\n');
 
   // Onboarding
   var onboardingActions = [
@@ -539,7 +539,7 @@ describe('adminAuditService.ts structural assertions', function () {
   var svcSrc = fs.readFileSync(
     path.resolve(__dirname, '../src/services/adminAuditService.ts'),
     'utf8'
-  );
+  ).replace(/\r\n/g, '\n');
 
   it('exports redactSensitiveFields', function () {
     expect(svcSrc).toContain('export function redactSensitiveFields');
@@ -624,7 +624,7 @@ describe('app.ts audit integration', function () {
   var appSrc = fs.readFileSync(
     path.resolve(__dirname, '../src/app.ts'),
     'utf8'
-  );
+  ).replace(/\r\n/g, '\n');
 
   it('imports adminAuditRoutes', function () {
     expect(appSrc).toContain('adminAuditRoutes');

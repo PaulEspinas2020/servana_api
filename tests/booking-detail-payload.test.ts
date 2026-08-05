@@ -35,7 +35,7 @@ const stripComments = (s: string): string =>
   s.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
 
 const bookingService = () =>
-  readFileSync(join(SRC, 'services', 'bookingService.ts'), 'utf8');
+  readFileSync(join(SRC, 'services', 'bookingService.ts'), 'utf8').replace(/\r\n/g, '\n');
 
 const getBookingByIdQuery = (): string => {
   const src = stripComments(bookingService());
@@ -79,7 +79,7 @@ describe('booking detail payload', () => {
 describe('the booking OTP does not travel in a URL', () => {
   const confirmOtp = (): string => {
     const src = stripComments(
-      readFileSync(join(SRC, 'controllers', 'bookingController.ts'), 'utf8'),
+      readFileSync(join(SRC, 'controllers', 'bookingController.ts'), 'utf8').replace(/\r\n/g, '\n'),
     );
     const start = src.indexOf('export const confirmOtp');
     expect(start).toBeGreaterThan(-1);
@@ -106,7 +106,7 @@ describe('the booking OTP does not travel in a URL', () => {
   });
 
   it('the route is POST, so a body was always available', () => {
-    const routes = readFileSync(join(SRC, 'routes', 'booking.routes.ts'), 'utf8');
+    const routes = readFileSync(join(SRC, 'routes', 'booking.routes.ts'), 'utf8').replace(/\r\n/g, '\n');
     expect(routes).toMatch(/router\.post\(\s*["']\/:id\/confirm-otp["']/);
   });
 });
