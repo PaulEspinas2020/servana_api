@@ -116,7 +116,21 @@ export const createBooking = async (req: any, res: any) => {
 export const confirmOtp = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.id);
-    const otp = (req.query?.otp || "").toString().trim();
+
+    // Body first, query as a fallback.
+    //
+    // The OTP used to arrive ONLY as `?otp=123456`. A query string is written
+    // to the nginx access log for every request, so each booking verification
+    // deposited a live credential into a plaintext log that is rotated, backed
+    // up and readable by anyone with host access. The OTP is what proves the
+    // customer is present, so that is a credential in a log.
+    //
+    // The route is already POST, so the body was always available and simply
+    // unused. Reading both keeps every already-installed client working —
+    // 1.0.0+36 sends the query form and cannot be changed retroactively — while
+    // letting the app move the value into the body. Drop the query branch once
+    // the query-sending builds are out of circulation.
+    const otp = (req.body?.otp ?? req.query?.otp ?? "").toString().trim();
 
     if (!bookingId || Number.isNaN(bookingId)) {
       return res.status(400).json({ success: false, message: "Invalid booking id" });

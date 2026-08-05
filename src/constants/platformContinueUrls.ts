@@ -53,14 +53,25 @@ export type ContinuePlatform = 'provider' | 'customer';
 /**
  * Where a password reset finishes.
  *
- * The provider default predates this file and is left exactly as it was. Note
- * that it points at `servana.com.ph/provider/...` while the provider portal is
- * deployed at `provider.servana.com.ph` — that mismatch is real, is overridden
- * by `PROVIDER_RESET_URL` in the production environment, and is not this
- * change's to correct.
+ * ## The provider default was on the wrong host
+ *
+ * It read `https://servana.com.ph/provider/reset-password`. The provider portal
+ * declares its own production origin as `https://provider.servana.com.ph`
+ * (`environment.prod.ts`), and `servana.com.ph` is the origin the *customer*
+ * portal was given — an app whose router sends every unknown path to a 404.
+ *
+ * So a provider resetting their password with `PROVIDER_RESET_URL` unset landed
+ * on a page that could not help them. Corrected to the host the provider portal
+ * says it serves; the `/provider` path prefix is real and comes from
+ * `app-routing.module.ts`.
+ *
+ * Whether production sets `PROVIDER_RESET_URL` is not knowable from here. If it
+ * does, this default never runs and nothing changes. If it does not, this is a
+ * fix rather than a behaviour change, because the old value could only 404.
  */
 export const PLATFORM_RESET_URLS: Record<ContinuePlatform, string> = {
-    provider: process.env.PROVIDER_RESET_URL || 'https://servana.com.ph/provider/reset-password',
+    provider:
+        process.env.PROVIDER_RESET_URL || 'https://provider.servana.com.ph/provider/reset-password',
     customer: process.env.CUSTOMER_RESET_URL || 'https://servana.com.ph/reset-password',
 };
 
@@ -121,4 +132,82 @@ export function continueUrlFor(
     const map: Partial<Record<ContinuePlatform, string>> =
         kind === 'reset' ? PLATFORM_RESET_URLS : PLATFORM_VERIFY_URLS;
     return map[platform as ContinuePlatform];
+}
+
+/**
+ * Builds the `ActionCodeSettings` argument for a Firebase Admin link call — or
+ * `undefined`, which is not the same thing.
+ *
+ * ## Why this exists rather than a ternary at each call site
+ *
+ * `generatePasswordResetLink(email, {})` is **not** the same call as
+ * `generatePasswordResetLink(email)`. Passing an empty settings object, or one
+ * carrying `url: ''`, makes Firebase reject a request that works today — so the
+ * difference between `undefined` and `{}` is the difference between a working
+ * signup and a broken one, and it is invisible to any test that only checks
+ * which URL was resolved.
+ *
+ * Two call sites got that ternary right independently. A third would be a coin
+ * flip, and the failure only shows up in production email. One function means
+ * the decision is made once and is the obvious thing to reach for.
+ *
+ * Falsy input — `undefined`, `null`, `''` — all mean "no return URL", and all
+ * produce `undefined` rather than a settings object nobody asked for.
+ */
+export function toActionCodeSettings(continueUrl?: string): { url: string } | undefined {
+    return continueUrl ? { url: continueUrl } : undefined;
+}
+
+/**
+ * Rejects a configured URL that would produce a dead or unsafe link.
+ *
+ * Called at boot (see `assertContinueUrlsAreUsable`) rather than at send time,
+ * because the alternative is discovering a typo in an env var from a customer
+ * who cannot get back into their account.
+ *
+ * `https` is required. An `http` reset link is a password-change flow over
+ * plaintext, and Firebase's own allowlist would reject it at send time anyway —
+ * later, and less legibly.
+ */
+export function isUsableContinueUrl(value: string): boolean {
+    let parsed: URL;
+    try {
+        parsed = new URL(value);
+    } catch {
+        return false;
+    }
+    return parsed.protocol === 'https:' && parsed.hostname.length > 0;
+}
+
+/**
+ * Fails startup on a continue URL that could never work.
+ *
+ * These URLs are only ever exercised by an email somebody receives, which makes
+ * a typo in `CUSTOMER_RESET_URL` the kind of defect that sits unnoticed until a
+ * customer is locked out and support cannot say why. Boot is the last moment it
+ * can be caught cheaply.
+ *
+ * Throws rather than warns: a process that starts and silently emails broken
+ * password-reset links is worse than one that refuses to start and says which
+ * variable is wrong.
+ */
+export function assertContinueUrlsAreUsable(): void {
+    const entries: Array<[string, string | undefined]> = [
+        ['PROVIDER_RESET_URL', PLATFORM_RESET_URLS.provider],
+        ['CUSTOMER_RESET_URL', PLATFORM_RESET_URLS.customer],
+        ['PROVIDER_VERIFY_URL', PLATFORM_VERIFY_URLS.provider],
+        ['CUSTOMER_VERIFY_URL', PLATFORM_VERIFY_URLS.customer],
+    ];
+
+    const broken = entries
+        .filter(([, url]) => url !== undefined && !isUsableContinueUrl(url))
+        .map(([name, url]) => `${name}=${url}`);
+
+    if (broken.length > 0) {
+        throw new Error(
+            `Unusable Firebase continue URL(s): ${broken.join(', ')}. ` +
+            `Each must be an absolute https URL. These are emailed to people as ` +
+            `password-reset and email-verification destinations.`,
+        );
+    }
 }

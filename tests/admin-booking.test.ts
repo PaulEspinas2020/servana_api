@@ -220,9 +220,9 @@ describe('adminEscalateBooking', () => {
 import * as fs from 'fs';
 import * as path from 'path';
 
-const svcSrc  = fs.readFileSync(path.join(__dirname, '../src/services/adminBookingService.ts'), 'utf-8');
-const ctrlSrc = fs.readFileSync(path.join(__dirname, '../src/controllers/adminBookingController.ts'), 'utf-8');
-const routeSrc = fs.readFileSync(path.join(__dirname, '../src/routes/adminBooking.routes.ts'), 'utf-8');
+const svcSrc  = fs.readFileSync(path.join(__dirname, '../src/services/adminBookingService.ts'), 'utf-8').replace(/\r\n/g, '\n');
+const ctrlSrc = fs.readFileSync(path.join(__dirname, '../src/controllers/adminBookingController.ts'), 'utf-8').replace(/\r\n/g, '\n');
+const routeSrc = fs.readFileSync(path.join(__dirname, '../src/routes/adminBooking.routes.ts'), 'utf-8').replace(/\r\n/g, '\n');
 
 describe('adminConfirmProviderAssignment — source contracts', () => {
   it('accepts exactly verbal | written | chat_message as consent methods', () => {

@@ -20,7 +20,7 @@ const PERM_PATH   = path.resolve(__dirname, '../src/services/adminPermissionServ
 const SCHEMA_PATH = path.resolve(__dirname, '../src/services/adminCreateBookingService.ts');
 const APP_PATH    = path.resolve(__dirname, '../src/app.ts');
 
-function read(p) { return fs.readFileSync(p, 'utf8'); }
+function read(p) { return fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n'); }
 
 const svc    = read(SVC_PATH);
 const ctrl   = read(CTRL_PATH);

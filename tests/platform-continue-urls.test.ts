@@ -13,7 +13,10 @@ import {
     ALLOWED_PLATFORMS,
     PLATFORM_RESET_URLS,
     PLATFORM_VERIFY_URLS,
+    assertContinueUrlsAreUsable,
     continueUrlFor,
+    isUsableContinueUrl,
+    toActionCodeSettings,
 } from '../src/constants/platformContinueUrls';
 
 describe('the allowlist itself', () => {
@@ -168,5 +171,118 @@ describe('the lookup cannot be walked into the prototype', () => {
         // The typeof check is what makes this true; a coercing lookup would not.
         const sneaky = { toString: () => 'customer', valueOf: () => 'customer' };
         expect(continueUrlFor('reset', sneaky)).toBeUndefined();
+    });
+});
+
+/**
+ * The `{}` vs `undefined` distinction, at the one place that now decides it.
+ *
+ * `firebase-action-code-settings.test.ts` proves the two current call sites get
+ * it right. This proves the *decision itself* is right, which is what a third
+ * call site will inherit instead of re-deriving it as a coin flip.
+ */
+describe('toActionCodeSettings', () => {
+    test('no continueUrl means undefined, not an empty object', () => {
+        // generatePasswordResetLink(email, {}) is not the same call as
+        // generatePasswordResetLink(email). The first breaks a signup that
+        // works today, and no resolution test can see the difference.
+        expect(toActionCodeSettings(undefined)).toBeUndefined();
+    });
+
+    test('an empty string means undefined too', () => {
+        // An unset env var read through `||` yields '' in some shapes. `{url: ''}`
+        // is rejected by Firebase.
+        expect(toActionCodeSettings('')).toBeUndefined();
+    });
+
+    test('a real URL becomes ActionCodeSettings', () => {
+        expect(toActionCodeSettings('https://servana.com.ph/reset-password')).toEqual({
+            url: 'https://servana.com.ph/reset-password',
+        });
+    });
+
+    test('it never returns an object without a url', () => {
+        for (const input of [undefined, '', ...Object.values(PLATFORM_RESET_URLS)]) {
+            const settings = toActionCodeSettings(input);
+            if (settings !== undefined) expect(settings.url).toBeTruthy();
+        }
+    });
+});
+
+describe('isUsableContinueUrl', () => {
+    test('accepts an absolute https URL', () => {
+        expect(isUsableContinueUrl('https://servana.com.ph/reset-password')).toBe(true);
+    });
+
+    test('rejects http — a password-change flow in plaintext', () => {
+        expect(isUsableContinueUrl('http://servana.com.ph/reset-password')).toBe(false);
+    });
+
+    test('rejects a relative path, which cannot be emailed to anyone', () => {
+        expect(isUsableContinueUrl('/reset-password')).toBe(false);
+    });
+
+    test('rejects the shapes a typo actually produces', () => {
+        for (const bad of ['', 'servana.com.ph/reset', 'https://', 'not a url', 'undefined']) {
+            expect(isUsableContinueUrl(bad)).toBe(false);
+        }
+    });
+});
+
+describe('assertContinueUrlsAreUsable', () => {
+    test('the shipped defaults pass', () => {
+        expect(() => assertContinueUrlsAreUsable()).not.toThrow();
+    });
+
+    test('a malformed env var fails startup and names itself', async () => {
+        // Boot is the last cheap moment to catch this. The alternative is
+        // learning about it from a customer who cannot get back in.
+        const original = process.env.CUSTOMER_RESET_URL;
+        process.env.CUSTOMER_RESET_URL = 'servana.com.ph/oops-no-scheme';
+        jest.resetModules();
+        try {
+            const fresh = await import('../src/constants/platformContinueUrls');
+            expect(() => fresh.assertContinueUrlsAreUsable()).toThrow(/CUSTOMER_RESET_URL/);
+        } finally {
+            if (original === undefined) delete process.env.CUSTOMER_RESET_URL;
+            else process.env.CUSTOMER_RESET_URL = original;
+            jest.resetModules();
+        }
+    });
+
+    test('an unset optional URL is not treated as broken', async () => {
+        // PROVIDER_VERIFY_URL is deliberately absent — the provider portal has
+        // no verify-email route. Absent must not mean invalid.
+        const original = process.env.PROVIDER_VERIFY_URL;
+        delete process.env.PROVIDER_VERIFY_URL;
+        jest.resetModules();
+        try {
+            const fresh = await import('../src/constants/platformContinueUrls');
+            expect(() => fresh.assertContinueUrlsAreUsable()).not.toThrow();
+        } finally {
+            if (original !== undefined) process.env.PROVIDER_VERIFY_URL = original;
+            jest.resetModules();
+        }
+    });
+});
+
+describe('the provider reset URL points at the host the provider portal serves', () => {
+    test('provider.servana.com.ph, not servana.com.ph', async () => {
+        // environment.prod.ts in Servana.com.ph declares
+        // siteUrl: 'https://provider.servana.com.ph'. The old default pointed at
+        // servana.com.ph, which is the CUSTOMER portal's origin and routes every
+        // unknown path to a 404 — so a provider reset landed nowhere useful.
+        const original = process.env.PROVIDER_RESET_URL;
+        delete process.env.PROVIDER_RESET_URL;
+        jest.resetModules();
+        try {
+            const fresh = await import('../src/constants/platformContinueUrls');
+            expect(fresh.PLATFORM_RESET_URLS.provider).toBe(
+                'https://provider.servana.com.ph/provider/reset-password',
+            );
+        } finally {
+            if (original !== undefined) process.env.PROVIDER_RESET_URL = original;
+            jest.resetModules();
+        }
     });
 });

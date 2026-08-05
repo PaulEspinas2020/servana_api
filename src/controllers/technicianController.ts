@@ -584,7 +584,11 @@ export const startJob = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
     const workerUid = actingWorkerUid(req);
-    const workerCode = req.query.workerCode as string; // or from auth token
+    // Body first, query as a fallback. The worker code authorises the job to
+    // start, so it is a credential, and a query string lands in the nginx
+    // access log. This route is PUT — the body was always available and unused.
+    // The query branch stays until the shipped ServanaWorker builds move over.
+    const workerCode = (req.body?.workerCode ?? req.query.workerCode) as string;
 
     if (!bookingId || !workerUid) {
       return res.status(400).json({

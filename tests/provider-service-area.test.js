@@ -40,7 +40,7 @@ describe('SERVICEAREA — required files exist', () => {
 
 describe('SERVICEAREA — CoverageMode includes all_cities', () => {
   let src;
-  beforeAll(() => { src = fs.readFileSync(SVC('providerServiceAreaEngine.ts'), 'utf8'); });
+  beforeAll(() => { src = fs.readFileSync(SVC('providerServiceAreaEngine.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it("CoverageMode union includes 'all_cities'", () => {
     expect(src).toContain("'city' | 'branch' | 'radius' | 'all_cities'");
@@ -55,7 +55,7 @@ describe('SERVICEAREA — CoverageMode includes all_cities', () => {
 
 describe('SERVICEAREA — ServiceAreaIntent exported with all 6 branches', () => {
   let src;
-  beforeAll(() => { src = fs.readFileSync(SVC('providerServiceAreaEngine.ts'), 'utf8'); });
+  beforeAll(() => { src = fs.readFileSync(SVC('providerServiceAreaEngine.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it("exports ServiceAreaIntent type", () => {
     expect(src).toContain('export type ServiceAreaIntent');
@@ -92,7 +92,7 @@ describe('SERVICEAREA — ServiceAreaIntent exported with all 6 branches', () =>
 
 describe('SERVICEAREA — explainCoverage missing-profile path returns covered:true', () => {
   let src;
-  beforeAll(() => { src = fs.readFileSync(SVC('providerServiceAreaEngine.ts'), 'utf8'); });
+  beforeAll(() => { src = fs.readFileSync(SVC('providerServiceAreaEngine.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it("DEFAULT_ALL_CITIES reason code exists in explainCoverage", () => {
     expect(src).toContain("'DEFAULT_ALL_CITIES'");
@@ -121,7 +121,7 @@ describe('SERVICEAREA — explainCoverage missing-profile path returns covered:t
 
 describe('SERVICEAREA — explainCoverage all_cities case returns covered:true', () => {
   let src;
-  beforeAll(() => { src = fs.readFileSync(SVC('providerServiceAreaEngine.ts'), 'utf8'); });
+  beforeAll(() => { src = fs.readFileSync(SVC('providerServiceAreaEngine.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it("switch case for 'all_cities' exists", () => {
     expect(src).toContain("case 'all_cities':");
@@ -142,7 +142,7 @@ describe('SERVICEAREA — explainCoverage all_cities case returns covered:true',
 
 describe('SERVICEAREA — resolveServiceAreaIntent exported and handles all branches', () => {
   let src;
-  beforeAll(() => { src = fs.readFileSync(SVC('providerServiceAreaEngine.ts'), 'utf8'); });
+  beforeAll(() => { src = fs.readFileSync(SVC('providerServiceAreaEngine.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it("exports resolveServiceAreaIntent function", () => {
     expect(src).toContain('export const resolveServiceAreaIntent');
@@ -181,7 +181,7 @@ describe('SERVICEAREA — resolveServiceAreaIntent exported and handles all bran
 
 describe('SERVICEAREA — getEffectiveServiceArea exported', () => {
   let src;
-  beforeAll(() => { src = fs.readFileSync(SVC('providerServiceAreaEngine.ts'), 'utf8'); });
+  beforeAll(() => { src = fs.readFileSync(SVC('providerServiceAreaEngine.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it("exports getEffectiveServiceArea function", () => {
     expect(src).toContain('export const getEffectiveServiceArea');
@@ -204,7 +204,7 @@ describe('SERVICEAREA — getEffectiveServiceArea exported', () => {
 
 describe('SERVICEAREA — EligibilityCheckCode includes DEFAULT_ALL_CITIES', () => {
   let src;
-  beforeAll(() => { src = fs.readFileSync(SVC('providerEligibilityEngine.ts'), 'utf8'); });
+  beforeAll(() => { src = fs.readFileSync(SVC('providerEligibilityEngine.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it("EligibilityCheckCode includes 'DEFAULT_ALL_CITIES'", () => {
     expect(src).toContain("'DEFAULT_ALL_CITIES'");
@@ -215,7 +215,7 @@ describe('SERVICEAREA — EligibilityCheckCode includes DEFAULT_ALL_CITIES', () 
 
 describe('SERVICEAREA — providerSupplyHealthService missingServiceArea definition', () => {
   let src;
-  beforeAll(() => { src = fs.readFileSync(SVC('providerSupplyHealthService.ts'), 'utf8'); });
+  beforeAll(() => { src = fs.readFileSync(SVC('providerSupplyHealthService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it("missing_service_area does NOT use NOT EXISTS (worker_service_areas)", () => {
     // The old definition used: NOT EXISTS (SELECT 1 FROM worker_service_areas)
@@ -244,7 +244,7 @@ describe('SERVICEAREA — providerSupplyHealthService missingServiceArea definit
 
 describe('SERVICEAREA — adminProviderService area_status uses default_all', () => {
   let src;
-  beforeAll(() => { src = fs.readFileSync(SVC('adminProviderService.ts'), 'utf8'); });
+  beforeAll(() => { src = fs.readFileSync(SVC('adminProviderService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it("area_status CASE returns 'default_all' for no-row providers", () => {
     expect(src).toContain("ELSE 'default_all'");
@@ -260,7 +260,7 @@ describe('SERVICEAREA — adminProviderService area_status uses default_all', ()
 
 describe('SERVICEAREA — hasServiceArea=false filter does not use NOT EXISTS', () => {
   let src;
-  beforeAll(() => { src = fs.readFileSync(SVC('adminProviderService.ts'), 'utf8'); });
+  beforeAll(() => { src = fs.readFileSync(SVC('adminProviderService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it("hasServiceArea=false uses EXISTS (not NOT EXISTS) to find invalid configs", () => {
     // Find the hasServiceArea=false branch
@@ -285,7 +285,7 @@ describe('SERVICEAREA — hasServiceArea=false filter does not use NOT EXISTS', 
 
 describe('SERVICEAREA — providerAutoOnlineEngine serviceAreaMode for unconfigured providers', () => {
   let src;
-  beforeAll(() => { src = fs.readFileSync(SVC('providerAutoOnlineEngine.ts'), 'utf8'); });
+  beforeAll(() => { src = fs.readFileSync(SVC('providerAutoOnlineEngine.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it("sets serviceAreaMode='all' when area.status === 'missing'", () => {
     const idx = src.indexOf("area.status === 'missing'");

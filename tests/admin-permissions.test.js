@@ -25,7 +25,7 @@ const AUTOONLINE_ROUTES = path.resolve(__dirname, '../src/routes/adminAutoOnline
 const FINANCE_ROUTES    = path.resolve(__dirname, '../src/routes/adminFinance.routes.ts');
 const AVAIL_ROUTES      = path.resolve(__dirname, '../src/routes/adminProviderAvailability.routes.ts');
 
-function read(f) { return fs.readFileSync(f, 'utf8'); }
+function read(f) { return fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n'); }
 
 // ── SERVICE TESTS ──────────────────────────────────────────────────────────────
 
@@ -780,7 +780,7 @@ describe('Protected mobile and provider-web routes — no changes', () => {
   test('provider catalog routes file: provider-facing route has no permission gate, admin routes do', () => {
     const catalogRoutes = path.resolve(__dirname, '../src/routes/providerCatalog.routes.ts');
     expect(fs.existsSync(catalogRoutes)).toBe(true);
-    const src = fs.readFileSync(catalogRoutes, 'utf8');
+    const src = fs.readFileSync(catalogRoutes, 'utf8').replace(/\r\n/g, '\n');
     // Provider-facing offering route must NOT have requirePermission (would break provider web app)
     const providerBlock = src.indexOf('"/provider-catalog/v1/offerings"');
     expect(providerBlock).toBeGreaterThan(-1);

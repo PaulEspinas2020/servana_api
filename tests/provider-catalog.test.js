@@ -35,7 +35,7 @@ describe('C15 — catalog files exist', () => {
 
 describe('C15 — adminAuditService exports catalog entity types', () => {
   let audit;
-  beforeAll(() => { audit = fs.readFileSync(SVC('adminAuditService.ts'), 'utf8'); });
+  beforeAll(() => { audit = fs.readFileSync(SVC('adminAuditService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it('AuditEntityType includes catalog_offering', () => {
     expect(audit).toContain("'catalog_offering'");
@@ -55,7 +55,7 @@ describe('C15 — adminAuditService exports catalog entity types', () => {
 
 describe('C15 — providerCatalogService imports and calls auditFire', () => {
   let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8'); });
+  beforeAll(() => { svc = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it('imports auditFire from adminAuditService', () => {
     expect(svc).toContain('import { auditFire } from "./adminAuditService"');
@@ -103,7 +103,7 @@ describe('C15 — providerCatalogService imports and calls auditFire', () => {
 
 describe('C15 — getCatalogOverview includes per-mapping stats', () => {
   let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8'); });
+  beforeAll(() => { svc = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it('queries per-mapping specific_service_count', () => {
     expect(svc).toContain('specific_service_count');
@@ -130,9 +130,9 @@ describe('C15 — getCatalogOverview includes per-mapping stats', () => {
 describe('C15 — listServiceFamilies endpoint wiring', () => {
   let svc, ctrl, routes;
   beforeAll(() => {
-    svc    = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8');
-    ctrl   = fs.readFileSync(CTRL('providerCatalogController.ts'), 'utf8');
-    routes = fs.readFileSync(ROUTE('providerCatalog.routes.ts'), 'utf8');
+    svc    = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8').replace(/\r\n/g, '\n');
+    ctrl   = fs.readFileSync(CTRL('providerCatalogController.ts'), 'utf8').replace(/\r\n/g, '\n');
+    routes = fs.readFileSync(ROUTE('providerCatalog.routes.ts'), 'utf8').replace(/\r\n/g, '\n');
   });
 
   it('service exports listServiceFamilies', () => {
@@ -160,8 +160,8 @@ describe('C15 — listServiceFamilies endpoint wiring', () => {
 describe('C15 — protected mobile/customer endpoints are not modified in catalog controller', () => {
   let ctrl, routes;
   beforeAll(() => {
-    ctrl   = fs.readFileSync(CTRL('providerCatalogController.ts'), 'utf8');
-    routes = fs.readFileSync(ROUTE('providerCatalog.routes.ts'), 'utf8');
+    ctrl   = fs.readFileSync(CTRL('providerCatalogController.ts'), 'utf8').replace(/\r\n/g, '\n');
+    routes = fs.readFileSync(ROUTE('providerCatalog.routes.ts'), 'utf8').replace(/\r\n/g, '\n');
   });
 
   it('catalog controller does not reference /workers/:uid/job-cards', () => {
@@ -183,7 +183,7 @@ describe('C15 — protected mobile/customer endpoints are not modified in catalo
 
 describe('C15 — initProviderCatalogSchema is safe (no DROP, no ALTER DROP)', () => {
   let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8'); });
+  beforeAll(() => { svc = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it('does not drop any table', () => {
     expect(svc.toUpperCase()).not.toContain('DROP TABLE');
@@ -207,7 +207,7 @@ describe('C15 — initProviderCatalogSchema is safe (no DROP, no ALTER DROP)', (
 
 describe('C15 — status functions accept optional adminUid', () => {
   let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8'); });
+  beforeAll(() => { svc = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it('updateSpecificServiceStatus has adminUid parameter with default', () => {
     expect(svc).toContain("adminUid: string = 'system'");
@@ -223,7 +223,7 @@ describe('C15 — status functions accept optional adminUid', () => {
 
 describe('C15 — controller passes adminUid to status update functions', () => {
   let ctrl;
-  beforeAll(() => { ctrl = fs.readFileSync(CTRL('providerCatalogController.ts'), 'utf8'); });
+  beforeAll(() => { ctrl = fs.readFileSync(CTRL('providerCatalogController.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it('updateSpecificServiceStatus controller extracts adminUid', () => {
     const idx = ctrl.indexOf('export const updateSpecificServiceStatus');
@@ -244,8 +244,8 @@ describe('C15 — controller passes adminUid to status update functions', () => 
 describe('C16 — createOffering handles duplicate catalog key safely', () => {
   let svc, ctrl;
   beforeAll(() => {
-    svc  = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8');
-    ctrl = fs.readFileSync(CTRL('providerCatalogController.ts'), 'utf8');
+    svc  = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8').replace(/\r\n/g, '\n');
+    ctrl = fs.readFileSync(CTRL('providerCatalogController.ts'), 'utf8').replace(/\r\n/g, '\n');
   });
 
   it('service catches PostgreSQL 23505 error code on insert', () => {
@@ -302,7 +302,7 @@ describe('C16 — createOffering handles duplicate catalog key safely', () => {
 
 describe('C16 — listSpecificServicesForOffering returns serviceOptionId alias', () => {
   let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8'); });
+  beforeAll(() => { svc = fs.readFileSync(SVC('providerCatalogService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   it('response shape uses serviceOptionId alias (not raw id)', () => {
     const idx = svc.indexOf('listSpecificServicesForOffering');

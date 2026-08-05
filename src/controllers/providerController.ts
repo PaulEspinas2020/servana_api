@@ -816,9 +816,24 @@ export const saveOnboardingStep = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const { step, ...payload } = req.body;
-    if (!step) return res.status(400).json({ status: "failed", message: "step is required" });
-    const data = await onboardingService.saveDraftStep(uid, step, payload);
+    /**
+     * `stepKey` is accepted as well as `step`, and this is not tidiness.
+     *
+     * The provider portal has been sending `stepKey` (provider-onboarding-api
+     * .service.ts) against a handler that only ever read `step`, so EVERY save
+     * returned 400 "step is required" and the server-side draft was never
+     * written. Submit then failed on incomplete-draft blockers, which made
+     * provider signup impossible to complete — the toast a provider saw on
+     * every step of the wizard.
+     *
+     * Accepting both here fixes browsers already holding the old bundle, which
+     * a frontend deploy alone cannot reach. The portal now sends `step`; this
+     * alias stays because removing it would re-break exactly those clients.
+     */
+    const { step, stepKey, ...payload } = req.body;
+    const stepName = step ?? stepKey;
+    if (!stepName) return res.status(400).json({ status: "failed", message: "step is required" });
+    const data = await onboardingService.saveDraftStep(uid, stepName, payload);
     return res.status(200).json({ status: "success", data: { success: true, ...data } });
   } catch (error: any) {
     const code = (error as any).statusCode;
@@ -2248,7 +2263,21 @@ export const startBooking = async (req: Request, res: Response) => {
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
     const bookingId = Number(req.params.bookingId);
     if (!bookingId) return res.status(400).json({ success: false, message: "bookingId is required" });
-    const workerCode = req.query.workerCode as string | undefined;
+    // Body first, query as a fallback — same reasoning as confirmOtp.
+    //
+    // The worker code is the short secret the CUSTOMER holds and reads out to
+    // the technician to prove the right person is at the right job. It
+    // authorises the job to start, so it is a credential, and a query string is
+    // written to the nginx access log on every request. Every job start was
+    // depositing one into a plaintext log that is rotated, backed up and
+    // readable by anyone with host access.
+    //
+    // The route is PUT, so the body was always available and simply unused.
+    // Reading both keeps the shipped ServanaWorker builds working while they
+    // move the value into the body.
+    const workerCode = (req.body?.workerCode ?? req.query.workerCode) as
+      | string
+      | undefined;
     const result = await technicianService.startJob(bookingId, uid, workerCode);
     return res.json({ success: true, message: "Job started", data: result });
   } catch (error: any) {
