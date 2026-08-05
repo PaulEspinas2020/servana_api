@@ -2263,7 +2263,21 @@ export const startBooking = async (req: Request, res: Response) => {
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
     const bookingId = Number(req.params.bookingId);
     if (!bookingId) return res.status(400).json({ success: false, message: "bookingId is required" });
-    const workerCode = req.query.workerCode as string | undefined;
+    // Body first, query as a fallback — same reasoning as confirmOtp.
+    //
+    // The worker code is the short secret the CUSTOMER holds and reads out to
+    // the technician to prove the right person is at the right job. It
+    // authorises the job to start, so it is a credential, and a query string is
+    // written to the nginx access log on every request. Every job start was
+    // depositing one into a plaintext log that is rotated, backed up and
+    // readable by anyone with host access.
+    //
+    // The route is PUT, so the body was always available and simply unused.
+    // Reading both keeps the shipped ServanaWorker builds working while they
+    // move the value into the body.
+    const workerCode = (req.body?.workerCode ?? req.query.workerCode) as
+      | string
+      | undefined;
     const result = await technicianService.startJob(bookingId, uid, workerCode);
     return res.json({ success: true, message: "Job started", data: result });
   } catch (error: any) {

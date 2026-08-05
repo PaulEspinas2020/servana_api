@@ -110,3 +110,56 @@ describe('the booking OTP does not travel in a URL', () => {
     expect(routes).toMatch(/router\.post\(\s*["']\/:id\/confirm-otp["']/);
   });
 });
+
+/**
+ * Round-2 sibling check.
+ *
+ * Moving the OTP off the URL fixed an instance. The class is "a short secret
+ * that authorises a booking state transition, sent as a query parameter", and
+ * the OTP was not the only member.
+ *
+ * The worker code is the other one: the customer reads it out to the technician
+ * at the door, and it authorises the job to START. It was on `req.query` in two
+ * controllers, so every job start wrote it into the nginx access log exactly
+ * the way every booking verification had been writing the OTP.
+ *
+ * Both routes are PUT, so the body was available and unused in both.
+ */
+describe('no booking credential travels in a URL', () => {
+  const CREDENTIAL_READS: Array<[string[], string]> = [
+    [['controllers', 'bookingController.ts'], 'otp'],
+    [['controllers', 'providerController.ts'], 'workerCode'],
+    [['controllers', 'technicianController.ts'], 'workerCode'],
+  ];
+
+  for (const [rel, key] of CREDENTIAL_READS) {
+    const name = rel[rel.length - 1];
+
+    it(`${name} reads ${key} from the body before the query`, () => {
+      const src = stripComments(
+        readFileSync(join(SRC, ...rel), 'utf8').replace(/\r\n/g, '\n'),
+      );
+
+      const body = new RegExp(`req\\.body\\??\\.${key}`);
+      const query = new RegExp(`req\\.query\\??\\.?${key}`);
+
+      expect(src).toMatch(body);
+
+      // The query branch must survive: builds already in customers' and
+      // technicians' hands send that form and cannot be changed retroactively.
+      expect(src).toMatch(query);
+
+      // Order is the whole point. Query-first would keep logging the
+      // credential for every client that still sends it that way.
+      expect(src.search(body)).toBeLessThan(src.search(query));
+    });
+  }
+
+  it('the detector would notice if a read reverted to query-only', () => {
+    // Without this the loop above passes whenever the regexes quietly stop
+    // matching, which is the failure it exists to prevent.
+    const reverted = 'const otp = req.query.otp;';
+    expect(reverted).not.toMatch(/req\.body\??\.otp/);
+    expect(reverted).toMatch(/req\.query\??\.?otp/);
+  });
+});
