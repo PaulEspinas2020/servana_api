@@ -330,7 +330,19 @@ export const getBookingById = async (
       bw.status AS worker_status,
       bw.assigned_at,
       bw.started_at,
-      bw.completed_at
+      bw.completed_at,
+      -- The customer app reads etaMinutes on the booking detail screen.
+      -- booking_workers was joined for its status and timestamps but never for
+      -- the ETA, so the key was always absent from the response and the app had
+      -- nothing to show.
+      bw.eta_minutes,
+      -- Money. The app renders "Amount" from totalAmount, which is not a column
+      -- on this table and never was — bookings stores quoted_price and
+      -- final_price. The key was simply missing from the payload, the client's
+      -- zero default took over, and every booking detail displayed a total of
+      -- zero. Aliased rather than renamed so quotedPrice/finalPrice keep
+      -- working for the admin portal and the provider app.
+      COALESCE(b.final_price, b.quoted_price) AS total_amount
     FROM ${dbSchema}.bookings b
     LEFT JOIN ${dbSchema}.payments p
       ON p.booking_id = b.id
