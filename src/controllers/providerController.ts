@@ -2175,6 +2175,8 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
 // Shared formatter to avoid duplication between list and single-card endpoints
 import { formatJobCard } from "./jobCardView";
 import { validateDataUri, AllowedUploadMime } from "../helpers/fileSignature";
+import { stripImageMetadata } from "../helpers/stripImageMetadata";
+import * as evidenceService from "../services/bookingEvidenceService";
 import { actionsForWorkerStatus } from "./bookingActions";
 
 /**
@@ -2411,6 +2413,173 @@ const CANCELLATION_BLOCK_MESSAGES: Record<string, string> = {
   NOT_CANCELLABLE_AT_THIS_STAGE: "This booking can no longer be cancelled from here.",
   SCHEDULE_UNKNOWN: "This booking has no confirmed schedule yet. Contact support.",
   INVALID_REASON: "Choose a reason for cancelling.",
+};
+
+/**
+ * Job evidence (C19 §17–§19).
+ *
+ *   GET    /api/provider/bookings/:bookingId/evidence
+ *   POST   /api/provider/bookings/:bookingId/evidence
+ *   DELETE /api/provider/bookings/:bookingId/evidence/:evidenceId
+ *
+ * Every route resolves the provider from the token and proves the booking is
+ * theirs before touching evidence, so a guessed booking id 404s rather than
+ * revealing that it exists (§54, enumeration).
+ */
+const assertOwnBooking = async (bookingId: number, uid: string) => {
+  const schema = dbSchema || "";
+  const res = await dbQuery.query(
+    `SELECT status FROM ${schema}.booking_workers
+      WHERE booking_id = $1 AND worker_uid = $2
+      ORDER BY id DESC LIMIT 1`,
+    [bookingId, uid]
+  );
+  return res.rowCount ? String(res.rows[0].status ?? "") : null;
+};
+
+export const getBookingEvidence = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
+    if (!(await assertOwnBooking(bookingId, uid))) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    const items = await evidenceService.listEvidence(bookingId, uid);
+    const requirements = evidenceService.requirementsForBooking().map((r) => ({
+      ...r,
+      satisfied: evidenceService.isRequirementSatisfied(r, items),
+      uploadedCount: evidenceService.countFor(r.code, items),
+    }));
+
+    return res.json({
+      status: "success",
+      data: {
+        bookingId,
+        requirements,
+        items,
+        // §34: completion readiness comes from the backend, not a local
+        // checklist. Uploaded-but-rejected never counts as satisfied.
+        blocking: {
+          BEFORE_SERVICE: evidenceService.blockingRequirements("BEFORE_SERVICE", items),
+          AFTER_SERVICE: evidenceService.blockingRequirements("AFTER_SERVICE", items),
+        },
+      },
+    });
+  } catch {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const uploadBookingEvidence = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
+    const workerStatus = await assertOwnBooking(bookingId, uid);
+    if (!workerStatus) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+    // Evidence belongs to a visit in progress. A booking that is finished,
+    // declined or cancelled must not accept new files.
+    if (!["ACCEPTED", "EN_ROUTE", "ARRIVED", "IN_PROGRESS"].includes(workerStatus.toUpperCase())) {
+      return res.status(409).json({
+        success: false,
+        code: "NOT_ACCEPTING_EVIDENCE",
+        message: "This booking is not accepting evidence.",
+      });
+    }
+
+    const { file, requirementCode } = req.body ?? {};
+    const requirement = evidenceService.findRequirement(String(requirementCode ?? ""));
+    if (!requirement) {
+      return res.status(422).json({
+        success: false,
+        code: "UNKNOWN_REQUIREMENT",
+        message: "Unknown evidence requirement.",
+      });
+    }
+
+    const existing = await evidenceService.listEvidence(bookingId, uid);
+    if (evidenceService.countFor(requirement.code, existing) >= requirement.maxCount) {
+      return res.status(409).json({
+        success: false,
+        code: "TOO_MANY_FILES",
+        message: `You can attach at most ${requirement.maxCount} for this requirement. Remove one first.`,
+      });
+    }
+
+    // Content-based validation (LJ-08). The declared type must be allowed AND
+    // match the actual bytes.
+    const validation = validateDataUri(file, {
+      allowed: requirement.acceptedMimeTypes as readonly AllowedUploadMime[],
+      maxBytes: requirement.maxBytes,
+    });
+    if (!validation.ok) {
+      return res.status(422).json({
+        success: false,
+        code: validation.code,
+        message: validation.message,
+      });
+    }
+
+    // §18. A photo taken at a customer address carries GPS in EXIF by default;
+    // storing it would attach a precise home location to every file.
+    const cleaned = stripImageMetadata(validation.buffer, validation.mime);
+    const dataUri = `data:${validation.mime};base64,${cleaned.toString("base64")}`;
+
+    const fileUrl = await uploadFileToStorage(
+      `booking-evidence/${bookingId}`,
+      `${uid}_${requirement.code}_${Date.now()}`,
+      dataUri
+    );
+
+    const item = await evidenceService.attachEvidence({
+      bookingId,
+      workerUid: uid,
+      requirement,
+      fileUrl,
+      mimeType: validation.mime,
+      bytes: cleaned.length,
+    });
+
+    // §19: attached is not approved. The client must not read 201 as accepted.
+    return res.status(201).json({
+      status: "success",
+      data: { ...item, approved: false },
+    });
+  } catch {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const deleteBookingEvidence = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    const evidenceId = Number(req.params.evidenceId);
+    if (!bookingId || isNaN(bookingId) || !evidenceId || isNaN(evidenceId)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
+    if (!(await assertOwnBooking(bookingId, uid))) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+    const removed = await evidenceService.removeEvidence(bookingId, uid, evidenceId);
+    if (!removed) {
+      return res.status(404).json({ success: false, message: "Evidence not found" });
+    }
+    return res.json({ status: "success", data: { evidenceId: String(evidenceId) } });
+  } catch {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
 };
 
 export const getWorkerJobCards = async (req: Request, res: Response) => {

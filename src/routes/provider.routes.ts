@@ -170,6 +170,12 @@ router.get("/worker/job-cards", verifyAuth, requireProviderRole, provider.getWor
 router.get("/provider/bookings/:bookingId/timeline", verifyAuth, requireProviderRole, provider.getBookingTimeline);
 // C18 §29 — dispute status + eligibility. Entry point only; opening is later.
 router.get("/provider/bookings/:bookingId/dispute-status", verifyAuth, requireProviderRole, provider.getBookingDisputeStatus);
+
+// C19 17-19 - job evidence. Requirements are server-driven; uploads are
+// content-validated and metadata-stripped; attached is NOT approved.
+router.get("/provider/bookings/:bookingId/evidence", verifyAuth, requireProviderRole, provider.getBookingEvidence);
+router.post("/provider/bookings/:bookingId/evidence", verifyAuth, requireProviderRole, requireActiveProvider, provider.uploadBookingEvidence);
+router.delete("/provider/bookings/:bookingId/evidence/:evidenceId", verifyAuth, requireProviderRole, requireActiveProvider, provider.deleteBookingEvidence);
 // C18 §26 — provider cancellation. 48h notice, record-only, auto-reassign.
 router.get("/provider/bookings/:bookingId/cancellation-eligibility", verifyAuth, requireProviderRole, provider.getCancellationEligibility);
 router.post("/provider/bookings/:bookingId/cancel", verifyAuth, requireProviderRole, requireActiveProvider, provider.cancelAcceptedBooking);
