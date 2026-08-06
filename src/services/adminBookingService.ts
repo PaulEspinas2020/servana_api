@@ -893,6 +893,38 @@ export const adminRescheduleBooking = async (
     [scheduledAt, bookingId]
   );
 
+  // C18 §14/§24. The provider is NOT a party to rescheduling — per operator
+  // policy only the customer and admin may move a booking, and the provider
+  // only responds to the outcome. But "only responds" still requires being
+  // TOLD: before this, a provider's booking could move to a different day and
+  // nothing informed them. They would arrive at the old time.
+  //
+  // Fire-and-forget: a notification failure must not roll back a reschedule
+  // that has already been committed and told to the customer.
+  (async () => {
+    try {
+      const w = await dbQuery.query(
+        `SELECT worker_uid FROM ${dbSchema}.bookings WHERE id = $1`,
+        [bookingId]
+      );
+      const workerUid = w.rows[0]?.worker_uid;
+      if (!workerUid) return;
+      const { createNotification } = await import('./notification.service');
+      const code = `SVN-${String(bookingId).padStart(6, '0')}`;
+      await createNotification(workerUid, {
+        type: 'booking_rescheduled',
+        severity: 'warning',
+        title: 'Booking rescheduled',
+        safeBody: `Booking ${code} has been moved to a new date and time. Check your schedule.`,
+        safeContextLabel: code,
+        route: { page: 'jobs', bookingId: String(bookingId) },
+        canOpenDetail: true,
+      });
+    } catch (e: any) {
+      console.error('[admin-reschedule] provider notification failed:', e?.message);
+    }
+  })();
+
   await addTimelineEvent(
     bookingId, 'booking_rescheduled',
     'Booking rescheduled by admin',
