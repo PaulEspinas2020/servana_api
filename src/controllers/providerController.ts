@@ -2145,21 +2145,7 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
 // ─── Job cards — web portal (UID from Firebase token, not URL param) ──────────
 
 // Shared formatter to avoid duplication between list and single-card endpoints
-function formatJobCard(job: any) {
-  return {
-    bookingId:    job.booking_id,
-    status:       job.status,
-    scheduleAt:   job.schedule,
-    customer:     { uid: job.customer_id, name: `${job.first_name} ${job.last_name}`, phone: job.phone_number },
-    address:      { addressOne: job.address_one, addressTwo: job.address_two, city: job.post_town, zipCode: job.zip_code, country: job.country, label: job.label },
-    service:      { name: job.service_name, type: job.service_type },
-    addOns:       job.pricing_breakdown,
-    workerStatus: job.worker_status,
-    assignedAt:   job.assigned_at,
-    startedAt:    job.started_at,
-    completedAt:  job.completed_at,
-  };
-}
+import { formatJobCard } from "./jobCardView";
 
 export const getWorkerJobCards = async (req: Request, res: Response) => {
   try {
