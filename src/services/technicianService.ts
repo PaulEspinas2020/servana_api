@@ -8,6 +8,7 @@ import { filterUidsAvailableAt } from "./providerAvailabilityEngine";
 import { getUserInfoByBookingId } from "./user.service";
 import { computeTranspoFee } from "./pricingService";
 import { createNotification } from "./notification.service";
+import { classifyResponseMiss } from "./bookingResponseConflict";
 import { createDisbursement } from "./disbursement.service";
 import { getOrCreateConversation, postSystemMessageOnce } from "../chat/chat.service";
 import { findExistingConversationByBookingId } from "../chat/chat.repository";
@@ -1006,7 +1007,10 @@ export const acceptJob = async (bookingId: number, workerUid: string) => {
   );
 
   if (!res.rowCount) {
-    throw new Error("Job not available for acceptance");
+    // The CAS found no ASSIGNED row. Explain why rather than throwing a bare
+    // Error that every controller flattened into "500 Server error" — a
+    // double-tap and a reassignment are different things (C18 §12).
+    throw await classifyResponseMiss(bookingId, workerUid, "ACCEPT");
   }
 
   // Notify customer that the technician has accepted and is on the way
@@ -1072,7 +1076,7 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
   );
 
   if (!declineRes.rowCount) {
-    throw new Error("No ASSIGNED job found for this worker on this booking");
+    throw await classifyResponseMiss(bookingId, workerUid, "DECLINE");
   }
 
   // 2. Get booking details needed for re-assignment

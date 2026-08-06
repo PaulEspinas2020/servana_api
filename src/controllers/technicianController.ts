@@ -4,6 +4,7 @@ import { toCamel } from "../helpers/idGenerator";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import { logProviderClientActivity } from "../services/adminMobileAttributionService";
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
+import { BookingResponseConflict } from "../services/bookingResponseConflict";
 import { touchProviderActivity } from "../services/adminProviderService";
 import mongoDb from "../db/mongodbQuery";
 import {
@@ -573,6 +574,14 @@ export const acceptJob = async (req: Request, res: Response) => {
       data: result,
     });
   } catch (error: any) {
+    if (error instanceof BookingResponseConflict) {
+      return res.status(error.httpStatus).json({
+        success: error.isAlreadySatisfied,
+        message: error.isAlreadySatisfied ? "Job accepted" : error.providerMessage,
+        idempotent: error.isAlreadySatisfied || undefined,
+        conflict: { code: error.code, currentStatus: error.currentStatus, providerMessage: error.providerMessage },
+      });
+    }
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to accept job",

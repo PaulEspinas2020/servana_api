@@ -8,6 +8,7 @@ import mongoDb from "../db/mongodbQuery";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import * as notificationService from "../services/notification.service";
 import { getProviderAggregate } from "../services/customerReviewService";
+import { BookingResponseConflict } from "../services/bookingResponseConflict";
 import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
 import * as serviceApplicationService from "../services/serviceApplicationService";
 import * as onboardingService from "../services/providerOnboardingService";
@@ -2179,6 +2180,33 @@ export const getWorkerJobCard = async (req: Request, res: Response) => {
 
 // ─── Booking lifecycle — web portal (UID from Firebase token; BOLA enforced in service via SQL WHERE) ──
 
+/**
+ * Turns an assignment-response failure into a result the provider can act on.
+ *
+ * C18 §12/§52. Acceptance and decline must be idempotent, so a repeat of the
+ * caller's own response is a 200 success carrying `idempotent: true` — not an
+ * error the UI has to apologise for. A genuine conflict is a 409 with a code
+ * the client can branch on. Anything else stays a 500.
+ *
+ * `success` and `message` keep their existing shape and meaning, so no client
+ * needs a change to keep working; the new fields are additive.
+ */
+function sendBookingResponseOutcome(res: Response, error: any, successMessage: string) {
+  if (error instanceof BookingResponseConflict) {
+    return res.status(error.httpStatus).json({
+      success: error.isAlreadySatisfied,
+      message: error.isAlreadySatisfied ? successMessage : error.providerMessage,
+      idempotent: error.isAlreadySatisfied || undefined,
+      conflict: {
+        code: error.code,
+        currentStatus: error.currentStatus,
+        providerMessage: error.providerMessage,
+      },
+    });
+  }
+  return res.status(500).json({ success: false, message: "Server error" });
+}
+
 export const acceptBooking = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
@@ -2189,7 +2217,7 @@ export const acceptBooking = async (req: Request, res: Response) => {
     touchProviderActivity(uid).catch(() => {});
     return res.json({ success: true, message: "Job accepted", data: result });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: "Server error" });
+    return sendBookingResponseOutcome(res, error, "Job accepted");
   }
 };
 
@@ -2208,7 +2236,7 @@ export const declineBooking = async (req: Request, res: Response) => {
       data: result,
     });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: "Server error" });
+    return sendBookingResponseOutcome(res, error, "Job declined");
   }
 };
 
