@@ -853,6 +853,28 @@ export const submitOnboarding = async (req: Request, res: Response) => {
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
     const code = (error as any).statusCode;
+
+    /**
+     * A refused submit must say WHAT is outstanding.
+     *
+     * submitOnboarding throws 422 with a `blockers` array — each entry carrying
+     * the label a person needs ("No documents uploaded") — and this handler
+     * collapsed all of it to "Server error". A provider was told only that
+     * something was wrong with a form showing every field filled in, with no
+     * way to discover which condition had failed. The labels are authored copy,
+     * not exception text, so they are safe to return (§21).
+     *
+     * Anything that is not a 422 keeps the generic message: those are genuine
+     * faults and their detail is not fit for a client.
+     */
+    const blockers = (error as any).blockers;
+    if (code === 422 && Array.isArray(blockers)) {
+      return res.status(422).json({
+        status: "failed",
+        message: "Some information still needs to be completed.",
+        blockers,
+      });
+    }
     return res.status(code ?? 500).json({ status: "failed", message: "Server error" });
   }
 };

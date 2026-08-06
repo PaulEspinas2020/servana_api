@@ -189,7 +189,8 @@ export const getOnboardingAggregate = async (uid: string) => {
 
   const [workerRes, reqsRes, appsRes, servicesRes, draftRes] = await Promise.all([
     dbQuery.query(
-      `SELECT uid, is_email_verified, account_status, first_name, last_name, phone_number
+      `SELECT uid, is_email_verified, is_mobile_verified, account_status,
+              first_name, last_name, phone_number
        FROM ${dbSchema}.user_credentials WHERE uid = $1`,
       [uid],
     ),
@@ -235,14 +236,29 @@ export const getOnboardingAggregate = async (uid: string) => {
   const guidelinesAccepted = !!(draft?.guidelines as any)?.accepted;
   const isSubmitted = draft?.submitted ?? false;
 
+  /**
+   * The requirement is a verified IDENTIFIER, not specifically an email.
+   *
+   * This read `is_email_verified` alone, and the portal supports signing up
+   * with a mobile number and no email at all. Those providers could complete
+   * all nine steps and were then refused at submit by a blocker they had no way
+   * to clear — there was no email to verify. 29 of 70 production providers are
+   * mobile-only, and every one of them has `is_mobile_verified = true`: their
+   * identity was verified, just not by the channel this check asked about.
+   *
+   * `is_mobile_verified` had no writer until 86a4684 gave it one and backfilled
+   * it, which is why the original check could only look at email.
+   */
+  const hasVerifiedIdentifier = !!(worker.is_email_verified || worker.is_mobile_verified);
+
   const completedSteps: string[] = [];
-  if (worker.is_email_verified) completedSteps.push('personal_info');
+  if (hasVerifiedIdentifier) completedSteps.push('personal_info');
   if (hasRequirements) completedSteps.push('requirements');
   if (hasPendingOrApprovedApp || hasActiveService) completedSteps.push('services');
   if (guidelinesAccepted) completedSteps.push('guidelines');
 
   let status = 'in_progress';
-  let currentStep = draft?.current_step ?? (worker.is_email_verified ? 'requirements' : 'personal_info');
+  let currentStep = draft?.current_step ?? (hasVerifiedIdentifier ? 'requirements' : 'personal_info');
 
   if (isSubmitted) {
     status = 'pending_review';
@@ -251,8 +267,16 @@ export const getOnboardingAggregate = async (uid: string) => {
 
   // Blockers
   const blockers: Array<{ code: string; severity: 'blocking' | 'warning'; label: string }> = [];
-  if (!worker.is_email_verified) {
-    blockers.push({ code: 'email_not_verified', severity: 'blocking', label: 'Email not verified' });
+  if (!hasVerifiedIdentifier) {
+    // `code` deliberately unchanged. Nothing branches on it today — the provider
+    // portal is this route's only caller and renders the label — but it is part
+    // of a shipped response shape, and renaming it would be a contract change
+    // for no gain (§4). The LABEL is what a person reads, so that is corrected.
+    blockers.push({
+      code: 'email_not_verified',
+      severity: 'blocking',
+      label: 'No verified email address or mobile number',
+    });
   }
   if (!hasRequirements) {
     blockers.push({ code: 'no_documents', severity: 'blocking', label: 'No documents uploaded' });
@@ -278,6 +302,8 @@ export const getOnboardingAggregate = async (uid: string) => {
       lastName: worker.last_name,
       phoneNumber: worker.phone_number,
       isEmailVerified: worker.is_email_verified,
+      // Additive: lets a client explain WHICH identifier is verified.
+      isMobileVerified: !!worker.is_mobile_verified,
       accountStatus: worker.account_status,
     },
     draft: draft ? {
