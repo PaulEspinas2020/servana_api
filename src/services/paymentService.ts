@@ -374,6 +374,49 @@ export const createPayment = async (request: any) => {
   return checkoutUrl;
 };
 
+/**
+ * Guarantees that one PayMongo event can only ever produce one payment row.
+ *
+ * C20 §31 (F-08). `processWebhook` deduplicates by SELECTing on
+ * `webhook_event_id` and returning early if a row exists — but that is
+ * check-then-act. PayMongo retries webhooks, and a retry that overlaps the
+ * original means both requests run the SELECT before either INSERTs, so both
+ * proceed and the same payment is recorded twice.
+ *
+ * That matters more here than it would elsewhere: Servana uses PayMongo for the
+ * actual money and this database purely as the RECORD. A duplicated payment row
+ * is not a cosmetic bug, it is the record disagreeing with the processor — and
+ * it flows straight into disbursements, earnings and the provider ledger.
+ *
+ * The index is the real fix; the SELECT stays as the cheap path that avoids
+ * doing work before failing. Partial, because rows predating webhook capture
+ * have a NULL event id and several NULLs are not a uniqueness conflict.
+ */
+let webhookIndexReady: Promise<void> | null = null;
+
+const ensureWebhookEventUniqueness = (): Promise<void> => {
+  webhookIndexReady ??= dbQuery
+    .query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_webhook_event_id
+         ON ${dbSchema}.payments (webhook_event_id)
+       WHERE webhook_event_id IS NOT NULL`,
+      []
+    )
+    .then(() => undefined)
+    .catch((e: any) => {
+      // Reset so a transient failure can be retried rather than poisoning the
+      // process. A pre-existing duplicate will also land here — that is a data
+      // problem to resolve, not something to silently ignore.
+      webhookIndexReady = null;
+      console.error("[paymongo] webhook uniqueness index failed:", e?.message);
+      throw e;
+    });
+  return webhookIndexReady;
+};
+
+/** Postgres unique_violation. */
+const isUniqueViolation = (e: any) => e?.code === "23505";
+
 export const processWebhook = async (req: Request, _res: Response) => {
   const rawBody = (req as any).rawBody as Buffer;
 
@@ -402,6 +445,10 @@ export const processWebhook = async (req: Request, _res: Response) => {
   if (!eventId || !eventType || !providerPaymentId) {
     throw new Error("Invalid webhook payload");
   }
+
+  // The index below is what actually guarantees uniqueness; this SELECT is the
+  // cheap path that avoids doing work before failing on it.
+  await ensureWebhookEventUniqueness();
 
   // idempotency
   const existing = await dbQuery.query(
