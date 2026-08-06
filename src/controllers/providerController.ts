@@ -507,9 +507,14 @@ export const getLedger = async (req: Request, res: Response) => {
 
     const result = await dbQuery.query(
       `SELECT b.id, b.schedule, b.final_price, b.payment_method, b.status,
-              so.level_2 AS service_name
+              so.level_2   AS service_name,
+              d.status     AS payout_status,
+              d.worker_share,
+              d.released_at
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+       LEFT JOIN ${dbSchema}.disbursements d
+              ON d.booking_id = b.id AND d.worker_uid = $1
        WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
        ORDER BY b.schedule DESC
        LIMIT 50`,
@@ -519,12 +524,37 @@ export const getLedger = async (req: Request, res: Response) => {
     const data = result.rows.map((r: any) => {
       const gross = Number(r.final_price || 0);
       const code = bookingCode(r.id);
+
+      // C20 F-01. This used to hardcode `status: "settled"` for every completed
+      // booking and recompute the amount from final_price, without joining
+      // `disbursements` at all — so a payout that had FAILED, or had not been
+      // calculated yet, was reported to the provider as settled money.
+      //
+      // /provider/earnings/summary reads the same figures correctly, which meant
+      // two endpoints disagreed about one booking. §1 requires pending,
+      // available, held, processing, paid and reversed to stay distinct; one
+      // word for all of them is the opposite.
+      const payoutStatus = String(r.payout_status ?? "").toUpperCase();
+      const status =
+        payoutStatus === "RELEASED" ? "settled"
+        : payoutStatus === "FAILED" ? "failed"
+        : "pending";
+
+      // Prefer the authoritative disbursed amount. final_price × rate is only
+      // an ESTIMATE, used where no disbursement row exists yet, and it is
+      // labelled as one rather than presented as a settled figure.
+      const hasDisbursement = r.worker_share != null;
+      const amountMinor = hasDisbursement
+        ? Math.round(Number(r.worker_share) * 100)
+        : Math.round(providerShareOf(gross) * 100);
+
       return {
         id: `led-${r.id}`,
         type: "booking_earning",
         direction: "credit",
-        status: "settled",
-        amountMinor: Math.round(providerShareOf(gross) * 100),
+        status,
+        isEstimate: !hasDisbursement,
+        amountMinor,
         currency: "PHP",
         description: `${r.service_name || "Service"} · ${code}`,
         bookingId: String(r.id),
@@ -534,7 +564,9 @@ export const getLedger = async (req: Request, res: Response) => {
         reference: code,
         occurredAt: r.schedule,
         availableAt: null,
-        settledAt: r.schedule,
+        // Only a RELEASED disbursement has actually settled, and it settled
+        // when it was released — not when the booking was scheduled.
+        settledAt: payoutStatus === "RELEASED" ? (r.released_at ?? null) : null,
       };
     });
 
