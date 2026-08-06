@@ -744,7 +744,16 @@ export const deleteWorkerTimeOff = async (req: Request, res: Response) => {
 
 // ─── Requirements (Firebase Storage, scoped to authenticated worker) ──────────
 
-const ALLOWED_REQUIREMENT_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+const ALLOWED_REQUIREMENT_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] as const;
+
+/**
+ * Ceiling for a provider compliance document.
+ *
+ * The old path had no size check at all: a data URI of any length was decoded
+ * and uploaded. 10 MB is comfortably above a phone photo of an ID or permit and
+ * well below anything that threatens the request pipeline.
+ */
+const MAX_REQUIREMENT_BYTES = 10 * 1024 * 1024;
 
 export const uploadWorkerRequirement = async (req: Request, res: Response) => {
   try {
@@ -757,10 +766,25 @@ export const uploadWorkerRequirement = async (req: Request, res: Response) => {
     if (!file.startsWith("data:")) {
       return res.status(422).json({ status: "failed", message: "file must be a data URI" });
     }
-    const mimeType = file.slice(file.indexOf(":") + 1, file.indexOf(";"));
-    if (!ALLOWED_REQUIREMENT_MIMES.includes(mimeType)) {
-      return res.status(422).json({ status: "failed", message: "File type not allowed. Use JPG, PNG, WebP, or PDF." });
+    // C19 §18/§54 (LJ-08). This used to read the MIME out of the data URI the
+    // CLIENT sent and check THAT against the allowlist — asking the uploader
+    // what the file is and believing the answer, so
+    // `data:image/png;base64,<any bytes>` passed a check that looked strict.
+    //
+    // Now validated by magic bytes, with the declared type required to match
+    // the actual content, plus a size ceiling the old path had no equivalent of.
+    const validation = validateDataUri(file, {
+      allowed: ALLOWED_REQUIREMENT_MIMES as readonly AllowedUploadMime[],
+      maxBytes: MAX_REQUIREMENT_BYTES,
+    });
+    if (!validation.ok) {
+      return res.status(422).json({
+        status: "failed",
+        code: validation.code,
+        message: validation.message,
+      });
     }
+    const mimeType = validation.mime;
     const sanitizedName = String(name).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
     const sanitizedType = requirementType ? String(requirementType).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 50) : undefined;
     const fileUrl = await uploadFileToStorage("provider-requirements", `${uid}_${Date.now()}`, file);
@@ -2150,6 +2174,7 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
 
 // Shared formatter to avoid duplication between list and single-card endpoints
 import { formatJobCard } from "./jobCardView";
+import { validateDataUri, AllowedUploadMime } from "../helpers/fileSignature";
 import { actionsForWorkerStatus } from "./bookingActions";
 
 /**
