@@ -11,6 +11,7 @@ import { getProviderAggregate } from "../services/customerReviewService";
 import { BookingResponseConflict } from "../services/bookingResponseConflict";
 import { buildBookingTimeline, currentTimelineStep } from "./bookingTimeline";
 import { buildDisputeSummary } from "./bookingDisputeView";
+import { evaluateCancellation, CANCELLATION_NOTICE_HOURS } from "./bookingCancellationPolicy";
 import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
 import * as serviceApplicationService from "../services/serviceApplicationService";
 import * as onboardingService from "../services/providerOnboardingService";
@@ -2266,6 +2267,103 @@ export const getBookingDisputeStatus = async (req: Request, res: Response) => {
   } catch (error: any) {
     return res.status(500).json({ success: false, message: "Server error" });
   }
+};
+
+/**
+ * GET  /api/provider/bookings/:bookingId/cancellation-eligibility
+ * POST /api/provider/bookings/:bookingId/cancel
+ *
+ * C18 §26. Operator policy: 48 hours notice, RECORD ONLY (no penalty), auto
+ * reassign, admin notified. Nothing here computes a consequence — §26 says
+ * "Do not invent penalties", and none were specified.
+ *
+ * The window is evaluated against SERVER time, never a client timestamp.
+ */
+const loadCancellationContext = async (bookingId: number, uid: string) => {
+  const schema = dbSchema || "";
+  const res = await dbQuery.query(
+    `SELECT bw.status AS worker_status, b.schedule
+       FROM ${schema}.booking_workers bw
+       JOIN ${schema}.bookings b ON b.id = bw.booking_id
+      WHERE bw.booking_id = $1 AND bw.worker_uid = $2
+      ORDER BY bw.id DESC LIMIT 1`,
+    [bookingId, uid]
+  );
+  return res.rowCount ? res.rows[0] : null;
+};
+
+export const getCancellationEligibility = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
+
+    const ctx = await loadCancellationContext(bookingId, uid);
+    if (!ctx) return res.status(404).json({ success: false, message: "Booking not found" });
+
+    return res.json({
+      status: "success",
+      data: {
+        bookingId,
+        ...evaluateCancellation({
+          workerStatus: ctx.worker_status,
+          schedule: ctx.schedule,
+          now: new Date(),
+        }),
+      },
+    });
+  } catch {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const cancelAcceptedBooking = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
+    const reasonCode = String(req.body?.reasonCode ?? "");
+    const note = req.body?.note ? String(req.body.note).slice(0, 1000) : null;
+
+    const ctx = await loadCancellationContext(bookingId, uid);
+    if (!ctx) return res.status(404).json({ success: false, message: "Booking not found" });
+
+    // Re-evaluated at mutation time (§1), not trusted from whatever the client
+    // was shown when it rendered the button.
+    const eligibility = evaluateCancellation({
+      workerStatus: ctx.worker_status,
+      schedule: ctx.schedule,
+      now: new Date(),
+      reasonCode,
+    });
+
+    if (!eligibility.canCancel) {
+      return res.status(409).json({
+        success: false,
+        code: eligibility.blockCode,
+        message: CANCELLATION_BLOCK_MESSAGES[eligibility.blockCode!] ?? "Cancellation is not available.",
+        data: eligibility,
+      });
+    }
+
+    const result = await technicianService.cancelAcceptedJob(bookingId, uid, reasonCode, note);
+    return res.json({ success: true, message: "Booking cancelled", data: result });
+  } catch (error: any) {
+    return sendBookingResponseOutcome(res, error, "Booking cancelled");
+  }
+};
+
+const CANCELLATION_BLOCK_MESSAGES: Record<string, string> = {
+  INSIDE_NOTICE_WINDOW: `Cancellation closes ${CANCELLATION_NOTICE_HOURS} hours before the booking. Contact support if you cannot attend.`,
+  NOT_CANCELLABLE_AT_THIS_STAGE: "This booking can no longer be cancelled from here.",
+  SCHEDULE_UNKNOWN: "This booking has no confirmed schedule yet. Contact support.",
+  INVALID_REASON: "Choose a reason for cancelling.",
 };
 
 export const getWorkerJobCards = async (req: Request, res: Response) => {

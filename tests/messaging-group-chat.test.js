@@ -73,7 +73,14 @@ describe('technicianService — system messages on startJob / completeJob / decl
   });
 
   it('emits provider_declined_${bookingId}_${workerUid} system message in declineJob', function () {
-    expect(src).toMatch(/provider_declined_/);
+    // The message key is built inside releaseBookingAndReassign, which
+    // declineJob and the C18 provider-cancellation path both call — one
+    // implementation so the two cannot drift into reassigning differently.
+    // Assert BOTH halves: the helper composes the key from its eventKind, and
+    // declineJob passes 'provider_declined'. Grepping only for the old literal
+    // would now pass for a cancellation that never declines anything.
+    expect(src).toMatch(/\$\{eventKind\}_\$\{bookingId\}_\$\{workerUid\}/);
+    expect(src).toMatch(/"provider_declined"/);
   });
 
   it('uses findExistingConversationByBookingId for non-creating hooks', function () {

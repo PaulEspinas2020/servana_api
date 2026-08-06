@@ -1065,27 +1065,107 @@ export const acceptJob = async (bookingId: number, workerUid: string) => {
   return res.rows[0];
 };
 
-export const declineJob = async (bookingId: number, workerUid: string) => {
+/**
+ * Releases a booking back to the pool and finds the next nearest provider.
+ *
+ * Extracted from declineJob so provider CANCELLATION reuses exactly the same
+ * path (C18 §26 requires cancellation to auto-reassign, like decline). One
+ * implementation means the two can never drift into reassigning differently.
+ *
+ * `trackingNote` and the system-message text differ between the two because a
+ * decline and a post-acceptance cancellation are different events to a
+ * customer reading their booking history.
+ */
+/**
+ * Provider cancels a booking they already accepted (C18 §26).
+ *
+ * Operator policy, recorded not inferred: allowed up to 48 hours before the
+ * scheduled start, RECORD ONLY (no penalty, no fee, no rating impact), and it
+ * auto-reassigns exactly like a decline while notifying admin.
+ *
+ * The 48-hour check happens in the CONTROLLER against server time before this
+ * runs; the compare-and-swap here is what makes it safe against a double tap,
+ * mirroring acceptJob/declineJob.
+ */
+export const cancelAcceptedJob = async (
+  bookingId: number,
+  workerUid: string,
+  reasonCode: string,
+  note?: string | null
+) => {
   await ensureArrivalColumns();
+  await ensureCancellationColumns();
 
-  // 1. Mark the booking_workers row as DECLINED (only if currently ASSIGNED)
-  const declineRes = await dbQuery.query(
+  const res = await dbQuery.query(
     `
     UPDATE ${dbSchema}.booking_workers
-    SET status = 'DECLINED',
-        declined_at = NOW()
+    SET status = 'CANCELLED',
+        cancelled_at = NOW(),
+        cancellation_reason_code = $3,
+        cancellation_note = $4
     WHERE booking_id = $1
       AND worker_uid = $2
-      AND status = 'ASSIGNED'
+      AND status IN ('ACCEPTED','EN_ROUTE','ARRIVED')
     RETURNING *
     `,
-    [bookingId, workerUid]
+    [bookingId, workerUid, reasonCode, note ?? null]
   );
 
-  if (!declineRes.rowCount) {
+  if (!res.rowCount) {
+    // Same classification the response path uses, so a double tap reads as
+    // "already done" rather than a server error.
     throw await classifyResponseMiss(bookingId, workerUid, "DECLINE");
   }
 
+  const reassignment = await releaseBookingAndReassign(
+    bookingId,
+    workerUid,
+    "Provider cancelled — seeking reassignment",
+    "provider_cancelled",
+    "The assigned provider can no longer attend this booking. We are finding a new provider for you."
+  );
+
+  // §26 requires admin notification. Fire-and-forget: a notification failure
+  // must not roll back a cancellation the provider has already been told about.
+  createNotification(workerUid, {
+    type: "booking_cancelled_by_you",
+    severity: "info",
+    title: "Booking cancelled",
+    safeBody: `You cancelled booking SVN-${String(bookingId).padStart(6, "0")}. We are finding a replacement provider.`,
+    safeContextLabel: `SVN-${String(bookingId).padStart(6, "0")}`,
+    canOpenDetail: false,
+  }).catch((e: any) => console.error("cancellation notification failed:", e?.message));
+
+  return { cancelled: true, bookingId, workerUid, reasonCode, reassignment };
+};
+
+let cancellationColumnsReady: Promise<void> | null = null;
+
+/** Lazily adds the cancellation record columns, like the arrival ones. */
+const ensureCancellationColumns = (): Promise<void> => {
+  cancellationColumnsReady ??= dbQuery
+    .query(
+      `ALTER TABLE ${dbSchema}.booking_workers
+         ADD COLUMN IF NOT EXISTS cancelled_at             TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS cancellation_reason_code VARCHAR(60),
+         ADD COLUMN IF NOT EXISTS cancellation_note        TEXT`,
+      []
+    )
+    .then(() => undefined)
+    .catch((e: any) => {
+      cancellationColumnsReady = null;
+      throw e;
+    });
+  return cancellationColumnsReady;
+};
+
+export const releaseBookingAndReassign = async (
+  bookingId: number,
+  workerUid: string,
+  trackingNote: string,
+  eventKind: "provider_declined" | "provider_cancelled",
+  customerMessage: string
+) => {
   // 2. Get booking details needed for re-assignment
   const bookingRes = await dbQuery.query(
     `
@@ -1124,9 +1204,9 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
   await dbQuery.query(
     `
     INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note)
-    VALUES ($1, 'CONFIRMED', 'Worker declined — seeking reassignment')
+    VALUES ($1, 'CONFIRMED', $2)
     `,
-    [bookingId]
+    [bookingId, trackingNote]
   );
 
   // 4. Attempt to find the next nearest qualified worker
@@ -1158,15 +1238,47 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
       if (existing) {
         await postSystemMessageOnce(
           existing.id,
-          `provider_declined_${bookingId}_${workerUid}`,
-          'The assigned provider was unable to accept this booking. We are finding a new provider for you.',
-          { bookingId, providerUid: workerUid, eventType: 'provider_declined' }
+          `${eventKind}_${bookingId}_${workerUid}`,
+          customerMessage,
+          { bookingId, providerUid: workerUid, eventType: eventKind }
         );
       }
     } catch (chatErr) {
       console.error('system message failed (declineJob):', chatErr);
     }
   })();
+
+  return reassignment;
+};
+
+export const declineJob = async (bookingId: number, workerUid: string) => {
+  await ensureArrivalColumns();
+
+  // 1. Mark the booking_workers row as DECLINED (only if currently ASSIGNED)
+  const declineRes = await dbQuery.query(
+    `
+    UPDATE ${dbSchema}.booking_workers
+    SET status = 'DECLINED',
+        declined_at = NOW()
+    WHERE booking_id = $1
+      AND worker_uid = $2
+      AND status = 'ASSIGNED'
+    RETURNING *
+    `,
+    [bookingId, workerUid]
+  );
+
+  if (!declineRes.rowCount) {
+    throw await classifyResponseMiss(bookingId, workerUid, "DECLINE");
+  }
+
+  const reassignment = await releaseBookingAndReassign(
+    bookingId,
+    workerUid,
+    "Worker declined — seeking reassignment",
+    "provider_declined",
+    "The assigned provider was unable to accept this booking. We are finding a new provider for you."
+  );
 
   return {
     declined: true,

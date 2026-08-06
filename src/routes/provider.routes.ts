@@ -169,6 +169,9 @@ router.get("/worker/job-cards", verifyAuth, requireProviderRole, provider.getWor
 router.get("/provider/bookings/:bookingId/timeline", verifyAuth, requireProviderRole, provider.getBookingTimeline);
 // C18 §29 — dispute status + eligibility. Entry point only; opening is later.
 router.get("/provider/bookings/:bookingId/dispute-status", verifyAuth, requireProviderRole, provider.getBookingDisputeStatus);
+// C18 §26 — provider cancellation. 48h notice, record-only, auto-reassign.
+router.get("/provider/bookings/:bookingId/cancellation-eligibility", verifyAuth, requireProviderRole, provider.getCancellationEligibility);
+router.post("/provider/bookings/:bookingId/cancel", verifyAuth, requireProviderRole, requireActiveProvider, provider.cancelAcceptedBooking);
 
 // ─── Booking lifecycle (auth-scoped; BOLA enforced in service via SQL WHERE worker_uid = token.uid) ──
 // Web portal equivalents of the unauthenticated /workers/bookings/:id/* mobile routes.
