@@ -49,6 +49,20 @@ export interface EvidenceRequirement {
 }
 
 /**
+ * Ceiling for one evidence photo.
+ *
+ * The client compresses to ~1.2 MB before uploading (ImageBudget.evidence): a
+ * phone camera produces 3-12 MB per shot, evidence takes two per booking, and
+ * none of that resolution shows a work area or a meter reading any better.
+ *
+ * This is the BACKSTOP, not the target — deliberately several times the client
+ * budget so a legitimate upload never trips it, while still refusing the
+ * 10 MB-per-photo case the old limit allowed. A client that stops compressing
+ * gets rejected here rather than quietly tripling storage.
+ */
+const EVIDENCE_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
  * The default requirement set.
  *
  * Server-driven per §17, but deliberately a small honest default rather than
@@ -70,7 +84,7 @@ const DEFAULT_REQUIREMENTS: EvidenceRequirement[] = [
     minCount: 1,
     maxCount: 5,
     acceptedMimeTypes: ["image/jpeg", "image/png", "image/webp"],
-    maxBytes: 10 * 1024 * 1024,
+    maxBytes: EVIDENCE_MAX_BYTES,
   },
   {
     code: "AFTER_PHOTO",
@@ -81,7 +95,7 @@ const DEFAULT_REQUIREMENTS: EvidenceRequirement[] = [
     minCount: 1,
     maxCount: 5,
     acceptedMimeTypes: ["image/jpeg", "image/png", "image/webp"],
-    maxBytes: 10 * 1024 * 1024,
+    maxBytes: EVIDENCE_MAX_BYTES,
   },
 ];
 
