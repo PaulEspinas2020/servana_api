@@ -8,6 +8,7 @@ import * as serviceService from "../services/serviceService";
 import * as technicianService from "../services/technicianService";
 import { send } from "../helpers/mailer";
 import bcrypt from "bcryptjs";
+import { randomInt } from "crypto";
 import { generateOTP } from "../helpers/otp";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import uploadInStorage from "../helpers/firebaseStorageUploader";
@@ -410,9 +411,21 @@ export interface EmployeeUpdateInput {
     address?: EmployeeAddress;
 }
 
+/**
+ * Generates a temporary password for a newly created employee account.
+ *
+ * C19 §13. This used `Math.random()` to pick each character. That is a
+ * non-cryptographic PRNG whose state is recoverable from observed output, so
+ * the credential it produced was predictable — and it is a password, handed to
+ * a real account, over a channel the recipient does not control.
+ *
+ * `randomInt` draws from the OS CSPRNG and rejection-samples, so there is no
+ * modulo bias across the 59-character alphabet either. Alphabet and length are
+ * unchanged.
+ */
 const generateTempPassword = (): string => {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$";
-    return Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+    return Array.from({ length: 12 }, () => chars[randomInt(chars.length)]).join("");
 };
 
 const addEmployees = async (employees: EmployeeInput[]) => {
