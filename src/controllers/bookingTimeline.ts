@@ -17,6 +17,12 @@
 
 export type TimelineEventCode =
   | "BOOKING_CREATED"
+  // Stored admin-side events (C18-04). Derived from booking_timeline_events.
+  | "ADMIN_ASSIGNED"
+  | "ADMIN_RESCHEDULED"
+  | "ADMIN_CANCELLED"
+  | "COMPLETION_APPROVED"
+  | "DISPUTE_OPENED"
   | "ASSIGNED"
   | "PROVIDER_ACCEPTED"
   | "PROVIDER_DECLINED"
@@ -142,4 +148,92 @@ export function buildBookingTimeline(row: TimelineRow): TimelineEvent[] {
  */
 export function currentTimelineStep(events: TimelineEvent[]): TimelineEventCode | null {
   return events.length ? events[events.length - 1].code : null;
+}
+
+// ─── Stored admin-side events (C18-04) ──────────────────────────────────────
+//
+// `booking_timeline_events` is written by the admin and booking services and
+// holds history the provider genuinely needs — their booking being rescheduled,
+// cancelled or disputed. The provider path writes nothing to it, so the two
+// sources are disjoint rather than duplicates: derived events are the
+// provider's own actions, stored events are everyone else's.
+//
+// Three rules govern what crosses:
+//
+//   1. WHITELIST by event type. `admin_note_added` is an internal note (§22)
+//      and never crosses. An event type added later is unknown, and unknown is
+//      dropped — fail closed.
+//   2. NEVER pass through stored text. `title`, `description` and `metadata`
+//      are admin-authored and may name people or carry investigation detail.
+//      Each whitelisted type maps to a FIXED label written here.
+//   3. Suppress entirely once the booking is reassigned away. A provider who
+//      no longer holds the booking has no business watching what happens to it
+//      next — the same rule C17 applied to customer data.
+
+const STORED_EVENT_LABELS: Record<string, { code: TimelineEventCode; label: string }> = {
+  booking_assigned:    { code: "ADMIN_ASSIGNED",     label: "Assigned by Servana" },
+  booking_rescheduled: { code: "ADMIN_RESCHEDULED",  label: "Booking rescheduled" },
+  booking_cancelled:   { code: "ADMIN_CANCELLED",    label: "Booking cancelled" },
+  completion_approved: { code: "COMPLETION_APPROVED", label: "Completion approved" },
+  dispute_opened:      { code: "DISPUTE_OPENED",     label: "A dispute was opened" },
+  // Deliberately absent:
+  //   admin_note_added   — internal note (§22)
+  //   provider_reassigned — naming a handover to a provider who has lost the
+  //                         booking tells them they were replaced and invites
+  //                         asking by whom (§27). The suppression below is the
+  //                         mechanism; this omission is belt and braces.
+};
+
+export interface StoredEventRow {
+  event_type?: unknown;
+  created_at?: unknown;
+}
+
+/**
+ * Merges stored admin-side events into a derived provider timeline.
+ *
+ * `isCurrentAssignee` is the authorization gate: false means the booking was
+ * reassigned away, and no admin event crosses. The provider keeps their OWN
+ * history, which is a record of what they did, not surveillance of a booking
+ * that is no longer theirs.
+ */
+export function mergeStoredEvents(
+  derived: TimelineEvent[],
+  stored: StoredEventRow[],
+  isCurrentAssignee: boolean
+): TimelineEvent[] {
+  if (!isCurrentAssignee || !stored.length) return derived;
+
+  const mapped: TimelineEvent[] = [];
+  for (const row of stored) {
+    const entry = STORED_EVENT_LABELS[String(row.event_type ?? "").toLowerCase()];
+    if (!entry) continue; // unknown or blacklisted — fail closed
+    const at = iso(row.created_at);
+    if (!at) continue; // no authoritative time, no event (§21)
+    mapped.push({
+      code: entry.code,
+      label: entry.label,
+      at,
+      actor: "SERVANA",
+      // Slotted between the derived stages by time rather than given a fixed
+      // rank: an admin action can land at any point in the lifecycle.
+      sequence: sequenceForTime(derived, at),
+    });
+  }
+
+  return [...derived, ...mapped].sort((a, b) => {
+    if (a.sequence !== b.sequence) return a.sequence - b.sequence;
+    // Same slot: order by time, and a null time sorts first so an untimed
+    // stage never jumps ahead of a dated admin action.
+    return String(a.at ?? "").localeCompare(String(b.at ?? ""));
+  });
+}
+
+/** Places a stored event after the last derived stage that preceded it. */
+function sequenceForTime(derived: TimelineEvent[], at: string): number {
+  let seq = 0;
+  for (const e of derived) {
+    if (e.at && e.at <= at) seq = e.sequence;
+  }
+  return seq;
 }

@@ -11,6 +11,7 @@
 import {
   buildBookingTimeline,
   currentTimelineStep,
+  mergeStoredEvents,
   TimelineEventCode,
 } from "../src/controllers/bookingTimeline";
 
@@ -233,5 +234,115 @@ describe("currentTimelineStep", () => {
 
   it("is null for an empty timeline", () => {
     expect(currentTimelineStep([])).toBeNull();
+  });
+});
+
+describe("stored admin-side events (C18-04)", () => {
+  const derived = () =>
+    buildBookingTimeline({
+      created_at: T.created,
+      assigned_at: T.assigned,
+      accepted_at: T.accepted,
+      worker_status: "ACCEPTED",
+    });
+
+  const stored = [
+    { event_type: "booking_rescheduled", created_at: T.enRoute },
+    { event_type: "dispute_opened", created_at: T.arrived },
+  ];
+
+  const merged = (rows: any[] = stored, isAssignee = true) =>
+    mergeStoredEvents(derived(), rows, isAssignee).map((e) => e.code);
+
+  it("a provider who still holds the booking sees admin actions", () => {
+    const out = merged();
+    expect(out).toContain("ADMIN_RESCHEDULED");
+    expect(out).toContain("DISPUTE_OPENED");
+  });
+
+  it("a provider whose booking was reassigned away sees NONE of them", () => {
+    // They keep their own history — a record of what they did — but not
+    // surveillance of a booking that is no longer theirs.
+    const out = merged(stored, false);
+    expect(out).not.toContain("ADMIN_RESCHEDULED");
+    expect(out).not.toContain("DISPUTE_OPENED");
+    expect(out).toEqual(["BOOKING_CREATED", "ASSIGNED", "PROVIDER_ACCEPTED"]);
+  });
+
+  it("internal admin notes never cross", () => {
+    // §22: admin-only notes are not provider-visible.
+    const out = merged([{ event_type: "admin_note_added", created_at: T.enRoute }]);
+    expect(out).toEqual(["BOOKING_CREATED", "ASSIGNED", "PROVIDER_ACCEPTED"]);
+  });
+
+  it("provider_reassigned is not surfaced", () => {
+    // §27: do not reveal the replacement provider. Telling someone they were
+    // replaced invites asking by whom.
+    const out = merged([{ event_type: "provider_reassigned", created_at: T.enRoute }]);
+    expect(out).not.toContain("ADMIN_ASSIGNED");
+    expect(out.length).toBe(3);
+  });
+
+  it("an unknown event type is dropped, not passed through", () => {
+    const out = merged([{ event_type: "some_future_admin_action", created_at: T.enRoute }]);
+    expect(out).toEqual(["BOOKING_CREATED", "ASSIGNED", "PROVIDER_ACCEPTED"]);
+  });
+
+  it("a stored event with no usable timestamp is dropped", () => {
+    for (const bad of [null, "", "nonsense", undefined]) {
+      const out = merged([{ event_type: "booking_rescheduled", created_at: bad }]);
+      expect(out).not.toContain("ADMIN_RESCHEDULED");
+    }
+  });
+
+  it("no admin-authored text reaches the payload", () => {
+    // Only event_type and created_at are selected server-side; labels are
+    // fixed here. Even if title/description arrive, they must not surface.
+    const events = mergeStoredEvents(
+      derived(),
+      [{
+        event_type: "dispute_opened",
+        created_at: T.arrived,
+        title: "Dispute opened by admin Jane Cruz",
+        description: "Provider accused of damage; withhold payout pending review",
+        metadata: { severity: "high", assignedTeam: "trust-and-safety" },
+      } as any],
+      true
+    );
+    const json = JSON.stringify(events);
+    expect(json).not.toContain("Jane Cruz");
+    expect(json).not.toContain("withhold payout");
+    expect(json).not.toContain("trust-and-safety");
+    expect(json).toContain("A dispute was opened");
+  });
+
+  it("admin events are attributed to SERVANA, never a person", () => {
+    const events = mergeStoredEvents(derived(), stored, true);
+    for (const e of events.filter((x) => x.code.startsWith("ADMIN_") || x.code === "DISPUTE_OPENED")) {
+      expect(e.actor).toBe("SERVANA");
+    }
+  });
+
+  it("admin events slot into the lifecycle by time, not at the end", () => {
+    // A reschedule that happened right after acceptance belongs there, not
+    // after a completion that came later.
+    const full = buildBookingTimeline({
+      created_at: T.created,
+      assigned_at: T.assigned,
+      accepted_at: T.accepted,
+      completed_at: T.completed,
+      worker_status: "COMPLETED",
+    });
+    const out = mergeStoredEvents(
+      full,
+      [{ event_type: "booking_rescheduled", created_at: T.enRoute }],
+      true
+    ).map((e) => e.code);
+    expect(out.indexOf("ADMIN_RESCHEDULED")).toBeLessThan(out.indexOf("JOB_COMPLETED"));
+    expect(out.indexOf("ADMIN_RESCHEDULED")).toBeGreaterThan(out.indexOf("PROVIDER_ACCEPTED"));
+  });
+
+  it("an empty stored list changes nothing", () => {
+    expect(mergeStoredEvents(derived(), [], true)).toEqual(derived());
   });
 });

@@ -9,7 +9,7 @@ import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import * as notificationService from "../services/notification.service";
 import { getProviderAggregate } from "../services/customerReviewService";
 import { BookingResponseConflict } from "../services/bookingResponseConflict";
-import { buildBookingTimeline, currentTimelineStep } from "./bookingTimeline";
+import { buildBookingTimeline, currentTimelineStep, mergeStoredEvents } from "./bookingTimeline";
 import { buildDisputeSummary } from "./bookingDisputeView";
 import { evaluateCancellation, CANCELLATION_NOTICE_HOURS } from "./bookingCancellationPolicy";
 import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
@@ -2180,7 +2180,10 @@ export const getBookingTimeline = async (req: Request, res: Response) => {
               to_jsonb(bw) ->> 'accepted_at' AS accepted_at,
               to_jsonb(bw) ->> 'declined_at' AS declined_at,
               to_jsonb(bw) ->> 'en_route_at' AS en_route_at,
-              to_jsonb(bw) ->> 'arrived_at'  AS arrived_at
+              to_jsonb(bw) ->> 'arrived_at'  AS arrived_at,
+              -- C18-04. The reassignment gate: admin-side events cross only
+              -- while the caller still holds the booking.
+              (b.worker_uid = $2) AS is_current_assignee
          FROM ${schema}.bookings b
          JOIN ${schema}.booking_workers bw
            ON bw.booking_id = b.id
@@ -2194,7 +2197,25 @@ export const getBookingTimeline = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: "Booking not found" });
     }
 
-    const events = buildBookingTimeline(result.rows[0]);
+    const row = result.rows[0];
+
+    // C18-04. Stored admin-side history — reschedules, cancellations, disputes.
+    // Only the event type and timestamp are selected: `title`, `description`
+    // and `metadata` are admin-authored and never cross (§21/§22).
+    const stored = await dbQuery.query(
+      `SELECT event_type, created_at
+         FROM ${schema}.booking_timeline_events
+        WHERE booking_id = $1
+        ORDER BY created_at ASC`,
+      [bookingId]
+    ).catch(() => null);
+
+    const events = mergeStoredEvents(
+      buildBookingTimeline(row),
+      stored?.rows ?? [],
+      row.is_current_assignee === true
+    );
+
     return res.json({
       status: "success",
       data: {
