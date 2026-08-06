@@ -2150,6 +2150,7 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
 
 // Shared formatter to avoid duplication between list and single-card endpoints
 import { formatJobCard } from "./jobCardView";
+import { actionsForWorkerStatus } from "./bookingActions";
 
 /**
  * GET /api/provider/bookings/:bookingId/timeline
@@ -2501,7 +2502,24 @@ const arrivalHandler = (
 
     const result = await advance(bookingId, uid);
     touchProviderActivity(uid).catch(() => {});
-    return res.json({ success: true, message: successMessage, data: result });
+
+    // C19 §11/§12 (LJ-07). Servana verifies at START, not at arrival: there is
+    // no ARRIVAL_VERIFICATION_REQUIRED state, and §3 forbids inventing one.
+    //
+    // What was missing is not a state but an ANSWER — after marking arrived the
+    // provider had no way to learn that a customer code is still needed before
+    // work can begin, short of trying and failing. Returning the new action set
+    // makes the requirement explicit at the moment it becomes relevant:
+    // START_JOB carries requiresCode, so the client can prompt for the code
+    // instead of surfacing a refusal.
+    //
+    // Additive: `success`, `message` and `data` are unchanged.
+    return res.json({
+      success: true,
+      message: successMessage,
+      data: result,
+      availableActions: actionsForWorkerStatus(result?.status),
+    });
   } catch (error: any) {
     // The guard rejects an out-of-order call by matching no row, which is a
     // client-state problem rather than a server fault — 409, not 500, so the
