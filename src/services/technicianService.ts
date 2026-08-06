@@ -994,10 +994,14 @@ export const assignWorker = async (bookingId: number, workerUid: string) => {
 };
 
 export const acceptJob = async (bookingId: number, workerUid: string) => {
+  // accepted_at is added by this lazy DDL; the UPDATE below writes it.
+  await ensureArrivalColumns();
+
   const res = await dbQuery.query(
     `
     UPDATE ${dbSchema}.booking_workers
-    SET status = 'ACCEPTED'
+    SET status = 'ACCEPTED',
+        accepted_at = NOW()
     WHERE booking_id = $1
     AND worker_uid = $2
     AND status = 'ASSIGNED'
@@ -1062,11 +1066,14 @@ export const acceptJob = async (bookingId: number, workerUid: string) => {
 };
 
 export const declineJob = async (bookingId: number, workerUid: string) => {
+  await ensureArrivalColumns();
+
   // 1. Mark the booking_workers row as DECLINED (only if currently ASSIGNED)
   const declineRes = await dbQuery.query(
     `
     UPDATE ${dbSchema}.booking_workers
-    SET status = 'DECLINED'
+    SET status = 'DECLINED',
+        declined_at = NOW()
     WHERE booking_id = $1
       AND worker_uid = $2
       AND status = 'ASSIGNED'
@@ -1203,6 +1210,14 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
  */
 let arrivalColumnsReady: Promise<void> | null = null;
 
+/**
+ * Lazily adds the optional lifecycle timestamp columns.
+ *
+ * Named for arrival historically; it now also covers accepted_at/declined_at,
+ * so EVERY writer of those columns must await it first. acceptJob and
+ * declineJob do — without that, the first accept after deploy would fail on a
+ * column that does not exist yet.
+ */
 const ensureArrivalColumns = (): Promise<void> => {
   // Memoised: this runs on the first arrival transition rather than at boot, so
   // it must not issue a DDL statement on every tap.
@@ -1210,7 +1225,9 @@ const ensureArrivalColumns = (): Promise<void> => {
     .query(
       `ALTER TABLE ${dbSchema}.booking_workers
          ADD COLUMN IF NOT EXISTS en_route_at TIMESTAMPTZ,
-         ADD COLUMN IF NOT EXISTS arrived_at  TIMESTAMPTZ`,
+         ADD COLUMN IF NOT EXISTS arrived_at  TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS declined_at TIMESTAMPTZ`,
       []
     )
     .then(() => undefined)

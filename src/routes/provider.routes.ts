@@ -165,6 +165,9 @@ router.delete("/provider/fcm-token", verifyAuth, requireProviderRole, provider.d
 router.get("/worker/job-cards/:bookingId", verifyAuth, requireProviderRole, provider.getWorkerJobCard);
 router.get("/worker/job-cards", verifyAuth, requireProviderRole, provider.getWorkerJobCards);
 
+// C18 §21 — authoritative booking timeline, provider-scoped.
+router.get("/provider/bookings/:bookingId/timeline", verifyAuth, requireProviderRole, provider.getBookingTimeline);
+
 // ─── Booking lifecycle (auth-scoped; BOLA enforced in service via SQL WHERE worker_uid = token.uid) ──
 // Web portal equivalents of the unauthenticated /workers/bookings/:id/* mobile routes.
 router.put("/worker/bookings/:bookingId/accept", verifyAuth, requireProviderRole, requireActiveProvider, provider.acceptBooking);

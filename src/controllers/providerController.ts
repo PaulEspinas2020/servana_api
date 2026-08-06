@@ -9,6 +9,7 @@ import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import * as notificationService from "../services/notification.service";
 import { getProviderAggregate } from "../services/customerReviewService";
 import { BookingResponseConflict } from "../services/bookingResponseConflict";
+import { buildBookingTimeline, currentTimelineStep } from "./bookingTimeline";
 import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
 import * as serviceApplicationService from "../services/serviceApplicationService";
 import * as onboardingService from "../services/providerOnboardingService";
@@ -2147,6 +2148,63 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
 
 // Shared formatter to avoid duplication between list and single-card endpoints
 import { formatJobCard } from "./jobCardView";
+
+/**
+ * GET /api/provider/bookings/:bookingId/timeline
+ *
+ * C18 §21. Provider-scoped by construction: the worker uid comes from the
+ * token and is a bound parameter of the query, so there is no way to ask about
+ * another provider's booking. An unrelated booking id returns 404 rather than
+ * an empty timeline, so the endpoint cannot be used to probe which booking ids
+ * exist (§46, ID enumeration).
+ */
+export const getBookingTimeline = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
+
+    const schema = dbSchema || "";
+    const result = await dbQuery.query(
+      `SELECT b.created_at,
+              b.status                AS booking_status,
+              bw.status               AS worker_status,
+              bw.assigned_at,
+              bw.started_at,
+              bw.completed_at,
+              to_jsonb(bw) ->> 'accepted_at' AS accepted_at,
+              to_jsonb(bw) ->> 'declined_at' AS declined_at,
+              to_jsonb(bw) ->> 'en_route_at' AS en_route_at,
+              to_jsonb(bw) ->> 'arrived_at'  AS arrived_at
+         FROM ${schema}.bookings b
+         JOIN ${schema}.booking_workers bw
+           ON bw.booking_id = b.id
+        WHERE b.id = $1 AND bw.worker_uid = $2
+        ORDER BY bw.id DESC
+        LIMIT 1`,
+      [bookingId, uid]
+    );
+
+    if (!result.rowCount) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    const events = buildBookingTimeline(result.rows[0]);
+    return res.json({
+      status: "success",
+      data: {
+        bookingId,
+        events,
+        currentStep: currentTimelineStep(events),
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
 
 export const getWorkerJobCards = async (req: Request, res: Response) => {
   try {
