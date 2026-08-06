@@ -6,6 +6,7 @@ import verifyOwnership from "../middleware/verifyOwnership";
 import { legacyRouteTelemetry } from "../middleware/legacyRouteTelemetry";
 import requireProviderRole from "../middleware/requireProviderRole";
 import requireActiveProvider from "../middleware/requireActiveProvider";
+import workerCodeLimiter from "../middleware/workerCodeLimiter";
 
 const router = Router();
 
@@ -130,7 +131,9 @@ router.get(
 // guarantee from the very test that exists to enforce it.
 router.put("/workers/bookings/:bookingId/decline", verifyAuth, requireProviderRole, requireActiveProvider, technicianController.declineJob);
 router.put("/workers/bookings/:bookingId/accept", verifyAuth, requireProviderRole, requireActiveProvider, technicianController.acceptJob);
-router.put("/workers/bookings/:bookingId/start", verifyAuth, requireProviderRole, requireActiveProvider, technicianController.startJob);
+// Shares ONE limiter instance with the singular route — separate instances
+// would mean separate counters, i.e. two budgets for one secret (LJ-02).
+router.put("/workers/bookings/:bookingId/start", verifyAuth, requireProviderRole, requireActiveProvider, workerCodeLimiter, technicianController.startJob);
 router.put("/workers/bookings/:bookingId/complete", verifyAuth, requireProviderRole, requireActiveProvider, technicianController.completeJob);
 
 // Admin-only routes — require authenticated admin (role 1)

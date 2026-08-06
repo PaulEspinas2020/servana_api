@@ -1,3 +1,4 @@
+import workerCodeLimiter from "../middleware/workerCodeLimiter";
 import express from "express";
 import requireActiveProvider from "../middleware/requireActiveProvider";
 import requireProviderRole from "../middleware/requireProviderRole";
@@ -175,11 +176,13 @@ router.post("/provider/bookings/:bookingId/cancel", verifyAuth, requireProviderR
 
 // ─── Booking lifecycle (auth-scoped; BOLA enforced in service via SQL WHERE worker_uid = token.uid) ──
 // Web portal equivalents of the unauthenticated /workers/bookings/:id/* mobile routes.
+
+
 router.put("/worker/bookings/:bookingId/accept", verifyAuth, requireProviderRole, requireActiveProvider, provider.acceptBooking);
 router.put("/worker/bookings/:bookingId/decline", verifyAuth, requireProviderRole, requireActiveProvider, provider.declineBooking);
 router.put("/worker/bookings/:bookingId/en-route", verifyAuth, requireProviderRole, requireActiveProvider, provider.markBookingEnRoute);
 router.put("/worker/bookings/:bookingId/arrived", verifyAuth, requireProviderRole, requireActiveProvider, provider.markBookingArrived);
-router.put("/worker/bookings/:bookingId/start", verifyAuth, requireProviderRole, requireActiveProvider, provider.startBooking);
+router.put("/worker/bookings/:bookingId/start", verifyAuth, requireProviderRole, requireActiveProvider, workerCodeLimiter, provider.startBooking);
 router.put("/worker/bookings/:bookingId/complete", verifyAuth, requireProviderRole, requireActiveProvider, provider.completeBooking);
 
 // ─── Location update (auth-scoped; uid from Firebase token, not request body) ─
