@@ -7,6 +7,7 @@ import * as userService from "../services/user.service";
 import mongoDb from "../db/mongodbQuery";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import * as notificationService from "../services/notification.service";
+import { getProviderAggregate } from "../services/customerReviewService";
 import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
 import * as serviceApplicationService from "../services/serviceApplicationService";
 import * as onboardingService from "../services/providerOnboardingService";
@@ -220,7 +221,7 @@ export const getDashboard = async (req: Request, res: Response) => {
     const jobSql = (filter: string, limit?: number) =>
       JOB_SELECT(filter).replace(/\{SCHEMA\}/g, schema) + (limit ? ` LIMIT ${limit}` : "");
 
-    const [activeJobRes, upcomingRes, todayStatsRes, locationDoc] = await Promise.all([
+    const [activeJobRes, upcomingRes, todayStatsRes, locationDoc, ratingAgg] = await Promise.all([
       // `bookings.status` is NEVER written 'IN_PROGRESS' — startJob writes that to
       // booking_workers only (technicianService.ts:1139). This filter therefore
       // matched nothing, and the dashboard reported no active job while the
@@ -265,6 +266,19 @@ export const getDashboard = async (req: Request, res: Response) => {
         const col = (await mongoDb).collection("worker_locations");
         return col.findOne({ uid }, { projection: { is_online: 1, updatedAt: 1 } });
       })(),
+      // `rating` was a hardcoded 0 while `provider_rating_aggregates` held the
+      // real figure, recomputed on every review create/update/delete. Every
+      // consumer of this endpoint — the provider web portal's dashboard facade
+      // among them — was being told each provider had a zero rating.
+      //
+      // Additive by construction: same key, same type, real value. No consumer
+      // needs a change, and one that renders `rating` starts being correct.
+      //
+      // Failure is non-fatal: a rating is not worth failing a whole dashboard
+      // over, so an error here degrades to the previous behaviour.
+      uid
+        ? getProviderAggregate(uid).catch(() => null)
+        : Promise.resolve(null),
     ]);
 
     const stats = todayStatsRes.rows[0] || {};
@@ -280,7 +294,10 @@ export const getDashboard = async (req: Request, res: Response) => {
         completedJobsToday: Number(stats.completed_today ?? 0),
         todayEarnings: Number(stats.today_earnings ?? 0),
         pendingPayout: Number(stats.total_earned ?? 0),
-        rating: 0,
+        rating: ratingAgg?.averageRating ?? 0,
+        // Still hardcoded, and deliberately so — there is no chat/messages
+        // system in this API, and no requirements-expiry source. Inventing a
+        // number for either would be worse than a zero. Recorded as C17-01.
         unreadMessages: 0,
         requirementsAlerts: 0,
         currency: "PHP",
