@@ -4,6 +4,8 @@ import verifyAuth from "../middleware/verifyAuth";
 import verifyRoles from "../middleware/verifyRoles";
 import verifyOwnership from "../middleware/verifyOwnership";
 import { legacyRouteTelemetry } from "../middleware/legacyRouteTelemetry";
+import requireProviderRole from "../middleware/requireProviderRole";
+import requireActiveProvider from "../middleware/requireActiveProvider";
 
 const router = Router();
 
@@ -108,10 +110,28 @@ router.get(
 // or decline any booking as any worker — and completion is what makes a job
 // payable. The controllers now derive identity from the token (actingWorkerUid);
 // verifyAuth is what guarantees there is one.
-router.put("/workers/bookings/:bookingId/decline", verifyAuth, technicianController.declineJob);
-router.put("/workers/bookings/:bookingId/accept", verifyAuth, technicianController.acceptJob);
-router.put("/workers/bookings/:bookingId/start", verifyAuth, technicianController.startJob);
-router.put("/workers/bookings/:bookingId/complete", verifyAuth, technicianController.completeJob);
+// C18-01. These carried `verifyAuth` alone while their `/worker/...` (singular)
+// successors carry `requireProviderRole + requireActiveProvider`. Any
+// authenticated account — a customer, an unknown role — reached a provider
+// booking mutation and was stopped only by the controller's row-level scoping.
+//
+// Nothing calls these: ServanaWorker and the provider portal both use the
+// singular family. The portal's capabilities config lists them, but that file
+// is imported nowhere and still claims `authRequired: false`, so it is stale
+// reference material rather than a caller.
+//
+// Brought level with the successors rather than deleted — deleting a mounted
+// route on the strength of a grep is how this repo previously removed six
+// secured endpoints.
+//
+// The guards are written out literally on every line rather than spread from a
+// shared const: `unauthenticated-pii-routes.test.ts` reads this file as TEXT
+// and greps each route for its guard names, so an array spread would hide the
+// guarantee from the very test that exists to enforce it.
+router.put("/workers/bookings/:bookingId/decline", verifyAuth, requireProviderRole, requireActiveProvider, technicianController.declineJob);
+router.put("/workers/bookings/:bookingId/accept", verifyAuth, requireProviderRole, requireActiveProvider, technicianController.acceptJob);
+router.put("/workers/bookings/:bookingId/start", verifyAuth, requireProviderRole, requireActiveProvider, technicianController.startJob);
+router.put("/workers/bookings/:bookingId/complete", verifyAuth, requireProviderRole, requireActiveProvider, technicianController.completeJob);
 
 // Admin-only routes — require authenticated admin (role 1)
 router.put("/admin/bookings/:bookingId/assign", verifyAuth, verifyRoles([1]), technicianController.assignWorker);

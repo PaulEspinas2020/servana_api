@@ -822,7 +822,7 @@ export const getJobCardsByWorker = async (workerId: string) => {
       ON bw.booking_id = b.id AND bw.worker_uid = $1
 
     WHERE b.worker_uid = $1
-    AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
+    AND bw.status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
     ORDER BY b.schedule ASC
     `,
     [workerId]

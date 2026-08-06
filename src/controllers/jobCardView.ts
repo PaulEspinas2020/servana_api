@@ -1,3 +1,5 @@
+import { actionsForWorkerStatus } from "./bookingActions";
+
 /// Stages customer disclosure by the provider's relationship to the booking.
 ///
 /// Command 17 §11. This response used to return the customer's full name,
@@ -20,7 +22,15 @@
 /// they need nothing.
 ///
 /// Keys are never removed, only emptied, so no consumer's shape changes.
-const OPERATIONAL_WORKER_STATUSES = new Set(["ACCEPTED", "IN_PROGRESS"]);
+const OPERATIONAL_WORKER_STATUSES = new Set([
+  "ACCEPTED",
+  // EN_ROUTE and ARRIVED sit BETWEEN accepted and in-progress. A provider who
+  // tapped "on my way" is travelling to the address — withholding it there
+  // would break the journey the disclosure is meant to enable.
+  "EN_ROUTE",
+  "ARRIVED",
+  "IN_PROGRESS",
+]);
 
 /// Statuses where the provider has no ongoing relationship to the customer.
 const RELINQUISHED_WORKER_STATUSES = new Set([
@@ -76,5 +86,9 @@ export function formatJobCard(job: any) {
     assignedAt:   job.assigned_at,
     startedAt:    job.started_at,
     completedAt:  job.completed_at,
+    // C18 §5. Authorized actions, decided server-side. Purely additive — a
+    // client that ignores it behaves exactly as before, and one that reads it
+    // stops inferring actions from status labels (§1 forbids that).
+    availableActions: actionsForWorkerStatus(job.worker_status),
   };
 }

@@ -50,18 +50,27 @@ const ADDRESS_KEYS = [
 ];
 
 const ALL_STATUSES = [
-  "ASSIGNED", "ACCEPTED", "IN_PROGRESS", "COMPLETED",
+  "ASSIGNED", "ACCEPTED", "EN_ROUTE", "ARRIVED", "IN_PROGRESS", "COMPLETED",
   "DECLINED", "CANCELED", "CANCELLED",
 ];
 
-describe("response shape is identical for every status", () => {
+describe("no key is ever removed, whatever the status", () => {
   // The provider web portal consumes this same endpoint. Emptying a value is
-  // safe; removing a key is a breaking change.
-  it.each(ALL_STATUSES)("%s emits exactly the same keys", (status) => {
+  // safe and ADDING a field is safe — consumers ignore what they do not read.
+  // REMOVING one is the breaking change, so that is what this pins.
+  it.each(ALL_STATUSES)("%s still carries every stable key", (status) => {
     const out: any = formatJobCard(row(status));
-    expect(Object.keys(out).sort()).toEqual([...TOP_KEYS].sort());
+    for (const k of TOP_KEYS) expect(out).toHaveProperty(k);
+    // customer and address are exact: a field appearing there is a disclosure
+    // decision, not a convenience, and must be made deliberately.
     expect(Object.keys(out.customer).sort()).toEqual([...CUSTOMER_KEYS].sort());
     expect(Object.keys(out.address).sort()).toEqual([...ADDRESS_KEYS].sort());
+  });
+
+  it.each(ALL_STATUSES)("%s carries server-decided actions (C18 §5)", (status) => {
+    const out: any = formatJobCard(row(status));
+    expect(Array.isArray(out.availableActions)).toBe(true);
+    expect(out.availableActions.length).toBeGreaterThan(0);
   });
 });
 
@@ -115,7 +124,7 @@ describe("a provider who declined retains nothing", () => {
 describe("the operational window keeps full detail", () => {
   // A provider who accepted must be able to travel there and call ahead.
   // Narrowing this would break the job, not protect the customer.
-  it.each(["ACCEPTED", "IN_PROGRESS", "COMPLETED"])("%s is unchanged", (s) => {
+  it.each(["ACCEPTED", "EN_ROUTE", "ARRIVED", "IN_PROGRESS", "COMPLETED"])("%s is unchanged", (s) => {
     const out: any = formatJobCard(row(s));
     expect(out.customer.name).toBe("Maria Santos");
     expect(out.customer.phone).toBe("+639171234567");
@@ -164,5 +173,17 @@ describe("name masking edge cases", () => {
   it("returns empty rather than 'null null' when both are absent", () => {
     const r: any = { ...row("ASSIGNED"), first_name: null, last_name: null };
     expect(formatJobCard(r).customer.name).toBe("");
+  });
+});
+
+describe("the arrival stages keep the address (C18)", () => {
+  // EN_ROUTE and ARRIVED sit between ACCEPTED and IN_PROGRESS. The first cut of
+  // this staging listed only ACCEPTED and IN_PROGRESS as operational, which
+  // would have masked the address for a provider actively travelling to it.
+  it.each(["EN_ROUTE", "ARRIVED"])("%s still gets the street address", (s) => {
+    const out: any = formatJobCard(row(s));
+    expect(out.address.addressOne).toBe("45 Ayala Avenue");
+    expect(out.customer.phone).toBe("+639171234567");
+    expect(out.customer.name).toBe("Maria Santos");
   });
 });
