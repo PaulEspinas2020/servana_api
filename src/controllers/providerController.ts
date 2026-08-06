@@ -10,6 +10,7 @@ import * as notificationService from "../services/notification.service";
 import { getProviderAggregate } from "../services/customerReviewService";
 import { BookingResponseConflict } from "../services/bookingResponseConflict";
 import { buildBookingTimeline, currentTimelineStep } from "./bookingTimeline";
+import { buildDisputeSummary } from "./bookingDisputeView";
 import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
 import * as serviceApplicationService from "../services/serviceApplicationService";
 import * as onboardingService from "../services/providerOnboardingService";
@@ -2199,6 +2200,67 @@ export const getBookingTimeline = async (req: Request, res: Response) => {
         bookingId,
         events,
         currentStep: currentTimelineStep(events),
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/**
+ * GET /api/provider/bookings/:bookingId/dispute-status
+ *
+ * C18 §29 — the safe entry point and status summary only. Opening a dispute is
+ * a later command; this tells the client whether to offer the entry at all.
+ *
+ * Reads `booking_escalations`, the table the admin portal already derives
+ * `hasDispute` from, so admin and provider cannot disagree about whether a
+ * booking is disputed.
+ *
+ * The escalation row is an ADMIN record: `reason` is free text an admin typed,
+ * `assigned_team` is internal routing, `severity` is internal triage and
+ * `actor_uid` names a person. None are selected here.
+ */
+export const getBookingDisputeStatus = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
+
+    const schema = dbSchema || "";
+
+    // Assignment check first: an unrelated booking must 404 rather than reveal
+    // whether it exists or is disputed (§46, ID enumeration).
+    const assignment = await dbQuery.query(
+      `SELECT status FROM ${schema}.booking_workers
+        WHERE booking_id = $1 AND worker_uid = $2
+        ORDER BY id DESC LIMIT 1`,
+      [bookingId, uid]
+    );
+    if (!assignment.rowCount) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    const esc = await dbQuery.query(
+      `SELECT actor_uid, resolved_at, created_at
+         FROM ${schema}.booking_escalations
+        WHERE booking_id = $1
+        ORDER BY id DESC LIMIT 1`,
+      [bookingId]
+    ).catch(() => null);
+
+    return res.json({
+      status: "success",
+      data: {
+        bookingId,
+        ...buildDisputeSummary({
+          workerStatus: assignment.rows[0]?.status,
+          callerUid: uid,
+          escalation: esc?.rows?.[0] ?? null,
+        }),
       },
     });
   } catch (error: any) {

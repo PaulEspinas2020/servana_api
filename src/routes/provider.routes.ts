@@ -167,6 +167,8 @@ router.get("/worker/job-cards", verifyAuth, requireProviderRole, provider.getWor
 
 // C18 §21 — authoritative booking timeline, provider-scoped.
 router.get("/provider/bookings/:bookingId/timeline", verifyAuth, requireProviderRole, provider.getBookingTimeline);
+// C18 §29 — dispute status + eligibility. Entry point only; opening is later.
+router.get("/provider/bookings/:bookingId/dispute-status", verifyAuth, requireProviderRole, provider.getBookingDisputeStatus);
 
 // ─── Booking lifecycle (auth-scoped; BOLA enforced in service via SQL WHERE worker_uid = token.uid) ──
 // Web portal equivalents of the unauthenticated /workers/bookings/:id/* mobile routes.
