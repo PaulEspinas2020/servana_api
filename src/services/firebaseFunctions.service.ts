@@ -222,8 +222,11 @@ const firebaseProviderRegister = async (
       firebaseUser.uid,
       provenFrom(decoded, firebaseUser)
     );
-  } catch (err) {
-    console.warn("[provider-register] could not record proven identifiers:", err);
+  } catch {
+    // Do not log identity data or persistence errors from the registration
+    // boundary. The readiness engine will keep the account gated until a later
+    // authenticated sync succeeds.
+    console.warn("[provider-register] identifier verification sync deferred");
   }
 
   return {

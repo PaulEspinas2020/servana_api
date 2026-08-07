@@ -52,6 +52,22 @@ describe('POST /api/auth/provider/register', () => {
     expect(firebaseProviderRegister).not.toHaveBeenCalled();
   });
 
+  test('rejects an existing non-provider identity before attribution or readiness work', async () => {
+    firebaseProviderRegister.mockResolvedValue({ data: { uid: 'customer-1', role: 3 } });
+    const { res, status, json } = response();
+
+    await providerRegisterController({ body: {
+      idToken: 'token', firstName: 'Ana', lastName: 'Cruz',
+    } } as any, res);
+
+    expect(status).toHaveBeenCalledWith(403);
+    expect(json).toHaveBeenCalledWith({
+      status: 'failed', message: 'This account is not registered as a service provider.',
+    });
+    expect(upsertSourceAttribution).not.toHaveBeenCalled();
+    expect(evaluateProvider).not.toHaveBeenCalled();
+  });
+
   test('reports rejected Firebase credentials as unauthorized', async () => {
     firebaseProviderRegister.mockRejectedValue({ code: 'auth/id-token-expired' });
     const { res, status, json } = response();

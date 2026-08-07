@@ -274,6 +274,14 @@ export const providerRegisterController = async (req: Request, res: Response) =>
       names.lastName,
     );
 
+    const registeredRole = Number(result?.data?.role);
+    if (![2, 4].includes(registeredRole)) {
+      return res.status(403).json({
+        status: "failed",
+        message: "This account is not registered as a service provider.",
+      });
+    }
+
     // Non-blocking attribution: record registration source for the newly created provider
     if (result?.data?.uid) {
       // This route belongs to the provider web portal. Do not trust a caller-
