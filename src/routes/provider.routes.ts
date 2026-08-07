@@ -50,6 +50,7 @@ router.post("/provider/public-profile-revisions", verifyAuth, requireProviderRol
 router.get("/provider/document-types", verifyAuth, requireProviderRole, profileCompliance.getDocumentCatalog);
 router.get("/provider/documents", verifyAuth, requireProviderRole, profileCompliance.getDocuments);
 router.post("/provider/documents", verifyAuth, requireProviderRole, profileCompliance.uploadDocument);
+router.delete("/provider/documents/:documentId", verifyAuth, requireProviderRole, profileCompliance.deleteDocument);
 router.get("/provider/documents/:documentId/preview", verifyAuth, requireProviderRole, profileCompliance.getDocumentPreview);
 router.get("/provider/certifications", verifyAuth, requireProviderRole, profileCompliance.getCertifications);
 router.post("/provider/certifications", verifyAuth, requireProviderRole, profileCompliance.submitCertification);

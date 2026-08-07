@@ -17,7 +17,7 @@ jest.mock('../src/helpers/firebaseStorageUploader', () => ({
 import dbQuery, { pool } from '../src/db/dbQuery';
 import * as scanner from '../src/services/providerManagedFileScanner';
 import * as storage from '../src/helpers/firebaseStorageUploader';
-import { uploadDocument } from '../src/services/providerProfileComplianceService';
+import { deleteDocument, uploadDocument } from '../src/services/providerProfileComplianceService';
 
 const query = dbQuery.query as jest.Mock;
 const connect = pool.connect as jest.Mock;
@@ -118,7 +118,7 @@ describe('required provider document submission integration boundary', () => {
 
   it('replays a confirmed request without rescanning, reuploading, or opening a transaction', async () => {
     query
-      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 77 }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 77, requirement_type: 'valid_id' }] })
       .mockResolvedValueOnce({ rowCount: 1, rows: [listed(77, 'valid_id')] });
 
     const result = await uploadDocument('provider-required-docs', {
@@ -132,6 +132,53 @@ describe('required provider document submission integration boundary', () => {
     expect(scan).not.toHaveBeenCalled();
     expect(uploadPrivate).not.toHaveBeenCalled();
     expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('rejects an idempotency key replayed for a different document type', async () => {
+    query.mockResolvedValueOnce({
+      rowCount: 1,
+      rows: [{ id: 77, requirement_type: 'valid_id' }],
+    });
+
+    await expect(uploadDocument('provider-required-docs', {
+      documentTypeId: 'service_record',
+      fileName: 'cv.pdf',
+      file: pdf,
+      clientRequestId: 'required-cross-type-replay-0001',
+    })).rejects.toMatchObject({ statusCode: 409, code: 'IDEMPOTENCY_KEY_REUSED' });
+
+    expect(scan).not.toHaveBeenCalled();
+    expect(uploadPrivate).not.toHaveBeenCalled();
+  });
+
+  it('deletes only an owned, unapproved document and removes private storage first', async () => {
+    query
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ id: 81, storage_path: 'provider-compliance/provider-required-docs/doc.pdf', lifecycle_state: 'under_review', review_state: 'pending_review' }],
+      })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ storage_path: 'provider-compliance/provider-required-docs/doc.pdf' }] });
+
+    await deleteDocument('provider-required-docs', 81);
+
+    expect(deletePrivate).toHaveBeenCalledWith('provider-compliance/provider-required-docs/doc.pdf');
+    expect(query.mock.calls[1][0]).toContain('DELETE FROM servana.worker_requirements');
+    expect(query.mock.calls[1][1]).toEqual([81, 'provider-required-docs']);
+  });
+
+  it('does not delete another provider\'s or an approved document', async () => {
+    query.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+    await expect(deleteDocument('provider-required-docs', 999))
+      .rejects.toMatchObject({ statusCode: 404, code: 'DOCUMENT_NOT_FOUND' });
+    expect(deletePrivate).not.toHaveBeenCalled();
+
+    query.mockResolvedValueOnce({
+      rowCount: 1,
+      rows: [{ id: 82, storage_path: 'private/approved.pdf', lifecycle_state: 'verified', review_state: 'approved' }],
+    });
+    await expect(deleteDocument('provider-required-docs', 82))
+      .rejects.toMatchObject({ statusCode: 409, code: 'APPROVED_DOCUMENT_LOCKED' });
+    expect(deletePrivate).not.toHaveBeenCalled();
   });
 
   it('rejects a new logical file at the catalog limit before private storage', async () => {

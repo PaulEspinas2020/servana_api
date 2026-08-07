@@ -133,6 +133,19 @@ export const getDocumentPreview = async (req: Request, res: Response) => {
   }
 };
 
+export const deleteDocument = async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.documentId);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(404).json({ status: 'failed', message: 'Document not found' });
+    }
+    await profileService.deleteDocument(uidOf(req), id);
+    return res.status(200).json({ status: 'success', data: { success: true } });
+  } catch (error) {
+    return fail(res, error, 'Document could not be deleted');
+  }
+};
+
 export const getCertifications = async (req: Request, res: Response) => {
   try {
     return res.status(200).json({ status: 'success', data: await profileService.listCertifications(uidOf(req)) });

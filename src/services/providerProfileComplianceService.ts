@@ -158,6 +158,45 @@ export const getDocumentPreview = async (providerUid: string, documentId: number
   return { documentId: String(row.id), displayName: row.file_name, mimeType: row.mime_type, ...preview };
 };
 
+export const deleteDocument = async (providerUid: string, documentId: number) => {
+  const result = await dbQuery.query(
+    `SELECT wr.id, wr.storage_path, wr.lifecycle_state,
+            COALESCE(ld.decision, 'pending_review') AS review_state
+     FROM ${s}.worker_requirements wr
+     ${latestDecisionSql}
+     WHERE wr.id = $1 AND wr.worker_uid = $2 LIMIT 1`,
+    [documentId, providerUid],
+  );
+  if (!result.rowCount) {
+    throw Object.assign(new Error('Document not found'), { statusCode: 404, code: 'DOCUMENT_NOT_FOUND' });
+  }
+  const row = result.rows[0];
+  if (row.lifecycle_state === 'verified' || row.review_state === 'approved') {
+    throw Object.assign(new Error('Approved documents cannot be deleted. Submit a replacement instead.'), {
+      statusCode: 409,
+      code: 'APPROVED_DOCUMENT_LOCKED',
+    });
+  }
+
+  // Remove the private object first. If the following row delete fails, the
+  // provider can retry and no sensitive blob is left behind; the temporary
+  // stale metadata is safer than an untracked private object.
+  if (row.storage_path) {
+    const { deletePrivateStoredFile } = await import('../helpers/firebaseStorageUploader');
+    await deletePrivateStoredFile(row.storage_path);
+  }
+  const deleted = await dbQuery.query(
+    `DELETE FROM ${s}.worker_requirements
+     WHERE id = $1 AND worker_uid = $2
+       AND lifecycle_state <> 'verified'
+     RETURNING storage_path`,
+    [documentId, providerUid],
+  );
+  if (!deleted.rowCount) {
+    throw Object.assign(new Error('Document could not be deleted'), { statusCode: 409, code: 'DOCUMENT_STATE_CHANGED' });
+  }
+};
+
 interface UploadDocumentInput {
   documentTypeId: string;
   fileName: string;
@@ -179,10 +218,18 @@ export const uploadDocument = async (providerUid: string, input: UploadDocumentI
   // storage being available again. The transaction repeats this check under
   // the provider/type lock to close the concurrent-request race.
   const replay = await dbQuery.query(
-    `SELECT id FROM ${s}.worker_requirements WHERE worker_uid = $1 AND client_request_id = $2 LIMIT 1`,
+    `SELECT id, requirement_type FROM ${s}.worker_requirements WHERE worker_uid = $1 AND client_request_id = $2 LIMIT 1`,
     [providerUid, input.clientRequestId],
   );
   if (replay.rowCount) {
+    const replayDefinition = DOCUMENT_TYPE_CATALOG.find((d) =>
+      d.id === replay.rows[0].requirement_type || d.aliases?.includes(replay.rows[0].requirement_type));
+    if (replayDefinition?.id !== definition.id) {
+      throw Object.assign(new Error('Idempotency key was already used for another document type'), {
+        statusCode: 409,
+        code: 'IDEMPOTENCY_KEY_REUSED',
+      });
+    }
     const all = await listDocuments(providerUid);
     return all.find((d: any) => d.id === String(replay.rows[0].id));
   }
@@ -231,10 +278,18 @@ export const uploadDocument = async (providerUid: string, input: UploadDocumentI
     // replacement-chain checks atomic across concurrent mobile/web retries.
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [providerUid, definition.id]);
     const prior = await client.query(
-      `SELECT id FROM ${s}.worker_requirements WHERE worker_uid = $1 AND client_request_id = $2 LIMIT 1`,
+      `SELECT id, requirement_type FROM ${s}.worker_requirements WHERE worker_uid = $1 AND client_request_id = $2 LIMIT 1`,
       [providerUid, input.clientRequestId],
     );
     if (prior.rowCount) {
+      const priorDefinition = DOCUMENT_TYPE_CATALOG.find((d) =>
+        d.id === prior.rows[0].requirement_type || d.aliases?.includes(prior.rows[0].requirement_type));
+      if (priorDefinition?.id !== definition.id) {
+        throw Object.assign(new Error('Idempotency key was already used for another document type'), {
+          statusCode: 409,
+          code: 'IDEMPOTENCY_KEY_REUSED',
+        });
+      }
       id = Number(prior.rows[0].id);
       commitAttempted = true;
       await client.query('COMMIT');

@@ -9,6 +9,10 @@ import { clearFcmToken } from "../services/notification.service";
 import { refreshIdToken, TokenRefreshError } from '../services/tokenRefreshService';
 import { sendAuthError } from "../errors/authErrors";
 import { continueUrlFor } from "../constants/platformContinueUrls";
+import {
+  isValidProviderProfileName,
+  providerRegistrationNames,
+} from "../contracts/providerProfileCreation";
 
 const signin = async (req: Request, res: Response) => {
     const { email, password, fcmToken } = req.body;
@@ -253,25 +257,28 @@ export const customerFirebaseLoginController = async (req: Request, res: Respons
 
 export const providerRegisterController = async (req: Request, res: Response) => {
   try {
-    const { idToken, firstName, lastName, sourceClient } = req.body;
+    const { idToken, firstName, lastName } = req.body;
 
-    if (!idToken) {
+    if (typeof idToken !== "string" || !idToken.trim()) {
       return res.status(400).json({ status: "failed", message: "idToken is required" });
     }
-    if (!firstName || !lastName) {
-      return res.status(400).json({ status: "failed", message: "firstName and lastName are required" });
+    if (!isValidProviderProfileName(firstName) || !isValidProviderProfileName(lastName)) {
+      return res.status(400).json({ status: "failed", message: "Enter a valid first and last name (80 characters maximum)." });
     }
 
+    const names = providerRegistrationNames(firstName, lastName);
+
     const result = await firebaseFunction.firebaseProviderRegister(
-      idToken,
-      String(firstName).trim(),
-      String(lastName).trim(),
+      idToken.trim(),
+      names.firstName,
+      names.lastName,
     );
 
     // Non-blocking attribution: record registration source for the newly created provider
     if (result?.data?.uid) {
-      const src = (sourceClient as string) || 'provider_web';
-      upsertSourceAttribution(result.data.uid, src as any, true, 'registration').catch(() => {});
+      // This route belongs to the provider web portal. Do not trust a caller-
+      // supplied attribution value at this boundary.
+      upsertSourceAttribution(result.data.uid, 'provider_web', true, 'registration').catch(() => {});
       // Non-blocking auto-online eligibility check on new provider registration
       autoOnlineEngine.evaluateProvider(result.data.uid, 'system', null).catch(() => {});
     }
@@ -279,9 +286,15 @@ export const providerRegisterController = async (req: Request, res: Response) =>
     return res.status(200).json(result);
   } catch (error: any) {
     const isDisabled = error?.message?.includes("disabled");
-    return res.status(isDisabled ? 403 : 400).json({
+    const isInvalidToken = typeof error?.code === "string" && error.code.startsWith("auth/");
+    const responseStatus = isDisabled ? 403 : isInvalidToken ? 401 : 500;
+    return res.status(responseStatus).json({
       status: "failed",
-      message: isDisabled ? "This account has been disabled. Please contact support." : "Registration failed. Please try again.",
+      message: isDisabled
+        ? "This account has been disabled. Please contact support."
+        : isInvalidToken
+        ? "Authentication failed."
+        : "Registration failed. Please try again.",
     });
   }
 };
