@@ -200,6 +200,48 @@ export const insertMessage = async (input: {
   return r.rows[0];
 };
 
+/**
+ * Atomic user-message insert. The pre-read in chat.service is a fast path, but
+ * only this database constraint closes the two-device race.
+ */
+export const insertMessageIdempotent = async (input: {
+  conversationId: number;
+  senderUid: string;
+  senderRole: number;
+  type: string;
+  body: string | null;
+  metadata?: any;
+  clientMsgId: string;
+}): Promise<{ message: any; inserted: boolean }> => {
+  await prepareChatSchema();
+  const r = await dbQuery.query(
+    `INSERT INTO ${dbSchema}.chat_messages
+       (conversation_id, sender_uid, sender_role, type, body, metadata, client_msg_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (conversation_id, sender_uid, client_msg_id)
+       WHERE client_msg_id IS NOT NULL
+       DO NOTHING
+     RETURNING *`,
+    [
+      input.conversationId,
+      input.senderUid,
+      input.senderRole,
+      input.type,
+      input.body,
+      input.metadata || {},
+      input.clientMsgId,
+    ]
+  );
+  if (r.rows[0]) return { message: r.rows[0], inserted: true };
+  const existing = await findMessageByClientId(
+    input.conversationId,
+    input.senderUid,
+    input.clientMsgId
+  );
+  if (!existing) throw new Error("Idempotent message insert could not reconcile");
+  return { message: existing, inserted: false };
+};
+
 export const findMessageByClientId = async (
   conversationId: number,
   senderUid: string,
@@ -389,6 +431,13 @@ export const ensureChatLifecycleSchema = async (): Promise<void> => {
          ADD COLUMN IF NOT EXISTS can_send  BOOLEAN NOT NULL DEFAULT TRUE`,
       []
     );
+    await dbQuery.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_message_client_idempotency
+         ON ${dbSchema}.chat_messages
+            (conversation_id, sender_uid, client_msg_id)
+       WHERE client_msg_id IS NOT NULL`,
+      []
+    );
     // Existing rows predate `status`; derive it once from the boolean so the
     // two never disagree on a database that already had closed conversations.
     await dbQuery.query(
@@ -405,6 +454,9 @@ export const ensureChatLifecycleSchema = async (): Promise<void> => {
   });
   return lifecycleSchemaReady;
 };
+
+/** Internal alias used by helpers declared above the lazy schema initializer. */
+const prepareChatSchema = (): Promise<void> => ensureChatLifecycleSchema();
 
 // ---- Conversation status ---------------------------------------------------
 

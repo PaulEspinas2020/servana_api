@@ -137,6 +137,78 @@ export interface AdminDashboardOperations {
   };
 }
 
+export interface DashboardMetricAccess {
+  operations: boolean;
+  revenue: boolean;
+  providers: boolean;
+  pipeline: boolean;
+  systemHealth: boolean;
+}
+
+/** Fail-closed response projection for granular dashboard permissions. */
+export const projectDashboardForAccess = (
+  data: AdminDashboardOperations,
+  access: DashboardMetricAccess,
+): AdminDashboardOperations => ({
+  ...data,
+  snapshot: {
+    bookingsToday: access.operations ? data.snapshot.bookingsToday : 0,
+    unassignedJobs: access.operations ? data.snapshot.unassignedJobs : 0,
+    inProgressJobs: access.operations ? data.snapshot.inProgressJobs : 0,
+    completedToday: access.operations ? data.snapshot.completedToday : 0,
+    revenueToday: access.revenue ? data.snapshot.revenueToday : 0,
+    pendingPayments: access.revenue ? data.snapshot.pendingPayments : 0,
+    pendingProviderApplications: access.providers ? data.snapshot.pendingProviderApplications : 0,
+    documentsNeedingReview: access.providers ? data.snapshot.documentsNeedingReview : 0,
+    disputes: access.operations ? data.snapshot.disputes : 0,
+    systemHealth: access.systemHealth ? data.snapshot.systemHealth : 'unknown',
+  },
+  bookingPipeline: access.pipeline ? data.bookingPipeline : {
+    total: 0, new: 0, awaitingAssignment: 0, assigned: 0, accepted: 0,
+    inProgress: 0, completed: 0, cancelled: 0, disputed: 0, late: 0,
+    cancellationsToday: 0,
+  },
+  providerHealth: access.providers ? data.providerHealth : {
+    totalProviders: 0, activeProviders: 0, pendingApplications: 0,
+    missingDocuments: 0, missingAvailability: 0, missingServiceArea: 0,
+    readyForFinalReview: 0, suspendedProviders: 0, archivedProviders: 0,
+  },
+  paymentHealth: access.revenue ? data.paymentHealth : {
+    revenueToday: 0, revenueWeek: 0, revenueMonth: 0, pendingCashPayments: 0,
+    gcashAwaitingApproval: 0, paymentExceptions: 0, averageOrderValue: 0, currency: 'PHP',
+  },
+  customerHealth: access.operations ? data.customerHealth : {
+    totalCustomers: 0, newCustomersToday: 0, customersWithActiveBookings: 0,
+    customersWithPaymentIssues: 0, customersWithDisputes: 0,
+  },
+  // Payment-issue counts are finance data even though they are displayed in
+  // the customer section. Do not reveal them through Operations access.
+  ...(access.operations ? {
+    customerHealth: {
+      ...data.customerHealth,
+      customersWithPaymentIssues: access.revenue
+        ? data.customerHealth.customersWithPaymentIssues
+        : 0,
+    },
+  } : {}),
+  serviceCatalogHealth: access.operations ? data.serviceCatalogHealth : { ...FALLBACK_CATALOG },
+  riskAndExceptions: {
+    lateJobs: access.operations ? data.riskAndExceptions.lateJobs : 0,
+    unassignedPaidBookings: access.operations ? data.riskAndExceptions.unassignedPaidBookings : 0,
+    paymentExceptions: access.revenue ? data.riskAndExceptions.paymentExceptions : 0,
+    disputes: access.operations ? data.riskAndExceptions.disputes : 0,
+    cancellationsToday: access.operations ? data.riskAndExceptions.cancellationsToday : 0,
+    catalogPublishBlockers: access.operations ? data.riskAndExceptions.catalogPublishBlockers : 0,
+  },
+  onboardingHealth: access.providers ? data.onboardingHealth : { ...FALLBACK_ONBOARDING },
+  actionQueue: data.actionQueue.filter((item) => {
+    if (['payment_review', 'payment_exception'].includes(item.type)) return access.revenue;
+    if (['provider_application', 'document_review', 'onboarding_case'].includes(item.type)) return access.providers;
+    return access.operations;
+  }),
+  recentActivity: access.operations ? data.recentActivity : [],
+});
+
 // ── Fallbacks ────────────────────────────────────────────────────────────────
 
 const FALLBACK_CATALOG: AdminServiceCatalogHealth = {
@@ -187,12 +259,13 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
       lp AS (
         SELECT DISTINCT ON (p.booking_id)
           p.booking_id,
-          p.status    AS pay_status,
-          p.method    AS pay_method,
+          UPPER(p.status) AS pay_status,
+          UPPER(p.method) AS pay_method,
           p.proof_url,
           COALESCE(p.amount, 0)::numeric AS pay_amount,
           p.paid_at
         FROM ${s}.payments p
+        WHERE p.additional_request_id IS NULL
         ORDER BY p.booking_id, p.id DESC
       ),
 
@@ -212,7 +285,7 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
                THEN b.schedule::text::timestamptz
                ELSE NULL END AS schedule,
           b.user_id,
-          b.status      AS raw_status,
+          UPPER(b.status) AS raw_status,
           b.worker_uid,
           b.cancelled_at,
           lw.worker_completed_at,
@@ -224,14 +297,14 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
           (esc.booking_id IS NOT NULL)::boolean AS has_escalation,
           CASE
             WHEN esc.booking_id IS NOT NULL                        THEN 'disputed'
-            WHEN b.status = 'COMPLETED'
-              OR lw.worker_status = 'COMPLETED'                    THEN 'completed'
-            WHEN lw.worker_status = 'IN_PROGRESS'                  THEN 'in_progress'
-            WHEN lw.worker_status = 'ACCEPTED'                     THEN 'accepted'
-            WHEN lw.worker_status = 'ASSIGNED'                     THEN 'assigned'
-            WHEN b.status IN ('CONFIRMED','PAID')
+            WHEN UPPER(b.status) = 'COMPLETED'
+              OR UPPER(lw.worker_status) = 'COMPLETED'             THEN 'completed'
+            WHEN UPPER(lw.worker_status) = 'IN_PROGRESS'           THEN 'in_progress'
+            WHEN UPPER(lw.worker_status) = 'ACCEPTED'              THEN 'accepted'
+            WHEN UPPER(lw.worker_status) = 'ASSIGNED'              THEN 'assigned'
+            WHEN UPPER(b.status) IN ('CONFIRMED','PAID')
               AND (b.worker_uid IS NULL OR b.worker_uid = '')      THEN 'awaiting_assignment'
-            WHEN b.status IN ('CANCELLED','CANCELED')              THEN 'cancelled'
+            WHEN UPPER(b.status) IN ('CANCELLED','CANCELED')       THEN 'cancelled'
             ELSE 'new'
           END AS ops_status
         FROM ${s}.bookings b
@@ -271,7 +344,7 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
           COUNT(DISTINCT booking_id) FILTER (WHERE ops_status = 'disputed')                       AS pipeline_disputed,
           -- Unassigned PAID bookings specifically (most urgent action item)
           COUNT(DISTINCT booking_id) FILTER (WHERE ops_status = 'awaiting_assignment'
-            AND raw_status = 'PAID')                                                               AS unassigned_paid,
+            AND pay_status = 'PAID')                                                               AS unassigned_paid,
           -- Revenue
           COALESCE(SUM(pay_amount) FILTER (WHERE pay_status = 'PAID'
             AND pay_paid_at >= (SELECT day_start FROM dr)), 0)::numeric                           AS revenue_today,
@@ -299,6 +372,28 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
 
   const mainResult = await dbQuery.query(mainSql, []);
   const r = mainResult.rows[0] ?? {};
+
+  // Revenue is a money-ledger aggregation, not a booking-state projection.
+  // Count every paid payment (including paid additional work), while lp above
+  // deliberately considers only the parent booking payment.
+  const revenueResult = await dbQuery.query(
+    `WITH dr AS (
+       SELECT DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Manila') AS day_start,
+              DATE_TRUNC('week', NOW() AT TIME ZONE 'Asia/Manila') AS week_start,
+              DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Manila') AS month_start
+     )
+     SELECT
+       COALESCE(SUM(p.amount) FILTER (WHERE (p.paid_at AT TIME ZONE 'Asia/Manila') >= dr.day_start), 0) AS revenue_today,
+       COALESCE(SUM(p.amount) FILTER (WHERE (p.paid_at AT TIME ZONE 'Asia/Manila') >= dr.week_start), 0) AS revenue_week,
+       COALESCE(SUM(p.amount) FILTER (WHERE (p.paid_at AT TIME ZONE 'Asia/Manila') >= dr.month_start), 0) AS revenue_month,
+       COALESCE(AVG(p.amount), 0) AS avg_order_value,
+       (dr.day_start AT TIME ZONE 'Asia/Manila') AS day_start_utc
+     FROM dr
+     LEFT JOIN ${s}.payments p ON UPPER(p.status) = 'PAID'
+     GROUP BY dr.day_start, dr.week_start, dr.month_start`,
+    [],
+  );
+  const revenue = revenueResult.rows[0] ?? {};
 
   const n = (v: unknown): number => {
     const x = Number(v);
@@ -396,7 +491,16 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
          COUNT(*) FILTER (WHERE status = 'active')   AS active_offerings,
          COUNT(*) FILTER (WHERE status = 'draft')    AS draft_offerings,
          COUNT(*) FILTER (WHERE status = 'archived') AS archived_offerings,
-         COUNT(*) FILTER (WHERE is_builtin = true)   AS mobile_protected
+         COUNT(*) FILTER (WHERE is_builtin = true)   AS mobile_protected,
+         COUNT(*) FILTER (
+           WHERE status = 'draft'
+             AND NOT EXISTS (
+               SELECT 1
+                 FROM ${s}.provider_catalog_offering_mappings pcm
+                WHERE pcm.offering_id = provider_catalog_offerings.id
+                  AND COALESCE(pcm.is_active, true) = true
+             )
+         ) AS publish_blockers
        FROM ${s}.provider_catalog_offerings`,
       []
     );
@@ -406,7 +510,7 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
       activeOfferings: n(c.active_offerings),
       draftOfferings: draft,
       archivedOfferings: n(c.archived_offerings),
-      publishBlockers: draft,
+      publishBlockers: n(c.publish_blockers),
       mobileProtected: n(c.mobile_protected),
     };
   } catch { /* table not yet seeded */ }
@@ -507,7 +611,7 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
     unassignedJobs: n(r.unassigned_jobs),
     inProgressJobs: n(r.in_progress_jobs),
     completedToday: n(r.completed_today),
-    revenueToday: n(r.revenue_today),
+    revenueToday: n(revenue.revenue_today),
     pendingPayments: n(r.total_pending_payments),
     pendingProviderApplications: pendingApplications,
     documentsNeedingReview,
@@ -544,13 +648,13 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
   };
 
   const paymentHealth: AdminPaymentHealth = {
-    revenueToday: n(r.revenue_today),
-    revenueWeek: n(r.revenue_week),
-    revenueMonth: n(r.revenue_month),
+    revenueToday: n(revenue.revenue_today),
+    revenueWeek: n(revenue.revenue_week),
+    revenueMonth: n(revenue.revenue_month),
     pendingCashPayments: n(r.pending_cash),
     gcashAwaitingApproval: n(r.gcash_awaiting),
     paymentExceptions: n(r.payment_exceptions),
-    averageOrderValue: n(r.avg_order_value),
+    averageOrderValue: n(revenue.avg_order_value),
     currency: 'PHP',
   };
 
@@ -697,7 +801,7 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
       generatedAt,
       timezone: 'Asia/Manila',
       dateRange: {
-        from: new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(),
+        from: revenue.day_start_utc?.toISOString?.() ?? generatedAt,
         to: generatedAt,
       },
     },

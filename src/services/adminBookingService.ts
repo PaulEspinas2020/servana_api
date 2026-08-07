@@ -209,9 +209,11 @@ export const mapOperationsStatus = (
 
 export const getAdminBookings = async (
   filter: BookingListFilter
-): Promise<{ rows: any[]; total: number }> => {
-  const page   = Math.max(1, filter.page  ?? 1);
-  const limit  = Math.min(100, Math.max(1, filter.limit ?? 25));
+): Promise<{ rows: any[]; total: number; page: number; limit: number }> => {
+  const rawPage = Number(filter.page);
+  const rawLimit = Number(filter.limit);
+  const page = Number.isFinite(rawPage) ? Math.max(1, Math.trunc(rawPage)) : 1;
+  const limit = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, Math.trunc(rawLimit))) : 25;
   const offset = (page - 1) * limit;
 
   const conditions: string[] = [];
@@ -225,6 +227,8 @@ export const getAdminBookings = async (
       OR (cu.first_name || ' ' || cu.last_name) ILIKE $${pi}
       OR cu.email ILIKE $${pi}
       OR cu.phone_number ILIKE $${pi}
+      OR gc.email ILIKE $${pi}
+      OR gc.phone_normalized ILIKE $${pi}
       OR (wu.first_name || ' ' || wu.last_name) ILIKE $${pi}
       OR s.name ILIKE $${pi}
     )`);
@@ -235,7 +239,7 @@ export const getAdminBookings = async (
     params.push(filter.paymentMethod); pi++;
   }
   if (filter.paymentStatus) {
-    conditions.push(`lp.status = $${pi}`);
+    conditions.push(`lp.payment_status = $${pi}`);
     params.push(filter.paymentStatus); pi++;
   }
   if (filter.serviceId) {
@@ -262,6 +266,12 @@ export const getAdminBookings = async (
       `EXISTS (SELECT 1 FROM ${dbSchema}.booking_escalations be2
                WHERE be2.booking_id = b.id AND be2.resolved_at IS NULL)`
     );
+  }
+  if (filter.needsAdminAction === true) {
+    conditions.push(`
+      (b.worker_uid IS NULL OR b.worker_uid = '')
+      AND b.status IN ('PENDING_OTP', 'CONFIRMED', 'PAID')
+    `);
   }
 
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -301,27 +311,24 @@ export const getAdminBookings = async (
         la.confirmation_source,
         lp.payment_status,
         CASE WHEN b.guest_customer_id IS NOT NULL THEN 'guest' ELSE 'client' END AS customer_type,
+        b.guest_customer_id::text                    AS guest_customer_id,
         COALESCE(cu.uid, b.guest_customer_id::text)  AS customer_uid,
         COALESCE(
           NULLIF(TRIM(COALESCE(cu.first_name,'') || ' ' || COALESCE(cu.last_name,'')), ''),
           TRIM(COALESCE(gc.first_name,'') || ' ' || COALESCE(gc.last_name,''))
         )                                            AS customer_name,
-        COALESCE(cu.phone_number, gc.phone_normalized) AS customer_phone,
-        COALESCE(cu.email, gc.email)                 AS customer_email,
         COALESCE(wu.first_name,'') || ' ' || COALESCE(wu.last_name,'') AS provider_name,
-        wu.phone_number                              AS provider_phone,
         s.id                                         AS service_id,
         so.id                                        AS service_option_id,
         s.name                                       AS service_name,
         so.level_3                                   AS specific_service_name,
-        COALESCE(ua.address_one, b.service_address->>'addressLine') AS address_line,
-        COALESCE(ua.post_town,   b.service_address->>'city')        AS city,
         br.id                                        AS branch_id,
         br.name                                      AS branch_name,
         br.city                                      AS branch_city,
         CASE
           WHEN EXISTS (SELECT 1 FROM ${dbSchema}.booking_escalations esc
                        WHERE esc.booking_id = b.id AND esc.resolved_at IS NULL) THEN 'disputed'
+          WHEN b.status IN ('CANCELLED','CANCELED')                             THEN 'cancelled'
           WHEN b.status = 'COMPLETED' OR la.worker_status = 'COMPLETED'        THEN 'completed'
           WHEN la.worker_status = 'IN_PROGRESS'                                 THEN 'in_progress'
           WHEN la.worker_status = 'ACCEPTED'                                    THEN 'accepted'
@@ -331,7 +338,6 @@ export const getAdminBookings = async (
             AND (b.worker_uid IS NULL OR b.worker_uid = '')                     THEN 'awaiting_assignment'
           WHEN b.status IN ('CONFIRMED','PAID') AND b.worker_uid IS NOT NULL
             AND b.worker_uid != ''                                               THEN 'assigned'
-          WHEN b.status IN ('CANCELLED','CANCELED')                             THEN 'cancelled'
           ELSE 'new'
         END AS ops_status
       FROM ${dbSchema}.bookings b
@@ -339,7 +345,6 @@ export const getAdminBookings = async (
       LEFT JOIN ${dbSchema}.guest_customers  gc  ON gc.guest_customer_id = b.guest_customer_id
       LEFT JOIN ${dbSchema}.service_options so   ON so.id   = b.service_option_id
       LEFT JOIN ${dbSchema}.services s           ON s.id    = so.service_id
-      LEFT JOIN ${dbSchema}.user_address ua      ON ua.address_id = b.user_address_id
       LEFT JOIN latest_payment  lp               ON lp.booking_id = b.id
       LEFT JOIN ${dbSchema}.branches br          ON br.id   = b.branch_id
       LEFT JOIN latest_assignment la             ON la.booking_id = b.id
@@ -375,12 +380,10 @@ export const getAdminBookings = async (
       operationsStatus: opStatus,
       customerType: (row.customer_type as 'guest' | 'client') ?? 'client',
       customerUid: row.customer_uid ?? null,
+      guestCustomerId: row.guest_customer_id ?? null,
       customerName: (row.customer_name ?? '').trim() || null,
-      customerPhone: row.customer_phone ?? null,
-      customerEmail: row.customer_email ?? null,
       providerUid: row.provider_uid ?? null,
       providerName: (row.provider_name ?? '').trim() || null,
-      providerPhone: row.provider_phone ?? null,
       assignmentStatus: row.worker_status ?? null,
       confirmationSource: (row.confirmation_source as 'admin_on_behalf_of_provider' | null) ?? null,
       serviceId: row.service_id ?? null,
@@ -388,8 +391,6 @@ export const getAdminBookings = async (
       serviceName: row.service_name ?? null,
       specificServiceName: row.specific_service_name ?? null,
       scheduledAt: row.scheduled_at ?? null,
-      addressLine: row.address_line ?? null,
-      city: row.city ?? null,
       quotedPrice: row.quoted_price ?? null,
       finalPrice: row.final_price ?? null,
       paymentMethod: row.payment_method ?? null,
@@ -407,11 +408,7 @@ export const getAdminBookings = async (
     };
   });
 
-  if (filter.needsAdminAction === true) {
-    rows = rows.filter((r: any) => r.needsAdminAction);
-  }
-
-  return { rows, total: Number(countRes.rows[0]?.total ?? 0) };
+  return { rows, total: Number(countRes.rows[0]?.total ?? 0), page, limit };
 };
 
 // ─── Metrics ─────────────────────────────────────────────────────────────────

@@ -267,7 +267,12 @@ export const saveWeeklySchedule = async (
     throw err;
   }
 
-  if (!timezone) timezone = 'Asia/Manila';
+  if (!timezone) timezone = OPERATIONAL_TIMEZONE;
+  if (timezone !== OPERATIONAL_TIMEZONE) {
+    const err: any = new Error(`timezone must be ${OPERATIONAL_TIMEZONE}`);
+    err.statusCode = 422;
+    throw err;
+  }
 
   // Optimistic locking — if expectedVersion provided, enforce it
   if (expectedVersion !== undefined) {
@@ -370,6 +375,100 @@ const normaliseNote = (raw: unknown): string | null => {
   return t === '' ? null : t.slice(0, NOTE_MAX);
 };
 
+
+/** A confirmed commitment that overlaps a time-off window. §18. */
+export interface TimeOffBookingConflict {
+  bookingId: string;
+  serviceName: string | null;
+  /** Operational-timezone rendering, for copy the provider can act on. */
+  startsAt: string;
+  localDate: string;
+  localTime: string;
+  durationMins: number;
+  status: string;
+}
+
+/**
+ * Confirmed bookings a proposed time-off window would collide with.
+ *
+ * C22 §18. Creating time off must never quietly free a provider who has
+ * accepted work — but it must also never be BLOCKED, because a provider who is
+ * ill has to be able to record it. So this reports; the caller decides.
+ *
+ * The date and time comparisons happen in the operational timezone via
+ * `AT TIME ZONE`, using Postgres's own IANA database, so this agrees with
+ * `operationalTimezone.ts` rather than being a second opinion.
+ *
+ * Booking end comes from `service_options.duration_mins` (default 120), the
+ * same source admin booking creation uses for its conflict window — so a
+ * booking that STARTS before a partial window but runs into it is caught.
+ *
+ * The UNION is not redundant: admin-created bookings set `worker_uid` on the
+ * booking row AND write a `booking_workers` row, and older rows may have only
+ * one. Querying either alone silently misses assignments.
+ */
+export const findTimeOffBookingConflicts = async (
+  providerUid: string,
+  window: {
+    startDate: string;
+    endDate: string;
+    allDay: boolean;
+    startTime?: string | null;
+    endTime?: string | null;
+  },
+): Promise<TimeOffBookingConflict[]> => {
+  const tz = OPERATIONAL_TIMEZONE;
+  // An all-day window is the whole calendar day, expressed as times so one
+  // query serves both cases.
+  const from = window.allDay ? '00:00' : (window.startTime ?? '00:00');
+  const to   = window.allDay ? '24:00' : (window.endTime   ?? '24:00');
+
+  const res = await dbQuery.query(
+    `WITH assigned AS (
+       SELECT b.id, b.schedule, b.status, b.service_option_id
+         FROM ${s}.bookings b
+        WHERE b.worker_uid = $1 AND b.status NOT IN ('CANCELLED', 'COMPLETED')
+       UNION
+       SELECT b.id, b.schedule, b.status, b.service_option_id
+         FROM ${s}.bookings b
+         JOIN ${s}.booking_workers bw ON bw.booking_id = b.id
+        WHERE bw.worker_uid = $1 AND b.status NOT IN ('CANCELLED', 'COMPLETED')
+     )
+     SELECT a.id, a.schedule, a.status,
+            sv.name AS service_name,
+            COALESCE(so.duration_mins, 120) AS duration_mins,
+            to_char(a.schedule AT TIME ZONE $5, 'YYYY-MM-DD') AS local_date,
+            to_char(a.schedule AT TIME ZONE $5, 'HH24:MI')    AS local_time
+       FROM assigned a
+       LEFT JOIN ${s}.service_options so ON so.id = a.service_option_id
+       LEFT JOIN ${s}.services sv        ON sv.id = so.service_id
+      WHERE (a.schedule AT TIME ZONE $5)::date BETWEEN $2::date AND $3::date
+        AND (
+          $4::boolean = TRUE
+          OR (
+            -- Half-open overlap against the booking's real span, so time off
+            -- ending at 12:00 does not collide with a booking starting at 12:00.
+            (a.schedule AT TIME ZONE $5)::time < $7::time
+            AND ((a.schedule AT TIME ZONE $5)
+                 + (COALESCE(so.duration_mins, 120) || ' minutes')::interval)::time > $6::time
+          )
+        )
+      ORDER BY a.schedule ASC
+      LIMIT 50`,
+    [providerUid, window.startDate, window.endDate, window.allDay, tz, from, to],
+  );
+
+  return (res.rows as any[]).map((r) => ({
+    bookingId:    String(r.id),
+    serviceName:  r.service_name ?? null,
+    startsAt:     r.schedule,
+    localDate:    r.local_date,
+    localTime:    r.local_time,
+    durationMins: Number(r.duration_mins ?? 120),
+    status:       String(r.status),
+  }));
+};
+
 export const createTimeOff = async (
   providerUid: string,
   payload: {
@@ -382,7 +481,7 @@ export const createTimeOff = async (
     note?: string | null;
   },
   actorUid: string,
-): Promise<ProviderTimeOff> => {
+): Promise<ProviderTimeOff & { bookingConflicts: TimeOffBookingConflict[] }> => {
   await bootstrap();
 
   if (!payload.startDate || !payload.endDate) {
@@ -425,6 +524,23 @@ export const createTimeOff = async (
     }
   }
 
+  // C22 §18. Looked up BEFORE the insert so the answer describes the state the
+  // provider is deciding about, and so a failure here cannot leave time off
+  // recorded with conflicts nobody was told about.
+  //
+  // Deliberately NOT a blocker. Time off is a statement of fact — a provider
+  // who is ill must be able to record it — and refusing would leave them with
+  // no way to say so. §18's "explicit resolution" is the CALLER's job: the
+  // conflicts come back with the record so the client must show them, and the
+  // provider is told plainly that the booking is still theirs.
+  const bookingConflicts = await findTimeOffBookingConflicts(providerUid, {
+    startDate: payload.startDate,
+    endDate: payload.endDate,
+    allDay,
+    startTime,
+    endTime,
+  });
+
   const res = await dbQuery.query(
     `INSERT INTO ${s}.worker_time_off
        (worker_uid, start_date, end_date, reason, created_by, status,
@@ -445,6 +561,7 @@ export const createTimeOff = async (
     id:          r.id,
     startDate:   r.start_date instanceof Date ? r.start_date.toISOString().slice(0, 10) : String(r.start_date).slice(0, 10),
     endDate:     r.end_date   instanceof Date ? r.end_date.toISOString().slice(0, 10)   : String(r.end_date).slice(0, 10),
+    bookingConflicts,
     allDay:      r.all_day !== false,
     startTime:   r.start_time ?? null,
     endTime:     r.end_time ?? null,

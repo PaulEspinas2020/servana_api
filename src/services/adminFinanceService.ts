@@ -14,6 +14,14 @@ const CASH_SLA_HOURS     = 24;
 const PAYMONGO_STALE_HOURS = 24;
 const PAYOUT_MAX_RETRIES = 3;
 
+function normalizePagination(pageValue?: number, limitValue?: number): { page: number; limit: number; offset: number } {
+  const rawPage = Number(pageValue);
+  const rawLimit = Number(limitValue);
+  const page = Number.isFinite(rawPage) ? Math.max(1, Math.trunc(rawPage)) : 1;
+  const limit = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, Math.trunc(rawLimit))) : 30;
+  return { page, limit, offset: (page - 1) * limit };
+}
+
 // ── Schema bootstrap ──────────────────────────────────────────────────────────
 
 export async function ensureFinanceSchema(): Promise<void> {
@@ -33,6 +41,7 @@ export async function ensureFinanceSchema(): Promise<void> {
     // rather than NULL, which would make every historical payment look eligible
     // for retry the moment the job starts working.
     `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
+    `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS refunded_amount NUMERIC(12,2) NOT NULL DEFAULT 0`,
     // Only columns confirmed to exist on payments — paid_at and the
     // submitted_at added two lines above. `created_at` is NOT referenced
     // anywhere else in this codebase, so naming it here would raise the very
@@ -224,18 +233,19 @@ export async function getFinanceSummary(): Promise<{
   totalPaidPayments: number;
   releasedPayoutsCount: number;
 }> {
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-
   const [pToday, rev, gcash, payouts, refunds, exceptions, totalPaid, released] =
     await Promise.all([
       dbQuery.query(
-        `SELECT COALESCE(SUM(amount),0) AS v FROM ${s}.payments WHERE status='PAID' AND paid_at >= $1`,
-        [todayStart]
+        `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount,0)),0) AS v
+         FROM ${s}.payments
+         WHERE UPPER(status)='PAID'
+           AND (paid_at AT TIME ZONE 'Asia/Manila') >= DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Manila')`
       ),
       dbQuery.query(
-        `SELECT COALESCE(SUM(servana_revenue),0) AS v FROM ${s}.finance_ledger_entries
-         WHERE created_at >= date_trunc('month', NOW())`
+        `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount,0)),0) AS v
+         FROM ${s}.payments
+         WHERE UPPER(status)='PAID'
+           AND (paid_at AT TIME ZONE 'Asia/Manila') >= DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Manila')`
       ),
       dbQuery.query(
         `SELECT COUNT(*) AS v FROM ${s}.payments WHERE method='GCASH' AND status='PENDING'`
@@ -250,7 +260,8 @@ export async function getFinanceSummary(): Promise<{
         `SELECT COUNT(*) AS v FROM ${s}.finance_reconciliation_exceptions WHERE status='open'`
       ),
       dbQuery.query(
-        `SELECT COALESCE(SUM(amount),0) AS v FROM ${s}.payments WHERE status='PAID'`
+        `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount,0)),0) AS v
+         FROM ${s}.payments WHERE UPPER(status)='PAID'`
       ),
       dbQuery.query(
         `SELECT COUNT(*) AS v FROM ${s}.disbursements WHERE status='RELEASED'`
@@ -259,13 +270,40 @@ export async function getFinanceSummary(): Promise<{
 
   return {
     paymentsToday:      toNum(pToday.rows[0]?.v),
-    revenueMtd:         toNum(rev.rows[0]?.v),
+    revenueMtd:         servanaShareOf(toNum(rev.rows[0]?.v)),
     pendingGcashCount:  toNum(gcash.rows[0]?.v),
     pendingPayoutCount: toNum(payouts.rows[0]?.v),
     openRefundCount:    toNum(refunds.rows[0]?.v),
     openExceptionCount: toNum(exceptions.rows[0]?.v),
     totalPaidPayments:  toNum(totalPaid.rows[0]?.v),
     releasedPayoutsCount: toNum(released.rows[0]?.v),
+  };
+}
+
+export type FinanceSummary = Awaited<ReturnType<typeof getFinanceSummary>>;
+
+export interface FinanceSummaryAccess {
+  payments: boolean;
+  gcashReview: boolean;
+  payouts: boolean;
+  refunds: boolean;
+  reconciliation: boolean;
+}
+
+/** Remove submodule counts the current admin is not allowed to inspect. */
+export function projectFinanceSummary(
+  data: FinanceSummary,
+  access: FinanceSummaryAccess,
+): FinanceSummary {
+  return {
+    paymentsToday: access.payments ? data.paymentsToday : 0,
+    revenueMtd: data.revenueMtd,
+    pendingGcashCount: access.gcashReview ? data.pendingGcashCount : 0,
+    pendingPayoutCount: access.payouts ? data.pendingPayoutCount : 0,
+    openRefundCount: access.refunds ? data.openRefundCount : 0,
+    openExceptionCount: access.reconciliation ? data.openExceptionCount : 0,
+    totalPaidPayments: access.payments ? data.totalPaidPayments : 0,
+    releasedPayoutsCount: access.payouts ? data.releasedPayoutsCount : 0,
   };
 }
 
@@ -311,9 +349,7 @@ export async function listPayments(filter: PaymentFilter = {}): Promise<{
   page: number;
   limit: number;
 }> {
-  const page  = Math.max(1, filter.page ?? 1);
-  const limit = Math.min(100, filter.limit ?? 30);
-  const offset = (page - 1) * limit;
+  const { page, limit, offset } = normalizePagination(filter.page, filter.limit);
   const { where, params } = buildPaymentWhere(filter);
 
   const countR = await dbQuery.query(
@@ -326,9 +362,8 @@ export async function listPayments(filter: PaymentFilter = {}): Promise<{
   const dataR = await dbQuery.query(
     `SELECT
        p.id, p.booking_id, p.method, p.amount, p.status, p.reference_no,
-       p.proof_url, p.provider, p.provider_payment_id, p.checkout_url,
-       p.paid_at, p.refunded_at, p.refund_reference, p.updated_at,
-       p.reviewed_by, p.reviewed_at, p.rejection_reason, p.rejected_at, p.submitted_at,
+       p.provider, p.provider_payment_id,
+       p.paid_at, p.refunded_at, p.updated_at, p.submitted_at,
        b.booking_reference
      FROM ${s}.payments p
      LEFT JOIN ${s}.bookings b ON b.id = p.booking_id
@@ -344,11 +379,16 @@ export async function listPayments(filter: PaymentFilter = {}): Promise<{
 export async function getPaymentDetail(paymentId: number): Promise<unknown> {
   const r = await dbQuery.query(
     `SELECT
-       p.*, b.booking_reference, b.status AS booking_status,
+       p.id, p.booking_id, p.additional_request_id, p.method, p.amount, p.status,
+       p.reference_no, p.proof_url, p.provider, p.provider_payment_id,
+       p.paid_at, p.refunded_at, p.refunded_amount, p.refund_reference,
+       p.updated_at, p.submitted_at, p.reviewed_by, p.reviewed_at,
+       p.rejection_reason, p.rejected_at,
+       b.booking_reference, b.status AS booking_status,
        le.servana_revenue, le.provider_payable, le.is_internal_fixer
      FROM ${s}.payments p
      LEFT JOIN ${s}.bookings b ON b.id = p.booking_id
-     LEFT JOIN finance_ledger_entries le ON le.payment_id = p.id
+     LEFT JOIN ${s}.finance_ledger_entries le ON le.payment_id = p.id
      WHERE p.id = $1
      LIMIT 1`,
     [paymentId]
@@ -604,9 +644,7 @@ export async function listLedgerEntries(filter: {
   page?: number;
   limit?: number;
 } = {}): Promise<{ rows: unknown[]; total: number; page: number; limit: number }> {
-  const page  = Math.max(1, filter.page ?? 1);
-  const limit = Math.min(100, filter.limit ?? 30);
-  const offset = (page - 1) * limit;
+  const { page, limit, offset } = normalizePagination(filter.page, filter.limit);
   const conds: string[] = [];
   const params: unknown[] = [];
   const push = (c: string, v: unknown) => { params.push(v); conds.push(c.replace('?', `$${params.length}`)); };
@@ -663,9 +701,7 @@ export async function listPayouts(filter: PayoutFilter = {}): Promise<{
   page: number;
   limit: number;
 }> {
-  const page  = Math.max(1, filter.page ?? 1);
-  const limit = Math.min(100, filter.limit ?? 30);
-  const offset = (page - 1) * limit;
+  const { page, limit, offset } = normalizePagination(filter.page, filter.limit);
   const conds: string[] = [];
   const params: unknown[] = [];
   const push = (c: string, v: unknown) => { params.push(v); conds.push(c.replace('?', `$${params.length}`)); };
@@ -686,9 +722,9 @@ export async function listPayouts(filter: PayoutFilter = {}): Promise<{
   const dataR = await dbQuery.query(
     `SELECT
        d.id, d.booking_id, d.worker_uid, d.total_amount, d.servana_share,
-       d.worker_share, d.status, d.paymongo_payout_id, d.payout_error,
+       d.worker_share, d.status, d.paymongo_payout_id,
        d.released_at, d.created_at, d.updated_at,
-       d.hold_reason, d.hold_until, d.held_by, d.retry_count, d.last_retry_at,
+       d.hold_reason, d.hold_until, d.retry_count, d.last_retry_at,
        b.booking_reference,
        COALESCE(uc.is_internal_fixer, false) AS is_internal_fixer
      FROM ${s}.disbursements d
@@ -711,7 +747,13 @@ export async function getPayoutDetail(disbursementId: number): Promise<unknown> 
      FROM ${s}.disbursements d
      LEFT JOIN ${s}.bookings b ON b.id = d.booking_id
      LEFT JOIN ${s}.user_credentials uc ON uc.uid = d.worker_uid
-     LEFT JOIN ${s}.payments p ON p.booking_id = d.booking_id AND p.status = 'PAID'
+     LEFT JOIN LATERAL (
+       SELECT status, amount
+       FROM ${s}.payments
+       WHERE booking_id = d.booking_id
+         AND additional_request_id IS NULL
+       ORDER BY id DESC LIMIT 1
+     ) p ON true
      WHERE d.id = $1 LIMIT 1`,
     [disbursementId]
   );
@@ -880,6 +922,25 @@ export async function openRefundReview(
   adminName: string | null,
   requestId: string | null
 ): Promise<number> {
+  const payment = await dbQuery.query(
+    `SELECT id, booking_id, amount, status, COALESCE(refunded_amount,0) AS refunded_amount
+     FROM ${s}.payments
+     WHERE id=$1 AND booking_id=$2
+     LIMIT 1`,
+    [body.paymentId, body.bookingId]
+  );
+  const pay = payment.rows[0];
+  if (!body.paymentId || !pay) {
+    throw Object.assign(new Error('A payment belonging to this booking is required'), { code: 'BUSINESS_RULE' });
+  }
+  if (String(pay.status).toUpperCase() !== 'PAID') {
+    throw Object.assign(new Error('Only a paid payment can be refunded'), { code: 'BUSINESS_RULE' });
+  }
+  const remaining = toNum(pay.amount) - toNum(pay.refunded_amount);
+  if (body.amount > remaining) {
+    throw Object.assign(new Error('Refund amount exceeds the remaining paid amount'), { code: 'BUSINESS_RULE' });
+  }
+
   // Check if there's an existing open refund for this booking
   const dup = await dbQuery.query(
     `SELECT id FROM ${s}.finance_refund_reviews WHERE booking_id=$1 AND status IN ('requested','approved') LIMIT 1`,
@@ -941,9 +1002,7 @@ export async function listRefundReviews(filter: {
   page?:   number;
   limit?:  number;
 } = {}): Promise<{ rows: unknown[]; total: number; page: number; limit: number }> {
-  const page  = Math.max(1, filter.page ?? 1);
-  const limit = Math.min(100, filter.limit ?? 30);
-  const offset = (page - 1) * limit;
+  const { page, limit, offset } = normalizePagination(filter.page, filter.limit);
   const conds: string[] = [];
   const params: unknown[] = [];
 
@@ -1078,9 +1137,11 @@ export async function markRefundProcessed(
   if (rr.payment_id) {
     await dbQuery.query(
       `UPDATE ${s}.payments
-       SET refunded_at=NOW(), refund_reference=$2, updated_at=NOW()
+       SET refunded_amount=COALESCE(refunded_amount,0)+$3,
+           status=CASE WHEN COALESCE(refunded_amount,0)+$3 >= amount THEN 'REFUNDED' ELSE status END,
+           refunded_at=NOW(), refund_reference=$2, updated_at=NOW()
        WHERE id=$1`,
-      [rr.payment_id, refundReference]
+      [rr.payment_id, refundReference, rr.amount]
     );
   }
 
@@ -1366,9 +1427,7 @@ export async function listExceptions(filter: {
   page?:   number;
   limit?:  number;
 } = {}): Promise<{ rows: unknown[]; total: number; page: number; limit: number }> {
-  const page  = Math.max(1, filter.page ?? 1);
-  const limit = Math.min(100, filter.limit ?? 30);
-  const offset = (page - 1) * limit;
+  const { page, limit, offset } = normalizePagination(filter.page, filter.limit);
   const conds: string[] = [];
   const params: unknown[] = [];
   const push = (c: string, v: unknown) => { params.push(v); conds.push(c.replace('?', `$${params.length}`)); };

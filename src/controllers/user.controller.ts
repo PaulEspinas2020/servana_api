@@ -85,8 +85,20 @@ const updateUserProfile = async (req: Request, res: Response) => {
     const { uid } = req.user;
 
     try {
+        // Provider identifiers are verified identity attributes, not ordinary
+        // profile fields. Provider clients may edit names here for legacy
+        // compatibility, but email/mobile changes must use a dedicated recent-
+        // auth + verification workflow. Strip every known alias so a stale web
+        // or mobile client cannot silently overwrite a verified identifier.
+        const profileBody = { ...req.body };
+        if ([2, 4].includes(Number(req.user?.role))) {
+            delete profileBody.phoneNumber;
+            delete profileBody.mobileNumber;
+            delete profileBody.phone;
+            delete profileBody.email;
+        }
         // Always use the JWT uid as the profile owner (body.id may be absent or spoofed)
-        const dbResponse = await userService.updateUserProfile({ ...req.body, id: uid });
+        const dbResponse = await userService.updateUserProfile({ ...profileBody, id: uid });
 
         await createLogEntry("Update", uid, dbResponse.id, "Profile");
 

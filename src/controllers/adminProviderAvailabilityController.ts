@@ -32,7 +32,8 @@ export const getSupplySummary = async (_req: Request, res: Response) => {
 
 export const getSupplyGaps = async (req: Request, res: Response) => {
   try {
-    const daysAhead = Math.min(Number(req.query.days ?? 7), 30);
+    const rawDays = Number(req.query.days);
+    const daysAhead = Number.isFinite(rawDays) ? Math.min(30, Math.max(1, Math.trunc(rawDays))) : 7;
     const gaps = await supplyHealth.getSupplyGaps(daysAhead);
     return ok(res, gaps);
   } catch (err: any) {
@@ -45,7 +46,8 @@ export const getMissingSetup = async (req: Request, res: Response) => {
     const filter = (['availability', 'service_area', 'both', 'any'].includes(req.query.filter as string)
       ? req.query.filter as any
       : 'any');
-    const limit  = Math.min(Number(req.query.limit ?? 50), 100);
+    const rawLimit = Number(req.query.limit);
+    const limit = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, Math.trunc(rawLimit))) : 50;
     const list   = await supplyHealth.listProvidersMissingSetup(filter, limit);
     return ok(res, list);
   } catch (err: any) {
@@ -56,8 +58,9 @@ export const getMissingSetup = async (req: Request, res: Response) => {
 export const evaluateBooking = async (req: Request, res: Response) => {
   try {
     const { bookingId } = req.body ?? {};
-    if (!bookingId) return fail(res, 400, 'bookingId is required');
-    const candidates = await eligEngine.listAssignmentCandidates(String(bookingId));
+    const parsedBookingId = Number(bookingId);
+    if (!Number.isSafeInteger(parsedBookingId) || parsedBookingId <= 0) return fail(res, 400, 'bookingId must be a positive integer');
+    const candidates = await eligEngine.listAssignmentCandidates(String(parsedBookingId));
     return ok(res, candidates);
   } catch (err: any) {
     return fail(res, err?.statusCode ?? 500, err?.message ?? 'Failed to evaluate booking');

@@ -78,6 +78,8 @@ export function formatJobCard(job: any) {
     bookingId:    job.booking_id,
     status:       job.status,
     scheduleAt:   job.schedule,
+    paymentMethod: job.payment_method,
+    paymentStatus: job.payment_status,
     customer,
     address,
     service:      { name: job.service_name, type: job.service_type },

@@ -1,6 +1,12 @@
 import { Request, Response } from "express";
 import * as svc from "../services/providerCatalogService";
 
+const isPositiveId = (value: number): boolean => Number.isSafeInteger(value) && value > 0;
+const invalidId = (res: Response, name: string) =>
+  res.status(400).json({ status: "failed", message: `Invalid ${name}` });
+const badRequest = (res: Response, message: string) =>
+  res.status(400).json({ status: 'failed', message });
+
 // ─── Provider-facing read ─────────────────────────────────────────────────────
 
 // GET /provider-catalog/v1/offerings
@@ -8,7 +14,9 @@ import * as svc from "../services/providerCatalogService";
 // Returns: active, provider-web-visible offerings with specific services + legacy mappings
 export const getOfferingsForProvider = async (req: Request, res: Response) => {
   try {
-    const data = await svc.getOfferingsForProvider();
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: 'failed', message: 'Unauthorized' });
+    const data = await svc.getOfferingsForProvider(uid);
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
@@ -21,6 +29,7 @@ export const getOfferingsForProvider = async (req: Request, res: Response) => {
 export const getOfferingProviders = async (req: Request, res: Response) => {
   try {
     const offeringId = Number(req.params.offeringId);
+    if (!isPositiveId(offeringId)) return invalidId(res, "offeringId");
     const data = await svc.getOfferingProviders(offeringId);
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
@@ -37,6 +46,14 @@ export const listServiceFamilies = async (req: Request, res: Response) => {
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
+  }
+};
+
+export const getPolicyDimensions = async (_req: Request, res: Response) => {
+  try {
+    return res.status(200).json({ status: 'success', data: await svc.getCatalogPolicyDimensions() });
+  } catch (error: any) {
+    return res.status(500).json({ status: 'failed', message: error?.message ?? 'Server error' });
   }
 };
 
@@ -75,7 +92,7 @@ export const createOffering = async (req: Request, res: Response) => {
 export const getOffering = async (req: Request, res: Response) => {
   try {
     const offeringId = Number(req.params.offeringId);
-    if (!offeringId) return res.status(400).json({ status: "failed", message: "Invalid offeringId" });
+    if (!isPositiveId(offeringId)) return invalidId(res, "offeringId");
     const data = await svc.getAdminOffering(offeringId);
     if (!data) return res.status(404).json({ status: "failed", message: "Offering not found" });
     return res.status(200).json({ status: "success", data });
@@ -88,6 +105,7 @@ export const getOffering = async (req: Request, res: Response) => {
 export const updateOffering = async (req: Request, res: Response) => {
   try {
     const offeringId = Number(req.params.offeringId);
+    if (!isPositiveId(offeringId)) return invalidId(res, "offeringId");
     const adminUid = (req as any).user?.uid ?? "system";
     const { version } = req.body;
     if (version == null) return res.status(400).json({ status: "failed", message: "version is required for optimistic concurrency" });
@@ -99,10 +117,32 @@ export const updateOffering = async (req: Request, res: Response) => {
   }
 };
 
+export const saveOfferingPolicy = async (req: Request, res: Response) => {
+  try {
+    const offeringId = Number(req.params.offeringId);
+    if (!isPositiveId(offeringId)) return invalidId(res, 'offeringId');
+    if (req.body?.expectedVersion == null) return res.status(400).json({ status: 'failed', message: 'expectedVersion is required for optimistic concurrency' });
+    const adminUid = (req as any).user?.uid ?? 'system';
+    const data = await svc.saveOfferingPolicy(offeringId, {
+      enforcementState: req.body.enforcementState,
+      allowedProviderTypes: req.body.allowedProviderTypes ?? [],
+      allowedBranchIds: req.body.allowedBranchIds ?? [],
+      allowedCityIds: req.body.allowedCityIds ?? [],
+      requirements: req.body.requirements ?? [],
+      expectedVersion: Number(req.body.expectedVersion),
+    }, adminUid);
+    return res.status(200).json({ status: 'success', data });
+  } catch (error: any) {
+    if (error.code === 'CONFLICT') return res.status(409).json({ status: 'failed', code: 'CONFLICT', message: error.message });
+    return res.status(Number(error.statusCode ?? 400)).json({ status: 'failed', message: error?.message ?? 'Bad request' });
+  }
+};
+
 // PATCH /admin/provider-catalog/offerings/:offeringId/status
 export const updateOfferingStatus = async (req: Request, res: Response) => {
   try {
     const offeringId = Number(req.params.offeringId);
+    if (!isPositiveId(offeringId)) return invalidId(res, "offeringId");
     const adminUid = (req as any).user?.uid ?? "system";
     const { status: newStatus } = req.body;
     if (!newStatus) return res.status(400).json({ status: "failed", message: "status is required" });
@@ -139,6 +179,7 @@ export const listAllSpecificServicesAdmin = async (req: Request, res: Response) 
 export const listSpecificServices = async (req: Request, res: Response) => {
   try {
     const offeringId = Number(req.params.offeringId);
+    if (!isPositiveId(offeringId)) return invalidId(res, "offeringId");
     const data = await svc.listSpecificServicesForOffering(offeringId);
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
@@ -150,6 +191,7 @@ export const listSpecificServices = async (req: Request, res: Response) => {
 export const createSpecificService = async (req: Request, res: Response) => {
   try {
     const offeringId = Number(req.params.offeringId);
+    if (!isPositiveId(offeringId)) return invalidId(res, "offeringId");
     const adminUid = (req as any).user?.uid ?? "system";
     const body = req.body;
     const data = await svc.createSpecificService(
@@ -175,6 +217,7 @@ export const createSpecificService = async (req: Request, res: Response) => {
 export const getSpecificService = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.serviceOptionId);
+    if (!isPositiveId(id)) return invalidId(res, "serviceOptionId");
     const data = await svc.getAdminSpecificService(id);
     if (!data) return res.status(404).json({ status: "failed", message: "Specific service not found" });
     return res.status(200).json({ status: "success", data });
@@ -187,6 +230,7 @@ export const getSpecificService = async (req: Request, res: Response) => {
 export const updateSpecificService = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.serviceOptionId);
+    if (!isPositiveId(id)) return invalidId(res, "serviceOptionId");
     const adminUid = (req as any).user?.uid ?? "system";
     const body = req.body;
     const data = await svc.updateSpecificService(
@@ -211,7 +255,9 @@ export const updateSpecificService = async (req: Request, res: Response) => {
 export const updateSpecificServiceStatus = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.serviceOptionId);
-    const isActive = req.body.isActive === true || req.body.isActive === "true";
+    if (!isPositiveId(id)) return invalidId(res, "serviceOptionId");
+    if (typeof req.body?.isActive !== 'boolean') return badRequest(res, 'isActive must be a boolean');
+    const isActive = req.body.isActive;
     const adminUid = (req as any).user?.uid ?? "system";
     const data = await svc.updateSpecificServiceStatus(id, isActive, adminUid);
     return res.status(200).json({ status: "success", data });
@@ -226,6 +272,7 @@ export const updateSpecificServiceStatus = async (req: Request, res: Response) =
 export const createAddon = async (req: Request, res: Response) => {
   try {
     const parentId = Number(req.params.serviceOptionId);
+    if (!isPositiveId(parentId)) return invalidId(res, "serviceOptionId");
     const adminUid = (req as any).user?.uid ?? "system";
     const body = req.body;
     const data = await svc.createAddon(
@@ -247,6 +294,7 @@ export const createAddon = async (req: Request, res: Response) => {
 export const updateAddon = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.addonOptionId);
+    if (!isPositiveId(id)) return invalidId(res, "addonOptionId");
     const adminUid = (req as any).user?.uid ?? "system";
     const body = req.body;
     const data = await svc.updateAddon(
@@ -268,7 +316,9 @@ export const updateAddon = async (req: Request, res: Response) => {
 export const updateAddonStatus = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.addonOptionId);
-    const isActive = req.body.isActive === true || req.body.isActive === "true";
+    if (!isPositiveId(id)) return invalidId(res, "addonOptionId");
+    if (typeof req.body?.isActive !== 'boolean') return badRequest(res, 'isActive must be a boolean');
+    const isActive = req.body.isActive;
     const adminUid = (req as any).user?.uid ?? "system";
     const data = await svc.updateAddonStatus(id, isActive, adminUid);
     return res.status(200).json({ status: "success", data });
@@ -320,7 +370,7 @@ export const getCatalogAuditTrail = async (req: Request, res: Response) => {
 export const createOfferingMapping = async (req: Request, res: Response) => {
   try {
     const offeringId = Number(req.params.offeringId);
-    if (!offeringId) return res.status(400).json({ status: "failed", message: "Invalid offeringId" });
+    if (!isPositiveId(offeringId)) return invalidId(res, "offeringId");
     const adminUid = (req as any).user?.uid ?? "system";
     const data = await svc.createOfferingMapping(
       offeringId,
@@ -337,7 +387,7 @@ export const createOfferingMapping = async (req: Request, res: Response) => {
 export const updateOfferingMapping = async (req: Request, res: Response) => {
   try {
     const mappingId = Number(req.params.mappingId);
-    if (!mappingId) return res.status(400).json({ status: "failed", message: "Invalid mappingId" });
+    if (!isPositiveId(mappingId)) return invalidId(res, "mappingId");
     const adminUid = (req as any).user?.uid ?? "system";
     const data = await svc.updateOfferingMapping(
       mappingId,
@@ -354,7 +404,7 @@ export const updateOfferingMapping = async (req: Request, res: Response) => {
 export const archiveOfferingMapping = async (req: Request, res: Response) => {
   try {
     const mappingId = Number(req.params.mappingId);
-    if (!mappingId) return res.status(400).json({ status: "failed", message: "Invalid mappingId" });
+    if (!isPositiveId(mappingId)) return invalidId(res, "mappingId");
     const adminUid = (req as any).user?.uid ?? "system";
     const data = await svc.archiveOfferingMapping(mappingId, adminUid);
     return res.status(200).json({ status: "success", data });
@@ -369,7 +419,7 @@ export const archiveOfferingMapping = async (req: Request, res: Response) => {
 export const publishPreviewOffering = async (req: Request, res: Response) => {
   try {
     const offeringId = Number(req.params.offeringId);
-    if (!offeringId) return res.status(400).json({ status: "failed", message: "Invalid offeringId" });
+    if (!isPositiveId(offeringId)) return invalidId(res, "offeringId");
     const data = await svc.getPublishPreview(offeringId);
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
@@ -381,7 +431,7 @@ export const publishPreviewOffering = async (req: Request, res: Response) => {
 export const publishOffering = async (req: Request, res: Response) => {
   try {
     const offeringId = Number(req.params.offeringId);
-    if (!offeringId) return res.status(400).json({ status: "failed", message: "Invalid offeringId" });
+    if (!isPositiveId(offeringId)) return invalidId(res, "offeringId");
     const adminUid = (req as any).user?.uid ?? "system";
     const data = await svc.publishOffering(offeringId, adminUid);
     return res.status(200).json({ status: "success", data });

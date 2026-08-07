@@ -435,7 +435,16 @@ export const upsertBankAccount = async (req: Request, res: Response) => {
       console.error(`[upsertBankAccount] MongoDB sync failed for uid=${uid}:`, mongoErr.message);
     }
 
-    return res.json({ status: "success", data: toCamel(account) });
+    return res.json({
+      status: "success",
+      data: {
+        workerUid: account.worker_uid,
+        bankCode: account.bank_code,
+        accountName: account.account_name,
+        maskedAccountNumber: `•••• ${String(account.account_number).slice(-4)}`,
+        updatedAt: account.updated_at,
+      },
+    });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
   }
@@ -450,7 +459,16 @@ export const getBankAccount = async (req: Request, res: Response) => {
       return res.status(404).json({ status: "failed", message: "No bank account registered" });
     }
 
-    return res.json({ status: "success", data: toCamel(account) });
+    return res.json({
+      status: "success",
+      data: {
+        workerUid: account.worker_uid,
+        bankCode: account.bank_code,
+        accountName: account.account_name,
+        maskedAccountNumber: `•••• ${String(account.account_number).slice(-4)}`,
+        updatedAt: account.updated_at,
+      },
+    });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
   }
@@ -459,8 +477,8 @@ export const getBankAccount = async (req: Request, res: Response) => {
 export const deleteBankAccount = async (req: Request, res: Response) => {
   try {
     const { uid } = req.params as { uid: string };
-    const account = await technician.deleteWorkerBankAccount(uid);
-    return res.json({ status: "success", data: toCamel(account) });
+    await technician.deleteWorkerBankAccount(uid);
+    return res.json({ status: "success", data: null });
   } catch (error: any) {
     return res.status(400).json({ status: "failed", message: "Failed to delete bank account" });
   }
@@ -643,6 +661,13 @@ export const completeJob = async (req: Request, res: Response) => {
       data: result,
     });
   } catch (error: any) {
+    if (error instanceof technician.UnpaidCashBookingError) {
+      return res.status(409).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
+    }
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to complete job",

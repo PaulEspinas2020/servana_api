@@ -59,16 +59,16 @@ export const submitGcash = async (bookingId: number, referenceNo: string, proofU
   const r = await dbQuery.query(
     `
     UPDATE ${dbSchema}.payments
-    SET method='GCASH',
-        reference_no=$2,
+    SET reference_no=$2,
         proof_url=$3,
         status='PENDING'
     WHERE booking_id=$1
+      AND method='GCASH'
     RETURNING *
     `,
     [bookingId, referenceNo, proofUrl || null]
   );
-  if (!r.rowCount) throw new Error("Payment record not found.");
+  if (!r.rowCount) throw new Error("This booking is not configured for GCash payment.");
   return r.rows[0];
 };
 
@@ -78,11 +78,12 @@ export const approvePayment = async (bookingId: number) => {
     UPDATE ${dbSchema}.payments
     SET status='PAID', paid_at=NOW()
     WHERE booking_id=$1
+      AND method='GCASH'
     RETURNING *
     `,
     [bookingId]
   );
-  if (!r.rowCount) throw new Error("Payment record not found.");
+  if (!r.rowCount) throw new Error("Only a GCash payment can be manually approved.");
 
   // try { await createDisbursement(bookingId); }
   // catch (e) { console.error("createDisbursement failed (approvePayment):", e); }
@@ -112,13 +113,14 @@ export const markCashPaid = async (bookingId: number) => {
   const r = await dbQuery.query(
     `
     UPDATE ${dbSchema}.payments
-    SET method='CASH', status='PAID', paid_at=NOW()
+    SET status='PAID', paid_at=NOW()
     WHERE booking_id=$1
+      AND method='CASH'
     RETURNING *
     `,
     [bookingId]
   );
-  if (!r.rowCount) throw new Error("Payment record not found.");
+  if (!r.rowCount) throw new Error("This booking is not configured for cash payment.");
 
   // try { await createDisbursement(bookingId); }
   // catch (e) { console.error("createDisbursement failed (markCashPaid):", e); }
@@ -148,6 +150,7 @@ const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SECRET_KEY || process.env.PAYMO
 const PAYMONGO_BASE_URL = "https://api.paymongo.com/v1";
 
 const getAuthHeader = () => {
+  if (!PAYMONGO_SECRET_KEY) throw new Error("PayMongo is not configured");
   const token = Buffer.from(`${PAYMONGO_SECRET_KEY}:`).toString("base64");
   return `Basic ${token}`;
 };
@@ -155,8 +158,16 @@ const getAuthHeader = () => {
 export const createCheckoutSession = async (bookingId: number) => {
   const r = await dbQuery.query(
     `
-    SELECT b.id, b.final_price
+    SELECT b.id,
+           b.status AS booking_status,
+           COALESCE(b.final_price, b.quoted_price) AS final_price,
+           p.method,
+           p.status AS payment_status,
+           p.provider,
+           p.checkout_url,
+           p.updated_at
     FROM ${dbSchema}.bookings b
+    JOIN ${dbSchema}.payments p ON p.booking_id = b.id
     WHERE b.id = $1
     `,
     [bookingId]
@@ -168,6 +179,39 @@ export const createCheckoutSession = async (bookingId: number) => {
 
   const booking = r.rows[0];
   const amount = Math.round(Number(booking.final_price) * 100); // centavos
+
+  if (String(booking.method).toUpperCase() !== "PAYMONGO") {
+    throw new Error("This booking is not configured for PayMongo payment");
+  }
+  if (String(booking.payment_status).toUpperCase() === "PAID") {
+    throw new Error("This booking is already paid");
+  }
+  if (["CANCELLED", "CANCELED", "EXPIRED", "FAILED", "REFUNDED"].includes(
+    String(booking.booking_status).toUpperCase(),
+  )) {
+    throw new Error("Payment cannot be started for an inactive booking");
+  }
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    throw new Error("Booking amount must be greater than zero");
+  }
+
+  // Reuse a recent pending session. This protects double taps and transient
+  // retries without keeping stale PayMongo URLs forever.
+  const updatedAt = booking.updated_at ? new Date(booking.updated_at).getTime() : 0;
+  const isRecent = updatedAt > 0 && Date.now() - updatedAt < 2 * 60 * 60 * 1000;
+  if (
+    String(booking.payment_status).toUpperCase() === "PENDING" &&
+    String(booking.provider).toUpperCase() === "PAYMONGO" &&
+    typeof booking.checkout_url === "string" &&
+    booking.checkout_url.length > 0 &&
+    isRecent
+  ) {
+    return {
+      booking_id: bookingId,
+      provider_payment_id: null,
+      checkout_url: booking.checkout_url,
+    };
+  }
 
   const payload = {
     data: {
@@ -220,6 +264,9 @@ export const createCheckoutSession = async (bookingId: number) => {
 
   const providerPaymentId = result?.data?.id;
   const checkoutUrl = result?.data?.attributes?.checkout_url;
+  if (!providerPaymentId || !checkoutUrl) {
+    throw new Error("PayMongo returned an incomplete checkout session");
+  }
 
   await dbQuery.query(
     `
@@ -255,7 +302,8 @@ export const createCheckoutSession = async (bookingId: number) => {
 const PAYMONGO_WEBHOOK_SECRET = process.env.PAYMONGO_WEBHOOK_SECRET || "";
 
 function verifySignature(rawBody: Buffer, signatureHeader: string): boolean {
-  const secret = process.env.PAYMONGO_WEBHOOK_SECRET!;
+  const secret = PAYMONGO_WEBHOOK_SECRET;
+  if (!secret || !signatureHeader) return false;
 
   const parts = signatureHeader.split(",");
   let timestamp = "";
@@ -269,6 +317,7 @@ function verifySignature(rawBody: Buffer, signatureHeader: string): boolean {
     if (key === "te" && !signature) signature = value; // fall back to test key only if live absent
   }
 
+  if (!timestamp || !signature || !/^[a-f\d]{64}$/i.test(signature)) return false;
   const payload = `${timestamp}.${rawBody.toString("utf8")}`;
 
   const expected = crypto
@@ -276,10 +325,10 @@ function verifySignature(rawBody: Buffer, signatureHeader: string): boolean {
     .update(payload)
     .digest("hex");
 
-  return crypto.timingSafeEqual(
-    Buffer.from(expected),
-    Buffer.from(signature)
-  );
+  const expectedBuffer = Buffer.from(expected, "hex");
+  const signatureBuffer = Buffer.from(signature, "hex");
+  return expectedBuffer.length === signatureBuffer.length &&
+    crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
 }
 
 // const dispatchAfterPayment = async (bookingId: number) => {
@@ -314,6 +363,9 @@ function verifySignature(rawBody: Buffer, signatureHeader: string): boolean {
 export const createPayment = async (request: any) => {
 
   const amount = Math.round(request.total_amount * 100);
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    throw new Error("Additional work amount must be greater than zero");
+  }
 
   const payload = {
     data: {
@@ -342,18 +394,26 @@ export const createPayment = async (request: any) => {
     body: JSON.stringify(payload)
   });
   type PaymongoCheckoutResponse = {
-    data: {
+    data?: {
       id: string;
       attributes: {
         checkout_url: string;
       };
     };
+    errors?: { detail?: string }[];
   };
 
   const result = (await response.json()) as PaymongoCheckoutResponse;
 
+  if (!response.ok) {
+    throw new Error(result.errors?.[0]?.detail || "Failed to create PayMongo checkout session");
+  }
+
   const providerPaymentId = result?.data?.id;
   const checkoutUrl = result?.data?.attributes?.checkout_url;
+  if (!providerPaymentId || !checkoutUrl) {
+    throw new Error("PayMongo returned an incomplete checkout session");
+  }
 
   await dbQuery.query(
     `
@@ -475,20 +535,38 @@ export const processWebhook = async (req: Request, _res: Response) => {
       throw new Error("Missing checkout_session_id");
     }
 
+    const paymentResource = eventData?.attributes?.payments?.[0];
+    const processorPaymentId = paymentResource?.id;
+    const paidAmount = Number(paymentResource?.attributes?.amount);
+    const paidCurrency = String(paymentResource?.attributes?.currency ?? '').toUpperCase();
+    if (!processorPaymentId || !processorPaymentId.startsWith('pay_')) {
+      throw new Error("Missing PayMongo payment id");
+    }
+    if (!Number.isSafeInteger(paidAmount) || paidAmount <= 0 || paidCurrency !== 'PHP') {
+      throw new Error("Invalid PayMongo payment amount or currency");
+    }
+
     const r = await dbQuery.query(
       `
     UPDATE ${dbSchema}.payments
     SET status = 'PAID',
         paid_at = NOW(),
         webhook_event_id = $2,
-        raw_response = $3
+        raw_response = $3,
+        provider_payment_id = $4
     WHERE provider_payment_id = $1
+      AND ROUND(amount * 100) = $5
     RETURNING booking_id, additional_request_id
     `,
-      [checkoutSessionId, eventId, payload]
+      [checkoutSessionId, eventId, payload, processorPaymentId, paidAmount]
     );
 
-    if (!r.rowCount) return;
+    if (!r.rowCount) {
+      // A paid event must map to a checkout created by this application. A
+      // transient replication/order race should be retried; acknowledging it
+      // here would permanently lose the authoritative payment event.
+      throw new Error("PayMongo checkout session not found");
+    }
 
     const payment = r.rows[0];
     // ======================
@@ -511,17 +589,9 @@ export const processWebhook = async (req: Request, _res: Response) => {
       return;
     }
 
-    // ======================
-    // NORMAL BOOKING
-    // ======================
-    await dbQuery.query(
-      `
-    UPDATE ${dbSchema}.bookings
-    SET status = 'PAID'
-    WHERE id = $1
-    `,
-      [payment.booking_id]
-    );
+    // NORMAL BOOKING: `payments.status` is authoritative for settlement.
+    // bookings.status is the service lifecycle and must not be overwritten by
+    // a webhook before OTP/assignment or after WORKER_ASSIGNED.
 
     await dbQuery.query(
       `
@@ -560,16 +630,23 @@ export const processWebhook = async (req: Request, _res: Response) => {
   }
 
   if (eventType === "checkout_session.payment.failed") {
-    await dbQuery.query(
+    const failedUpdate = await dbQuery.query(
       `
       UPDATE ${dbSchema}.payments
       SET status = 'FAILED',
           webhook_event_id = $2,
           raw_response = $3
       WHERE provider_payment_id = $1
+      RETURNING booking_id
       `,
       [providerPaymentId, eventId, payload]
     );
+
+    if (!failedUpdate.rowCount) {
+      // Preserve ordering-race recovery: PayMongo must retry until the checkout
+      // row created by this application is visible, just like paid events.
+      throw new Error("PayMongo checkout session not found");
+    }
 
     // Send payment failed email to customer
     try {

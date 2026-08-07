@@ -1,6 +1,7 @@
 import * as repo from "./chat.repository";
 import { emitToConversation } from "./chat.realtime";
 import { toCamel } from "../helpers/idGenerator";
+import { notifyAdminsSafely } from '../services/adminNotificationService';
 
 /**
  * Transport-agnostic chat logic. Both the REST controller and the Socket.IO
@@ -148,8 +149,10 @@ const conversationClosedMessage = (conversation: any): string => {
 export const getOrCreateConversation = async (bookingId: number) => {
   await repo.ensureChatLifecycleSchema();
   let conversation = await repo.findConversationByBookingId(bookingId);
+  let created = false;
   if (!conversation) {
     conversation = await repo.createConversation(bookingId);
+    created = true;
   }
 
   // Sync participant rows from the booking (client + active workers).
@@ -162,6 +165,15 @@ export const getOrCreateConversation = async (bookingId: number) => {
   for (const w of workerUids) {
     const role = (await repo.getUserRole(w)) ?? 2;
     await repo.upsertParticipant(conversation.id, w, role);
+  }
+
+  if (created) {
+    notifyAdminsSafely({
+      type: 'booking_chat_created', severity: 'info', title: 'Booking chat created',
+      body: `A new automatic chat was created for booking SVN-${String(bookingId).padStart(6, '0')}.`,
+      bookingId, conversationId: conversation.id,
+      notificationKey: `booking_chat_created_${bookingId}`,
+    });
   }
 
   return conversation;
@@ -391,15 +403,25 @@ export const sendMessage = async (
   }
 
   const type = input.type || "text";
-  const hasBody = !!(input.body && input.body.trim());
+  const allowedTypes = new Set(["text", "image", "file"]);
+  if (!allowedTypes.has(type)) throw httpError(422, "Message type is not allowed");
+
+  const body = typeof input.body === "string" ? input.body.trim() : "";
+  if (body.length > 4000) throw httpError(422, "Message is too long");
+  const hasBody = body.length > 0;
   const hasAttachments = !!(input.attachments && input.attachments.length);
   if (type !== "system" && !hasBody && !hasAttachments) {
     throw httpError(422, "Message must have a body or an attachment");
   }
 
+  const clientMsgId = input.clientMsgId?.trim();
+  if (!clientMsgId || clientMsgId.length < 16 || clientMsgId.length > 128) {
+    throw httpError(422, "A valid message idempotency key is required");
+  }
+
   // Idempotency: a retried send returns the original message.
-  if (input.clientMsgId) {
-    const existing = await repo.findMessageByClientId(conversationId, actor.uid, input.clientMsgId);
+  if (clientMsgId) {
+    const existing = await repo.findMessageByClientId(conversationId, actor.uid, clientMsgId);
     if (existing) return hydrateMessage(existing);
   }
 
@@ -412,15 +434,18 @@ export const sendMessage = async (
     await repo.upsertParticipant(conversationId, actor.uid, actor.role);
   }
 
-  const message = await repo.insertMessage({
+  const inserted = await repo.insertMessageIdempotent({
     conversationId,
     senderUid: actor.uid,
     senderRole: actor.role,
     type,
-    body: input.body ?? null,
+    body: hasBody ? body : null,
     metadata: input.metadata,
-    clientMsgId: input.clientMsgId,
+    clientMsgId,
   });
+
+  if (!inserted.inserted) return hydrateMessage(inserted.message);
+  const message = inserted.message;
 
   if (hasAttachments) {
     for (const a of input.attachments!) {
@@ -432,6 +457,14 @@ export const sendMessage = async (
 
   const full = await hydrateMessage(message);
   emitToConversation(conversationId, "message:new", full);
+  if (access.role !== "admin") {
+    notifyAdminsSafely({
+      type: 'new_chat_message', severity: 'info', title: 'New booking message',
+      body: `A ${access.role === 'coworker' ? 'provider' : 'client'} sent a new message in booking chat.`,
+      bookingId: conversation.booking_id ?? null, conversationId,
+      notificationKey: `chat_message_${message.id}`,
+    });
+  }
   return full;
 };
 

@@ -396,12 +396,23 @@ const updateUserProfile = async (profileUpdateReq: ProfileUpdateReq) => {
 };
 
 const updateUserPhoneNumber = async (phoneNumber: string | undefined, uid: string | undefined) => {
-    const insertQuery = `UPDATE ${dbSchema}.user_credentials SET phone_number =$1 WHERE uid = $2 returning *`;
+    // Provider identifiers (roles 2 and 4) are verification-controlled and
+    // cannot be changed through the legacy generic profile path. Customer and
+    // admin compatibility is preserved until their dedicated migrations.
+    const insertQuery = `UPDATE ${dbSchema}.user_credentials
+        SET phone_number = $1
+        WHERE uid = $2 AND role::int NOT IN (2, 4)
+        RETURNING *`;
 
     try {
         const { rows } = await dbQuery.query(insertQuery, [phoneNumber, uid]);
 
-        if (!rows && rows.length == 0) throw "Failed to update phone number";
+        if (!rows || rows.length === 0) {
+            throw Object.assign(
+                new Error("This phone number must be changed through the verified contact workflow"),
+                { statusCode: 409, code: "CONTACT_REVERIFICATION_REQUIRED" },
+            );
+        }
 
         const dbResponse = formatUserProfile(rows[0]);
         return dbResponse;

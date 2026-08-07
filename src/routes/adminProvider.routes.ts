@@ -2,11 +2,14 @@ import { Router } from 'express';
 import verifyAuth from '../middleware/verifyAuth';
 import verifyRoles from '../middleware/verifyRoles';
 import { requirePermission } from '../middleware/requirePermission';
+import requireProviderTarget from '../middleware/requireProviderTarget';
 import * as ctrl from '../controllers/adminProviderController';
 import * as attrCtrl from '../controllers/adminMobileAttributionController';
+import * as reviewModeration from '../controllers/adminReviewModerationController';
 
 const router = Router();
 const adminOnly = [verifyAuth, verifyRoles([1])];
+router.param('uid', requireProviderTarget);
 
 // ── Provider Registry ─────────────────────────────────────────────────────────
 router.get('/admin/providers/metrics', ...adminOnly, requirePermission('providers.view'), ctrl.getProviderMetrics);
@@ -27,12 +30,21 @@ router.get('/admin/providers/requirement-definitions', ...adminOnly, requirePerm
 router.get('/admin/providers/mobile-metrics',          ...adminOnly, requirePermission('providers.view'), attrCtrl.getMobileMetrics);
 router.post('/admin/providers/attribution/backfill',   ...adminOnly, requirePermission('providers.view'), attrCtrl.triggerBackfill);
 
+router.get('/admin/review-moderation/cases', ...adminOnly, requirePermission('reviews.moderation.view'), reviewModeration.list);
+router.patch('/admin/review-moderation/cases/:caseId/decision', ...adminOnly, requirePermission('reviews.moderation.decide'), reviewModeration.decide);
+router.get('/admin/review-response-moderation/cases', ...adminOnly, requirePermission('reviews.moderation.view'), reviewModeration.listResponses);
+router.patch('/admin/review-response-moderation/cases/:caseId/decision', ...adminOnly, requirePermission('reviews.moderation.decide'), reviewModeration.decideResponse);
+
 // ── Provider 360 Workspace ────────────────────────────────────────────────────
 router.get('/admin/providers/:uid',                        ...adminOnly, requirePermission('providers.profile.view'), ctrl.getProvider);
 router.get('/admin/providers/:uid/services',               ...adminOnly, requirePermission('providers.active_services.view'), ctrl.getProviderServices);
 router.get('/admin/providers/:uid/service-applications',   ...adminOnly, requirePermission('providers.profile.view'), ctrl.getProviderServiceApplications);
 router.get('/admin/providers/:uid/catalog-capabilities',   ...adminOnly, requirePermission('providers.profile.view'), ctrl.getProviderCatalogCapabilities);
+router.get('/admin/providers/:uid/profile-photo-submissions', ...adminOnly, requirePermission('providers.profile.view'), ctrl.getProviderProfilePhotoSubmissions);
+router.get('/admin/providers/:uid/profile-photo-submissions/:submissionId/preview', ...adminOnly, requirePermission('providers.profile.view'), ctrl.getProviderProfilePhotoPreview);
+router.patch('/admin/providers/:uid/profile-photo-submissions/:submissionId/decision', ...adminOnly, requirePermission('providers.profile.edit'), ctrl.decideProviderProfilePhoto);
 router.get('/admin/providers/:uid/requirements',                   ...adminOnly, requirePermission('providers.documents.view'), ctrl.getProviderRequirements);
+router.get('/admin/providers/:uid/requirements/:id/preview',       ...adminOnly, requirePermission('providers.documents.view'), ctrl.getProviderRequirementPreview);
 router.post('/admin/providers/:uid/requirements',                  ...adminOnly, requirePermission('providers.documents.upload'), ctrl.uploadProviderRequirement);
 router.delete('/admin/providers/:uid/requirements/:id',            ...adminOnly, requirePermission('providers.documents.delete'), ctrl.deleteProviderRequirement);
 router.patch('/admin/providers/:uid/requirements/:id/verify',      ...adminOnly, requirePermission('providers.documents.verify'), ctrl.verifyProviderRequirement);
@@ -40,6 +52,8 @@ router.patch('/admin/providers/:uid/requirements/:id/reject',             ...adm
 router.patch('/admin/providers/:uid/requirements/:id/request-resubmission', ...adminOnly, requirePermission('providers.documents.request_resubmission'), ctrl.needsResubmissionProviderRequirement);
 router.get('/admin/providers/:uid/jobs',                   ...adminOnly, requirePermission('providers.jobs.view'), ctrl.getProviderJobs);
 router.get('/admin/providers/:uid/performance',            ...adminOnly, requirePermission('providers.performance.view'), ctrl.getProviderPerformance);
+router.get('/admin/providers/:uid/reputation',             ...adminOnly, requirePermission('reviews.moderation.view'), reviewModeration.providerSummary);
+router.get('/admin/providers/:uid/reviews',                ...adminOnly, requirePermission('reviews.moderation.view'), reviewModeration.providerReviews);
 router.get('/admin/providers/:uid/earnings',               ...adminOnly, requirePermission('providers.earnings.view'), ctrl.getProviderEarnings);
 router.get('/admin/providers/:uid/availability',                   ...adminOnly, requirePermission('provider_availability.view'), ctrl.getProviderAvailability);
 router.put('/admin/providers/:uid/availability',                   ...adminOnly, requirePermission('provider_availability.weekly_schedule.edit'), ctrl.saveProviderAvailabilityAdmin);
@@ -57,6 +71,10 @@ router.post('/admin/providers/:uid/availability/force-offline', ...adminOnly, re
 
 // ── Profile Edit ──────────────────────────────────────────────────────────────
 router.patch('/admin/providers/:uid/profile',          ...adminOnly, requirePermission('providers.profile.edit'), ctrl.updateProviderProfile);
+
+// Explicit, permissioned and audited admin override. Normal provider onboarding
+// continues to use the service-application approval flow.
+router.post('/admin/providers/:uid/services', ...adminOnly, requirePermission('providers.services.assign'), ctrl.assignProviderServices);
 
 // ── Service Removal ───────────────────────────────────────────────────────────
 router.delete('/admin/providers/:uid/services/:serviceId', ...adminOnly, requirePermission('providers.services.remove'), ctrl.removeProviderService);

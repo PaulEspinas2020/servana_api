@@ -6,6 +6,15 @@ import {
 import * as svc from '../services/adminCommunicationService';
 import { auditFire } from '../services/adminAuditService';
 
+function boundedLimit(value: string | undefined, fallback = 50, max = 100): number {
+  const parsed = value == null ? fallback : Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, max) : fallback;
+}
+
+function positivePage(value: string | undefined): number {
+  const parsed = value == null ? 1 : Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+}
 
 // ── GET /admin/communications/summary ────────────────────────────────────────
 
@@ -36,8 +45,8 @@ export async function listEvents(req: Request, res: Response) {
       fromDate:       q.from_date,
       toDate:         q.to_date,
       search:         q.search,
-      page:           q.page  ? parseInt(q.page,  10) : 1,
-      limit:          q.limit ? parseInt(q.limit, 10) : 50,
+      page:           positivePage(q.page),
+      limit:          boundedLimit(q.limit),
     };
     const result = await svc.listCommunicationEvents(filters);
     res.json({ status: 'success', data: result });
@@ -63,7 +72,7 @@ export async function getEventDetail(req: Request, res: Response) {
 export async function getEntityTimeline(req: Request, res: Response) {
   try {
     const q = req.query as Record<string, string | undefined>;
-    const limit = q.limit ? parseInt(q.limit, 10) : 50;
+    const limit = boundedLimit(q.limit);
     const items = await svc.getEntityCommunicationTimeline(
       String(req.params.entityType),
       String(req.params.entityId),
@@ -80,7 +89,7 @@ export async function getEntityTimeline(req: Request, res: Response) {
 export async function getRecipientTimeline(req: Request, res: Response) {
   try {
     const q = req.query as Record<string, string | undefined>;
-    const limit = q.limit ? parseInt(q.limit, 10) : 50;
+    const limit = boundedLimit(q.limit);
     const items = await svc.getRecipientCommunicationTimeline(String(req.params.recipientUid), limit);
     res.json({ status: 'success', data: items });
   } catch (err) {
@@ -93,7 +102,7 @@ export async function getRecipientTimeline(req: Request, res: Response) {
 export async function listFailures(req: Request, res: Response) {
   try {
     const q = req.query as Record<string, string | undefined>;
-    const limit = q.limit ? parseInt(q.limit, 10) : 50;
+    const limit = boundedLimit(q.limit);
     const items = await svc.findRetryableFailures(limit);
     res.json({ status: 'success', data: items });
   } catch (err) {
@@ -296,7 +305,7 @@ export async function previewTemplate(req: Request, res: Response) {
 export async function getConversationDetail(req: Request, res: Response) {
   try {
     const id = parseInt(String(req.params.id), 10);
-    if (!id) return adminBadRequest(res, 'Invalid conversation id');
+    if (!Number.isInteger(id) || id <= 0) return adminBadRequest(res, 'Invalid conversation id');
     const detail = await svc.getAdminConversationDetail(id);
     if (!detail) return adminNotFound(res, 'Conversation');
     res.json({ status: 'success', data: detail });
@@ -310,9 +319,11 @@ export async function getConversationDetail(req: Request, res: Response) {
 export async function getConversationMessages(req: Request, res: Response) {
   try {
     const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) return adminBadRequest(res, 'Invalid conversation id');
     const q = req.query as Record<string, string | undefined>;
-    const limit = q.limit ? parseInt(q.limit, 10) : 50;
-    const before = q.before ? parseInt(q.before, 10) : undefined;
+    const limit = boundedLimit(q.limit);
+    const parsedBefore = q.before ? parseInt(q.before, 10) : undefined;
+    const before = parsedBefore && parsedBefore > 0 ? parsedBefore : undefined;
     const result = await svc.getAdminConversationMessages(id, limit, before);
     res.json({ status: 'success', data: result });
   } catch (err) {
@@ -325,10 +336,14 @@ export async function getConversationMessages(req: Request, res: Response) {
 export async function sendConversationMessage(req: Request, res: Response) {
   try {
     const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) return adminBadRequest(res, 'Invalid conversation id');
     const actor: string = (req as any).user?.uid ?? '';
     if (!actor) return adminBadRequest(res, 'Actor uid required');
     const { body, clientMsgId } = req.body as Record<string, string>;
     if (!body || !body.trim()) return adminBadRequest(res, 'body is required');
+    if (!clientMsgId || clientMsgId.trim().length < 16 || clientMsgId.trim().length > 128) {
+      return adminBadRequest(res, 'clientMsgId must be between 16 and 128 characters');
+    }
     const message = await svc.sendAdminMessage(id, actor, body.trim(), clientMsgId);
     auditFire({
       action: 'chat_message_sent',
@@ -352,7 +367,7 @@ export async function sendConversationMessage(req: Request, res: Response) {
 export async function listReports(req: Request, res: Response) {
   try {
     const q = req.query as Record<string, string | undefined>;
-    const limit = q.limit ? parseInt(q.limit, 10) : 50;
+    const limit = boundedLimit(q.limit);
     const items = await svc.listMessageReports(limit);
     res.json({ status: 'success', data: items });
   } catch (err) {
@@ -366,6 +381,8 @@ export async function resolveReport(req: Request, res: Response) {
   try {
     const reportId = parseInt(String(req.params.reportId), 10);
     const actor: string = (req as any).user?.uid ?? '';
+    if (!Number.isInteger(reportId) || reportId <= 0) return adminBadRequest(res, 'Invalid report id');
+    if (!actor) return adminBadRequest(res, 'Actor uid required');
     const { action, note } = req.body as Record<string, string>;
     if (!action || !['dismiss', 'redact', 'warn'].includes(action)) {
       return adminBadRequest(res, 'action must be dismiss, redact, or warn');
@@ -394,7 +411,7 @@ export async function resolveReport(req: Request, res: Response) {
 export async function getConversations(req: Request, res: Response) {
   try {
     const q = req.query as Record<string, string | undefined>;
-    const limit = q.limit ? parseInt(q.limit, 10) : 50;
+    const limit = boundedLimit(q.limit);
     const items = await svc.getChatConversationSummaries(limit, q.booking_id);
     res.json({ status: 'success', data: items });
   } catch (err) {

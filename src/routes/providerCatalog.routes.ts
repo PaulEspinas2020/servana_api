@@ -1,6 +1,7 @@
 import { Router } from "express";
 import verifyAuth from "../middleware/verifyAuth";
 import verifyRoles from "../middleware/verifyRoles";
+import requireProviderRole from "../middleware/requireProviderRole";
 import { requirePermission } from "../middleware/requirePermission";
 import * as ctrl from "../controllers/providerCatalogController";
 
@@ -12,6 +13,7 @@ const router = Router();
 router.get(
   "/provider-catalog/v1/offerings",
   verifyAuth,
+  requireProviderRole,
   ctrl.getOfferingsForProvider
 );
 
@@ -78,6 +80,11 @@ router.get(
   verifyAuth, verifyRoles([1]), requirePermission('services.view'),
   ctrl.listServiceFamilies
 );
+router.get(
+  "/admin/provider-catalog/policy-dimensions",
+  verifyAuth, verifyRoles([1]), requirePermission('services.view'),
+  ctrl.getPolicyDimensions
+);
 
 // Overview + Audit (no :offeringId — must be before /offerings/:offeringId to avoid shadowing)
 router.get(
@@ -113,6 +120,11 @@ router.patch(
   "/admin/provider-catalog/offerings/:offeringId",
   verifyAuth, verifyRoles([1]), requirePermission('services.offering.edit'),
   ctrl.updateOffering
+);
+router.put(
+  "/admin/provider-catalog/offerings/:offeringId/policy",
+  verifyAuth, verifyRoles([1]), requirePermission('services.offering.edit'),
+  ctrl.saveOfferingPolicy
 );
 router.patch(
   "/admin/provider-catalog/offerings/:offeringId/status",

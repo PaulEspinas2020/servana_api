@@ -1,5 +1,5 @@
 import { db } from "../config";
-import dbQuery from "../db/dbQuery";
+import dbQuery, { pool } from "../db/dbQuery";
 const dbSchema = db.schema;
 import { generateOTP } from "../helpers/otp";
 import { computeQuote } from "./pricingService";
@@ -13,6 +13,7 @@ import { getEmailById, getNameByEmail } from "./user.service";
 import { closeConversationForCancellation } from "../chat/chat.service";
 import { toCamel } from "../helpers/idGenerator";
 import { assertBookingAccess } from "./bookingAccessService";
+import { notifyAdminsSafely } from './adminNotificationService';
 
 export const createBooking = async (
   userId: string,
@@ -20,9 +21,10 @@ export const createBooking = async (
     userAddressId: string;
     serviceOptionId: number;
     schedule: string;
-    paymentMethod: "CASH" | "GCASH";
+    paymentMethod: "CASH" | "GCASH" | "PAYMONGO";
     pricing: any;
-  }
+  },
+  idempotencyKey?: string | null,
 ) => {
   try {
 
@@ -32,6 +34,8 @@ export const createBooking = async (
       FROM ${dbSchema}.service_options so
       JOIN ${dbSchema}.services s ON s.id = so.service_id
       WHERE so.id = $1
+        AND so.option_type = 'MAIN'
+        AND so.is_active = true
       `,
       [payload.serviceOptionId]
     );
@@ -72,38 +76,61 @@ export const createBooking = async (
 
     const otp = generateOTP();
 
-    const bookingRes = await dbQuery.query(
-      `
-      INSERT INTO ${dbSchema}.bookings
-        (user_id, user_address_id, service_option_id,
-         schedule, payment_method,
-         otp_code, status,
-         quoted_price, final_price, pricing_breakdown)
-      VALUES ($1,$2,$3,$4,$5,$6,'PENDING_OTP',$7,$8,$9)
-      RETURNING *
-      `,
-      [
-        userId,
-        payload.userAddressId,
-        payload.serviceOptionId,
-        payload.schedule,
-        payload.paymentMethod,
-        otp,
-        quote.final,
-        quote.final,
-        initialBreakdown
-      ]
-    );
+    // A booking and its authoritative payment row are one domain write. Using
+    // pool.query twice could commit the booking first and then fail the payment
+    // insert, leaving an orphan that the idempotency record never sees. A retry
+    // would then create a second booking. Keep both writes on one checked-out
+    // client and commit them together.
+    const client = await pool.connect();
+    let booking: any;
+    try {
+      await client.query('BEGIN');
+      const bookingRes = await client.query(
+        `
+        INSERT INTO ${dbSchema}.bookings
+          (user_id, user_address_id, service_option_id,
+           schedule, payment_method,
+           otp_code, status,
+           quoted_price, final_price, pricing_breakdown)
+        VALUES ($1,$2,$3,$4,$5,$6,'PENDING_OTP',$7,$8,$9)
+        RETURNING *
+        `,
+        [
+          userId,
+          payload.userAddressId,
+          payload.serviceOptionId,
+          payload.schedule,
+          payload.paymentMethod,
+          otp,
+          quote.final,
+          quote.final,
+          initialBreakdown
+        ]
+      );
+      booking = bookingRes.rows[0];
 
-    const booking = bookingRes.rows[0];
-
-    await dbQuery.query(
-      `
-      INSERT INTO ${dbSchema}.payments (booking_id, method, amount, status)
-      VALUES ($1,$2,$3,'PENDING')
-      `,
-      [booking.id, payload.paymentMethod, quote.final]
-    );
+      await client.query(
+        `
+        INSERT INTO ${dbSchema}.payments (booking_id, method, amount, status)
+        VALUES ($1,$2,$3,'PENDING')
+        `,
+        [booking.id, payload.paymentMethod, quote.final]
+      );
+      if (idempotencyKey) {
+        await client.query(
+          `INSERT INTO ${dbSchema}.booking_create_idempotency
+             (idempotency_key, actor_uid, booking_id)
+           VALUES ($1, $2, $3)`,
+          [idempotencyKey, userId, booking.id],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (writeError) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw writeError;
+    } finally {
+      client.release();
+    }
     // Best-effort: the booking and its payment row are already committed above.
     // Anything that goes wrong from here is a NOTIFICATION failure, and failing
     // the request for it would tell the customer their booking did not happen
@@ -146,6 +173,12 @@ export const createBooking = async (
       );
     }
 
+    notifyAdminsSafely({
+      type: 'new_booking', severity: 'info', title: 'New booking created',
+      body: `Booking SVN-${String(booking.id).padStart(6, '0')} was created and is awaiting confirmation.`,
+      bookingId: Number(booking.id), notificationKey: `booking_created_${booking.id}`,
+    });
+
     return {
       bookingId: booking.id,
       status: booking.status,
@@ -179,13 +212,16 @@ export const createBooking = async (
  */
 export const resendBookingOtp = async (bookingId: number) => {
   const res = await dbQuery.query(
-    `SELECT id, user_id, status, schedule FROM ${dbSchema}.bookings WHERE id = $1`,
+    `SELECT id, user_id, status, schedule, worker_uid FROM ${dbSchema}.bookings WHERE id = $1`,
     [bookingId],
   );
   if (!res.rowCount) throw new Error('Booking not found');
 
   const booking = res.rows[0];
-  if (String(booking.status).toUpperCase() !== 'PENDING_OTP') {
+  const status = String(booking.status).toUpperCase();
+  const awaitsOtp = status === 'PENDING_OTP' ||
+    (status === 'PAID' && !booking.worker_uid);
+  if (!awaitsOtp) {
     throw Object.assign(
       new Error('This booking is no longer awaiting verification.'),
       { statusCode: 409 },
@@ -238,7 +274,10 @@ export const confirmOtp = async (
       SET status='CONFIRMED'
       WHERE id=$1
         AND otp_code=$2::text
-        AND status='PENDING_OTP'
+        AND (
+          status='PENDING_OTP'
+          OR (status='PAID' AND worker_uid IS NULL)
+        )
       RETURNING *
       `,
       [bookingId, otp]

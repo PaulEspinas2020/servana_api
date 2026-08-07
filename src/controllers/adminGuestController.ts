@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import * as svc from '../services/adminGuestService';
+import { getAddressesByUserId } from '../services/address.service';
 import {
   adminServerError,
   adminNotFound,
@@ -85,6 +86,20 @@ export const getClientDetail = async (req: Request, res: Response) => {
     const detail = await svc.getClientDetail(identityId);
     if (!detail) return adminNotFound(res, 'Client customer');
     return res.json({ status: 'success', data: detail });
+  } catch (err: any) {
+    return adminServerError(res, err);
+  }
+};
+
+// GET /admin/customers/clients/:identityId/addresses
+export const getClientAddresses = async (req: Request, res: Response) => {
+  try {
+    const identityId = String(req.params.identityId || '').trim();
+    if (!identityId) return adminBadRequest(res, 'identityId is required');
+    const client = await svc.getClientDetail(identityId);
+    if (!client) return adminNotFound(res, 'Client customer');
+    const addresses = await getAddressesByUserId(identityId);
+    return res.json({ status: 'success', data: addresses });
   } catch (err: any) {
     return adminServerError(res, err);
   }

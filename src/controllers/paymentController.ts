@@ -77,6 +77,9 @@ export const markCashPaid = async (req: Request, res: Response) => {
 export const createPaymongoPayment = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
+    if (!Number.isSafeInteger(bookingId) || bookingId <= 0) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
     await assertBookingAccess(bookingId, (req as any).user?.uid);
 
     const result = await paymentService.createCheckoutSession(bookingId);
@@ -126,7 +129,7 @@ export const paymongoWebhook = async (req: Request, res: Response) => {
 
     return res.status(isMalformed ? 400 : 500).json({
       success: false,
-      message: error.message,
+      message: isMalformed ? "Invalid webhook payload" : "Webhook processing failed",
     });
   }
 };

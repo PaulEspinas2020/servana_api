@@ -590,8 +590,11 @@ export async function getAdminConversationDetail(conversationId: number) {
          b.schedule,
          b.user_id   AS customer_uid,
          b.worker_uid AS provider_uid,
-         uc_client.first_name || ' ' || uc_client.last_name AS customer_name,
-         uc_client.email AS customer_email,
+         COALESCE(
+           NULLIF(TRIM(COALESCE(uc_client.first_name, '') || ' ' || COALESCE(uc_client.last_name, '')), ''),
+           NULLIF(TRIM(COALESCE(gc.first_name, '') || ' ' || COALESCE(gc.last_name, '')), '')
+         ) AS customer_name,
+         COALESCE(uc_client.email, gc.email) AS customer_email,
          uc_worker.first_name || ' ' || uc_worker.last_name AS provider_name,
          uc_worker.email AS provider_email,
          so.level_2 AS service_title,
@@ -599,6 +602,7 @@ export async function getAdminConversationDetail(conversationId: number) {
        FROM ${dbSchema}.chat_conversations c
        LEFT JOIN ${dbSchema}.bookings b ON b.id = c.booking_id
        LEFT JOIN ${dbSchema}.user_credentials uc_client ON uc_client.uid = b.user_id
+       LEFT JOIN ${dbSchema}.guest_customers gc ON gc.guest_customer_id = b.guest_customer_id
        LEFT JOIN ${dbSchema}.user_credentials uc_worker ON uc_worker.uid = b.worker_uid
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
        WHERE c.id = $1`,
@@ -635,8 +639,8 @@ export async function getAdminConversationDetail(conversationId: number) {
         leftAt:   p.left_at ?? null,
       })),
     };
-  } catch {
-    return null;
+  } catch (error) {
+    throw error;
   }
 }
 
@@ -679,8 +683,8 @@ export async function getAdminConversationMessages(conversationId: number, limit
     const hasMore = rows.length === capped;
     const oldestId = messages.length ? messages[0].id : null;
     return { messages, hasMore, oldestId };
-  } catch {
-    return { messages: [], nextCursor: null };
+  } catch (error) {
+    throw error;
   }
 }
 
@@ -793,8 +797,7 @@ export async function getChatConversationSummaries(limit = 50, bookingId?: strin
       lastMessageBody: r.last_message_body ? String(r.last_message_body).substring(0, 120) : null,
       lastSenderRole:  r.last_sender_role ?? null,
     }));
-  } catch {
-    // chat tables may not exist yet
-    return [];
+  } catch (error) {
+    throw error;
   }
 }

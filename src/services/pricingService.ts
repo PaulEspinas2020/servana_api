@@ -24,7 +24,8 @@ export const computeTranspoFee = (distanceKm: number): number => {
 
 export const computeQuote = async (req: QuoteRequest) => {
   const baseRes = await dbQuery.query(
-    `SELECT id, base_price FROM ${dbSchema}.service_options WHERE id=$1 AND option_type='MAIN'`,
+    `SELECT id, base_price FROM ${dbSchema}.service_options
+     WHERE id=$1 AND option_type='MAIN' AND is_active=true`,
     [req.optionId]
   );
   if (!baseRes.rowCount) throw new Error("Invalid service option.");
@@ -52,8 +53,11 @@ export const computeQuote = async (req: QuoteRequest) => {
     const addonsRes = await dbQuery.query(
       `SELECT id, level_3, base_price
        FROM ${dbSchema}.service_options
-       WHERE id = ANY($1) AND option_type='ADD_ON'`,
-      [req.addonOptionIds]
+       WHERE id = ANY($1)
+         AND option_type='ADD_ON'
+         AND parent_option_id=$2
+         AND is_active=true`,
+      [req.addonOptionIds, req.optionId]
     );
     addons = addonsRes.rows;
     addonsTotal = addons.reduce((s, a) => s + Number(a.base_price || 0), 0);

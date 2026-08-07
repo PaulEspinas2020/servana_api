@@ -1038,6 +1038,7 @@ export const decideRequirement = async (
           route: {
             routeLabel: 'View Requirements',
             commandsRoute: ['/provider/requirements'],
+            screen: 'ProviderDocuments',
             requiresAccessCheck: false,
             contextType: 'requirement',
           },
@@ -1051,7 +1052,24 @@ export const decideRequirement = async (
     }
   }
 
-  return { ...decRes.rows[0], providerNotified };
+  // Keep the canonical Command 24 lifecycle/replacement relationship in sync
+  // without changing the already-shipped admin decision contract. Compliance
+  // itself reads the authoritative decision row, so a temporary lifecycle
+  // projection failure cannot turn a committed review into a 500/retry trap.
+  let lifecycleSynchronized = false;
+  try {
+    const compliance = await import('./providerProfileComplianceService');
+    await compliance.applyDocumentDecisionEffects(requirementId, decision);
+    lifecycleSynchronized = true;
+  } catch (error: any) {
+    console.error('[decideRequirement] lifecycle projection pending', {
+      requirementId,
+      decision,
+      code: error?.code ?? 'UNKNOWN',
+    });
+  }
+
+  return { ...decRes.rows[0], providerNotified, lifecycleSynchronized };
 };
 
 // ── Readiness calculation ─────────────────────────────────────────────────────

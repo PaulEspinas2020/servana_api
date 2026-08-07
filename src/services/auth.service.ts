@@ -115,15 +115,27 @@ const registerUser = async (user: UserCredentialsReq) => {
             throw "Failed to Create User in DB";
         }
         if (platform === "mobile") {
-            const otpCode = generateOTP();
+            let otpDeliveryPending = false;
+            try {
+                const otpCode = generateOTP();
+                await userService.storeEmailOtp(dbRegister.email, otpCode);
 
-            await userService.storeEmailOtp(dbRegister.email, otpCode);
-
-            send(dbRegister.email, "verify_email_otp", {
-                otp_code: otpCode,
-                first_name: dbRegister.firstName,
-                email: dbRegister.email,
-            });
+                send(dbRegister.email, "verify_email_otp", {
+                    otp_code: otpCode,
+                    first_name: dbRegister.firstName,
+                    email: dbRegister.email,
+                });
+            } catch (otpError: any) {
+                // The Firebase identity and DB profile already exist. Reporting
+                // signup failure here makes a retry collide with that identity
+                // and strands the customer. Return the created profile and let
+                // the verification screen's resend endpoint recover delivery.
+                otpDeliveryPending = true;
+                console.error('[auth.register] profile created; initial OTP persistence failed', {
+                    uid: dbRegister.uid,
+                    error: otpError?.message || 'unknown error',
+                });
+            }
 
             if (role == 2 && serviceIds?.length) {
                 await technicianService.assignServicesToEmployee(userData.uid, [Number(serviceIds[0])]);
@@ -132,7 +144,10 @@ const registerUser = async (user: UserCredentialsReq) => {
             return {
                 dbRegister,
                 verificationType: "otp",
-                message: "User created successfully. OTP sent to email.",
+                otpDeliveryPending,
+                message: otpDeliveryPending
+                    ? "User created successfully. Request a new verification code to continue."
+                    : "User created successfully. OTP sent to email.",
             };
         }
 

@@ -21,6 +21,8 @@ const row = (workerStatus: string) => ({
   booking_id: 101,
   status: "CONFIRMED",
   schedule: "2026-08-10T09:00:00.000Z",
+  payment_method: "CASH",
+  payment_status: "PENDING",
   customer_id: "cust-1",
   first_name: "Maria",
   last_name: "Santos",
@@ -43,6 +45,7 @@ const row = (workerStatus: string) => ({
 const TOP_KEYS = [
   "bookingId", "status", "scheduleAt", "customer", "address", "service",
   "addOns", "workerStatus", "assignedAt", "startedAt", "completedAt",
+  "paymentMethod", "paymentStatus",
 ];
 const CUSTOMER_KEYS = ["uid", "name", "phone"];
 const ADDRESS_KEYS = [

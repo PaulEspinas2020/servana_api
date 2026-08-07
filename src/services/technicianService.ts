@@ -8,6 +8,7 @@ import { filterUidsAvailableAt } from "./providerAvailabilityEngine";
 import { getUserInfoByBookingId } from "./user.service";
 import { computeTranspoFee } from "./pricingService";
 import { createNotification } from "./notification.service";
+import { notifyAdminsSafely } from './adminNotificationService';
 import { classifyResponseMiss } from "./bookingResponseConflict";
 import { createDisbursement } from "./disbursement.service";
 import { getOrCreateConversation, postSystemMessageOnce } from "../chat/chat.service";
@@ -694,6 +695,12 @@ export const assignNearestWorker = async (
     [bookingId]
   );
 
+  notifyAdminsSafely({
+    type: 'booking_auto_assigned', severity: 'success', title: 'Booking auto-assigned',
+    body: `Booking SVN-${String(bookingId).padStart(6, '0')} was automatically assigned to a provider.`,
+    bookingId, notificationKey: `booking_auto_assigned_${bookingId}_${best.uid}`,
+  });
+
   // Notify customer that a technician has been assigned
   try {
     const userInfo = await getUserInfoByBookingId(bookingId);
@@ -779,6 +786,8 @@ export const getJobCardsByWorker = async (workerId: string) => {
       b.id AS booking_id,
       b.status,
       b.schedule,
+      p.method AS payment_method,
+      p.status AS payment_status,
 
       -- Customer: for admin-created guest bookings user_id is NULL; LEFT JOIN
       -- still works, customer fields will be null and the mobile app must handle that.
@@ -817,6 +826,9 @@ export const getJobCardsByWorker = async (workerId: string) => {
 
     LEFT JOIN ${dbSchema}.service_options s
       ON s.id = b.service_option_id
+
+    LEFT JOIN ${dbSchema}.payments p
+      ON p.booking_id = b.id
 
     LEFT JOIN ${dbSchema}.booking_workers bw
       ON bw.booking_id = b.id AND bw.worker_uid = $1
@@ -1016,6 +1028,12 @@ export const acceptJob = async (bookingId: number, workerUid: string) => {
     // double-tap and a reassignment are different things (C18 §12).
     throw await classifyResponseMiss(bookingId, workerUid, "ACCEPT");
   }
+
+  notifyAdminsSafely({
+    type: 'provider_accepted', severity: 'success', title: 'Provider accepted booking',
+    body: `The auto-assigned provider accepted booking SVN-${String(bookingId).padStart(6, '0')}.`,
+    bookingId, notificationKey: `provider_accepted_${bookingId}_${workerUid}`,
+  });
 
   // Notify customer that the technician has accepted and is on the way
   try {
@@ -1280,6 +1298,14 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
     "The assigned provider was unable to accept this booking. We are finding a new provider for you."
   );
 
+  notifyAdminsSafely({
+    type: 'provider_declined', severity: 'warning', title: 'Provider declined booking',
+    body: reassignment?.assigned
+      ? `A provider declined booking SVN-${String(bookingId).padStart(6, '0')}; another provider was auto-assigned.`
+      : `A provider declined booking SVN-${String(bookingId).padStart(6, '0')}. Please assign a provider.`,
+    bookingId, notificationKey: `provider_declined_${bookingId}_${workerUid}`,
+  });
+
   return {
     declined: true,
     bookingId,
@@ -1505,21 +1531,47 @@ export const startJob = async (
   return res.rows[0];
 };
 
+export class UnpaidCashBookingError extends Error {
+  readonly code = "CASH_PAYMENT_REQUIRED";
+
+  constructor() {
+    super("Record the customer's cash payment before completing this job");
+    this.name = "UnpaidCashBookingError";
+  }
+}
+
 export const completeJob = async (bookingId: number, workerUid: string) => {
   const res = await dbQuery.query(
     `
-    UPDATE ${dbSchema}.booking_workers
+    UPDATE ${dbSchema}.booking_workers bw
     SET status = 'COMPLETED',
         completed_at = NOW()
-    WHERE booking_id = $1
-    AND worker_uid = $2
-    AND status = 'IN_PROGRESS'
-    RETURNING *
+    WHERE bw.booking_id = $1
+    AND bw.worker_uid = $2
+    AND bw.status = 'IN_PROGRESS'
+    AND EXISTS (
+      SELECT 1
+      FROM ${dbSchema}.payments p
+      WHERE p.booking_id = bw.booking_id
+        AND (UPPER(COALESCE(p.method, '')) <> 'CASH' OR UPPER(COALESCE(p.status, '')) = 'PAID')
+    )
+    RETURNING bw.*
     `,
     [bookingId, workerUid]
   );
 
   if (!res.rowCount) {
+    const payment = await dbQuery.query(
+      `SELECT method, status FROM ${dbSchema}.payments WHERE booking_id = $1`,
+      [bookingId]
+    );
+    const row = payment.rows[0];
+    if (
+      String(row?.method ?? '').toUpperCase() === 'CASH' &&
+      String(row?.status ?? '').toUpperCase() !== 'PAID'
+    ) {
+      throw new UnpaidCashBookingError();
+    }
     throw new Error("Job cannot be completed");
   }
 

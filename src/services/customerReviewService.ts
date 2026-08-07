@@ -1,5 +1,8 @@
-import dbQuery from "../db/dbQuery";
+import dbQuery, { pool } from "../db/dbQuery";
 import { db } from "../config";
+import { createNotification } from './notification.service';
+import { getPublicRatingSummary, recalculateProviderRating, QueryRunner } from './ratingAggregationService';
+import { emitReputationUpdated } from './reputationRealtimeService';
 
 const dbSchema = db.schema;
 
@@ -13,8 +16,7 @@ const MAX_COMMENT_LENGTH   = 2000;
 const MAX_PRIVATE_LENGTH   = 2000;
 const VALID_DIMENSIONS     = new Set([
   'SERVICE_QUALITY', 'PROFESSIONALISM', 'PUNCTUALITY',
-  'COMMUNICATION',   'VALUE',           'CLEANLINESS',
-  'ACCURACY',
+  'COMMUNICATION', 'CLEANLINESS', 'SCOPE_ADHERENCE',
 ]);
 
 // ─── Lazy table init ──────────────────────────────────────────────────────────
@@ -22,78 +24,12 @@ const VALID_DIMENSIONS     = new Set([
 let tablesReady: Promise<void> | null = null;
 
 async function initTables(): Promise<void> {
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.customer_reviews (
-      review_id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-      booking_id          VARCHAR(128) NOT NULL,
-      customer_uid        VARCHAR(128) NOT NULL,
-      provider_uid        VARCHAR(128),
-      service_id          VARCHAR(128),
-      overall_rating      INTEGER      NOT NULL CHECK (overall_rating BETWEEN 1 AND 5),
-      public_comment      TEXT,
-      private_feedback    TEXT,
-      visibility          VARCHAR(30)  NOT NULL DEFAULT 'PUBLIC'
-        CHECK (visibility IN ('PUBLIC','ANONYMOUS_PUBLIC','PRIVATE')),
-      moderation_status   VARCHAR(30)  NOT NULL DEFAULT 'NOT_REQUIRED'
-        CHECK (moderation_status IN ('NOT_REQUIRED','PENDING','APPROVED','REJECTED','HIDDEN','REMOVED','FLAGGED')),
-      client_request_id   VARCHAR(128),
-      created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-      updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-      edited_at           TIMESTAMPTZ,
-      deleted_at          TIMESTAMPTZ,
-      UNIQUE (booking_id, customer_uid)
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_cr_client_req
-      ON ${dbSchema}.customer_reviews (customer_uid, client_request_id)
-      WHERE client_request_id IS NOT NULL AND deleted_at IS NULL;
-    CREATE INDEX IF NOT EXISTS idx_cr_customer_uid
-      ON ${dbSchema}.customer_reviews (customer_uid, created_at DESC)
-      WHERE deleted_at IS NULL;
-    CREATE INDEX IF NOT EXISTS idx_cr_provider_uid
-      ON ${dbSchema}.customer_reviews (provider_uid, created_at DESC)
-      WHERE deleted_at IS NULL AND moderation_status IN ('NOT_REQUIRED','APPROVED');
-
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.review_dimension_scores (
-      id           BIGSERIAL    PRIMARY KEY,
-      review_id    UUID         NOT NULL REFERENCES ${dbSchema}.customer_reviews(review_id) ON DELETE CASCADE,
-      dimension_key VARCHAR(50) NOT NULL,
-      score        INTEGER      NOT NULL CHECK (score BETWEEN 1 AND 5),
-      UNIQUE (review_id, dimension_key)
-    );
-
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.review_provider_responses (
-      response_id       UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-      review_id         UUID         NOT NULL REFERENCES ${dbSchema}.customer_reviews(review_id) ON DELETE CASCADE,
-      provider_uid      VARCHAR(128) NOT NULL,
-      body              TEXT         NOT NULL,
-      moderation_status VARCHAR(30)  NOT NULL DEFAULT 'NOT_REQUIRED',
-      created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-      updated_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-      deleted_at        TIMESTAMPTZ
-    );
-
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.review_reports (
-      report_id    UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-      review_id    UUID         REFERENCES ${dbSchema}.customer_reviews(review_id),
-      response_id  UUID         REFERENCES ${dbSchema}.review_provider_responses(response_id),
-      reporter_uid VARCHAR(128) NOT NULL,
-      reason       VARCHAR(50)  NOT NULL,
-      details      TEXT,
-      created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-    );
-
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_rating_aggregates (
-      provider_uid     VARCHAR(128) PRIMARY KEY,
-      average_rating   NUMERIC(3,2) NOT NULL DEFAULT 0,
-      review_count     INTEGER      NOT NULL DEFAULT 0,
-      rating_1_count   INTEGER      NOT NULL DEFAULT 0,
-      rating_2_count   INTEGER      NOT NULL DEFAULT 0,
-      rating_3_count   INTEGER      NOT NULL DEFAULT 0,
-      rating_4_count   INTEGER      NOT NULL DEFAULT 0,
-      rating_5_count   INTEGER      NOT NULL DEFAULT 0,
-      last_updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-    );
-  `);
+  const result = await dbQuery.query(`SELECT to_regclass('${dbSchema}.customer_reviews') AS table_name`);
+  if (!result.rows[0]?.table_name) {
+    throw Object.assign(new Error('Review schema is not deployed. Apply migration 012.'), {
+      code: 'REVIEW_SCHEMA_NOT_DEPLOYED', statusCode: 503,
+    });
+  }
 }
 
 export function ensureReviewTables(): Promise<void> {
@@ -126,21 +62,29 @@ export interface CreateReviewPayload {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-async function getBookingForReview(bookingId: string, customerUid: string) {
+async function getBookingForReview(
+  bookingId: string,
+  customerUid: string,
+  runner: QueryRunner = (sql, params = []) => dbQuery.query(sql, params),
+) {
   // Fetch booking, verify ownership, get provider + service
-  const res = await dbQuery.query(
+  const res = await runner(
     `SELECT
        b.id::text        AS id,
        b.user_id         AS customer_uid,
        b.status,
        so.service_id::text AS service_id,
        bw.worker_uid     AS provider_uid,
-       bw.completed_at
+       bw.status         AS assignment_status,
+       bw.completed_at,
+       uc.account_status AS customer_account_status,
+       uc.role           AS customer_role
      FROM ${dbSchema}.bookings b
      LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
      LEFT JOIN ${dbSchema}.booking_workers bw
        ON bw.booking_id = b.id
-       AND bw.status IN ('COMPLETED','IN_PROGRESS','ACCEPTED','ASSIGNED')
+       AND bw.status = 'COMPLETED'
+     LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = b.user_id
      WHERE b.id = $1::bigint
      ORDER BY bw.completed_at DESC NULLS LAST
      LIMIT 1`,
@@ -155,25 +99,34 @@ async function getBookingForReview(bookingId: string, customerUid: string) {
     status: string;
     service_id: string | null;
     provider_uid: string | null;
+    assignment_status: string | null;
     completed_at: Date | null;
+    customer_account_status: string | null;
+    customer_role: number | string | null;
   };
 }
 
-async function getExistingReview(bookingId: string, customerUid: string) {
-  const res = await dbQuery.query(
+async function getExistingReview(bookingId: string, customerUid: string, runner: QueryRunner = (sql, params = []) => dbQuery.query(sql, params)) {
+  const res = await runner(
     `SELECT review_id::text, overall_rating, created_at, edited_at, deleted_at
      FROM ${dbSchema}.customer_reviews
-     WHERE booking_id = $1 AND customer_uid = $2`,
+     WHERE booking_id = $1 AND customer_uid = $2
+     ORDER BY deleted_at NULLS FIRST, created_at DESC
+     LIMIT 1`,
     [bookingId, customerUid]
   );
   return res.rows.length ? res.rows[0] : null;
 }
 
 function reviewWindowFor(completedAt: Date | null): { opens: Date; closes: Date } {
-  const base = completedAt ?? new Date();
+  if (!completedAt) throw Object.assign(new Error('BOOKING_COMPLETION_NOT_FINALIZED'), { code: 'REVIEW_NOT_ELIGIBLE', status: 422 });
+  const base = completedAt;
   const closes = new Date(base.getTime() + REVIEW_WINDOW_DAYS * 24 * 60 * 60 * 1000);
   return { opens: base, closes };
 }
+
+const reviewContentNeedsModeration = (text: string | null): boolean => Boolean(text &&
+  /(?:\b\+?63\d{9,10}\b|\b\d{10,11}\b|[\w.+-]+@[\w.-]+\.[a-z]{2,}|https?:\/\/|\b(?:theft|injury|threat|harass|fraud)\b)/i.test(text));
 
 // ─── Eligibility ─────────────────────────────────────────────────────────────
 
@@ -196,9 +149,17 @@ export async function getReviewEligibility(
     return { ...base, reason: 'BOOKING_NOT_OWNED' };
   }
 
+  if (Number(booking.customer_role) !== 3 || booking.customer_account_status !== 'active') {
+    return { ...base, reason: 'REVIEW_RESTRICTED' };
+  }
+
+  if (!booking.provider_uid || booking.provider_uid === customerUid) {
+    return { ...base, reason: 'BOOKING_INVALID' };
+  }
+
   const status = (booking.status || '').toUpperCase();
-  if (!['COMPLETED', 'REVIEWED', 'PAID'].includes(status)) {
-    // Allow PAID as some flows mark payment before completion
+  const assignmentStatus = (booking.assignment_status || '').toUpperCase();
+  if (!['COMPLETED', 'REVIEWED'].includes(status) || assignmentStatus !== 'COMPLETED' || !booking.completed_at) {
     const notCompleted =
       status === 'CANCELLED' ? 'BOOKING_CANCELLED' : 'BOOKING_NOT_COMPLETED';
     return { ...base, reason: notCompleted };
@@ -263,93 +224,122 @@ export async function createReview(payload: CreateReviewPayload) {
     throw Object.assign(new Error('PRIVATE_TOO_LONG'), { code: 'REVIEW_CONTENT_INVALID', status: 400 });
   }
 
-  const booking = await getBookingForReview(bookingId, customerUid);
-  if (!booking) {
-    throw Object.assign(new Error('BOOKING_NOT_OWNED'), { code: 'REVIEW_FORBIDDEN', status: 403 });
-  }
-  const status = (booking.status || '').toUpperCase();
-  if (!['COMPLETED', 'REVIEWED', 'PAID'].includes(status)) {
-    throw Object.assign(new Error('BOOKING_NOT_COMPLETED'), { code: 'REVIEW_NOT_ELIGIBLE', status: 422 });
+  const requestId = clientRequestId?.trim() || `legacy-review:${customerUid}:${bookingId}`;
+  if (requestId.length > 128) {
+    throw Object.assign(new Error('INVALID_CLIENT_REQUEST_ID'), { code: 'REVIEW_CONTENT_INVALID', status: 400 });
   }
 
-  // Check idempotency: same clientRequestId from same customer
-  if (clientRequestId) {
-    const idem = await dbQuery.query(
+  const client = await pool.connect();
+  let reviewId: string;
+  let providerUid: string;
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`review:${customerUid}:${bookingId}`]);
+    const run: QueryRunner = (sql, params = []) => client.query(sql, params);
+
+    const replay = await run(
       `SELECT review_id::text FROM ${dbSchema}.customer_reviews
        WHERE customer_uid = $1 AND client_request_id = $2 AND deleted_at IS NULL`,
-      [customerUid, clientRequestId]
+      [customerUid, requestId],
     );
-    if (idem.rows.length) {
-      return getReviewById(idem.rows[0].review_id, customerUid);
+    if (replay.rows.length) {
+      reviewId = replay.rows[0].review_id;
+      await client.query('COMMIT');
+      return getReviewById(reviewId, customerUid);
     }
-  }
 
-  // Enforce one-review-per-booking
-  const existing = await getExistingReview(bookingId, customerUid);
-  if (existing && !existing.deleted_at) {
-    throw Object.assign(new Error('REVIEW_ALREADY_EXISTS'), { code: 'REVIEW_DUPLICATE_REQUEST', status: 409 });
-  }
+    const booking = await getBookingForReview(bookingId, customerUid, run);
+    if (!booking) throw Object.assign(new Error('BOOKING_NOT_OWNED'), { code: 'REVIEW_FORBIDDEN', status: 403 });
+    if (Number(booking.customer_role) !== 3 || booking.customer_account_status !== 'active') {
+      throw Object.assign(new Error('REVIEW_RESTRICTED'), { code: 'REVIEW_FORBIDDEN', status: 403 });
+    }
+    if (!booking.provider_uid || booking.provider_uid === customerUid) {
+      throw Object.assign(new Error('BOOKING_INVALID'), { code: 'REVIEW_NOT_ELIGIBLE', status: 422 });
+    }
+    const bookingStatus = (booking.status || '').toUpperCase();
+    if (!['COMPLETED', 'REVIEWED'].includes(bookingStatus)
+        || (booking.assignment_status || '').toUpperCase() !== 'COMPLETED'
+        || !booking.completed_at) {
+      throw Object.assign(new Error('BOOKING_NOT_COMPLETED'), { code: 'REVIEW_NOT_ELIGIBLE', status: 422 });
+    }
+    const { opens, closes } = reviewWindowFor(booking.completed_at);
+    const now = new Date();
+    if (now < opens || now > closes) {
+      throw Object.assign(new Error('REVIEW_WINDOW_CLOSED'), { code: 'REVIEW_NOT_ELIGIBLE', status: 422 });
+    }
+    const existing = await getExistingReview(bookingId, customerUid, run);
+    if (existing && !existing.deleted_at) {
+      throw Object.assign(new Error('REVIEW_ALREADY_EXISTS'), { code: 'REVIEW_DUPLICATE_REQUEST', status: 409 });
+    }
 
-  // Validate dimensions
-  const validDims: Record<string, number> = {};
-  for (const [key, score] of Object.entries(dimensions)) {
-    if (VALID_DIMENSIONS.has(key) && Number.isInteger(score) && score >= 1 && score <= 5) {
+    const configured = booking.service_id ? await run(
+      `SELECT dimension_key FROM ${dbSchema}.service_review_dimensions
+       WHERE service_id::text = $1 AND is_active = TRUE AND policy_version = 1`,
+      [booking.service_id],
+    ) : { rows: [] };
+    const allowed = configured.rows.length
+      ? new Set(configured.rows.map((row: any) => String(row.dimension_key)))
+      : VALID_DIMENSIONS;
+    const validDims: Record<string, number> = {};
+    for (const [key, score] of Object.entries(dimensions)) {
+      if (!allowed.has(key) || !Number.isInteger(score) || score < 1 || score > 5) {
+        throw Object.assign(new Error('INVALID_REVIEW_DIMENSION'), { code: 'REVIEW_CONTENT_INVALID', status: 400 });
+      }
       validDims[key] = score;
     }
-  }
 
-  const validVisibility = ['PUBLIC', 'ANONYMOUS_PUBLIC', 'PRIVATE'].includes(visibility)
-    ? visibility : 'PUBLIC';
-
-  const reviewRes = await dbQuery.query(
-    `INSERT INTO ${dbSchema}.customer_reviews
-       (booking_id, customer_uid, provider_uid, service_id, overall_rating,
-        public_comment, private_feedback, visibility, moderation_status, client_request_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'NOT_REQUIRED', $9)
-     RETURNING review_id::text, booking_id, overall_rating, visibility,
-               moderation_status, created_at, updated_at`,
-    [
-      bookingId,
-      customerUid,
-      booking.provider_uid,
-      booking.service_id,
-      overallRating,
-      publicComment?.trim() || null,
-      privateFeedback?.trim() || null,
-      validVisibility,
-      clientRequestId || null,
-    ]
-  );
-  const review = reviewRes.rows[0];
-
-  // Insert dimension scores
-  if (Object.keys(validDims).length) {
-    const dimValues = Object.entries(validDims)
-      .map((_, i) => `($1, $${i * 2 + 2}, $${i * 2 + 3})`)
-      .join(', ');
-    const dimParams: unknown[] = [review.review_id];
-    for (const [k, v] of Object.entries(validDims)) {
-      dimParams.push(k, v);
-    }
-    await dbQuery.query(
-      `INSERT INTO ${dbSchema}.review_dimension_scores (review_id, dimension_key, score)
-       VALUES ${dimValues} ON CONFLICT (review_id, dimension_key) DO UPDATE SET score = EXCLUDED.score`,
-      dimParams
+    const validVisibility = ['PUBLIC', 'ANONYMOUS_PUBLIC', 'PRIVATE'].includes(visibility) ? visibility : 'PUBLIC';
+    const needsModeration = validVisibility !== 'PRIVATE' && reviewContentNeedsModeration(publicComment);
+    const publicationState = validVisibility === 'PRIVATE' ? 'PRIVATE' : needsModeration ? 'PENDING_MODERATION' : 'PUBLISHED';
+    const moderationStatus = needsModeration ? 'PENDING' : 'AUTOMATED_CHECKS_PASSED';
+    const inserted = await run(
+      `INSERT INTO ${dbSchema}.customer_reviews
+       (booking_id, customer_uid, provider_uid, service_id, overall_rating, public_comment,
+        private_feedback, visibility, publication_state, moderation_status, client_request_id,
+        policy_version, submitted_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,1,NOW())
+       RETURNING review_id::text`,
+      [bookingId, customerUid, booking.provider_uid, booking.service_id, overallRating,
+       publicComment?.trim() || null, privateFeedback?.trim() || null, validVisibility,
+       publicationState, moderationStatus, requestId],
     );
+    reviewId = inserted.rows[0].review_id;
+    providerUid = booking.provider_uid;
+
+    for (const [key, score] of Object.entries(validDims)) {
+      await run(
+        `INSERT INTO ${dbSchema}.review_dimension_scores (review_id, dimension_key, score)
+         VALUES ($1,$2,$3)`,
+        [reviewId, key, score],
+      );
+    }
+    await run(
+      `INSERT INTO ${dbSchema}.review_reputation_events
+       (review_id, provider_uid, event_type, actor_type, actor_uid, public_detail, idempotency_key)
+       VALUES ($1,$2,'REVIEW_SUBMITTED','CUSTOMER',$3,$4::jsonb,$5)`,
+      [reviewId, providerUid, customerUid, JSON.stringify({ publicationState }), `review:${requestId}`],
+    );
+    await recalculateProviderRating(providerUid, run);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
 
-  // Mark booking as REVIEWED
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET status = 'REVIEWED', updated_at = NOW() WHERE id = $1::bigint`,
-    [bookingId]
-  );
-
-  // Recalculate provider aggregate
-  if (booking.provider_uid) {
-    await recalcProviderAggregate(booking.provider_uid);
-  }
-
-  return getReviewById(review.review_id, customerUid);
+  void createNotification(providerUid!, {
+    notificationKey: `review-received:${reviewId!}`,
+    type: 'REVIEW_RECEIVED',
+    severity: 'info',
+    title: 'New verified review',
+    safeBody: 'A customer submitted feedback for a completed booking.',
+    safeContextLabel: 'Reviews & performance',
+    route: { screen: 'ReviewsPerformance' },
+    canOpenDetail: true,
+  }).catch(() => undefined);
+  emitReputationUpdated(providerUid!, 'REVIEW_SUBMITTED', reviewId!);
+  return getReviewById(reviewId!, customerUid);
 }
 
 // ─── Get review ───────────────────────────────────────────────────────────────
@@ -464,25 +454,37 @@ export async function editReview(
   if (!Number.isInteger(overallRating) || overallRating < MIN_RATING || overallRating > MAX_RATING) {
     throw Object.assign(new Error('INVALID_RATING'), { code: 'REVIEW_CONTENT_INVALID', status: 400 });
   }
+  if (publicComment && publicComment.length > MAX_COMMENT_LENGTH) {
+    throw Object.assign(new Error('COMMENT_TOO_LONG'), { code: 'REVIEW_CONTENT_INVALID', status: 400 });
+  }
+  if (privateFeedback && privateFeedback.length > MAX_PRIVATE_LENGTH) {
+    throw Object.assign(new Error('PRIVATE_TOO_LONG'), { code: 'REVIEW_CONTENT_INVALID', status: 400 });
+  }
 
   const validVisibility = ['PUBLIC', 'ANONYMOUS_PUBLIC', 'PRIVATE'].includes(visibility)
     ? visibility : 'PUBLIC';
+  const needsModeration = validVisibility !== 'PRIVATE' && reviewContentNeedsModeration(publicComment);
+  const publicationState = validVisibility === 'PRIVATE' ? 'PRIVATE' : needsModeration ? 'PENDING_MODERATION' : 'EDITED';
+  const moderationStatus = needsModeration ? 'PENDING' : 'AUTOMATED_CHECKS_PASSED';
+  const validDims: Record<string, number> = {};
+  for (const [key, score] of Object.entries(dimensions)) {
+    if (!VALID_DIMENSIONS.has(key) || !Number.isInteger(score) || score < 1 || score > 5) {
+      throw Object.assign(new Error('INVALID_REVIEW_DIMENSION'), { code: 'REVIEW_CONTENT_INVALID', status: 400 });
+    }
+    validDims[key] = score;
+  }
 
   await dbQuery.query(
     `UPDATE ${dbSchema}.customer_reviews
      SET overall_rating = $1, public_comment = $2, private_feedback = $3,
-         visibility = $4, edited_at = NOW(), updated_at = NOW()
-     WHERE review_id = $5`,
-    [overallRating, publicComment?.trim() || null, privateFeedback?.trim() || null, validVisibility, reviewId]
+         visibility = $4, publication_state = $5, moderation_status = $6,
+         edited_at = NOW(), updated_at = NOW(), version = version + 1
+     WHERE review_id = $7`,
+    [overallRating, publicComment?.trim() || null, privateFeedback?.trim() || null,
+     validVisibility, publicationState, moderationStatus, reviewId]
   );
 
   // Update dimensions
-  const validDims: Record<string, number> = {};
-  for (const [key, score] of Object.entries(dimensions)) {
-    if (VALID_DIMENSIONS.has(key) && Number.isInteger(score) && score >= 1 && score <= 5) {
-      validDims[key] = score;
-    }
-  }
   if (Object.keys(validDims).length) {
     await dbQuery.query(
       `DELETE FROM ${dbSchema}.review_dimension_scores WHERE review_id = $1`,
@@ -498,7 +500,17 @@ export async function editReview(
     );
   }
 
-  if (row.provider_uid) await recalcProviderAggregate(row.provider_uid);
+  if (row.provider_uid) {
+    await recalculateProviderRating(row.provider_uid);
+    emitReputationUpdated(String(row.provider_uid), 'REVIEW_EDITED', reviewId);
+    void createNotification(String(row.provider_uid), {
+      notificationKey: `review-edited:${reviewId}:${Date.now()}`,
+      type: 'REVIEW_UPDATED', severity: 'info', title: 'Review updated',
+      safeBody: 'A verified customer review was updated.',
+      safeContextLabel: 'Reviews & performance', route: { screen: 'ReviewsPerformance' },
+      canOpenDetail: true,
+    }).catch(() => undefined);
+  }
   return getReviewById(reviewId, customerUid);
 }
 
@@ -514,11 +526,23 @@ export async function deleteReview(reviewId: string, customerUid: string) {
     throw Object.assign(new Error('REVIEW_NOT_FOUND'), { code: 'REVIEW_NOT_FOUND', status: 404 });
   }
   await dbQuery.query(
-    `UPDATE ${dbSchema}.customer_reviews SET deleted_at = NOW(), updated_at = NOW() WHERE review_id = $1`,
+    `UPDATE ${dbSchema}.customer_reviews
+     SET deleted_at = NOW(), publication_state = 'WITHDRAWN', updated_at = NOW(), version = version + 1
+     WHERE review_id = $1`,
     [reviewId]
   );
   const providerUid = existing.rows[0].provider_uid;
-  if (providerUid) await recalcProviderAggregate(providerUid);
+  if (providerUid) {
+    await recalculateProviderRating(providerUid);
+    emitReputationUpdated(String(providerUid), 'REVIEW_WITHDRAWN', reviewId);
+    void createNotification(String(providerUid), {
+      notificationKey: `review-withdrawn:${reviewId}`,
+      type: 'REVIEW_WITHDRAWN', severity: 'info', title: 'Review withdrawn',
+      safeBody: 'A customer withdrew a verified review.',
+      safeContextLabel: 'Reviews & performance', route: { screen: 'ReviewsPerformance' },
+      canOpenDetail: true,
+    }).catch(() => undefined);
+  }
   return { deleted: true };
 }
 
@@ -576,7 +600,8 @@ export async function listProviderReviews(providerUid: string, limit = 20, offse
      WHERE r.provider_uid = $1
        AND r.deleted_at IS NULL
        AND r.visibility IN ('PUBLIC','ANONYMOUS_PUBLIC')
-       AND r.moderation_status IN ('NOT_REQUIRED','APPROVED')
+       AND r.publication_state IN ('PUBLISHED','EDITED','REDACTED')
+       AND r.moderation_status IN ('NOT_REQUIRED','AUTOMATED_CHECKS_PASSED','APPROVED','RESTORED','REPORTED')
      ORDER BY r.created_at DESC
      LIMIT $2 OFFSET $3`,
     [providerUid, limit, offset]
@@ -585,7 +610,8 @@ export async function listProviderReviews(providerUid: string, limit = 20, offse
     `SELECT COUNT(*)::int AS total FROM ${dbSchema}.customer_reviews
      WHERE provider_uid = $1 AND deleted_at IS NULL
        AND visibility IN ('PUBLIC','ANONYMOUS_PUBLIC')
-       AND moderation_status IN ('NOT_REQUIRED','APPROVED')`,
+       AND publication_state IN ('PUBLISHED','EDITED','REDACTED')
+       AND moderation_status IN ('NOT_REQUIRED','AUTOMATED_CHECKS_PASSED','APPROVED','RESTORED','REPORTED')`,
     [providerUid]
   );
   return { reviews: res.rows.map((r: any) => mapPublicReviewRow(r)), total: countRes.rows[0].total };
@@ -594,59 +620,7 @@ export async function listProviderReviews(providerUid: string, limit = 20, offse
 // ─── Provider aggregate ───────────────────────────────────────────────────────
 
 export async function getProviderAggregate(providerUid: string) {
-  const res = await dbQuery.query(
-    `SELECT average_rating, review_count,
-            rating_1_count, rating_2_count, rating_3_count, rating_4_count, rating_5_count,
-            last_updated_at
-     FROM ${dbSchema}.provider_rating_aggregates WHERE provider_uid = $1`,
-    [providerUid]
-  );
-  if (!res.rows.length) {
-    return { providerUid, averageRating: 0, reviewCount: 0, distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 } };
-  }
-  const r = res.rows[0];
-  return {
-    providerUid,
-    averageRating: parseFloat(r.average_rating) || 0,
-    reviewCount: r.review_count,
-    distribution: {
-      1: r.rating_1_count, 2: r.rating_2_count, 3: r.rating_3_count,
-      4: r.rating_4_count, 5: r.rating_5_count,
-    },
-  };
-}
-
-async function recalcProviderAggregate(providerUid: string): Promise<void> {
-  await dbQuery.query(
-    `INSERT INTO ${dbSchema}.provider_rating_aggregates
-       (provider_uid, average_rating, review_count,
-        rating_1_count, rating_2_count, rating_3_count, rating_4_count, rating_5_count,
-        last_updated_at)
-     SELECT
-       $1,
-       ROUND(AVG(overall_rating)::numeric, 2),
-       COUNT(*)::int,
-       COUNT(*) FILTER (WHERE overall_rating = 1)::int,
-       COUNT(*) FILTER (WHERE overall_rating = 2)::int,
-       COUNT(*) FILTER (WHERE overall_rating = 3)::int,
-       COUNT(*) FILTER (WHERE overall_rating = 4)::int,
-       COUNT(*) FILTER (WHERE overall_rating = 5)::int,
-       NOW()
-     FROM ${dbSchema}.customer_reviews
-     WHERE provider_uid = $1 AND deleted_at IS NULL
-       AND visibility IN ('PUBLIC','ANONYMOUS_PUBLIC')
-       AND moderation_status IN ('NOT_REQUIRED','APPROVED')
-     ON CONFLICT (provider_uid) DO UPDATE SET
-       average_rating  = EXCLUDED.average_rating,
-       review_count    = EXCLUDED.review_count,
-       rating_1_count  = EXCLUDED.rating_1_count,
-       rating_2_count  = EXCLUDED.rating_2_count,
-       rating_3_count  = EXCLUDED.rating_3_count,
-       rating_4_count  = EXCLUDED.rating_4_count,
-       rating_5_count  = EXCLUDED.rating_5_count,
-       last_updated_at = NOW()`,
-    [providerUid]
-  );
+  return { providerUid, ...(await getPublicRatingSummary(providerUid)) };
 }
 
 // ─── Report review ────────────────────────────────────────────────────────────
@@ -662,8 +636,8 @@ export async function reportReview(
 
   const exists = await dbQuery.query(
     `SELECT review_id FROM ${dbSchema}.customer_reviews
-     WHERE review_id = $1 AND deleted_at IS NULL`,
-    [reviewId]
+     WHERE review_id = $1 AND customer_uid = $2 AND deleted_at IS NULL`,
+    [reviewId, reporterUid]
   );
   if (!exists.rows.length) {
     throw Object.assign(new Error('REVIEW_NOT_FOUND'), { code: 'REVIEW_NOT_FOUND', status: 404 });
@@ -671,17 +645,12 @@ export async function reportReview(
 
   await dbQuery.query(
     `INSERT INTO ${dbSchema}.review_reports (review_id, reporter_uid, reason, details)
-     VALUES ($1, $2, $3, $4)`,
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (review_id, reporter_uid) WHERE review_id IS NOT NULL DO NOTHING`,
     [reviewId, reporterUid, safeReason, details?.trim() || null]
   );
 
-  // Flag the review for moderation
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.customer_reviews SET moderation_status = 'FLAGGED', updated_at = NOW()
-     WHERE review_id = $1 AND moderation_status = 'NOT_REQUIRED'`,
-    [reviewId]
-  );
-
+  // A report is a workflow signal, never an automatic rating exclusion.
   return { reported: true };
 }
 

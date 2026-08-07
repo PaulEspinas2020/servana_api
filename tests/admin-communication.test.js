@@ -611,3 +611,33 @@ describe('export CSV shape', function () {
     expect(sanitized).not.toContain(',');
   });
 });
+
+describe('admin messaging bridge contracts', function () {
+  var serviceSource = fs.readFileSync(
+    path.join(__dirname, '../src/services/adminCommunicationService.ts'), 'utf8'
+  ).replace(/\r\n/g, '\n');
+  var controllerSource = fs.readFileSync(
+    path.join(__dirname, '../src/controllers/adminCommunicationController.ts'), 'utf8'
+  ).replace(/\r\n/g, '\n');
+
+  test('guest booking conversations resolve the guest name and email', function () {
+    expect(serviceSource).toContain('LEFT JOIN ${dbSchema}.guest_customers gc');
+    expect(serviceSource).toContain('COALESCE(uc_client.email, gc.email) AS customer_email');
+  });
+
+  test('conversation reads propagate database errors instead of returning empty success payloads', function () {
+    var detailStart = serviceSource.indexOf('export async function getAdminConversationDetail');
+    var reportStart = serviceSource.indexOf('export async function sendAdminMessage');
+    var conversationReads = serviceSource.slice(detailStart, reportStart);
+    expect(conversationReads).not.toContain('return { messages: [], nextCursor: null }');
+    expect(conversationReads).toContain('throw error');
+  });
+
+  test('admin sends validate the shared chat idempotency key contract', function () {
+    var start = controllerSource.indexOf('export async function sendConversationMessage');
+    var end = controllerSource.indexOf('export async function listReports');
+    var sendController = controllerSource.slice(start, end);
+    expect(sendController).toContain('clientMsgId.trim().length < 16');
+    expect(sendController).toContain('clientMsgId.trim().length > 128');
+  });
+});

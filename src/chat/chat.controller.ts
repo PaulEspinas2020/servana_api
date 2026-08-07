@@ -1,8 +1,15 @@
 import { Request, Response } from "express";
 import * as chatService from "./chat.service";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
+import { validateDataUri, AllowedUploadMime } from "../helpers/fileSignature";
 
-const ALLOWED_CHAT_MIMES = ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"];
+const ALLOWED_CHAT_MIMES: readonly AllowedUploadMime[] = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/pdf",
+];
+const MAX_CHAT_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 /**
  * Pull the authenticated actor (uid + numeric role) off the request.
@@ -163,12 +170,16 @@ export const uploadAttachment = async (req: any, res: Response) => {
     if (!file || !name) {
       return res.status(400).json({ success: false, message: "file (data URI) and name are required" });
     }
-    if (!file.startsWith("data:")) {
-      return res.status(422).json({ success: false, message: "file must be a data URI" });
-    }
-    const mimeType = file.slice(file.indexOf(":") + 1, file.indexOf(";"));
-    if (!ALLOWED_CHAT_MIMES.includes(mimeType)) {
-      return res.status(422).json({ success: false, message: "File type not allowed. Use JPG, PNG, WebP, GIF, or PDF." });
+    const validation = validateDataUri(file, {
+      allowed: ALLOWED_CHAT_MIMES,
+      maxBytes: MAX_CHAT_ATTACHMENT_BYTES,
+    });
+    if (!validation.ok) {
+      return res.status(422).json({
+        success: false,
+        code: validation.code,
+        message: validation.message,
+      });
     }
     const sanitizedName = String(name).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
     const storageKey = `${uid}_${Date.now()}`;
@@ -178,7 +189,8 @@ export const uploadAttachment = async (req: any, res: Response) => {
       attachmentId: storageKey,
       previewUrl,
       fileName: sanitizedName,
-      mimeType,
+      mimeType: validation.mime,
+      sizeBytes: validation.bytes,
     });
   } catch (e: any) {
     return handle(res, e);

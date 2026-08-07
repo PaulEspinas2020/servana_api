@@ -11,7 +11,10 @@ const PAYMONGO_BASE_URL  = "https://api.paymongo.com/v1";
 const RELEASE_HOURS      = 72;
 
 const getAuthHeader = () => {
-  const key = process.env.PAYMONGO_SK_DEV || process.env.PAYMONGO_SK || "";
+  // Use the same key contract as checkout and refunds. Keeping a separate
+  // PAYMONGO_SK variable made payouts silently run in a different mode.
+  const key = process.env.PAYMONGO_SECRET_KEY || process.env.PAYMONGO_SK_DEV || "";
+  if (!key) throw new Error("PayMongo is not configured");
   return `Basic ${Buffer.from(`${key}:`).toString("base64")}`;
 };
 
@@ -112,6 +115,13 @@ const releaseDisbursement = async (disbursement: any) => {
     return;
   }
   const amountCentavos = Math.round(Number(disbursement.worker_share) * 100);
+  if (!Number.isSafeInteger(amountCentavos) || amountCentavos <= 0) {
+    await dbQuery.query(
+      `UPDATE ${dbSchema}.disbursements SET status = 'FAILED', payout_error = $2, updated_at = NOW() WHERE id = $1`,
+      [disbursement.id, "Invalid payout amount"]
+    );
+    return;
+  }
 
   try {
     const response = await axios.post(
@@ -125,7 +135,9 @@ const releaseDisbursement = async (disbursement: any) => {
             account_number: bank.account_number,
             account_name:   bank.account_name,
             narration:      `Servana payout booking #${disbursement.booking_id}`,
-            reference_id:   `DISB-${disbursement.booking_id}-${disbursement.id}-${Date.now()}`,
+            // Stable across retries so the processor/support team can identify
+            // duplicate attempts for the same internal payout.
+            reference_id:   `DISB-${disbursement.booking_id}-${disbursement.id}`,
           },
         },
       },
@@ -133,6 +145,9 @@ const releaseDisbursement = async (disbursement: any) => {
     );
 
     const payoutId = response.data?.data?.id;
+    if (!payoutId || typeof payoutId !== "string") {
+      throw new Error("PayMongo returned an incomplete disbursement response");
+    }
 
     await dbQuery.query(
       `
@@ -229,6 +244,7 @@ export const retryFailedDisbursements = async () => {
       ON bw.booking_id = d.booking_id
      AND bw.worker_uid = d.worker_uid
     WHERE d.status = 'FAILED'
+      AND bw.status = 'COMPLETED'
       AND d.updated_at < NOW() - INTERVAL '6 hours'
       AND d.created_at >= NOW() - INTERVAL '7 days'
     `,
@@ -242,10 +258,12 @@ export const retryFailedDisbursements = async () => {
   for (const row of res.rows) {
     try {
       // Reset to PENDING so releaseDisbursement can proceed
-      await dbQuery.query(
-        `UPDATE ${dbSchema}.disbursements SET status = 'PENDING', payout_error = NULL, updated_at = NOW() WHERE id = $1`,
+      const reset = await dbQuery.query(
+        `UPDATE ${dbSchema}.disbursements SET status = 'PENDING', payout_error = NULL, updated_at = NOW()
+         WHERE id = $1 AND status = 'FAILED' RETURNING id`,
         [row.id]
       );
+      if (!reset.rowCount) continue;
       await releaseDisbursement({ ...row, status: "PENDING" });
     } catch (err: any) {
       console.error(`[disbursement] retry row ${row.id} aborted:`, err.message);

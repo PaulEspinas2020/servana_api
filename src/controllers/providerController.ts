@@ -28,6 +28,8 @@ import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 import * as availabilityService from "../services/providerOperationalAvailabilityService";
 import { touchProviderActivity } from "../services/adminProviderService";
 import { getProviderPerformance } from "../services/providerPerformanceService";
+import { randomUUID } from 'crypto';
+import { submitProfilePhoto } from '../services/providerProfileMediaService';
 
 const dbSchema = db.schema;
 
@@ -817,6 +819,17 @@ export const createWorkerTimeOff = async (req: Request, res: Response) => {
       reason:    record.reason ?? reason,
       note:      record.note,
       createdAt: record.createdAt,
+
+      // C22 §18. Confirmed bookings this time off collides with. The time off
+      // WAS created — a provider who is ill must be able to say so — but the
+      // work is still theirs, and the client is required to say that rather
+      // than let them assume leave cancels it.
+      bookingConflicts: record.bookingConflicts,
+      conflictNotice: record.bookingConflicts.length > 0
+        ? "Your time off is saved, but these bookings are still assigned to " +
+          "you. Creating time off does not cancel accepted work — open each " +
+          "booking to cancel or request a reschedule."
+        : null,
     };
     return res.status(201).json({ status: "success", data: dto });
   } catch (error: any) {
@@ -1655,26 +1668,23 @@ export const uploadWorkerProfilePhoto = async (req: Request, res: Response) => {
     if (!file) {
       return res.status(400).json({ status: "failed", message: "file (data URI) is required" });
     }
-    if (!String(file).startsWith("data:")) {
-      return res.status(422).json({ status: "failed", message: "file must be a data URI" });
-    }
-    const mimeType = String(file).slice(file.indexOf(":") + 1, file.indexOf(";"));
-    if (!ALLOWED_PHOTO_MIMES.includes(mimeType)) {
-      return res.status(422).json({ status: "failed", message: "File type not allowed. Use JPG, PNG, or WebP." });
-    }
-    await ensureProfileTable();
-    const safeUrl = await uploadFileToStorage("provider-profile-photos", `${uid}_photo`, file);
-    const uploadedAt = new Date().toISOString();
-    await dbQuery.query(
-      `INSERT INTO ${dbSchema}.user_profile (uid, photo_url, updated_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (uid) DO UPDATE SET photo_url = EXCLUDED.photo_url, updated_at = NOW()`,
-      [uid, safeUrl]
-    );
-    return res.status(200).json({ status: "success", data: { safeUrl, uploadedAt } });
+    const submission = await submitProfilePhoto(uid, {
+      file: String(file),
+      clientRequestId: String(req.body?.clientRequestId ?? `legacy-photo-${randomUUID()}`),
+    });
+    // Compatibility: legacy web clients expect safeUrl. A pending submission
+    // never replaces the currently approved public URL.
+    const current = await dbQuery.query(`SELECT photo_url FROM ${dbSchema}.user_profile WHERE uid = $1 LIMIT 1`, [uid]);
+    return res.status(202).json({ status: "success", data: {
+      safeUrl: current.rows[0]?.photo_url ?? '',
+      uploadedAt: submission.submittedAt,
+      submissionId: submission.submissionId,
+      reviewState: submission.state,
+    } });
   } catch (error: any) {
-    console.error("[uploadWorkerProfilePhoto] 500:", error?.message ?? error);
-    return res.status(500).json({ status: "failed", message: "Server error" });
+    const status = Number(error?.statusCode ?? 500);
+    if (status === 500) console.error("[uploadWorkerProfilePhoto] 500:", error?.message ?? error);
+    return res.status(status).json({ status: "failed", code: error?.code ?? 'PROFILE_PHOTO_SUBMISSION_FAILED', message: status === 500 ? "Server error" : error.message });
   }
 };
 
@@ -2096,13 +2106,26 @@ export const recordSafetyCheckIn = async (req: Request, res: Response) => {
 const toApplicationDto = (app: any) => ({
   id: app.id,
   serviceId: Number(app.service_id),
+  serviceName: app.service_name ?? app.service_snapshot?.name ?? null,
+  serviceCategory: app.service_category ?? app.service_snapshot?.category ?? null,
   status: app.status,
   submittedAt: app.submitted_at,
   updatedAt: app.updated_at,
   cancelledAt: app.cancelled_at ?? null,
   approvedAt: app.approved_at ?? null,
-  reviewReason: app.review_reason ?? null,
+  providerReasonCode: app.provider_reason_code ?? null,
+  providerReasonDetail: app.provider_reason_detail ?? null,
+  requirementsVersion: Number(app.requirements_version ?? 1),
   version: Number(app.version),
+  ...(Array.isArray(app.timeline) ? {
+    timeline: app.timeline.map((event: any) => ({
+      code: event.event_code,
+      label: event.provider_label,
+      explanation: event.provider_explanation ?? null,
+      actorCategory: event.actor_category,
+      createdAt: event.created_at,
+    })),
+  } : {}),
 });
 
 export const getServiceApplications = async (req: Request, res: Response) => {
@@ -2127,7 +2150,18 @@ export const submitServiceApplication = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "serviceId (positive integer) is required" });
     }
 
-    const app = await serviceApplicationService.submitApplication(uid, serviceId);
+    const clientRequestId = typeof req.body?.clientRequestId === 'string'
+      ? req.body.clientRequestId.trim()
+      : '';
+    const requirementsVersion = Number(req.body?.requirementsVersion);
+    if (clientRequestId.length < 16 || clientRequestId.length > 128) {
+      return res.status(400).json({ success: false, code: 'INVALID_IDEMPOTENCY_KEY', message: 'clientRequestId must be between 16 and 128 characters' });
+    }
+    if (!Number.isInteger(requirementsVersion) || requirementsVersion <= 0) {
+      return res.status(400).json({ success: false, code: 'INVALID_REQUIREMENTS_VERSION', message: 'requirementsVersion (positive integer) is required' });
+    }
+
+    const app = await serviceApplicationService.submitApplication(uid, serviceId, { clientRequestId, requirementsVersion });
     autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
     return res.status(201).json({ success: true, application: toApplicationDto(app) });
   } catch (error: any) {
@@ -2138,6 +2172,49 @@ export const submitServiceApplication = async (req: Request, res: Response) => {
       message: error.message || "Failed to submit application",
       ...(error.application ? { application: toApplicationDto(error.application) } : {}),
     });
+  }
+};
+
+export const getServiceApplicationDetail = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const applicationId = String(req.params.applicationId ?? '').trim();
+    if (!applicationId) return res.status(400).json({ success: false, message: 'applicationId is required' });
+    const app = await serviceApplicationService.getApplicationByWorker(applicationId, uid);
+    return res.json({ success: true, application: toApplicationDto(app) });
+  } catch (error: any) {
+    return res.status(error.statusCode ?? 500).json({ success: false, code: error.code ?? 'INTERNAL_ERROR', message: error.message || 'Failed to load application' });
+  }
+};
+
+export const getServiceApplicationEligibility = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const serviceId = Number(req.params.serviceId);
+    if (!Number.isInteger(serviceId) || serviceId <= 0) {
+      return res.status(400).json({ success: false, message: 'serviceId must be a positive integer' });
+    }
+    const eligibility = await serviceApplicationService.evaluateApplicationEligibility(uid, serviceId);
+    return res.json({ success: true, eligibility });
+  } catch (error: any) {
+    return res.status(error.statusCode ?? 500).json({ success: false, code: error.code ?? 'INTERNAL_ERROR', message: 'Failed to evaluate service eligibility' });
+  }
+};
+
+export const getProviderServicesOverview = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const overview = await serviceApplicationService.getProviderServicesOverview(uid);
+    return res.json({
+      success: true,
+      services: overview.services,
+      applications: overview.applications.map(toApplicationDto),
+    });
+  } catch {
+    return res.status(500).json({ success: false, message: 'Failed to load provider services' });
   }
 };
 
@@ -2170,7 +2247,12 @@ export const resubmitServiceApplication = async (req: Request, res: Response) =>
     const { applicationId } = req.params as { applicationId: string };
     if (!applicationId) return res.status(400).json({ success: false, message: "applicationId is required" });
 
-    const app = await serviceApplicationService.resubmitApplication(applicationId, uid);
+    const clientRequestId = typeof req.body?.clientRequestId === 'string' ? req.body.clientRequestId.trim() : '';
+    const expectedVersion = Number(req.body?.expectedVersion);
+    if (clientRequestId.length < 16 || clientRequestId.length > 128 || !Number.isInteger(expectedVersion)) {
+      return res.status(400).json({ success: false, code: 'INVALID_RESUBMISSION', message: 'clientRequestId and expectedVersion are required' });
+    }
+    const app = await serviceApplicationService.resubmitApplication(applicationId, uid, { clientRequestId, expectedVersion });
     return res.json({ success: true, application: toApplicationDto(app) });
   } catch (error: any) {
     const status = error.statusCode ?? 500;
@@ -2906,6 +2988,13 @@ export const completeBooking = async (req: Request, res: Response) => {
     touchProviderActivity(uid).catch(() => {});
     return res.json({ success: true, message: "Job completed successfully", data: result });
   } catch (error: any) {
+    if (error instanceof technicianService.UnpaidCashBookingError) {
+      return res.status(409).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
+    }
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };

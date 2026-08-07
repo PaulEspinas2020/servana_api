@@ -35,6 +35,7 @@ import {
   previewActivationEligibility,
   getActivationRequirements,
 } from "./providerActivationService";
+import { calculateCompliance } from "./providerProfileComplianceService";
 
 const s = db.schema;
 
@@ -418,6 +419,21 @@ export async function getProviderAccountState(
   // ── Capabilities ──────────────────────────────────────────────────────────
   const suspended = operational === "SUSPENDED";
   const fullyActive = activation === "ACTIVE" && operational === "ACTIVE";
+  const compliance = await calculateCompliance(uid).catch(() => null);
+  // This endpoint is an advisory UI contract used by both provider clients.
+  // During the controlled 009 migration rollout, an unavailable Command 24
+  // projection must not make the existing portal appear suspended. Actual
+  // assignment and auto-online authorization remain fail-closed in their own
+  // engines. Once the schema exists, a real non-current result is enforced.
+  const complianceProjectionUnavailable =
+    compliance === null ||
+    (compliance.state === "restricted" &&
+      compliance.blockingRequirements?.length === 1 &&
+      compliance.blockingRequirements[0]?.code === "PROVIDER_NOT_FOUND");
+  const complianceCurrent =
+    complianceProjectionUnavailable ||
+    compliance.state === "compliant" ||
+    compliance.state === "expiring_soon";
 
   const access: Capabilities = {
     ...DENY_ALL,
@@ -435,11 +451,11 @@ export async function getProviderAccountState(
     canViewEarnings: application === "APPROVED" || fullyActive || suspended,
     canViewBookings: application === "APPROVED" || fullyActive || suspended,
     canManageAvailability: !suspended && application === "APPROVED",
-    canBrowseJobs: fullyActive,
-    canAcceptJobs: fullyActive,
+    canBrowseJobs: fullyActive && complianceCurrent,
+    canAcceptJobs: fullyActive && complianceCurrent,
     canMessageCustomers: fullyActive,
-    canRequestWithdrawal: fullyActive,
-    canGoOnline: fullyActive,
+    canRequestWithdrawal: fullyActive && complianceCurrent,
+    canGoOnline: fullyActive && complianceCurrent,
   };
 
   // ── Checklist (§9) ────────────────────────────────────────────────────────

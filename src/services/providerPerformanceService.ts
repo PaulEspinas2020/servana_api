@@ -41,10 +41,16 @@ export interface RateMetric {
 }
 
 export interface ProviderPerformance {
+  policyVersion: number;
+  window: { kind: 'LIFETIME'; through: string };
+  minimumSample: number;
   acceptance: RateMetric & { declined: number; pending: number };
   onTime: RateMetric & { graceMinutes: number };
+  completion: RateMetric;
   jobs: { completed: number; cancelled: number; assigned: number };
+  cancellations: { attributedToProvider: number; attributionUnknown: number; explanation: string };
   rating: { average: number | null; reviewCount: number };
+  qualityStatus: { state: 'INSUFFICIENT_DATA' | 'MEETING_EXPECTATIONS'; explanation: string };
 }
 
 const ratio = (count: number, total: number): number | null =>
@@ -104,6 +110,9 @@ export const getProviderPerformance = async (
   const ratingRow = ratingRes.rows[0];
 
   return {
+    policyVersion: 1,
+    window: { kind: 'LIFETIME', through: new Date().toISOString() },
+    minimumSample: 5,
     acceptance: {
       count: accepted,
       total: decided,
@@ -117,14 +126,27 @@ export const getProviderPerformance = async (
       rate: ratio(onTime, measured),
       graceMinutes: ON_TIME_GRACE_MINUTES,
     },
+    completion: {
+      count: num(a.completed),
+      total: accepted,
+      rate: ratio(num(a.completed), accepted),
+    },
     jobs: {
       completed: num(a.completed),
       cancelled: num(cancelledRes.rows[0]?.cancelled),
       assigned: num(a.pending),
     },
+    cancellations: {
+      attributedToProvider: num(cancelledRes.rows[0]?.cancelled),
+      attributionUnknown: 0,
+      explanation: 'Only cancellations recorded against this provider are included; customer, admin, and system cancellations are excluded.',
+    },
     rating: {
       average: ratingRow?.average_rating != null ? Number(ratingRow.average_rating) : null,
       reviewCount: num(ratingRow?.review_count),
     },
+    qualityStatus: decided < 5
+      ? { state: 'INSUFFICIENT_DATA', explanation: 'At least 5 decided assignments are required before a quality status is shown.' }
+      : { state: 'MEETING_EXPECTATIONS', explanation: 'Operational metrics are available. No automated restriction is inferred from rating alone.' },
   };
 };

@@ -22,7 +22,7 @@ async function sendFcmPushToWorker(
   workerUid: string,
   title: string,
   body: string,
-  route?: { page?: string; screen?: string; bookingId?: string } | null,
+  route?: { page?: string; screen?: string; bookingId?: string; caseId?: string } | null,
   meta?: { type?: string; notificationKey?: string },
 ): Promise<void> {
   const { rows } = await dbQuery.query(
@@ -36,6 +36,7 @@ async function sendFcmPushToWorker(
   if (route?.page) data.page = String(route.page);
   if (route?.screen) data.screen = String(route.screen);
   if (route?.bookingId) data.bookingId = String(route.bookingId);
+  if (route?.caseId) data.caseId = String(route.caseId);
   if (meta?.type) data.type = String(meta.type);
   if (meta?.notificationKey) data.notificationKey = String(meta.notificationKey);
 

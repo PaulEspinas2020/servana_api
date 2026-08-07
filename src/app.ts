@@ -173,6 +173,10 @@ app.use("/api", cors(corsOptionsDelegate), adminAuditRoutes);
 
 import adminCommunicationRoutes from "./routes/adminCommunication.routes";
 app.use("/api", cors(corsOptionsDelegate), adminCommunicationRoutes);
+import adminSupportCaseRoutes from "./routes/adminSupportCase.routes";
+app.use("/api", cors(corsOptionsDelegate), adminSupportCaseRoutes);
+import adminNotificationRoutes from "./routes/adminNotification.routes";
+app.use("/api", cors(corsOptionsDelegate), adminNotificationRoutes);
 
 import adminAutoOnlineRoutes from "./routes/adminAutoOnline.routes";
 app.use("/api", cors(corsOptionsDelegate), adminAutoOnlineRoutes);
@@ -185,6 +189,9 @@ app.use("/api", cors(corsOptionsDelegate), adminPermissionRoutes);
 
 import adminCustomerRoutes from "./routes/adminCustomer.routes";
 app.use("/api", cors(corsOptionsDelegate), adminCustomerRoutes);
+
+import adminUserAccountRoutes from "./routes/adminUserAccount.routes";
+app.use("/api", cors(corsOptionsDelegate), adminUserAccountRoutes);
 
 import customerSupportRoutes from "./routes/customerSupport.routes";
 app.use("/api", cors(corsOptionsDelegate), customerSupportRoutes);

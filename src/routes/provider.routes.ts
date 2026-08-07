@@ -8,6 +8,9 @@ import verifyRoles from "../middleware/verifyRoles";
 import * as provider from "../controllers/providerController";
 import * as locationAccess from "../controllers/providerLocationAccessController";
 import * as accountState from "../controllers/providerAccountStateController";
+import * as profileCompliance from "../controllers/providerProfileComplianceController";
+import * as reputation from "../controllers/providerReputationController";
+import * as supportCases from "../controllers/providerSupportCaseController";
 
 const router = express.Router();
 
@@ -37,6 +40,26 @@ router.get("/provider/account-state", verifyAuth, accountState.getAccountState);
 router.get("/provider/profile", verifyAuth, requireProviderRole, provider.getProviderProfile);
 router.post("/provider/service-preference", verifyAuth, requireProviderRole, provider.saveServicePreference);
 
+// Command 24 canonical Profile & Compliance Center. These additive routes are
+// shared by Worker mobile and the web provider portal; none accepts a provider
+// UID from path/query/body as authorization.
+router.get("/provider/profile-center", verifyAuth, requireProviderRole, profileCompliance.getProfileCenter);
+router.get("/provider/profile-fields", verifyAuth, requireProviderRole, profileCompliance.getFieldRegistry);
+router.get("/provider/public-profile-preview", verifyAuth, requireProviderRole, profileCompliance.getPublicProfilePreview);
+router.post("/provider/public-profile-revisions", verifyAuth, requireProviderRole, profileCompliance.submitPublicProfileRevision);
+router.get("/provider/document-types", verifyAuth, requireProviderRole, profileCompliance.getDocumentCatalog);
+router.get("/provider/documents", verifyAuth, requireProviderRole, profileCompliance.getDocuments);
+router.post("/provider/documents", verifyAuth, requireProviderRole, profileCompliance.uploadDocument);
+router.get("/provider/documents/:documentId/preview", verifyAuth, requireProviderRole, profileCompliance.getDocumentPreview);
+router.get("/provider/certifications", verifyAuth, requireProviderRole, profileCompliance.getCertifications);
+router.post("/provider/certifications", verifyAuth, requireProviderRole, profileCompliance.submitCertification);
+router.get("/provider/compliance", verifyAuth, requireProviderRole, profileCompliance.getCompliance);
+router.get("/provider/verification-timeline", verifyAuth, requireProviderRole, profileCompliance.getVerificationTimeline);
+router.post("/provider/contact-changes", verifyAuth, requireProviderRole, profileCompliance.requestContactChange);
+router.post("/provider/contact-changes/confirm", verifyAuth, requireProviderRole, profileCompliance.confirmContactChange);
+router.get("/provider/profile-photo-submissions", verifyAuth, requireProviderRole, profileCompliance.getProfilePhotoSubmissions);
+router.get("/provider/profile-photo-submissions/:submissionId/preview", verifyAuth, requireProviderRole, profileCompliance.getProfilePhotoPreview);
+
 // Location / online status
 router.get("/provider/location/status", verifyAuth, requireProviderRole, provider.getLocationStatus);
 router.post("/provider/location/go-online", verifyAuth, requireProviderRole, requireActiveProvider, provider.goOnline);
@@ -53,6 +76,12 @@ router.get("/provider/ledger", verifyAuth, requireProviderRole, requireCapabilit
 router.get("/provider/payouts", verifyAuth, requireProviderRole, requireCapability("canViewEarnings"), provider.getPayouts);
 // Performance metrics for the portal's Performance page (own uid from token).
 router.get("/provider/performance", verifyAuth, requireProviderRole, provider.getProviderPerformanceMetrics);
+router.get("/provider/reputation/summary", verifyAuth, requireProviderRole, reputation.summary);
+router.get("/provider/reviews", verifyAuth, requireProviderRole, reputation.list);
+router.get("/provider/reviews/:reviewId", verifyAuth, requireProviderRole, reputation.detail);
+router.post("/provider/reviews/:reviewId/response", verifyAuth, requireProviderRole, reputation.respond);
+router.post("/provider/reviews/:reviewId/report", verifyAuth, requireProviderRole, reputation.report);
+router.post("/provider/review-moderation/:caseId/appeals", verifyAuth, requireProviderRole, reputation.appeal);
 
 // Review / onboarding
 router.get("/providers/me/review-status", verifyAuth, requireProviderRole, provider.getReviewStatus);
@@ -61,6 +90,18 @@ router.post("/providers/me/submit-for-review", verifyAuth, requireProviderRole, 
 // Support tickets
 router.get("/provider/support/tickets", verifyAuth, requireProviderRole, provider.getSupportTickets);
 router.post("/provider/support/tickets", verifyAuth, requireProviderRole, provider.createSupportTicket);
+
+// Command 26 canonical case API. Legacy ticket routes remain during migration.
+router.get("/provider/support/case-categories", verifyAuth, requireProviderRole, supportCases.categories);
+router.get("/provider/support/cases", verifyAuth, requireProviderRole, supportCases.list);
+router.post("/provider/support/cases", verifyAuth, requireProviderRole, supportCases.create);
+router.get("/provider/support/cases/:caseId", verifyAuth, requireProviderRole, supportCases.detail);
+router.post("/provider/support/cases/:caseId/messages", verifyAuth, requireProviderRole, supportCases.reply);
+router.post("/provider/support/cases/:caseId/withdraw", verifyAuth, requireProviderRole, supportCases.withdraw);
+router.post("/provider/support/cases/:caseId/reopen", verifyAuth, requireProviderRole, supportCases.reopen);
+router.post("/provider/support/cases/:caseId/appeals", verifyAuth, requireProviderRole, supportCases.appeal);
+router.post("/provider/support/cases/:caseId/attachments", verifyAuth, requireProviderRole, supportCases.upload);
+router.get("/provider/support/cases/:caseId/attachments/:attachmentId/preview", verifyAuth, requireProviderRole, supportCases.preview);
 
 // Notification preferences
 router.get("/provider/notification-preferences", verifyAuth, requireProviderRole, provider.getNotificationPreferences);
@@ -147,6 +188,7 @@ router.post("/provider/safety/check-in", verifyAuth, requireProviderRole, provid
 
 // ─── Service application lifecycle (provider web portal — separate from employee_services) ──
 router.get("/worker/service-applications", verifyAuth, requireProviderRole, provider.getServiceApplications);
+router.get("/worker/service-applications/:applicationId", verifyAuth, requireProviderRole, provider.getServiceApplicationDetail);
 router.post("/worker/service-applications", verifyAuth, requireProviderRole, provider.submitServiceApplication);
 router.post("/worker/service-applications/:applicationId/resubmit", verifyAuth, requireProviderRole, provider.resubmitServiceApplication);
 router.delete("/worker/service-applications/:applicationId", verifyAuth, requireProviderRole, provider.cancelServiceApplication);
@@ -154,6 +196,8 @@ router.delete("/worker/service-applications/:applicationId", verifyAuth, require
 // ─── Active service pause / reactivate (employee_services status) ─────────────
 router.patch("/worker/services/:serviceId/pause",       verifyAuth, requireProviderRole, provider.pauseWorkerService);
 router.patch("/worker/services/:serviceId/reactivate",  verifyAuth, requireProviderRole, provider.reactivateWorkerService);
+router.get("/worker/services/:serviceId/eligibility", verifyAuth, requireProviderRole, provider.getServiceApplicationEligibility);
+router.get("/worker/services-overview", verifyAuth, requireProviderRole, provider.getProviderServicesOverview);
 
 // FCM token — saved after login so push notifications reach this device
 router.post("/provider/fcm-token", verifyAuth, requireProviderRole, provider.saveProviderFcmToken);

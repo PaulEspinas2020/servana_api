@@ -318,9 +318,10 @@ describe('adminCommunication.routes — new messaging routes registered', functi
     expect(msgIdx).toBeLessThan(detIdx);
   });
 
-  it('all new conversation routes use requirePermission(support_conversations.view)', function () {
+  it('conversation reads require view and sends require send permission', function () {
     var routeBlock = src.match(/conversations\/:id[\s\S]{0,1000}/)?.[0] || '';
     expect(routeBlock).toMatch(/support_conversations\.view/);
+    expect(src).toMatch(/router\.post\('\/admin\/communications\/conversations\/:id\/messages'[\s\S]{0,200}support_conversations\.send/);
   });
 });
 
@@ -401,4 +402,3 @@ describe('adminCommunicationService — MESSAGING additions present', function (
     expect(src).toMatch(/redact/i);
   });
 });
-

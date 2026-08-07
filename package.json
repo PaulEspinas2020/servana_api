@@ -19,6 +19,11 @@
     "admin:bootstrap": "ts-node -r dotenv/config scripts/create-admin-with-password.ts",
     "report:provider-readiness": "ts-node -r dotenv/config scripts/report-provider-readiness.ts",
     "backfill:verified-identifiers": "ts-node -r dotenv/config scripts/backfill-verified-identifiers.ts"
+    ,"migrations:plan": "ts-node -r dotenv/config scripts/run-migrations.ts"
+    ,"migrations:apply": "ts-node -r dotenv/config scripts/run-migrations.ts --apply"
+    ,"migrate:legacy-provider-documents:plan": "ts-node -r dotenv/config scripts/migrate-legacy-provider-documents.ts"
+    ,"migrate:legacy-provider-documents:apply": "ts-node -r dotenv/config scripts/migrate-legacy-provider-documents.ts --apply"
+    ,"measure:reviews": "node scripts/measure-review-api.mjs"
   },
   "keywords": [],
   "author": "Cla H.",
