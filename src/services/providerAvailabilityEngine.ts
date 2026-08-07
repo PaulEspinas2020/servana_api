@@ -75,6 +75,8 @@ const bootstrap = async () => {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+import { zonedParts, operationalDate, OPERATIONAL_TIMEZONE } from './operationalTimezone';
+
 export interface WeeklyScheduleSlot {
   dayOfWeek: 0 | 1 | 2 | 3 | 4 | 5 | 6;
   dayLabel: string;
@@ -452,13 +454,20 @@ export const scheduleCoversWindow = (
   return covered ? 'covered' : 'outside_window';
 };
 
-/** Weekday + HH:mm pair for a booking window, matching explainAvailability. */
+/**
+ * Weekday + HH:mm pair for a booking window, matching explainAvailability.
+ *
+ * C22 §5. This used `Date.getDay()` and `Date.getHours()`, which are
+ * SERVER-LOCAL — and production runs Etc/UTC with TZ unset (measured on the
+ * host). Providers enter schedules in Manila time, so every booking was read
+ * eight hours early: 09:00 Manila became 01:00 and fell outside an 08:00–17:00
+ * rule, while 19:00 Manila became 11:00 and fell inside it. Wrong in both
+ * directions, which is why it never looked like an off-by-one.
+ */
 export const windowParts = (startAt: string, endAt: string) => {
-  const bookingStart = new Date(startAt);
-  const bookingEnd   = new Date(endAt);
-  const hhmm = (d: Date) =>
-    `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  return { dow: bookingStart.getDay(), startTime: hhmm(bookingStart), endTime: hhmm(bookingEnd) };
+  const start = zonedParts(startAt);
+  const end   = zonedParts(endAt);
+  return { dow: start.dayOfWeek, startTime: start.hhmm, endTime: end.hhmm };
 };
 
 /**
@@ -483,7 +492,10 @@ export const filterUidsAvailableAt = async (
   await bootstrap();
 
   const { dow, startTime, endTime } = windowParts(startAt, endAt);
-  const day = new Date(startAt).toISOString().slice(0, 10);
+  // C22 §5. Was toISOString().slice(0, 10) — the UTC date, which in Manila is
+  // a day early for anything before 08:00. Time off booked for the right day
+  // did not block the booking, and the previous day's did.
+  const day = operationalDate(startAt);
 
   const [availRes, timeOffRes] = await Promise.all([
     dbQuery.query(
@@ -531,9 +543,13 @@ export const explainAvailability = async (
   const reasons: AvailabilityExplanation['reasons'] = [];
   const bookingStart = new Date(startAt);
   const bookingEnd   = new Date(endAt);
-  const dow = bookingStart.getDay() as 0 | 1 | 2 | 3 | 4 | 5 | 6;
-  const bookingStartTime = `${String(bookingStart.getHours()).padStart(2, '0')}:${String(bookingStart.getMinutes()).padStart(2, '0')}`;
-  const bookingEndTime   = `${String(bookingEnd.getHours()).padStart(2, '0')}:${String(bookingEnd.getMinutes()).padStart(2, '0')}`;
+  // C22 §5. A second, independent copy of the windowParts bug — the admin
+  // "can I confirm this provider is free?" answer was computed in UTC too.
+  const startParts = zonedParts(startAt);
+  const endParts   = zonedParts(endAt);
+  const dow = startParts.dayOfWeek as 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  const bookingStartTime = startParts.hhmm;
+  const bookingEndTime   = endParts.hhmm;
 
   const [availRes, timeOffRes, conflictRes] = await Promise.all([
     dbQuery.query(
@@ -545,7 +561,7 @@ export const explainAvailability = async (
        WHERE worker_uid = $1
          AND COALESCE(status, 'active') = 'active'
          AND start_date <= $2::date AND end_date >= $3::date`,
-      [providerUid, bookingStart.toISOString().slice(0, 10), bookingStart.toISOString().slice(0, 10)]
+      [providerUid, operationalDate(startAt), operationalDate(startAt)]
     ),
     // Booking conflict: active booking within ±2-hour window.
     // Admin-created bookings set worker_uid on the bookings row AND write a
@@ -632,10 +648,13 @@ const computeNextAvailable = (
   const activeTimeOff = timeOff.filter(t => t.status === 'active');
 
   for (let i = 0; i < 14; i++) {
-    const candidate = new Date(now);
-    candidate.setDate(now.getDate() + i);
-    const dow = candidate.getDay();
-    const dateStr = candidate.toISOString().slice(0, 10);
+    // C22 §5. Walking days with the host clock put the boundary at UTC
+    // midnight — 08:00 Manila — so for eight hours every morning this
+    // reported the previous day's availability as "next".
+    const candidate = new Date(now.getTime() + i * 24 * 60 * 60 * 1000);
+    const parts = zonedParts(candidate);
+    const dow = parts.dayOfWeek;
+    const dateStr = parts.ymd;
 
     // Check time-off
     const blocked = activeTimeOff.some(t => t.startDate <= dateStr && t.endDate >= dateStr);
