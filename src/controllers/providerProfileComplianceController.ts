@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import * as profileService from '../services/providerProfileComplianceService';
 import * as contactService from '../services/providerContactChangeService';
 import * as mediaService from '../services/providerProfileMediaService';
+import * as autoOnlineEngine from '../services/providerAutoOnlineEngine';
 
 const uidOf = (req: Request): string => String(req.user?.uid ?? '');
 const fail = (res: Response, error: any, fallback: string) => {
@@ -117,6 +118,7 @@ export const uploadDocument = async (req: Request, res: Response) => {
       identifierLast4: req.body?.identifierLast4 == null ? null : String(req.body.identifierLast4),
       replacementForId: replacement,
     });
+    autoOnlineEngine.evaluateProvider(uidOf(req), 'system', uidOf(req)).catch(() => {});
     return res.status(201).json({ status: 'success', data });
   } catch (error) {
     return fail(res, error, 'Document could not be submitted');
@@ -140,6 +142,7 @@ export const deleteDocument = async (req: Request, res: Response) => {
       return res.status(404).json({ status: 'failed', message: 'Document not found' });
     }
     await profileService.deleteDocument(uidOf(req), id);
+    autoOnlineEngine.evaluateProvider(uidOf(req), 'system', uidOf(req)).catch(() => {});
     return res.status(200).json({ status: 'success', data: { success: true } });
   } catch (error) {
     return fail(res, error, 'Document could not be deleted');

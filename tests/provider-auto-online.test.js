@@ -230,14 +230,21 @@ describe('Command 14 — trigger hooks (fire-and-forget pattern)', () => {
     expect(provCtrl).toContain('from "../services/providerAutoOnlineEngine"');
   });
 
-  it('uploadWorkerRequirement triggers evaluateProvider', () => {
-    // The trigger should appear near the uploadWorkerRequirement function
-    const fn = provCtrl.slice(provCtrl.indexOf('uploadWorkerRequirement'), provCtrl.indexOf('getWorkerRequirementsOwn'));
+  it('canonical uploadDocument triggers evaluateProvider', () => {
+    const complianceCtrl = fs.readFileSync(
+      path.join(__dirname, '../src/controllers/providerProfileComplianceController.ts'),
+      'utf8',
+    );
+    const fn = complianceCtrl.slice(complianceCtrl.indexOf('uploadDocument'), complianceCtrl.indexOf('getDocumentPreview'));
     expect(fn).toContain('autoOnlineEngine.evaluateProvider');
   });
 
-  it('deleteWorkerRequirementOwn triggers evaluateProvider', () => {
-    const fn = provCtrl.slice(provCtrl.indexOf('deleteWorkerRequirementOwn'), provCtrl.indexOf('getOnboardingState'));
+  it('canonical deleteDocument triggers evaluateProvider', () => {
+    const complianceCtrl = fs.readFileSync(
+      path.join(__dirname, '../src/controllers/providerProfileComplianceController.ts'),
+      'utf8',
+    );
+    const fn = complianceCtrl.slice(complianceCtrl.indexOf('deleteDocument'), complianceCtrl.indexOf('getCertifications'));
     expect(fn).toContain('autoOnlineEngine.evaluateProvider');
   });
 

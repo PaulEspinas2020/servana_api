@@ -864,90 +864,31 @@ export const deleteWorkerTimeOff = async (req: Request, res: Response) => {
 
 // ─── Requirements (Firebase Storage, scoped to authenticated worker) ──────────
 
-const ALLOWED_REQUIREMENT_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] as const;
-
-/**
- * Ceiling for a provider compliance document.
- *
- * The old path had no size check at all: a data URI of any length was decoded
- * and uploaded. 10 MB is comfortably above a phone photo of an ID or permit and
- * well below anything that threatens the request pipeline.
- */
-const MAX_REQUIREMENT_BYTES = 10 * 1024 * 1024;
-
 export const uploadWorkerRequirement = async (req: Request, res: Response) => {
-  try {
-    const uid = req.user?.uid;
-    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const { file, name, requirementType } = req.body;
-    if (!file || !name) {
-      return res.status(400).json({ status: "failed", message: "file (data URI) and name are required" });
-    }
-    if (!file.startsWith("data:")) {
-      return res.status(422).json({ status: "failed", message: "file must be a data URI" });
-    }
-    // C19 §18/§54 (LJ-08). This used to read the MIME out of the data URI the
-    // CLIENT sent and check THAT against the allowlist — asking the uploader
-    // what the file is and believing the answer, so
-    // `data:image/png;base64,<any bytes>` passed a check that looked strict.
-    //
-    // Now validated by magic bytes, with the declared type required to match
-    // the actual content, plus a size ceiling the old path had no equivalent of.
-    const validation = validateDataUri(file, {
-      allowed: ALLOWED_REQUIREMENT_MIMES as readonly AllowedUploadMime[],
-      maxBytes: MAX_REQUIREMENT_BYTES,
-    });
-    if (!validation.ok) {
-      return res.status(422).json({
-        status: "failed",
-        code: validation.code,
-        message: validation.message,
-      });
-    }
-    const mimeType = validation.mime;
-    const sanitizedName = String(name).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
-    const sanitizedType = requirementType ? String(requirementType).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 50) : undefined;
-    const fileUrl = await uploadFileToStorage("provider-requirements", `${uid}_${Date.now()}`, file);
-    const inserted = await technicianService.addWorkerRequirements(uid, [{ fileUrl, fileName: sanitizedName, requirementType: sanitizedType }]);
-    const row = inserted[0];
-    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
-    return res.status(201).json({
-      status: "success",
-      data: {
-        requirementId: String(row.id),
-        status: "pending_review",
-        uploadedAt: row.uploadedAt,
-        requirementType: sanitizedType ?? null,
-      },
-    });
-  } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
-  }
+  void req;
+  return res.status(410).json({
+    status: "failed",
+    code: "LEGACY_DOCUMENT_ENDPOINT_RETIRED",
+    message: "Use POST /provider/documents for private document submission",
+  });
 };
 
 export const getWorkerRequirementsOwn = async (req: Request, res: Response) => {
-  try {
-    const uid = req.user?.uid;
-    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const requirements = await technicianService.getWorkerRequirements(uid);
-    return res.status(200).json({ status: "success", data: requirements });
-  } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
-  }
+  void req;
+  return res.status(410).json({
+    status: "failed",
+    code: "LEGACY_DOCUMENT_ENDPOINT_RETIRED",
+    message: "Use GET /provider/documents for private document metadata",
+  });
 };
 
 export const deleteWorkerRequirementOwn = async (req: Request, res: Response) => {
-  try {
-    const uid = req.user?.uid;
-    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const id = Number(req.params.id);
-    if (!id) return res.status(400).json({ status: "failed", message: "Invalid id" });
-    await technicianService.deleteWorkerRequirement(uid, id);
-    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
-    return res.status(200).json({ status: "success", data: { success: true } });
-  } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
-  }
+  void req;
+  return res.status(410).json({
+    status: "failed",
+    code: "LEGACY_DOCUMENT_ENDPOINT_RETIRED",
+    message: "Use DELETE /provider/documents/:documentId",
+  });
 };
 
 // ─── Onboarding ───────────────────────────────────────────────────────────────
