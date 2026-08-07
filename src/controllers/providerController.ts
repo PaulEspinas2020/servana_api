@@ -77,11 +77,11 @@ function bridgeToWebTimeOff(timeOff: availEngine.ProviderTimeOff[]): any[] {
       id:        String(t.id),
       startDate: t.startDate,
       endDate:   t.endDate,
-      allDay:    true,
-      startTime: null,
-      endTime:   null,
+      allDay:    t.allDay,
+      startTime: t.startTime,
+      endTime:   t.endTime,
       reason:    t.reason ?? 'other',
-      note:      null,
+      note:      t.note,
       createdAt: t.createdAt,
     }));
 }
@@ -793,22 +793,41 @@ export const createWorkerTimeOff = async (req: Request, res: Response) => {
     if (!startDate || !endDate || !reason) {
       return res.status(400).json({ status: "failed", message: "startDate, endDate, and reason are required" });
     }
-    const record = await availEngine.createTimeOff(uid, { startDate, endDate, reason }, uid);
+    // C22 §17. These four fields were destructured above and then dropped:
+    // only startDate, endDate and reason were passed on. The provider web
+    // portal has shipped a partial-day form the whole time, so a provider
+    // asking for two hours off lost the entire day and the response told them
+    // it was all-day.
+    const record = await availEngine.createTimeOff(
+      uid,
+      { startDate, endDate, reason, allDay, startTime, endTime, note },
+      uid,
+    );
+    // Report what was STORED, not what was asked for. Echoing the request
+    // makes the response agree with the client by construction, which is
+    // exactly how the original defect stayed invisible: the portal sent
+    // partial-day fields, nothing persisted them, and the reply said allDay.
     const dto = {
       id:        String(record.id),
       startDate: record.startDate,
       endDate:   record.endDate,
-      allDay:    allDay ?? true,
-      startTime: startTime ?? null,
-      endTime:   endTime ?? null,
+      allDay:    record.allDay,
+      startTime: record.startTime,
+      endTime:   record.endTime,
       reason:    record.reason ?? reason,
-      note:      note ?? null,
+      note:      record.note,
       createdAt: record.createdAt,
     };
     return res.status(201).json({ status: "success", data: dto });
   } catch (error: any) {
     const code = error?.statusCode ?? 500;
-    return res.status(code).json({ status: "failed", message: "Server error" });
+    // A 422 carries an actionable reason ("endTime must be later than
+    // startTime"). Flattening every status to "Server error" would hide the
+    // validation this endpoint just gained and leave the provider guessing.
+    const message = code === 422 || code === 400 || code === 404
+      ? (error?.message ?? "Invalid request")
+      : "Server error";
+    return res.status(code).json({ status: "failed", message });
   }
 };
 

@@ -60,7 +60,17 @@ const ensureTimeOffColumns = async () => {
        ADD COLUMN IF NOT EXISTS created_by   TEXT,
        ADD COLUMN IF NOT EXISTS status       TEXT NOT NULL DEFAULT 'active',
        ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ,
-       ADD COLUMN IF NOT EXISTS cancelled_by TEXT`,
+       ADD COLUMN IF NOT EXISTS cancelled_by TEXT,
+       -- C22 §17. The provider web portal has shipped a partial-day time-off
+       -- form since before this table existed: an "All day" checkbox that,
+       -- when cleared, collects a start and end time. The route destructured
+       -- those fields and passed only the dates on, and there were no columns
+       -- to hold them — so a provider asking for two hours off lost the whole
+       -- day, silently, and the response echoed allDay: true.
+       ADD COLUMN IF NOT EXISTS all_day    BOOLEAN NOT NULL DEFAULT TRUE,
+       ADD COLUMN IF NOT EXISTS start_time TIME,
+       ADD COLUMN IF NOT EXISTS end_time   TIME,
+       ADD COLUMN IF NOT EXISTS note       TEXT`,
     []
   );
 };
@@ -90,6 +100,11 @@ export interface ProviderTimeOff {
   id: number;
   startDate: string;    // YYYY-MM-DD (mobile-compatible field name)
   endDate: string;
+  /** False only for a single-day window with explicit start and end times. */
+  allDay: boolean;
+  startTime: string | null;  // HH:mm, null when allDay
+  endTime: string | null;    // HH:mm, null when allDay
+  note: string | null;
   reason: string | null;
   status: 'active' | 'cancelled';
   createdAt: string;
@@ -168,6 +183,10 @@ export const getAvailabilityProfile = async (providerUid: string): Promise<Provi
     ),
     dbQuery.query(
       `SELECT id, start_date, end_date, reason, created_at,
+              COALESCE(all_day, TRUE) AS all_day,
+              to_char(start_time, 'HH24:MI') AS start_time,
+              to_char(end_time,   'HH24:MI') AS end_time,
+              note,
               COALESCE(status, 'active') AS status,
               created_by, cancelled_at, cancelled_by
        FROM ${s}.worker_time_off
@@ -197,6 +216,10 @@ export const getAvailabilityProfile = async (providerUid: string): Promise<Provi
     id:          r.id,
     startDate:   r.start_date instanceof Date ? r.start_date.toISOString().slice(0, 10) : String(r.start_date).slice(0, 10),
     endDate:     r.end_date   instanceof Date ? r.end_date.toISOString().slice(0, 10)   : String(r.end_date).slice(0, 10),
+    allDay:      r.all_day !== false,
+    startTime:   r.start_time ?? null,
+    endTime:     r.end_time ?? null,
+    note:        r.note ?? null,
     reason:      r.reason ?? null,
     status:      r.status ?? 'active',
     createdAt:   r.created_at,
@@ -297,6 +320,10 @@ export const listTimeOff = async (providerUid: string): Promise<ProviderTimeOff[
   await bootstrap();
   const res = await dbQuery.query(
     `SELECT id, start_date, end_date, reason, created_at,
+              COALESCE(all_day, TRUE) AS all_day,
+              to_char(start_time, 'HH24:MI') AS start_time,
+              to_char(end_time,   'HH24:MI') AS end_time,
+              note,
             COALESCE(status, 'active') AS status,
             created_by, cancelled_at, cancelled_by
      FROM ${s}.worker_time_off
@@ -308,6 +335,10 @@ export const listTimeOff = async (providerUid: string): Promise<ProviderTimeOff[
     id:          r.id,
     startDate:   r.start_date instanceof Date ? r.start_date.toISOString().slice(0, 10) : String(r.start_date).slice(0, 10),
     endDate:     r.end_date   instanceof Date ? r.end_date.toISOString().slice(0, 10)   : String(r.end_date).slice(0, 10),
+    allDay:      r.all_day !== false,
+    startTime:   r.start_time ?? null,
+    endTime:     r.end_time ?? null,
+    note:        r.note ?? null,
     reason:      r.reason ?? null,
     status:      r.status ?? 'active',
     createdAt:   r.created_at,
@@ -317,9 +348,39 @@ export const listTimeOff = async (providerUid: string): Promise<ProviderTimeOff[
   }));
 };
 
+/** `HH:mm` or `HH:mm:ss` in, `HH:mm` out; anything else is null. */
+const normaliseHhMm = (raw: unknown): string | null => {
+  if (typeof raw !== 'string') return null;
+  const m = /^(\d{2}):(\d{2})(?::\d{2})?$/.exec(raw.trim());
+  if (!m) return null;
+  const h = Number(m[1]), min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return `${m[1]}:${m[2]}`;
+};
+
+/**
+ * §34 keeps time-off detail private, so the note is bounded rather than
+ * unlimited free text — a field with no ceiling invites medical detail nobody
+ * asked for and nothing redacts.
+ */
+const NOTE_MAX = 500;
+const normaliseNote = (raw: unknown): string | null => {
+  if (typeof raw !== 'string') return null;
+  const t = raw.trim();
+  return t === '' ? null : t.slice(0, NOTE_MAX);
+};
+
 export const createTimeOff = async (
   providerUid: string,
-  payload: { startDate: string; endDate: string; reason?: string },
+  payload: {
+    startDate: string;
+    endDate: string;
+    reason?: string;
+    allDay?: boolean;
+    startTime?: string | null;
+    endTime?: string | null;
+    note?: string | null;
+  },
   actorUid: string,
 ): Promise<ProviderTimeOff> => {
   await bootstrap();
@@ -335,12 +396,48 @@ export const createTimeOff = async (
     throw err;
   }
 
+  // C22 §17. Partial-day time off is single-day only. A multi-day range with
+  // times has no agreed meaning — "09:00 to 12:00" across three days could be
+  // those hours each day or one continuous window — and inventing one silently
+  // is how the original defect worked. Refusing with a reason is honest;
+  // guessing is not.
+  const allDay = payload.allDay !== false;
+  let startTime: string | null = null;
+  let endTime: string | null = null;
+
+  if (!allDay) {
+    if (payload.startDate !== payload.endDate) {
+      const err: any = new Error('Partial-day time off must start and end on the same date');
+      err.statusCode = 422;
+      throw err;
+    }
+    startTime = normaliseHhMm(payload.startTime);
+    endTime = normaliseHhMm(payload.endTime);
+    if (!startTime || !endTime) {
+      const err: any = new Error('startTime and endTime are required when allDay is false');
+      err.statusCode = 422;
+      throw err;
+    }
+    if (startTime >= endTime) {
+      const err: any = new Error('endTime must be later than startTime');
+      err.statusCode = 422;
+      throw err;
+    }
+  }
+
   const res = await dbQuery.query(
-    `INSERT INTO ${s}.worker_time_off (worker_uid, start_date, end_date, reason, created_by, status)
-     VALUES ($1, $2, $3, $4, $5, 'active')
+    `INSERT INTO ${s}.worker_time_off
+       (worker_uid, start_date, end_date, reason, created_by, status,
+        all_day, start_time, end_time, note)
+     VALUES ($1, $2, $3, $4, $5, 'active', $6, $7::time, $8::time, $9)
      RETURNING id, start_date, end_date, reason, created_at, created_by,
-               COALESCE(status, 'active') AS status, cancelled_at, cancelled_by`,
-    [providerUid, payload.startDate, payload.endDate, payload.reason ?? null, actorUid]
+               COALESCE(status, 'active') AS status, cancelled_at, cancelled_by,
+               COALESCE(all_day, TRUE) AS all_day,
+               to_char(start_time, 'HH24:MI') AS start_time,
+               to_char(end_time,   'HH24:MI') AS end_time,
+               note`,
+    [providerUid, payload.startDate, payload.endDate, payload.reason ?? null, actorUid,
+     allDay, startTime, endTime, normaliseNote(payload.note)]
   );
 
   const r = res.rows[0];
@@ -348,6 +445,10 @@ export const createTimeOff = async (
     id:          r.id,
     startDate:   r.start_date instanceof Date ? r.start_date.toISOString().slice(0, 10) : String(r.start_date).slice(0, 10),
     endDate:     r.end_date   instanceof Date ? r.end_date.toISOString().slice(0, 10)   : String(r.end_date).slice(0, 10),
+    allDay:      r.all_day !== false,
+    startTime:   r.start_time ?? null,
+    endTime:     r.end_time ?? null,
+    note:        r.note ?? null,
     reason:      r.reason ?? null,
     status:      'active',
     createdAt:   r.created_at,
@@ -370,7 +471,11 @@ export const cancelTimeOff = async (
      SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $3
      WHERE id = $1 AND worker_uid = $2 AND COALESCE(status, 'active') = 'active'
      RETURNING id, start_date, end_date, reason, created_at, created_by,
-               status, cancelled_at, cancelled_by`,
+               status, cancelled_at, cancelled_by,
+               COALESCE(all_day, TRUE) AS all_day,
+               to_char(start_time, 'HH24:MI') AS start_time,
+               to_char(end_time,   'HH24:MI') AS end_time,
+               note`,
     [timeOffId, providerUid, actorUid]
   );
 
@@ -385,6 +490,10 @@ export const cancelTimeOff = async (
     id:          r.id,
     startDate:   r.start_date instanceof Date ? r.start_date.toISOString().slice(0, 10) : String(r.start_date).slice(0, 10),
     endDate:     r.end_date   instanceof Date ? r.end_date.toISOString().slice(0, 10)   : String(r.end_date).slice(0, 10),
+    allDay:      r.all_day !== false,
+    startTime:   r.start_time ?? null,
+    endTime:     r.end_time ?? null,
+    note:        r.note ?? null,
     reason:      reason ?? r.reason ?? null,
     status:      'cancelled',
     createdAt:   r.created_at,
@@ -503,11 +612,21 @@ export const filterUidsAvailableAt = async (
       [uids]
     ),
     dbQuery.query(
+      // C22 §17. Was date-only, so ANY time-off row blocked the whole day —
+      // which is what turned a two-hour partial day into a lost day of work.
+      // A partial day now blocks only where it actually overlaps the booking.
+      // Half-open comparison: time off ending at 12:00 does not block a
+      // booking starting at 12:00.
       `SELECT DISTINCT worker_uid FROM ${s}.worker_time_off
         WHERE worker_uid = ANY($1::text[])
           AND COALESCE(status, 'active') = 'active'
-          AND start_date <= $2::date AND end_date >= $2::date`,
-      [uids, day]
+          AND start_date <= $2::date AND end_date >= $2::date
+          AND (
+            COALESCE(all_day, TRUE) = TRUE
+            OR start_time IS NULL OR end_time IS NULL
+            OR (start_time < $4::time AND end_time > $3::time)
+          )`,
+      [uids, day, startTime, endTime]
     ),
   ]);
 
@@ -557,11 +676,18 @@ export const explainAvailability = async (
       [providerUid]
     ),
     dbQuery.query(
+      // C22 §17. Same partial-day overlap rule as filterUidsAvailableAt — the
+      // admin answer and the assignment answer must agree about one provider.
       `SELECT id, start_date, end_date FROM ${s}.worker_time_off
        WHERE worker_uid = $1
          AND COALESCE(status, 'active') = 'active'
-         AND start_date <= $2::date AND end_date >= $3::date`,
-      [providerUid, operationalDate(startAt), operationalDate(startAt)]
+         AND start_date <= $2::date AND end_date >= $2::date
+         AND (
+           COALESCE(all_day, TRUE) = TRUE
+           OR start_time IS NULL OR end_time IS NULL
+           OR (start_time < $4::time AND end_time > $3::time)
+         )`,
+      [providerUid, operationalDate(startAt), zonedParts(startAt).hhmm, zonedParts(endAt).hhmm]
     ),
     // Booking conflict: active booking within ±2-hour window.
     // Admin-created bookings set worker_uid on the bookings row AND write a
