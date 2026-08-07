@@ -1,6 +1,12 @@
 ﻿import { Request, Response } from "express";
 import { db } from "../config";
 import { providerShareOf, PROVIDER_SHARE_RATE, PROVIDER_SHARE_PERCENT } from '../services/revenueSplit';
+import {
+  canonicalPayoutStatus,
+  earningsPayoutDialect,
+  payoutsPayoutDialect,
+  ledgerPayoutDialect,
+} from '../services/payoutStatus';
 import dbQuery from "../db/dbQuery";
 import * as technicianService from "../services/technicianService";
 import * as userService from "../services/user.service";
@@ -314,13 +320,11 @@ export const getDashboard = async (req: Request, res: Response) => {
 
 // ─── Earnings ─────────────────────────────────────────────────────────────────
 
-const normalizePayoutStatus = (raw: string | null | undefined): string => {
-  if (!raw) return "pending";
-  const s = raw.toLowerCase();
-  if (s === "released") return "disbursed";
-  if (s === "failed")   return "failed_or_on_hold";
-  return s;
-};
+// C20 F-03. This was one of three hand-written mappings over the same column,
+// each answering a different word. It now derives from `payoutStatus.ts`, which
+// emits exactly what this function always emitted — the point is that the three
+// dialects can no longer drift apart, not that any value changed.
+const normalizePayoutStatus = earningsPayoutDialect;
 
 export const getEarnings = async (req: Request, res: Response) => {
   try {
@@ -384,6 +388,9 @@ export const getEarnings = async (req: Request, res: Response) => {
         clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
         bookingStatus: r.status ? r.status.toLowerCase() : "completed",
         providerPayoutStatus: normalizePayoutStatus(r.payout_status),
+        // Additive (C20 F-03). Keeps PROCESSING distinct from PENDING, which
+        // the dialect above cannot express and §1 requires.
+        payoutStatusCanonical: canonicalPayoutStatus(r.payout_status),
         disbursedAt: r.released_at || null,
         paymentMethod: (r.payment_method || "cash").toLowerCase(),
         currency: "PHP",
@@ -440,6 +447,8 @@ export const getEarningById = async (req: Request, res: Response) => {
       clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
       bookingStatus:       r.status ? r.status.toLowerCase() : "completed",
       providerPayoutStatus: normalizePayoutStatus(r.payout_status),
+      // Additive (C20 F-03). Keeps PROCESSING distinct from PENDING.
+      payoutStatusCanonical: canonicalPayoutStatus(r.payout_status),
       disbursedAt:         r.released_at || null,
       paymentMethod:       (r.payment_method || "cash").toLowerCase(),
       currency:            "PHP",
@@ -581,11 +590,11 @@ export const getLedger = async (req: Request, res: Response) => {
       // two endpoints disagreed about one booking. §1 requires pending,
       // available, held, processing, paid and reversed to stay distinct; one
       // word for all of them is the opposite.
-      const payoutStatus = String(r.payout_status ?? "").toUpperCase();
-      const status =
-        payoutStatus === "RELEASED" ? "settled"
-        : payoutStatus === "FAILED" ? "failed"
-        : "pending";
+      // C20 F-03. The third dialect, and the one this command introduced: the
+      // F-01 fix had to stop hardcoding `settled`, and added `settled` as a
+      // value in doing so. Derived from the same canonical source now.
+      const status = ledgerPayoutDialect(r.payout_status);
+      const payoutCanonical = canonicalPayoutStatus(r.payout_status);
 
       // Prefer the authoritative disbursed amount. final_price × rate is only
       // an ESTIMATE, used where no disbursement row exists yet, and it is
@@ -600,6 +609,7 @@ export const getLedger = async (req: Request, res: Response) => {
         type: "booking_earning",
         direction: "credit",
         status,
+        payoutStatusCanonical: payoutCanonical,
         isEstimate: !hasDisbursement,
         amountMinor,
         currency: "PHP",
@@ -613,7 +623,7 @@ export const getLedger = async (req: Request, res: Response) => {
         availableAt: null,
         // Only a RELEASED disbursement has actually settled, and it settled
         // when it was released — not when the booking was scheduled.
-        settledAt: payoutStatus === "RELEASED" ? (r.released_at ?? null) : null,
+        settledAt: payoutCanonical === "paid" ? (r.released_at ?? null) : null,
       };
     });
 
@@ -623,13 +633,11 @@ export const getLedger = async (req: Request, res: Response) => {
   }
 };
 
-const _mapPayoutStatus = (raw: string): string => {
-  const s = (raw || "").toUpperCase();
-  if (s === "RELEASED")   return "paid";
-  if (s === "FAILED")     return "failed";
-  if (s === "PROCESSING") return "pending";
-  return "pending";
-};
+// C20 F-03. Same column, second dialect — now derived rather than rewritten.
+// Note it still collapses PROCESSING into "pending", which §1 says must stay
+// distinct; that is preserved because consumers branch on these literals, and
+// the distinction is carried by `payoutStatusCanonical` alongside it.
+const _mapPayoutStatus = payoutsPayoutDialect;
 
 export const getPayouts = async (req: Request, res: Response) => {
   try {
@@ -641,6 +649,7 @@ export const getPayouts = async (req: Request, res: Response) => {
       amountMinor:       Math.round(Number(r.worker_share || 0) * 100),
       currency:          "PHP",
       status:            _mapPayoutStatus(r.status),
+      payoutStatusCanonical: canonicalPayoutStatus(r.status),
       payoutMethodSummary: null,
       initiatedAt:       r.created_at    ? new Date(r.created_at).toISOString()    : null,
       expectedArrivalAt: r.release_after ? new Date(r.release_after).toISOString() : null,

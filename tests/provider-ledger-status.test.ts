@@ -23,6 +23,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
+import { ledgerPayoutDialect, canonicalPayoutStatus } from "../src/services/payoutStatus";
 
 const src = fs.readFileSync(
   path.join(__dirname, "..", "src/controllers/providerController.ts"),
@@ -59,17 +60,35 @@ describe("the ledger reads the actual disbursement", () => {
 });
 
 describe("status distinguishes the states §1 requires", () => {
+  // These asserted the literal strings inline in the handler and broke when
+  // C20 F-03 moved the mapping into `payoutStatus.ts` — a source-shape check
+  // failing on an improvement, which is the argument for asserting behaviour.
+  // The ledger's mapping is now called directly.
+
   it("only a RELEASED disbursement is settled", () => {
-    expect(code).toMatch(/RELEASED.*settled/s);
+    expect(ledgerPayoutDialect("RELEASED")).toBe("settled");
+    for (const other of ["PENDING", "PROCESSING", "FAILED", null, "ANYTHING"]) {
+      expect(ledgerPayoutDialect(other as any)).not.toBe("settled");
+    }
   });
 
   it("a FAILED payout is reported as failed, not settled", () => {
     // The sharpest case: money that failed to pay out was shown as settled.
-    expect(code).toMatch(/FAILED.*failed/s);
+    expect(ledgerPayoutDialect("FAILED")).toBe("failed");
   });
 
   it("anything else falls back to pending, not settled", () => {
-    expect(code).toMatch(/:\s*"pending"/);
+    expect(ledgerPayoutDialect("PENDING")).toBe("pending");
+    expect(ledgerPayoutDialect("PROCESSING")).toBe("pending");
+    expect(ledgerPayoutDialect(null)).toBe("pending");
+    // An unrecognised status must never read as money that arrived.
+    expect(ledgerPayoutDialect("SOMETHING_NEW")).toBe("pending");
+  });
+
+  it("the ledger takes its mapping from the one canonical source", () => {
+    expect(code).toMatch(/ledgerPayoutDialect\(r\.payout_status\)/);
+    // A second hand-written comparison here is how the third dialect started.
+    expect(code).not.toMatch(/=== ?"RELEASED"/);
   });
 });
 
@@ -93,7 +112,13 @@ describe("settledAt reflects settlement, not scheduling", () => {
   });
 
   it("is null unless the payout actually released", () => {
-    expect(code).toMatch(/RELEASED.*released_at.*:\s*null/s);
+    // settledAt is gated on the canonical value being `paid`, which only
+    // RELEASED produces — verified here rather than by matching source text.
+    expect(code).toMatch(/settledAt: payoutCanonical === "paid"/);
+    expect(canonicalPayoutStatus("RELEASED")).toBe("paid");
+    for (const other of ["PENDING", "PROCESSING", "FAILED", null]) {
+      expect(canonicalPayoutStatus(other)).not.toBe("paid");
+    }
   });
 });
 
