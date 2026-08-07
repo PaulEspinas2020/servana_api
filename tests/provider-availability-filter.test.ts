@@ -23,9 +23,9 @@ import { filterUidsAvailableAt, scheduleCoversWindow } from '../src/services/pro
 
 const q = dbQuery.query as jest.Mock;
 
-/** Monday 2026-08-10, 10:00–11:00 local. */
-const START = new Date(2026, 7, 10, 10, 0).toISOString();
-const END   = new Date(2026, 7, 10, 11, 0).toISOString();
+/** Monday 2026-08-10, 10:00–11:00 in the operational Manila timezone. */
+const START = new Date('2026-08-10T10:00:00+08:00').toISOString();
+const END   = new Date('2026-08-10T11:00:00+08:00').toISOString();
 const MONDAY = 1;
 
 /** availability rows, then time-off rows; bootstrap DDL calls resolve empty. */
