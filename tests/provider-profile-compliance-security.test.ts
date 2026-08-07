@@ -6,6 +6,8 @@ jest.mock('../src/db/dbQuery', () => ({
 jest.mock('../src/config', () => ({ db: { schema: 'servana' } }));
 
 import dbQuery from '../src/db/dbQuery';
+import fs from 'fs';
+import path from 'path';
 import { baselineDocumentScan } from '../src/services/providerDocumentSecurity';
 import {
   DOCUMENT_TYPE_CATALOG,
@@ -70,6 +72,23 @@ describe('Command 24 provider profile and document security', () => {
     expect(JSON.stringify(result)).not.toContain('storage_path');
     expect(JSON.stringify(result)).not.toContain('permanent.example');
     expect(JSON.stringify(result)).not.toContain('risk score');
+  });
+
+  it('prevents caching of short-lived private document preview URLs', () => {
+    const controller = fs.readFileSync(
+      path.join(__dirname, '../src/controllers/providerProfileComplianceController.ts'),
+      'utf8',
+    );
+    const preview = controller.slice(
+      controller.indexOf('export const getDocumentPreview'),
+      controller.indexOf('export const deleteDocument'),
+    );
+
+    expect(preview).toContain("res.set('Cache-Control', 'private, no-store, max-age=0')");
+    expect(preview).toContain("res.set('Pragma', 'no-cache')");
+    expect(preview.indexOf("res.set('Cache-Control'")).toBeLessThan(
+      preview.indexOf('profileService.getDocumentPreview'),
+    );
   });
 
   it('does not treat an approved review as verified until scanning is clean', async () => {

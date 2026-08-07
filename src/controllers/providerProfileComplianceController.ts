@@ -129,6 +129,10 @@ export const getDocumentPreview = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.documentId);
     if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ status: 'failed', message: 'Document not found' });
+    // The payload contains a short-lived private storage URL. Prevent browsers
+    // and intermediary caches from retaining or replaying it.
+    res.set('Cache-Control', 'private, no-store, max-age=0');
+    res.set('Pragma', 'no-cache');
     return res.status(200).json({ status: 'success', data: await profileService.getDocumentPreview(uidOf(req), id) });
   } catch (error) {
     return fail(res, error, 'Document preview is temporarily unavailable');
