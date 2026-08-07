@@ -33,7 +33,18 @@ export const listConversations = async (req: any, res: Response) => {
   }
 };
 
-/** GET /bookings/:bookingId/conversation — get or lazily create it. */
+/**
+ * GET /bookings/:bookingId/conversation
+ *
+ * Resolves the booking's conversation. It does NOT create one: a booking
+ * conversation is a consequence of a provider being confirmed, created
+ * transactionally by `technicianService.acceptJob` and by admin assignment —
+ * not of a client opening a screen.
+ *
+ * 404 when it does not exist yet is the contract the customer app was already
+ * written against: `MessagingRepository.resolveForBooking` maps 404 to null,
+ * commenting "the conversation does not exist yet (provider not yet assigned)".
+ */
 export const getBookingConversation = async (req: any, res: Response) => {
   try {
     const bookingId = Number(req.params.bookingId);
@@ -45,7 +56,13 @@ export const getBookingConversation = async (req: any, res: Response) => {
     if (!access.allowed) {
       return res.status(403).json({ success: false, message: "Not allowed for this booking" });
     }
-    const conversation = await chatService.getOrCreateConversation(bookingId);
+    const conversation = await chatService.getExistingConversation(bookingId);
+    if (!conversation) {
+      return res.status(404).json({
+        success: false,
+        message: "No conversation for this booking yet",
+      });
+    }
     const full = await chatService.getConversationWithParticipants(conversation.id);
     return res.json({ success: true, conversation: full });
   } catch (e: any) {

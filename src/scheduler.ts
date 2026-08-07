@@ -5,6 +5,7 @@ import { processPendingDisbursements, retryFailedDisbursements } from "./service
 import { createCheckoutSession } from "./services/paymentService";
 import { send } from "./helpers/mailer";
 import { getUserInfoByBookingId } from "./services/user.service";
+import { sweepGracePeriod } from "./chat/chat.service";
 
 const dbSchema = db.schema;
 
@@ -153,6 +154,21 @@ const runPaymentRetries = async () => {
 };
 
 // ---------------------------------------------------------------------------
+// Booking conversations past their post-completion grace window
+// ---------------------------------------------------------------------------
+
+const runConversationGraceSweep = async () => {
+  try {
+    const ids = await sweepGracePeriod();
+    if (ids.length) {
+      console.log(`[scheduler] ${ids.length} booking conversation(s) moved to read-only.`);
+    }
+  } catch (err) {
+    console.error("[scheduler] Conversation grace sweep error:", err);
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Start all scheduled jobs
 // ---------------------------------------------------------------------------
 
@@ -168,6 +184,13 @@ export const startScheduler = () => {
 
   // Every 6 hours — retry failed PayMongo checkout sessions
   cron.schedule("0 */6 * * *", runPaymentRetries);
+
+  // Hourly — retire booking conversations whose post-completion grace window
+  // has lapsed. Completion deliberately does NOT close the chat: the 48 hours
+  // after a job are when "you left a cable behind", "can I get a receipt" and
+  // "something isn't right" actually happen. After that it goes read-only, so
+  // a finished booking cannot quietly become a permanent private channel.
+  cron.schedule("30 * * * *", runConversationGraceSweep);
 
   console.log("[scheduler] All cron jobs started.");
 };

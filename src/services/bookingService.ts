@@ -10,6 +10,7 @@ import { getLatLonByLocationId } from "../services/address.service";
 import { assignNearestWorker } from "../services/technicianService";
 import { send } from "../helpers/mailer";
 import { getEmailById, getNameByEmail } from "./user.service";
+import { closeConversationForCancellation } from "../chat/chat.service";
 import { toCamel } from "../helpers/idGenerator";
 import { assertBookingAccess } from "./bookingAccessService";
 
@@ -726,6 +727,17 @@ export const customerCancelBooking = async (
       reasonCode ? JSON.stringify({ reasonCode }) : null,
     ],
   );
+
+  // Close the conversation on the customer-cancelled path too. Both cancel
+  // routes must behave identically or a cancelled booking stays a live private
+  // channel depending only on who pressed the button.
+  (async () => {
+    try {
+      await closeConversationForCancellation(bookingId);
+    } catch (err) {
+      console.error('[cancel] chat close failed', bookingId, err);
+    }
+  })();
 
   const updatedRes = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.bookings WHERE id = $1`,

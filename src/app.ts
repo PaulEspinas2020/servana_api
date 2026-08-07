@@ -211,6 +211,15 @@ const httpServer = http.createServer(app);
 const io = initChatSocket(httpServer);
 initProviderSocket(io);
 
+// Additive chat lifecycle columns (status / can_read / can_send). Every
+// statement is IF NOT EXISTS, so this is a no-op after the first boot. It is
+// not awaited — a DDL hiccup must not stop the server coming up, and every
+// read path COALESCEs the new columns.
+import { ensureChatLifecycleSchema } from "./chat/chat.repository";
+ensureChatLifecycleSchema().catch((e) =>
+  console.error("[chat] lifecycle schema init failed:", e)
+);
+
 import { startScheduler } from "./scheduler";
 startScheduler();
 

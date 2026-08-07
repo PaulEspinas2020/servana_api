@@ -2,6 +2,12 @@ import { db } from "../config";
 import dbQuery from "../db/dbQuery";
 import { send } from "../helpers/mailer";
 import { getUserInfoByBookingId } from "./user.service";
+import {
+  handleProviderReassignment,
+  closeConversationForCancellation,
+  openConversationForConfirmedBooking,
+  escalateToSupport,
+} from "../chat/chat.service";
 const dbSchema = db.schema;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -863,6 +869,18 @@ export const adminReassignProvider = async (
     reason,
   });
 
+  // Move the booking conversation across with the assignment. The old provider
+  // is marked left (can_send false), the new one admitted, and a system event
+  // recorded. Fire-and-forget with its own catch: chat membership must never
+  // be able to fail a reassignment that has already been committed above.
+  (async () => {
+    try {
+      await handleProviderReassignment(bookingId, fromProviderUid, toProviderUid);
+    } catch (err) {
+      console.error('[reassign] chat membership update failed', bookingId, err);
+    }
+  })();
+
   return { bookingId, fromProviderUid, toProviderUid, providerName };
 };
 
@@ -983,6 +1001,17 @@ export const adminCancelBooking = async (
     { reasonCode, refundAction }
   );
 
+  // Close the booking conversation so a cancelled job cannot become an
+  // open-ended private channel between customer and provider. The transcript
+  // stays readable; support can still post an official resolution.
+  (async () => {
+    try {
+      await closeConversationForCancellation(bookingId);
+    } catch (err) {
+      console.error('[cancel] chat close failed', bookingId, err);
+    }
+  })();
+
   logBookingAudit({
     bookingId, actorUid: adminUid, actorRole: 'admin',
     action: 'booking_cancelled',
@@ -1031,6 +1060,20 @@ export const adminEscalateBooking = async (
     after:  { reason, severity },
     reason,
   });
+
+  // Reopen the SAME booking conversation rather than starting a parallel
+  // dispute thread. One booking keeps one auditable timeline — assignment,
+  // chat, arrival, OTP, service, payment, completion, complaint, resolution —
+  // instead of the case being scattered across two messaging surfaces. This
+  // also un-freezes a conversation that had already gone read-only, which is
+  // the common case: disputes are raised after completion.
+  (async () => {
+    try {
+      await escalateToSupport(bookingId);
+    } catch (chatErr) {
+      console.error('[escalate] chat escalation failed', bookingId, chatErr);
+    }
+  })();
 
   return escRes.rows[0];
 };
@@ -1189,6 +1232,20 @@ export const adminConfirmProviderAssignment = async (
     after:  { assignmentStatus: 'ACCEPTED', confirmationSource: 'admin_on_behalf_of_provider', consentMethod },
     reason,
   });
+
+  // This is a provider confirmation, so it opens the booking conversation —
+  // exactly as `technicianService.acceptJob` does when the provider taps accept
+  // themselves. It has to be here explicitly: this path writes
+  // booking_workers.status = 'ACCEPTED' directly and never goes through
+  // acceptJob, so without this an admin-confirmed booking would have no
+  // conversation at all now that read paths no longer create one lazily.
+  (async () => {
+    try {
+      await openConversationForConfirmedBooking(bookingId);
+    } catch (chatErr) {
+      console.error('auto group-chat creation failed (admin on behalf):', bookingId, chatErr);
+    }
+  })();
 
   return {
     bookingId,
