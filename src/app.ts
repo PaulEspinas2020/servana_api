@@ -173,6 +173,10 @@ app.use("/api", cors(corsOptionsDelegate), adminAuditRoutes);
 
 import adminCommunicationRoutes from "./routes/adminCommunication.routes";
 app.use("/api", cors(corsOptionsDelegate), adminCommunicationRoutes);
+import adminSupportCaseRoutes from "./routes/adminSupportCase.routes";
+app.use("/api", cors(corsOptionsDelegate), adminSupportCaseRoutes);
+import adminNotificationRoutes from "./routes/adminNotification.routes";
+app.use("/api", cors(corsOptionsDelegate), adminNotificationRoutes);
 
 import adminAutoOnlineRoutes from "./routes/adminAutoOnline.routes";
 app.use("/api", cors(corsOptionsDelegate), adminAutoOnlineRoutes);
@@ -185,6 +189,9 @@ app.use("/api", cors(corsOptionsDelegate), adminPermissionRoutes);
 
 import adminCustomerRoutes from "./routes/adminCustomer.routes";
 app.use("/api", cors(corsOptionsDelegate), adminCustomerRoutes);
+
+import adminUserAccountRoutes from "./routes/adminUserAccount.routes";
+app.use("/api", cors(corsOptionsDelegate), adminUserAccountRoutes);
 
 import customerSupportRoutes from "./routes/customerSupport.routes";
 app.use("/api", cors(corsOptionsDelegate), customerSupportRoutes);
@@ -210,6 +217,15 @@ import { initProviderSocket } from "./provider.gateway";
 const httpServer = http.createServer(app);
 const io = initChatSocket(httpServer);
 initProviderSocket(io);
+
+// Additive chat lifecycle columns (status / can_read / can_send). Every
+// statement is IF NOT EXISTS, so this is a no-op after the first boot. It is
+// not awaited — a DDL hiccup must not stop the server coming up, and every
+// read path COALESCEs the new columns.
+import { ensureChatLifecycleSchema } from "./chat/chat.repository";
+ensureChatLifecycleSchema().catch((e) =>
+  console.error("[chat] lifecycle schema init failed:", e)
+);
 
 import { startScheduler } from "./scheduler";
 startScheduler();

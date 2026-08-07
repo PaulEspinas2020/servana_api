@@ -75,11 +75,23 @@ class AdditionalService {
       [id]
     );
 
-    const checkoutUrl = await createPayment(res.rows[0]);
+    const request = res.rows[0];
+    if (!request) throw new Error("Additional work request not found");
+    if (request.status !== "WAITING_FOR_PAYMENT") {
+      throw new Error(`Cannot create payment from status: ${request.status}`);
+    }
+
+    const existing = await dbQuery.query(
+      `SELECT checkout_url FROM ${dbSchema}.payments
+       WHERE additional_request_id = $1 AND provider = 'PAYMONGO' AND status = 'PENDING'
+         AND checkout_url IS NOT NULL AND updated_at > NOW() - INTERVAL '2 hours'
+       ORDER BY id DESC LIMIT 1`,
+      [id]
+    );
+    const checkoutUrl = existing.rows[0]?.checkout_url || await createPayment(request);
 
     // Notify customer that additional work was approved and payment is needed
     try {
-      const request = res.rows[0];
       if (request?.booking_id) {
         const userInfo = await getUserInfoByBookingId(request.booking_id);
         if (userInfo) {

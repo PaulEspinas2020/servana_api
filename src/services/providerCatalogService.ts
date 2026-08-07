@@ -1,7 +1,8 @@
 import { db } from "../config";
-import dbQuery from "../db/dbQuery";
+import dbQuery, { pool } from "../db/dbQuery";
 import { toCamel } from "../helpers/idGenerator";
 import { auditFire } from "./adminAuditService";
+import { evaluateApplicationEligibility } from "./serviceApplicationService";
 const dbSchema = db.schema;
 
 // ─── Schema init ─────────────────────────────────────────────────────────────
@@ -272,7 +273,7 @@ export const seedBuiltInOfferings = async (): Promise<void> => {
 
 // ─── Provider-facing catalog read ────────────────────────────────────────────
 
-export const getOfferingsForProvider = async (): Promise<any[]> => {
+export const getOfferingsForProvider = async (workerUid: string): Promise<any[]> => {
   const offeringsRes = await dbQuery.query(
     `SELECT id, catalog_key, name, short_description, provider_description,
             icon_key, banner_path, display_order, is_builtin, status
@@ -361,7 +362,7 @@ export const getOfferingsForProvider = async (): Promise<any[]> => {
   }
 
   // Group specific services by (service_id + level_2) → then match to offerings via mappings
-  return offerings.map((o: any) => {
+  return Promise.all(offerings.map(async (o: any) => {
     const oMappings = mappingsByOffering.get(Number(o.id)) ?? [];
     const specificServices: any[] = [];
 
@@ -372,16 +373,29 @@ export const getOfferingsForProvider = async (): Promise<any[]> => {
       for (const ss of services) {
         specificServices.push({
           serviceOptionId: Number(ss.id),
+          serviceId: mp.serviceId,
           name: ss.level_3,
           description: ss.description || null,
           unit: ss.unit,
-          basePrice: Number(ss.base_price),
           inclusions: ss.inclusions ?? [],
           exclusions: ss.exclusions ?? [],
-          addons: addonsByParent.get(Number(ss.id)) ?? [],
+          addons: (addonsByParent.get(Number(ss.id)) ?? []).map((addon: any) => ({
+            serviceOptionId: addon.serviceOptionId,
+            name: addon.name,
+            unit: addon.unit,
+          })),
         });
       }
     }
+
+    const applicationTargets = await Promise.all(
+      [...new Map(oMappings.map((mapping: any) => [mapping.serviceId, mapping])).values()]
+        .map(async (mapping: any) => ({
+          serviceId: mapping.serviceId,
+          serviceName: mapping.serviceFamilyName,
+          eligibility: await evaluateApplicationEligibility(workerUid, mapping.serviceId),
+        })),
+    );
 
     return {
       id: Number(o.id),
@@ -396,8 +410,9 @@ export const getOfferingsForProvider = async (): Promise<any[]> => {
       status: o.status,
       legacyMappings: oMappings,
       specificServices,
+      applicationTargets,
     };
-  });
+  }));
 };
 
 // ─── Admin — Offering Providers (Compatibility tab) ──────────────────────────
@@ -405,7 +420,7 @@ export const getOfferingsForProvider = async (): Promise<any[]> => {
 export const getOfferingProviders = async (offeringId: number): Promise<any[]> => {
   const res = await dbQuery.query(
     `SELECT ecc.employee_uid, ecc.status, ecc.approved_at, ecc.created_at,
-            uc.first_name, uc.last_name, uc.email
+            uc.first_name, uc.last_name
      FROM ${dbSchema}.employee_catalog_capabilities ecc
      LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = ecc.employee_uid
      WHERE ecc.offering_id = $1
@@ -482,6 +497,22 @@ export const getAdminOffering = async (offeringId: number): Promise<any | null> 
     [offeringId]
   );
 
+  const [policyRes, requirementsRes] = await Promise.all([
+    dbQuery.query(
+      `SELECT enforcement_state, allowed_provider_types, allowed_branch_ids,
+              allowed_city_ids, version, updated_at, updated_by
+       FROM ${dbSchema}.provider_catalog_offering_policies WHERE offering_id = $1`,
+      [offeringId],
+    ),
+    dbQuery.query(
+      `SELECT requirement_key, document_type_id, provider_label,
+              provider_description, is_required, is_active, display_order, version
+       FROM ${dbSchema}.provider_catalog_offering_requirements
+       WHERE offering_id = $1 ORDER BY display_order, id`,
+      [offeringId],
+    ),
+  ]);
+
   const statsMap = new Map<number, { specific_service_count: number; min_price: number | null; max_price: number | null }>();
   for (const r of mappingStatsRes.rows) {
     statsMap.set(Number(r.mapping_id), {
@@ -496,6 +527,34 @@ export const getAdminOffering = async (offeringId: number): Promise<any | null> 
     ...offer,
     isMobileProtected: Boolean(offerRes.rows[0].is_mobile_protected),
     legacyCustomerMobileVisible: Boolean(offerRes.rows[0].legacy_customer_mobile_visible),
+    policy: policyRes.rowCount ? {
+      enforcementState: policyRes.rows[0].enforcement_state,
+      allowedProviderTypes: policyRes.rows[0].allowed_provider_types ?? [],
+      allowedBranchIds: policyRes.rows[0].allowed_branch_ids ?? [],
+      allowedCityIds: policyRes.rows[0].allowed_city_ids ?? [],
+      version: Number(policyRes.rows[0].version ?? 1),
+      updatedAt: policyRes.rows[0].updated_at,
+      updatedBy: policyRes.rows[0].updated_by ?? null,
+      requirements: requirementsRes.rows.map((row: any) => ({
+        requirementKey: row.requirement_key,
+        documentTypeId: row.document_type_id,
+        providerLabel: row.provider_label,
+        providerDescription: row.provider_description,
+        required: Boolean(row.is_required),
+        active: Boolean(row.is_active),
+        displayOrder: Number(row.display_order),
+        version: Number(row.version),
+      })),
+    } : {
+      enforcementState: 'draft',
+      allowedProviderTypes: [],
+      allowedBranchIds: [],
+      allowedCityIds: [],
+      version: 0,
+      updatedAt: null,
+      updatedBy: null,
+      requirements: [],
+    },
     mappings: mappingsRes.rows.map((m: any) => {
       const stats = statsMap.get(Number(m.mapping_id));
       return {
@@ -637,6 +696,162 @@ export const updateOffering = async (
   result.isMobileProtected = Boolean(res.rows[0].legacy_provider_mobile_visible);
   auditFire({ action: 'catalog_offering.update', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_offering', entityId: String(offeringId), after: { name: result.name, status: result.status } });
   return result;
+};
+
+export interface OfferingPolicyInput {
+  enforcementState: 'draft' | 'enforced';
+  allowedProviderTypes: string[];
+  allowedBranchIds: string[];
+  allowedCityIds: string[];
+  requirements: Array<{
+    requirementKey: string;
+    documentTypeId: string;
+    providerLabel: string;
+    providerDescription: string;
+    required: boolean;
+    displayOrder?: number;
+  }>;
+  expectedVersion: number;
+}
+
+export const saveOfferingPolicy = async (
+  offeringId: number,
+  input: OfferingPolicyInput,
+  adminUid: string,
+): Promise<any> => {
+  const providerTypes = uniqueStrings(input.allowedProviderTypes, 'allowedProviderTypes');
+  const branchIds = uniqueStrings(input.allowedBranchIds, 'allowedBranchIds');
+  const cityIds = uniqueStrings(input.allowedCityIds, 'allowedCityIds');
+  if (!['draft', 'enforced'].includes(input.enforcementState)) throw new Error('enforcementState must be draft or enforced');
+  if (providerTypes.some((value) => !['individual_provider', 'organization_provider'].includes(value))) {
+    throw new Error('allowedProviderTypes contains an unsupported provider type');
+  }
+  if (!Array.isArray(input.requirements) || input.requirements.length > 50) throw new Error('requirements must contain at most 50 items');
+  const requirementKeys = new Set<string>();
+  for (const requirement of input.requirements) {
+    if (!/^[a-z0-9][a-z0-9_-]{2,99}$/.test(String(requirement.requirementKey ?? ''))) throw new Error('Each requirement needs a stable lowercase requirementKey');
+    if (requirementKeys.has(requirement.requirementKey)) throw new Error(`Duplicate requirementKey: ${requirement.requirementKey}`);
+    requirementKeys.add(requirement.requirementKey);
+    if (!String(requirement.providerLabel ?? '').trim() || !String(requirement.providerDescription ?? '').trim()) {
+      throw new Error('Every requirement needs provider-safe label and description text');
+    }
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const offering = await client.query(
+      `SELECT id, version FROM ${dbSchema}.provider_catalog_offerings WHERE id = $1 FOR UPDATE`,
+      [offeringId],
+    );
+    if (!offering.rowCount) throw Object.assign(new Error('Offering not found'), { statusCode: 404 });
+    if (Number(offering.rows[0].version) !== Number(input.expectedVersion)) {
+      throw Object.assign(new Error('Conflict: offering policy changed; refresh and retry'), { code: 'CONFLICT' });
+    }
+
+    if (branchIds.length) {
+      const valid = await client.query(`SELECT id::text AS id FROM ${dbSchema}.branches WHERE id::text = ANY($1)`, [branchIds]);
+      const found = new Set(valid.rows.map((row: any) => String(row.id)));
+      const unknown = branchIds.filter((id) => !found.has(id));
+      if (unknown.length) throw new Error(`Unknown branch ids: ${unknown.join(', ')}`);
+    }
+    if (cityIds.length) {
+      const valid = await client.query(
+        `SELECT area_id FROM ${dbSchema}.provider_service_area_catalog WHERE area_id = ANY($1) AND is_supported = TRUE`,
+        [cityIds],
+      );
+      const found = new Set(valid.rows.map((row: any) => String(row.area_id)));
+      const unknown = cityIds.filter((id) => !found.has(id));
+      if (unknown.length) throw new Error(`Unsupported service area ids: ${unknown.join(', ')}`);
+    }
+    if (input.requirements.length) {
+      const documentTypes = input.requirements.map((requirement) => requirement.documentTypeId);
+      const valid = await client.query(
+        `SELECT document_type_id FROM ${dbSchema}.provider_document_types
+         WHERE document_type_id = ANY($1) AND is_active = TRUE`,
+        [documentTypes],
+      );
+      const found = new Set(valid.rows.map((row: any) => String(row.document_type_id)));
+      const unknown = documentTypes.filter((id) => !found.has(id));
+      if (unknown.length) throw new Error(`Unknown document types: ${[...new Set(unknown)].join(', ')}`);
+    }
+
+    await client.query(
+      `INSERT INTO ${dbSchema}.provider_catalog_offering_policies
+         (offering_id, enforcement_state, allowed_provider_types,
+          allowed_branch_ids, allowed_city_ids, updated_by)
+       VALUES ($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6)
+       ON CONFLICT (offering_id) DO UPDATE SET
+         enforcement_state = EXCLUDED.enforcement_state,
+         allowed_provider_types = EXCLUDED.allowed_provider_types,
+         allowed_branch_ids = EXCLUDED.allowed_branch_ids,
+         allowed_city_ids = EXCLUDED.allowed_city_ids,
+         updated_by = EXCLUDED.updated_by, updated_at = NOW(),
+         version = ${dbSchema}.provider_catalog_offering_policies.version + 1`,
+      [offeringId, input.enforcementState, JSON.stringify(providerTypes), JSON.stringify(branchIds), JSON.stringify(cityIds), adminUid],
+    );
+    await client.query(
+      `UPDATE ${dbSchema}.provider_catalog_offering_requirements
+       SET is_active = FALSE, updated_at = NOW(), version = version + 1
+       WHERE offering_id = $1 AND is_active = TRUE`,
+      [offeringId],
+    );
+    for (const requirement of input.requirements) {
+      await client.query(
+        `INSERT INTO ${dbSchema}.provider_catalog_offering_requirements
+           (offering_id, requirement_key, document_type_id, provider_label,
+            provider_description, is_required, is_active, display_order)
+         VALUES ($1,$2,$3,$4,$5,$6,TRUE,$7)
+         ON CONFLICT (offering_id, requirement_key) DO UPDATE SET
+           document_type_id = EXCLUDED.document_type_id,
+           provider_label = EXCLUDED.provider_label,
+           provider_description = EXCLUDED.provider_description,
+           is_required = EXCLUDED.is_required, is_active = TRUE,
+           display_order = EXCLUDED.display_order, updated_at = NOW(),
+           version = ${dbSchema}.provider_catalog_offering_requirements.version + 1`,
+        [offeringId, requirement.requirementKey, requirement.documentTypeId,
+          requirement.providerLabel.trim(), requirement.providerDescription.trim(),
+          Boolean(requirement.required), Number(requirement.displayOrder ?? 0)],
+      );
+    }
+    await client.query(
+      `UPDATE ${dbSchema}.provider_catalog_offerings
+       SET version = version + 1, updated_by = $2, updated_at = NOW() WHERE id = $1`,
+      [offeringId, adminUid],
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  auditFire({ action: 'catalog_offering.policy_update', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_offering', entityId: String(offeringId), after: { enforcementState: input.enforcementState, requirementCount: input.requirements.length } });
+  return getAdminOffering(offeringId);
+};
+
+export const getCatalogPolicyDimensions = async () => {
+  const [branches, areas, documentTypes] = await Promise.all([
+    dbQuery.query(`SELECT id::text AS id, name FROM ${dbSchema}.branches ORDER BY name`, []),
+    dbQuery.query(`SELECT area_id, provider_label, province, is_supported FROM ${dbSchema}.provider_service_area_catalog ORDER BY province, provider_label`, []),
+    dbQuery.query(`SELECT document_type_id, provider_label, category, expiry_policy FROM ${dbSchema}.provider_document_types WHERE is_active = TRUE ORDER BY category, provider_label`, []),
+  ]);
+  return {
+    providerTypes: [
+      { id: 'individual_provider', label: 'Individual provider' },
+      { id: 'organization_provider', label: 'Organization provider' },
+    ],
+    branches: branches.rows.map((row: any) => ({ id: String(row.id), label: row.name })),
+    serviceAreas: areas.rows.map((row: any) => ({ id: row.area_id, label: row.provider_label, province: row.province, supported: Boolean(row.is_supported) })),
+    documentTypes: documentTypes.rows.map((row: any) => ({ id: row.document_type_id, label: row.provider_label, category: row.category, expiryPolicy: row.expiry_policy })),
+  };
+};
+
+const uniqueStrings = (value: unknown, field: string): string[] => {
+  if (!Array.isArray(value) || value.length > 250) throw new Error(`${field} must be an array with at most 250 values`);
+  const normalized = value.map((item) => String(item).trim()).filter(Boolean);
+  if (normalized.some((item) => item.length > 100)) throw new Error(`${field} contains an invalid value`);
+  return [...new Set(normalized)];
 };
 
 export const updateOfferingStatus = async (
@@ -1425,8 +1640,8 @@ export const getCatalogAuditTrail = async (filter: {
     conditions.push(`ae.entity_id = $${params.length}`);
   }
 
-  const limit = Math.min(filter.limit ?? 50, 200);
-  const offset = filter.offset ?? 0;
+  const limit = Math.min(Math.max(Number(filter.limit) || 50, 1), 200);
+  const offset = Math.max(Number(filter.offset) || 0, 0);
   params.push(limit, offset);
 
   const res = await dbQuery.query(

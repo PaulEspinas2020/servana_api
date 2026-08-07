@@ -10,6 +10,8 @@ import dbQuery from '../db/dbQuery';
 import { db } from '../config';
 import { explainAvailability, AvailabilityExplanation } from './providerAvailabilityEngine';
 import { explainCoverage,    CoverageExplanation    } from './providerServiceAreaEngine';
+import { calculateCompliance } from './providerProfileComplianceService';
+import { evaluateServicePolicy } from './providerServicePolicyService';
 
 const s = db.schema;
 
@@ -43,10 +45,13 @@ export interface ProviderEligibilityResult {
   reasons: EligibilityReason[];
   checks: {
     accountActive:   boolean;
+    activationActive: boolean;
     notArchived:     boolean;
     hasActiveService: boolean;
+    servicePolicyOk: boolean;
     availabilityOk:  boolean;
     serviceAreaOk:   boolean;
+    complianceOk:    boolean;
   };
 }
 
@@ -111,17 +116,21 @@ export const evaluateProviderForSlot = async (
   const reasons: EligibilityReason[] = [];
   const checks = {
     accountActive:    false,
+    activationActive: false,
     notArchived:      false,
     hasActiveService: false,
+    servicePolicyOk:  false,
     availabilityOk:   false,
     serviceAreaOk:    false,
+    complianceOk:     false,
   };
 
   // 1. Account status
   const accountRes = await dbQuery.query(
-    `SELECT account_status, is_archive
-     FROM ${s}.user_credentials
-     WHERE uid = $1 AND role::int IN (2, 4)`,
+    `SELECT uc.account_status, uc.is_archive, pa.activation_status
+     FROM ${s}.user_credentials uc
+     LEFT JOIN ${s}.provider_activation pa ON pa.provider_uid = uc.uid
+     WHERE uc.uid = $1 AND uc.role::int IN (2, 4)`,
     [providerUid]
   );
 
@@ -145,12 +154,19 @@ export const evaluateProviderForSlot = async (
     checks.notArchived = true;
   }
 
+  if (account.activation_status !== 'ACTIVE') {
+    reasons.push({ code: 'PROVIDER_ACTIVATION_NOT_ACTIVE', severity: 'blocker', message: 'Provider activation is not active' });
+  } else {
+    checks.activationActive = true;
+  }
+
   // 2. Active service compatibility (if serviceId provided)
   if (slot.serviceId) {
     const serviceRes = await dbQuery.query(
       `SELECT 1 FROM ${s}.employee_services
        WHERE employee_uid = $1
          AND service_id = $2
+         AND COALESCE(status, 'active') = 'active'
        LIMIT 1`,
       [providerUid, slot.serviceId]
     );
@@ -159,13 +175,13 @@ export const evaluateProviderForSlot = async (
       const appRes = await dbQuery.query(
         `SELECT status FROM ${s}.worker_service_applications
          WHERE worker_uid = $1 AND service_id = $2
-         ORDER BY created_at DESC LIMIT 1`,
+         ORDER BY submitted_at DESC LIMIT 1`,
         [providerUid, slot.serviceId]
       );
       const appStatus: string | null = appRes.rows[0]?.status ?? null;
-      const msg = appStatus === 'pending' || appStatus === 'resubmitted'
+      const msg = appStatus === 'pending_review'
         ? `Provider's application for service ${slot.serviceId} is pending review`
-        : appStatus === 'flag_action_required'
+        : appStatus === 'action_required'
         ? `Provider's application for service ${slot.serviceId} requires action before approval`
         : appStatus === 'rejected'
         ? `Provider's application for service ${slot.serviceId} was rejected`
@@ -179,7 +195,41 @@ export const evaluateProviderForSlot = async (
     reasons.push({ code: 'NO_ACTIVE_SERVICE', severity: 'info', message: 'No service_id provided — service check skipped' });
   }
 
-  // 3. Availability
+  if (!slot.serviceId) checks.servicePolicyOk = true;
+  if (slot.serviceId) {
+    try {
+      const policy = await evaluateServicePolicy(providerUid, Number(slot.serviceId));
+      if (policy.eligible) {
+        checks.servicePolicyOk = true;
+      } else {
+        reasons.push({ code: policy.code, severity: 'blocker', message: policy.message });
+      }
+    } catch {
+      reasons.push({ code: 'SERVICE_POLICY_UNAVAILABLE', severity: 'blocker', message: 'Service policy could not be verified' });
+    }
+  }
+
+  // 4. Compliance and availability
+  // Command 24 compliance. Unknown/unavailable state is not permission.
+  try {
+    const compliance = await calculateCompliance(providerUid);
+    if (compliance.state === 'compliant' || compliance.state === 'expiring_soon') {
+      checks.complianceOk = true;
+    } else {
+      reasons.push({
+        code: 'PROVIDER_COMPLIANCE_BLOCKED',
+        severity: 'blocker',
+        message: 'Provider compliance requirements are not current',
+      });
+    }
+  } catch {
+    reasons.push({
+      code: 'PROVIDER_COMPLIANCE_UNAVAILABLE',
+      severity: 'blocker',
+      message: 'Provider compliance could not be verified',
+    });
+  }
+
   let availExplain: AvailabilityExplanation | null = null;
   try {
     availExplain = await explainAvailability(providerUid, slot.startAt, slot.endAt);

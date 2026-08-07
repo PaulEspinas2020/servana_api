@@ -2,6 +2,12 @@ import { db } from "../config";
 import dbQuery from "../db/dbQuery";
 import { send } from "../helpers/mailer";
 import { getUserInfoByBookingId } from "./user.service";
+import {
+  handleProviderReassignment,
+  closeConversationForCancellation,
+  openConversationForConfirmedBooking,
+  escalateToSupport,
+} from "../chat/chat.service";
 const dbSchema = db.schema;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -203,9 +209,11 @@ export const mapOperationsStatus = (
 
 export const getAdminBookings = async (
   filter: BookingListFilter
-): Promise<{ rows: any[]; total: number }> => {
-  const page   = Math.max(1, filter.page  ?? 1);
-  const limit  = Math.min(100, Math.max(1, filter.limit ?? 25));
+): Promise<{ rows: any[]; total: number; page: number; limit: number }> => {
+  const rawPage = Number(filter.page);
+  const rawLimit = Number(filter.limit);
+  const page = Number.isFinite(rawPage) ? Math.max(1, Math.trunc(rawPage)) : 1;
+  const limit = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, Math.trunc(rawLimit))) : 25;
   const offset = (page - 1) * limit;
 
   const conditions: string[] = [];
@@ -219,6 +227,8 @@ export const getAdminBookings = async (
       OR (cu.first_name || ' ' || cu.last_name) ILIKE $${pi}
       OR cu.email ILIKE $${pi}
       OR cu.phone_number ILIKE $${pi}
+      OR gc.email ILIKE $${pi}
+      OR gc.phone_normalized ILIKE $${pi}
       OR (wu.first_name || ' ' || wu.last_name) ILIKE $${pi}
       OR s.name ILIKE $${pi}
     )`);
@@ -229,7 +239,7 @@ export const getAdminBookings = async (
     params.push(filter.paymentMethod); pi++;
   }
   if (filter.paymentStatus) {
-    conditions.push(`lp.status = $${pi}`);
+    conditions.push(`lp.payment_status = $${pi}`);
     params.push(filter.paymentStatus); pi++;
   }
   if (filter.serviceId) {
@@ -256,6 +266,12 @@ export const getAdminBookings = async (
       `EXISTS (SELECT 1 FROM ${dbSchema}.booking_escalations be2
                WHERE be2.booking_id = b.id AND be2.resolved_at IS NULL)`
     );
+  }
+  if (filter.needsAdminAction === true) {
+    conditions.push(`
+      (b.worker_uid IS NULL OR b.worker_uid = '')
+      AND b.status IN ('PENDING_OTP', 'CONFIRMED', 'PAID')
+    `);
   }
 
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -295,27 +311,24 @@ export const getAdminBookings = async (
         la.confirmation_source,
         lp.payment_status,
         CASE WHEN b.guest_customer_id IS NOT NULL THEN 'guest' ELSE 'client' END AS customer_type,
+        b.guest_customer_id::text                    AS guest_customer_id,
         COALESCE(cu.uid, b.guest_customer_id::text)  AS customer_uid,
         COALESCE(
           NULLIF(TRIM(COALESCE(cu.first_name,'') || ' ' || COALESCE(cu.last_name,'')), ''),
           TRIM(COALESCE(gc.first_name,'') || ' ' || COALESCE(gc.last_name,''))
         )                                            AS customer_name,
-        COALESCE(cu.phone_number, gc.phone_normalized) AS customer_phone,
-        COALESCE(cu.email, gc.email)                 AS customer_email,
         COALESCE(wu.first_name,'') || ' ' || COALESCE(wu.last_name,'') AS provider_name,
-        wu.phone_number                              AS provider_phone,
         s.id                                         AS service_id,
         so.id                                        AS service_option_id,
         s.name                                       AS service_name,
         so.level_3                                   AS specific_service_name,
-        COALESCE(ua.address_one, b.service_address->>'addressLine') AS address_line,
-        COALESCE(ua.post_town,   b.service_address->>'city')        AS city,
         br.id                                        AS branch_id,
         br.name                                      AS branch_name,
         br.city                                      AS branch_city,
         CASE
           WHEN EXISTS (SELECT 1 FROM ${dbSchema}.booking_escalations esc
                        WHERE esc.booking_id = b.id AND esc.resolved_at IS NULL) THEN 'disputed'
+          WHEN b.status IN ('CANCELLED','CANCELED')                             THEN 'cancelled'
           WHEN b.status = 'COMPLETED' OR la.worker_status = 'COMPLETED'        THEN 'completed'
           WHEN la.worker_status = 'IN_PROGRESS'                                 THEN 'in_progress'
           WHEN la.worker_status = 'ACCEPTED'                                    THEN 'accepted'
@@ -325,7 +338,6 @@ export const getAdminBookings = async (
             AND (b.worker_uid IS NULL OR b.worker_uid = '')                     THEN 'awaiting_assignment'
           WHEN b.status IN ('CONFIRMED','PAID') AND b.worker_uid IS NOT NULL
             AND b.worker_uid != ''                                               THEN 'assigned'
-          WHEN b.status IN ('CANCELLED','CANCELED')                             THEN 'cancelled'
           ELSE 'new'
         END AS ops_status
       FROM ${dbSchema}.bookings b
@@ -333,7 +345,6 @@ export const getAdminBookings = async (
       LEFT JOIN ${dbSchema}.guest_customers  gc  ON gc.guest_customer_id = b.guest_customer_id
       LEFT JOIN ${dbSchema}.service_options so   ON so.id   = b.service_option_id
       LEFT JOIN ${dbSchema}.services s           ON s.id    = so.service_id
-      LEFT JOIN ${dbSchema}.user_address ua      ON ua.address_id = b.user_address_id
       LEFT JOIN latest_payment  lp               ON lp.booking_id = b.id
       LEFT JOIN ${dbSchema}.branches br          ON br.id   = b.branch_id
       LEFT JOIN latest_assignment la             ON la.booking_id = b.id
@@ -369,12 +380,10 @@ export const getAdminBookings = async (
       operationsStatus: opStatus,
       customerType: (row.customer_type as 'guest' | 'client') ?? 'client',
       customerUid: row.customer_uid ?? null,
+      guestCustomerId: row.guest_customer_id ?? null,
       customerName: (row.customer_name ?? '').trim() || null,
-      customerPhone: row.customer_phone ?? null,
-      customerEmail: row.customer_email ?? null,
       providerUid: row.provider_uid ?? null,
       providerName: (row.provider_name ?? '').trim() || null,
-      providerPhone: row.provider_phone ?? null,
       assignmentStatus: row.worker_status ?? null,
       confirmationSource: (row.confirmation_source as 'admin_on_behalf_of_provider' | null) ?? null,
       serviceId: row.service_id ?? null,
@@ -382,8 +391,6 @@ export const getAdminBookings = async (
       serviceName: row.service_name ?? null,
       specificServiceName: row.specific_service_name ?? null,
       scheduledAt: row.scheduled_at ?? null,
-      addressLine: row.address_line ?? null,
-      city: row.city ?? null,
       quotedPrice: row.quoted_price ?? null,
       finalPrice: row.final_price ?? null,
       paymentMethod: row.payment_method ?? null,
@@ -401,11 +408,7 @@ export const getAdminBookings = async (
     };
   });
 
-  if (filter.needsAdminAction === true) {
-    rows = rows.filter((r: any) => r.needsAdminAction);
-  }
-
-  return { rows, total: Number(countRes.rows[0]?.total ?? 0) };
+  return { rows, total: Number(countRes.rows[0]?.total ?? 0), page, limit };
 };
 
 // ─── Metrics ─────────────────────────────────────────────────────────────────
@@ -863,6 +866,18 @@ export const adminReassignProvider = async (
     reason,
   });
 
+  // Move the booking conversation across with the assignment. The old provider
+  // is marked left (can_send false), the new one admitted, and a system event
+  // recorded. Fire-and-forget with its own catch: chat membership must never
+  // be able to fail a reassignment that has already been committed above.
+  (async () => {
+    try {
+      await handleProviderReassignment(bookingId, fromProviderUid, toProviderUid);
+    } catch (err) {
+      console.error('[reassign] chat membership update failed', bookingId, err);
+    }
+  })();
+
   return { bookingId, fromProviderUid, toProviderUid, providerName };
 };
 
@@ -892,6 +907,38 @@ export const adminRescheduleBooking = async (
     `UPDATE ${dbSchema}.bookings SET schedule = $1 WHERE id = $2`,
     [scheduledAt, bookingId]
   );
+
+  // C18 §14/§24. The provider is NOT a party to rescheduling — per operator
+  // policy only the customer and admin may move a booking, and the provider
+  // only responds to the outcome. But "only responds" still requires being
+  // TOLD: before this, a provider's booking could move to a different day and
+  // nothing informed them. They would arrive at the old time.
+  //
+  // Fire-and-forget: a notification failure must not roll back a reschedule
+  // that has already been committed and told to the customer.
+  (async () => {
+    try {
+      const w = await dbQuery.query(
+        `SELECT worker_uid FROM ${dbSchema}.bookings WHERE id = $1`,
+        [bookingId]
+      );
+      const workerUid = w.rows[0]?.worker_uid;
+      if (!workerUid) return;
+      const { createNotification } = await import('./notification.service');
+      const code = `SVN-${String(bookingId).padStart(6, '0')}`;
+      await createNotification(workerUid, {
+        type: 'booking_rescheduled',
+        severity: 'warning',
+        title: 'Booking rescheduled',
+        safeBody: `Booking ${code} has been moved to a new date and time. Check your schedule.`,
+        safeContextLabel: code,
+        route: { page: 'jobs', bookingId: String(bookingId) },
+        canOpenDetail: true,
+      });
+    } catch (e: any) {
+      console.error('[admin-reschedule] provider notification failed:', e?.message);
+    }
+  })();
 
   await addTimelineEvent(
     bookingId, 'booking_rescheduled',
@@ -951,6 +998,17 @@ export const adminCancelBooking = async (
     { reasonCode, refundAction }
   );
 
+  // Close the booking conversation so a cancelled job cannot become an
+  // open-ended private channel between customer and provider. The transcript
+  // stays readable; support can still post an official resolution.
+  (async () => {
+    try {
+      await closeConversationForCancellation(bookingId);
+    } catch (err) {
+      console.error('[cancel] chat close failed', bookingId, err);
+    }
+  })();
+
   logBookingAudit({
     bookingId, actorUid: adminUid, actorRole: 'admin',
     action: 'booking_cancelled',
@@ -999,6 +1057,20 @@ export const adminEscalateBooking = async (
     after:  { reason, severity },
     reason,
   });
+
+  // Reopen the SAME booking conversation rather than starting a parallel
+  // dispute thread. One booking keeps one auditable timeline — assignment,
+  // chat, arrival, OTP, service, payment, completion, complaint, resolution —
+  // instead of the case being scattered across two messaging surfaces. This
+  // also un-freezes a conversation that had already gone read-only, which is
+  // the common case: disputes are raised after completion.
+  (async () => {
+    try {
+      await escalateToSupport(bookingId);
+    } catch (chatErr) {
+      console.error('[escalate] chat escalation failed', bookingId, chatErr);
+    }
+  })();
 
   return escRes.rows[0];
 };
@@ -1157,6 +1229,20 @@ export const adminConfirmProviderAssignment = async (
     after:  { assignmentStatus: 'ACCEPTED', confirmationSource: 'admin_on_behalf_of_provider', consentMethod },
     reason,
   });
+
+  // This is a provider confirmation, so it opens the booking conversation —
+  // exactly as `technicianService.acceptJob` does when the provider taps accept
+  // themselves. It has to be here explicitly: this path writes
+  // booking_workers.status = 'ACCEPTED' directly and never goes through
+  // acceptJob, so without this an admin-confirmed booking would have no
+  // conversation at all now that read paths no longer create one lazily.
+  (async () => {
+    try {
+      await openConversationForConfirmedBooking(bookingId);
+    } catch (chatErr) {
+      console.error('auto group-chat creation failed (admin on behalf):', bookingId, chatErr);
+    }
+  })();
 
   return {
     bookingId,

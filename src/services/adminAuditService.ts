@@ -8,14 +8,14 @@ export type AuditOutcome = 'success' | 'failed' | 'blocked';
 export type AuditCategory =
   | 'auth' | 'provider' | 'onboarding' | 'booking' | 'payment'
   | 'catalog' | 'customer' | 'user' | 'admin' | 'settings'
-  | 'notification' | 'file' | 'system' | 'finance';
+  | 'notification' | 'file' | 'system' | 'finance' | 'support';
 export type AuditEntityType =
   | 'provider' | 'booking' | 'customer' | 'user' | 'service'
   | 'service_option' | 'addon' | 'provider_application' | 'provider_requirement'
   | 'onboarding_case' | 'payment' | 'notification' | 'settings' | 'admin_role' | 'system'
   | 'catalog_offering' | 'catalog_mapping' | 'catalog_service_option' | 'catalog_addon'
   | 'disbursement' | 'refund_review' | 'reconciliation_exception' | 'ledger_entry'
-  | 'admin_user' | 'permission_grant' | 'permission_profile';
+  | 'admin_user' | 'permission_grant' | 'permission_profile' | 'support_case';
 
 export interface AuditWriteOpts {
   action: string;

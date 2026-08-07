@@ -64,7 +64,10 @@ describe('resend OTP exists and is safe', () => {
     // Re-issuing against a confirmed, cancelled or completed booking would move
     // it backwards, and an OTP for a finished job only helps someone who should
     // not have one.
-    expect(resendService).toContain("!== 'PENDING_OTP'");
+    expect(resendService).toContain("status === 'PENDING_OTP'");
+    // Compatibility is limited to rows the old payment webhook corrupted:
+    // PAID with no worker. A paid booking already assigned must not move back.
+    expect(resendService).toContain("status === 'PAID' && !booking.worker_uid");
     expect(resendService).toContain('409');
   });
 

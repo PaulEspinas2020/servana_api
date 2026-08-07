@@ -7,6 +7,7 @@ import {
   adminValidationError,
 } from '../helpers/adminError';
 import * as svc from '../services/adminFinanceService';
+import { hasPermission, isSuperAdmin } from '../services/adminPermissionService';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -28,6 +29,10 @@ function ip(req: Request): string | null {
   return fwdStr?.split(',')[0]?.trim() ?? req.socket?.remoteAddress ?? null;
 }
 
+function isPositiveId(value: number): boolean {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
 function handleSvcError(res: Response, err: unknown): Response {
   const e = err as any;
   if (e?.code === 'NOT_FOUND')      return adminNotFound(res, e.message);
@@ -41,7 +46,17 @@ function handleSvcError(res: Response, err: unknown): Response {
 export async function getFinanceSummary(req: Request, res: Response): Promise<void> {
   try {
     const data = await svc.getFinanceSummary();
-    res.json({ status: 'success', data });
+    const uid = (req as any).user?.uid ?? '';
+    const superAdmin = await isSuperAdmin(uid);
+    const can = async (key: string) => superAdmin || await hasPermission(uid, key);
+    const projected = svc.projectFinanceSummary(data, {
+      payments: await can('payments.view'),
+      gcashReview: await can('payments.gcash_review.view'),
+      payouts: await can('payouts.view'),
+      refunds: await can('payments.view'),
+      reconciliation: await can('reconciliation.view'),
+    });
+    res.json({ status: 'success', data: projected });
   } catch (err) {
     handleSvcError(res, err);
   }
@@ -66,7 +81,7 @@ export async function listPayments(req: Request, res: Response): Promise<void> {
 export async function getPaymentDetail(req: Request, res: Response): Promise<void> {
   try {
     const paymentId = Number(req.params.paymentId);
-    if (!paymentId) { adminBadRequest(res, 'Invalid payment ID'); return; }
+    if (!isPositiveId(paymentId)) { adminBadRequest(res, 'Invalid payment ID'); return; }
     const data = await svc.getPaymentDetail(paymentId);
     if (!data) { adminNotFound(res, 'Payment'); return; }
     res.json({ status: 'success', data });
@@ -87,7 +102,7 @@ export async function listGcashPendingQueue(req: Request, res: Response): Promis
 export async function approveGcashPayment(req: Request, res: Response): Promise<void> {
   try {
     const paymentId = Number(req.params.paymentId);
-    if (!paymentId) { adminBadRequest(res, 'Invalid payment ID'); return; }
+    if (!isPositiveId(paymentId)) { adminBadRequest(res, 'Invalid payment ID'); return; }
     const { uid, name } = actorFrom(req);
     const data = await svc.approveGcashPayment(paymentId, uid, name, rid(req), ip(req));
     res.json({ status: 'success', data });
@@ -99,7 +114,7 @@ export async function approveGcashPayment(req: Request, res: Response): Promise<
 export async function rejectGcashPayment(req: Request, res: Response): Promise<void> {
   try {
     const paymentId = Number(req.params.paymentId);
-    if (!paymentId) { adminBadRequest(res, 'Invalid payment ID'); return; }
+    if (!isPositiveId(paymentId)) { adminBadRequest(res, 'Invalid payment ID'); return; }
     const { rejectionReason } = req.body;
     if (!rejectionReason?.trim()) {
       adminValidationError(res, 'rejectionReason is required');
@@ -116,7 +131,7 @@ export async function rejectGcashPayment(req: Request, res: Response): Promise<v
 export async function adminConfirmCash(req: Request, res: Response): Promise<void> {
   try {
     const paymentId = Number(req.params.paymentId);
-    if (!paymentId) { adminBadRequest(res, 'Invalid payment ID'); return; }
+    if (!isPositiveId(paymentId)) { adminBadRequest(res, 'Invalid payment ID'); return; }
     const { uid, name } = actorFrom(req);
     const data = await svc.adminConfirmCash(paymentId, uid, name, rid(req), ip(req));
     res.json({ status: 'success', data });
@@ -145,7 +160,7 @@ export async function listLedgerEntries(req: Request, res: Response): Promise<vo
 export async function getBookingLedger(req: Request, res: Response): Promise<void> {
   try {
     const bookingId = Number(req.params.bookingId);
-    if (!bookingId) { adminBadRequest(res, 'Invalid booking ID'); return; }
+    if (!isPositiveId(bookingId)) { adminBadRequest(res, 'Invalid booking ID'); return; }
     const data = await svc.getBookingLedger(bookingId);
     res.json({ status: 'success', data });
   } catch (err) {
@@ -172,7 +187,7 @@ export async function listPayouts(req: Request, res: Response): Promise<void> {
 export async function getPayoutDetail(req: Request, res: Response): Promise<void> {
   try {
     const disbursementId = Number(req.params.disbursementId);
-    if (!disbursementId) { adminBadRequest(res, 'Invalid disbursement ID'); return; }
+    if (!isPositiveId(disbursementId)) { adminBadRequest(res, 'Invalid disbursement ID'); return; }
     const data = await svc.getPayoutDetail(disbursementId);
     if (!data) { adminNotFound(res, 'Disbursement'); return; }
     res.json({ status: 'success', data });
@@ -184,7 +199,7 @@ export async function getPayoutDetail(req: Request, res: Response): Promise<void
 export async function holdPayout(req: Request, res: Response): Promise<void> {
   try {
     const disbursementId = Number(req.params.disbursementId);
-    if (!disbursementId) { adminBadRequest(res, 'Invalid disbursement ID'); return; }
+    if (!isPositiveId(disbursementId)) { adminBadRequest(res, 'Invalid disbursement ID'); return; }
     const { holdReason, holdUntil } = req.body;
     if (!holdReason?.trim()) { adminValidationError(res, 'holdReason is required'); return; }
     const { uid, name } = actorFrom(req);
@@ -198,7 +213,7 @@ export async function holdPayout(req: Request, res: Response): Promise<void> {
 export async function releasePayoutHold(req: Request, res: Response): Promise<void> {
   try {
     const disbursementId = Number(req.params.disbursementId);
-    if (!disbursementId) { adminBadRequest(res, 'Invalid disbursement ID'); return; }
+    if (!isPositiveId(disbursementId)) { adminBadRequest(res, 'Invalid disbursement ID'); return; }
     const { uid, name } = actorFrom(req);
     await svc.releasePayoutHold(disbursementId, uid, name, rid(req));
     res.json({ status: 'success', data: { disbursementId } });
@@ -210,7 +225,7 @@ export async function releasePayoutHold(req: Request, res: Response): Promise<vo
 export async function retryPayout(req: Request, res: Response): Promise<void> {
   try {
     const disbursementId = Number(req.params.disbursementId);
-    if (!disbursementId) { adminBadRequest(res, 'Invalid disbursement ID'); return; }
+    if (!isPositiveId(disbursementId)) { adminBadRequest(res, 'Invalid disbursement ID'); return; }
     const { uid, name } = actorFrom(req);
     await svc.retryPayout(disbursementId, uid, name, rid(req));
     res.json({ status: 'success', data: { disbursementId, message: 'Payout queued for retry' } });
@@ -257,7 +272,7 @@ export async function listRefundReviews(req: Request, res: Response): Promise<vo
 export async function getRefundReview(req: Request, res: Response): Promise<void> {
   try {
     const refundId = Number(req.params.refundId);
-    if (!refundId) { adminBadRequest(res, 'Invalid refund ID'); return; }
+    if (!isPositiveId(refundId)) { adminBadRequest(res, 'Invalid refund ID'); return; }
     const data = await svc.getRefundReview(refundId);
     if (!data) { adminNotFound(res, 'Refund review'); return; }
     res.json({ status: 'success', data });
@@ -269,14 +284,17 @@ export async function getRefundReview(req: Request, res: Response): Promise<void
 export async function openRefundReview(req: Request, res: Response): Promise<void> {
   try {
     const { bookingId, paymentId, amount, reason, customerUid, customerName, refundMethod, notes } = req.body;
-    if (!bookingId || !amount || !reason?.trim()) {
+    const parsedBookingId = Number(bookingId);
+    const parsedPaymentId = paymentId == null ? null : Number(paymentId);
+    const parsedAmount = Number(amount);
+    if (!isPositiveId(parsedBookingId) || (parsedPaymentId != null && !isPositiveId(parsedPaymentId)) || !Number.isFinite(parsedAmount) || parsedAmount <= 0 || !reason?.trim()) {
       adminValidationError(res, 'bookingId, amount, and reason are required');
       return;
     }
     const { uid, name } = actorFrom(req);
     const refundId = await svc.openRefundReview(
-      { bookingId: Number(bookingId), paymentId: paymentId ? Number(paymentId) : null,
-        amount: Number(amount), reason: reason.trim(), customerUid, customerName, refundMethod, notes },
+      { bookingId: parsedBookingId, paymentId: parsedPaymentId,
+        amount: parsedAmount, reason: reason.trim(), customerUid, customerName, refundMethod, notes },
       uid, name, rid(req)
     );
     res.status(201).json({ status: 'success', data: { refundId } });
@@ -288,7 +306,7 @@ export async function openRefundReview(req: Request, res: Response): Promise<voi
 export async function approveRefund(req: Request, res: Response): Promise<void> {
   try {
     const refundId = Number(req.params.refundId);
-    if (!refundId) { adminBadRequest(res, 'Invalid refund ID'); return; }
+    if (!isPositiveId(refundId)) { adminBadRequest(res, 'Invalid refund ID'); return; }
     const { uid, name } = actorFrom(req);
     await svc.approveRefund(refundId, uid, name, rid(req));
     res.json({ status: 'success', data: { refundId } });
@@ -300,7 +318,7 @@ export async function approveRefund(req: Request, res: Response): Promise<void> 
 export async function rejectRefund(req: Request, res: Response): Promise<void> {
   try {
     const refundId = Number(req.params.refundId);
-    if (!refundId) { adminBadRequest(res, 'Invalid refund ID'); return; }
+    if (!isPositiveId(refundId)) { adminBadRequest(res, 'Invalid refund ID'); return; }
     const { rejectionReason } = req.body;
     if (!rejectionReason?.trim()) { adminValidationError(res, 'rejectionReason is required'); return; }
     const { uid, name } = actorFrom(req);
@@ -314,7 +332,7 @@ export async function rejectRefund(req: Request, res: Response): Promise<void> {
 export async function markRefundProcessed(req: Request, res: Response): Promise<void> {
   try {
     const refundId = Number(req.params.refundId);
-    if (!refundId) { adminBadRequest(res, 'Invalid refund ID'); return; }
+    if (!isPositiveId(refundId)) { adminBadRequest(res, 'Invalid refund ID'); return; }
     const { refundReference } = req.body;
     if (!refundReference?.trim()) { adminValidationError(res, 'refundReference is required'); return; }
     const { uid, name } = actorFrom(req);
@@ -355,7 +373,7 @@ export async function listExceptions(req: Request, res: Response): Promise<void>
 export async function resolveException(req: Request, res: Response): Promise<void> {
   try {
     const exceptionId = Number(req.params.exceptionId);
-    if (!exceptionId) { adminBadRequest(res, 'Invalid exception ID'); return; }
+    if (!isPositiveId(exceptionId)) { adminBadRequest(res, 'Invalid exception ID'); return; }
     const { resolutionReason } = req.body;
     if (!resolutionReason?.trim()) { adminValidationError(res, 'resolutionReason is required'); return; }
     const { uid, name } = actorFrom(req);
@@ -369,7 +387,7 @@ export async function resolveException(req: Request, res: Response): Promise<voi
 export async function ignoreException(req: Request, res: Response): Promise<void> {
   try {
     const exceptionId = Number(req.params.exceptionId);
-    if (!exceptionId) { adminBadRequest(res, 'Invalid exception ID'); return; }
+    if (!isPositiveId(exceptionId)) { adminBadRequest(res, 'Invalid exception ID'); return; }
     const { reason } = req.body;
     if (!reason?.trim()) { adminValidationError(res, 'reason is required'); return; }
     const { uid, name } = actorFrom(req);

@@ -544,7 +544,7 @@ export async function listAllCustomers(params: ListAllCustomersParams): Promise<
       COALESCE(cbs.booking_count, 0)                                             AS booking_count,
       cbs.last_booking_at,
       COALESCE(cbs.total_spend, 0)                                               AS total_spend,
-      uc.created_at
+      uc.created_date                                                              AS created_at
     FROM ${s}.user_credentials uc
     LEFT JOIN client_booking_stats cbs ON cbs.user_id = uc.uid
     WHERE uc.role::int = 3 ${clientSearchWhere}
@@ -677,7 +677,7 @@ export async function getClientDetail(identityId: string): Promise<any | null> {
        uc.last_name,
        uc.email,
        uc.phone_number   AS phone,
-       uc.created_at,
+       uc.created_date AS created_at,
        COALESCE(bs.booking_count, 0)   AS booking_count,
        bs.last_at                       AS last_booking_at,
        COALESCE(bs.upcoming_count, 0)  AS upcoming_booking_count,

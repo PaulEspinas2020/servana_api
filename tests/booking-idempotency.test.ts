@@ -152,12 +152,20 @@ describe('the controller wiring', () => {
     expect(createFn).toContain('getBookingById(alreadyCreated)');
   });
 
-  it('records only AFTER the booking exists', () => {
-    // Recording first would poison the key when a create fails, so the
-    // customer could never retry.
-    expect(createFn.indexOf('bookingService.createBooking')).toBeLessThan(
-      createFn.indexOf('recordIdempotentBooking'),
+  it('passes the key into the transactional service write', () => {
+    expect(createFn).toMatch(
+      /bookingService\.createBooking\(\s*userId,\s*validatedPayload,\s*idempotencyKey/,
     );
+    expect(createFn.indexOf('validateCustomerBookingCreatePayload(req.body)')).toBeLessThan(
+      createFn.indexOf('bookingService.createBooking'),
+    );
+    expect(createFn).not.toContain('recordIdempotentBooking(');
+  });
+
+  it('a concurrent uniqueness loser returns the winning booking', () => {
+    expect(createFn).toContain("e?.code === '23505'");
+    expect(createFn).toContain("includes('idempotency')");
+    expect(createFn).toContain('findBookingByIdempotencyKey(idempotencyKey, userId)');
   });
 
   it('a key whose booking has vanished is a 409, not a silent re-create', () => {

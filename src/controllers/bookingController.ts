@@ -8,17 +8,19 @@ import { formatBooking, formatBookings } from "../services/bookingService";
 import {
   normaliseIdempotencyKey,
   findBookingByIdempotencyKey,
-  recordIdempotentBooking,
 } from "../services/bookingIdempotency";
 import { createCustomerNotification } from "../services/notification.service";
+import { validateCustomerBookingCreatePayload } from "../services/bookingCreateValidation";
 export const createBooking = async (req: any, res: any) => {
+  let idempotencyKey: string | null = null;
+  let userId = '';
   try {
     // Identity comes from the verified token, never from the query string.
     // `?userId=` was previously authoritative, which let any caller create a
     // booking in any customer's name (§7: route params are not identity).
     // The parameter is still accepted and ignored so existing clients keep
     // working; a mismatch is logged without PII so drift stays visible.
-    const userId = (req as any).user?.uid as string;
+    userId = (req as any).user?.uid as string;
     const claimedUserId = req.query.userId as string | undefined;
     if (claimedUserId && claimedUserId !== userId) {
       console.warn(
@@ -46,7 +48,7 @@ export const createBooking = async (req: any, res: any) => {
     // The key is optional: older clients do not send one, and rejecting those
     // would break every shipped app in order to fix a duplicate-submission bug.
     // A caller without a key simply gets no protection, exactly as before.
-    const idempotencyKey = normaliseIdempotencyKey(
+    idempotencyKey = normaliseIdempotencyKey(
       req.header('X-Idempotency-Key'),
     );
 
@@ -78,17 +80,11 @@ export const createBooking = async (req: any, res: any) => {
       });
     }
 
+    const validatedPayload = validateCustomerBookingCreatePayload(req.body);
     const booking = await bookingService.createBooking(
       userId,
-      req.body
-    );
-
-    // Record only after a booking exists, so a failed create leaves the key
-    // free to be retried rather than permanently poisoned.
-    await recordIdempotentBooking(
+      validatedPayload,
       idempotencyKey,
-      userId,
-      (booking as any)?.id ?? (booking as any)?.bookingId ?? null,
     );
 
     // Non-blocking: notify the customer that their booking was received
@@ -108,6 +104,24 @@ export const createBooking = async (req: any, res: any) => {
 
     res.json({ success: true, booking });
   } catch (e: any) {
+    if (
+      e?.code === '23505' &&
+      String(e?.constraint ?? '').includes('idempotency') &&
+      idempotencyKey &&
+      userId
+    ) {
+      const existingId = await findBookingByIdempotencyKey(idempotencyKey, userId);
+      const existing = existingId
+        ? await bookingService.getBookingById(existingId)
+        : null;
+      if (existing) {
+        return res.json({
+          success: true,
+          booking: formatBooking(existing),
+          idempotentReplay: true,
+        });
+      }
+    }
     res.status(400).json({ success: false, message: e.message });
   }
 };

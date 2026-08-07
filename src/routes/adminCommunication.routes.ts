@@ -18,12 +18,12 @@ router.get('/admin/communications/conversations',                              .
 
 // Conversation detail + messages + admin send (must precede /:id to avoid conflicts)
 router.get('/admin/communications/conversations/:id/messages',                ...adminOnly, requirePermission('communications.support_conversations.view'), ctrl.getConversationMessages);
-router.post('/admin/communications/conversations/:id/messages',               ...adminOnly, requirePermission('communications.support_conversations.view'), ctrl.sendConversationMessage);
+router.post('/admin/communications/conversations/:id/messages',               ...adminOnly, requirePermission('communications.support_conversations.send'), ctrl.sendConversationMessage);
 router.get('/admin/communications/conversations/:id',                         ...adminOnly, requirePermission('communications.support_conversations.view'), ctrl.getConversationDetail);
 
 // Message reports (moderation)
-router.get('/admin/communications/reports',                                   ...adminOnly, requirePermission('communications.support_conversations.view'), ctrl.listReports);
-router.patch('/admin/communications/reports/:reportId',                       ...adminOnly, requirePermission('communications.support_conversations.view'), ctrl.resolveReport);
+router.get('/admin/communications/reports',                                   ...adminOnly, requirePermission('communications.message_reports.view'), ctrl.listReports);
+router.patch('/admin/communications/reports/:reportId',                       ...adminOnly, requirePermission('communications.message_reports.resolve'), ctrl.resolveReport);
 
 // Event list + export
 router.get('/admin/communications/events',                                     ...adminOnly, requirePermission('communications.notification_logs.view'), ctrl.listEvents);

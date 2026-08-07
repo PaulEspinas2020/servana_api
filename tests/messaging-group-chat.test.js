@@ -18,8 +18,23 @@ var SRC   = function () { return path.join.apply(path, [__dirname, '..', 'src'].
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Strip comments before asserting.
+ *
+ * Added 2026-08-07. `removeParticipant sets left_at` began failing not because
+ * the code changed meaning but because a comment elsewhere in the file
+ * mentioned `removeParticipant` by name, and the block regex matched the prose
+ * first. A source-inspection test that can be satisfied by an explanation of
+ * the behaviour, rather than the behaviour, is worse than no test.
+ */
+function stripComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+}
+
 function readSrc() {
-  return fs.readFileSync(SRC.apply(null, arguments), 'utf8');
+  return stripComments(fs.readFileSync(SRC.apply(null, arguments), 'utf8'));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -73,7 +88,14 @@ describe('technicianService — system messages on startJob / completeJob / decl
   });
 
   it('emits provider_declined_${bookingId}_${workerUid} system message in declineJob', function () {
-    expect(src).toMatch(/provider_declined_/);
+    // The message key is built inside releaseBookingAndReassign, which
+    // declineJob and the C18 provider-cancellation path both call — one
+    // implementation so the two cannot drift into reassigning differently.
+    // Assert BOTH halves: the helper composes the key from its eventKind, and
+    // declineJob passes 'provider_declined'. Grepping only for the old literal
+    // would now pass for a cancellation that never declines anything.
+    expect(src).toMatch(/\$\{eventKind\}_\$\{bookingId\}_\$\{workerUid\}/);
+    expect(src).toMatch(/"provider_declined"/);
   });
 
   it('uses findExistingConversationByBookingId for non-creating hooks', function () {
@@ -170,8 +192,19 @@ describe('chat.service — resolveAccessForBooking source proofs', function () {
     expect(src).toMatch(/allowed:\s*false,\s*role:\s*null/);
   });
 
+  /**
+   * The rule is unchanged — a non-admin cannot write to a closed conversation
+   * — but it moved. It used to be an inline `is_closed && role !== admin`
+   * check in sendMessage. It now lives in resolveAccessForConversation, which
+   * still reads is_closed (so rows predating the `status` column behave
+   * correctly) and still exempts admins, and sendMessage gates on the derived
+   * canSend. Asserting the old expression would now be asserting the shape of
+   * a line rather than the behaviour it encoded.
+   */
   it('access is denied for closed conversations for non-admin', function () {
-    expect(src).toMatch(/is_closed.*role.*admin|role.*admin.*is_closed/);
+    expect(src).toMatch(/is_closed/);
+    expect(src).toMatch(/role\s*===?\s*"admin"|"admin"/);
+    expect(src).toMatch(/canSend/);
   });
 });
 
@@ -285,9 +318,10 @@ describe('adminCommunication.routes — new messaging routes registered', functi
     expect(msgIdx).toBeLessThan(detIdx);
   });
 
-  it('all new conversation routes use requirePermission(support_conversations.view)', function () {
+  it('conversation reads require view and sends require send permission', function () {
     var routeBlock = src.match(/conversations\/:id[\s\S]{0,1000}/)?.[0] || '';
     expect(routeBlock).toMatch(/support_conversations\.view/);
+    expect(src).toMatch(/router\.post\('\/admin\/communications\/conversations\/:id\/messages'[\s\S]{0,200}support_conversations\.send/);
   });
 });
 
@@ -321,8 +355,11 @@ describe('chat.repository — MESSAGING additions present', function () {
   });
 
   it('removeParticipant sets left_at = NOW() not DELETE', function () {
-    var block = src.match(/removeParticipant[\s\S]{0,300}/)?.[0] || '';
-    expect(block).toMatch(/left_at\s*=\s*NOW\(\)/);
+    // Anchor on the definition, not the first mention. COALESCE(left_at, NOW())
+    // is the same soft-leave semantics, made idempotent so removing an already
+    // departed participant does not reset when they actually left.
+    var block = src.match(/export const removeParticipant[\s\S]{0,600}/)?.[0] || '';
+    expect(block).toMatch(/left_at\s*=\s*(COALESCE\(\s*left_at\s*,\s*)?NOW\(\)/);
     expect(block).not.toMatch(/DELETE/);
   });
 });
@@ -365,4 +402,3 @@ describe('adminCommunicationService — MESSAGING additions present', function (
     expect(src).toMatch(/redact/i);
   });
 });
-

@@ -4,7 +4,27 @@ import { emitToProvider } from "../provider.realtime";
 import { logCommunicationEvent } from "./adminCommunicationService";
 const dbSchema = db.schema;
 
-async function sendFcmPushToWorker(workerUid: string, title: string, body: string): Promise<void> {
+/**
+ * Sends a provider push.
+ *
+ * The `data` payload is what makes the notification ACTIONABLE. Without it the
+ * message carried title and body only, so tapping it could open the app but
+ * never the thing it was about — the `route` was written to the notification
+ * row and dropped from the push.
+ *
+ * FCM requires every data value to be a string, hence the coercion. Only safe
+ * identifiers travel: a page name, a booking id and the notification key. No
+ * customer name, address or note is ever put here — §39 forbids exposing that
+ * on a lock screen, and `data` is readable by the OS before the app decides
+ * anything.
+ */
+async function sendFcmPushToWorker(
+  workerUid: string,
+  title: string,
+  body: string,
+  route?: { page?: string; screen?: string; bookingId?: string; caseId?: string } | null,
+  meta?: { type?: string; notificationKey?: string },
+): Promise<void> {
   const { rows } = await dbQuery.query(
     `SELECT fcm_token FROM ${dbSchema}.user_credentials WHERE uid = $1 LIMIT 1`,
     [workerUid],
@@ -12,11 +32,20 @@ async function sendFcmPushToWorker(workerUid: string, title: string, body: strin
   const token: string | undefined = rows[0]?.fcm_token;
   if (!token) return;
 
+  const data: Record<string, string> = {};
+  if (route?.page) data.page = String(route.page);
+  if (route?.screen) data.screen = String(route.screen);
+  if (route?.bookingId) data.bookingId = String(route.bookingId);
+  if (route?.caseId) data.caseId = String(route.caseId);
+  if (meta?.type) data.type = String(meta.type);
+  if (meta?.notificationKey) data.notificationKey = String(meta.notificationKey);
+
   const { getMessaging } = await import('firebase-admin/messaging');
   const { firebaseAdmin } = await import('../middleware/firebaseApp');
   await getMessaging(firebaseAdmin).send({
     token,
     notification: { title, body },
+    data,
     android: { priority: 'high' },
     apns: { payload: { aps: { contentAvailable: true } } },
   });
@@ -336,7 +365,10 @@ export async function createNotification(
   // Push real-time — no-op when socket server is not initialised (e.g. during tests)
   emitToProvider(workerUid, "notification", notification);
   // FCM push for background/offline devices
-  sendFcmPushToWorker(workerUid, data.title, data.safeBody).catch(() => {});
+  sendFcmPushToWorker(workerUid, data.title, data.safeBody, data.route as any, {
+    type: data.type,
+    notificationKey: notification.notificationKey,
+  }).catch(() => {});
   // Fire-and-forget admin log
   logCommunicationEvent({
     channel: 'socket',

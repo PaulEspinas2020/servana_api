@@ -5,6 +5,8 @@ import { processPendingDisbursements, retryFailedDisbursements } from "./service
 import { createCheckoutSession } from "./services/paymentService";
 import { send } from "./helpers/mailer";
 import { getUserInfoByBookingId } from "./services/user.service";
+import { sweepGracePeriod } from "./chat/chat.service";
+import { notifyAllAdmins } from './services/adminNotificationService';
 
 const dbSchema = db.schema;
 
@@ -125,12 +127,25 @@ const runPaymentRetries = async () => {
     for (const row of res.rows) {
       try {
         // Reset payment to PENDING then create a fresh checkout session
-        await dbQuery.query(
-          `UPDATE ${dbSchema}.payments SET status = 'PENDING', updated_at = NOW() WHERE id = $1`,
+        const claim = await dbQuery.query(
+          `UPDATE ${dbSchema}.payments SET status = 'PENDING', updated_at = NOW()
+           WHERE id = $1 AND status = 'FAILED' RETURNING id`,
           [row.payment_id]
         );
+        if (!claim.rowCount) continue;
 
-        const session = await createCheckoutSession(row.booking_id);
+        let session;
+        try {
+          session = await createCheckoutSession(row.booking_id);
+        } catch (error) {
+          // A failed processor call must remain retryable on the next sweep.
+          await dbQuery.query(
+            `UPDATE ${dbSchema}.payments SET status = 'FAILED', updated_at = NOW()
+             WHERE id = $1 AND status = 'PENDING'`,
+            [row.payment_id]
+          );
+          throw error;
+        }
 
         const userInfo = await getUserInfoByBookingId(row.booking_id);
         if (userInfo) {
@@ -153,6 +168,42 @@ const runPaymentRetries = async () => {
 };
 
 // ---------------------------------------------------------------------------
+// Booking conversations past their post-completion grace window
+// ---------------------------------------------------------------------------
+
+const runConversationGraceSweep = async () => {
+  try {
+    const ids = await sweepGracePeriod();
+    if (ids.length) {
+      console.log(`[scheduler] ${ids.length} booking conversation(s) moved to read-only.`);
+    }
+  } catch (err) {
+    console.error("[scheduler] Conversation grace sweep error:", err);
+  }
+};
+
+export const runDailyAdminBookingSummary = async () => {
+  try {
+    const result = await dbQuery.query(`
+      SELECT COUNT(*) AS total
+        FROM ${dbSchema}.bookings
+       WHERE (schedule AT TIME ZONE 'Asia/Manila')::date =
+             (NOW() AT TIME ZONE 'Asia/Manila')::date
+         AND UPPER(status) NOT IN ('COMPLETED', 'CANCELED', 'CANCELLED')
+    `, []);
+    const total = Number(result.rows[0]?.total ?? 0);
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
+    await notifyAllAdmins({
+      type: 'daily_active_bookings', severity: 'info', title: 'Today’s active bookings',
+      body: `${total} active booking${total === 1 ? '' : 's'} scheduled for today.`,
+      notificationKey: `daily_active_bookings_${day}`,
+    });
+  } catch (err) {
+    console.error('[scheduler] Daily admin booking summary error:', err);
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Start all scheduled jobs
 // ---------------------------------------------------------------------------
 
@@ -168,6 +219,16 @@ export const startScheduler = () => {
 
   // Every 6 hours — retry failed PayMongo checkout sessions
   cron.schedule("0 */6 * * *", runPaymentRetries);
+
+  // Hourly — retire booking conversations whose post-completion grace window
+  // has lapsed. Completion deliberately does NOT close the chat: the 48 hours
+  // after a job are when "you left a cable behind", "can I get a receipt" and
+  // "something isn't right" actually happen. After that it goes read-only, so
+  // a finished booking cannot quietly become a permanent private channel.
+  cron.schedule("30 * * * *", runConversationGraceSweep);
+
+  // 07:00 every morning in the operational timezone, independent of host UTC.
+  cron.schedule('0 7 * * *', runDailyAdminBookingSummary, { timezone: 'Asia/Manila' });
 
   console.log("[scheduler] All cron jobs started.");
 };

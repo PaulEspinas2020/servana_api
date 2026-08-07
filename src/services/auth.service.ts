@@ -8,6 +8,7 @@ import * as serviceService from "../services/serviceService";
 import * as technicianService from "../services/technicianService";
 import { send } from "../helpers/mailer";
 import bcrypt from "bcryptjs";
+import { randomInt } from "crypto";
 import { generateOTP } from "../helpers/otp";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import uploadInStorage from "../helpers/firebaseStorageUploader";
@@ -114,15 +115,27 @@ const registerUser = async (user: UserCredentialsReq) => {
             throw "Failed to Create User in DB";
         }
         if (platform === "mobile") {
-            const otpCode = generateOTP();
+            let otpDeliveryPending = false;
+            try {
+                const otpCode = generateOTP();
+                await userService.storeEmailOtp(dbRegister.email, otpCode);
 
-            await userService.storeEmailOtp(dbRegister.email, otpCode);
-
-            send(dbRegister.email, "verify_email_otp", {
-                otp_code: otpCode,
-                first_name: dbRegister.firstName,
-                email: dbRegister.email,
-            });
+                send(dbRegister.email, "verify_email_otp", {
+                    otp_code: otpCode,
+                    first_name: dbRegister.firstName,
+                    email: dbRegister.email,
+                });
+            } catch (otpError: any) {
+                // The Firebase identity and DB profile already exist. Reporting
+                // signup failure here makes a retry collide with that identity
+                // and strands the customer. Return the created profile and let
+                // the verification screen's resend endpoint recover delivery.
+                otpDeliveryPending = true;
+                console.error('[auth.register] profile created; initial OTP persistence failed', {
+                    uid: dbRegister.uid,
+                    error: otpError?.message || 'unknown error',
+                });
+            }
 
             if (role == 2 && serviceIds?.length) {
                 await technicianService.assignServicesToEmployee(userData.uid, [Number(serviceIds[0])]);
@@ -131,7 +144,10 @@ const registerUser = async (user: UserCredentialsReq) => {
             return {
                 dbRegister,
                 verificationType: "otp",
-                message: "User created successfully. OTP sent to email.",
+                otpDeliveryPending,
+                message: otpDeliveryPending
+                    ? "User created successfully. Request a new verification code to continue."
+                    : "User created successfully. OTP sent to email.",
             };
         }
 
@@ -410,9 +426,21 @@ export interface EmployeeUpdateInput {
     address?: EmployeeAddress;
 }
 
+/**
+ * Generates a temporary password for a newly created employee account.
+ *
+ * C19 §13. This used `Math.random()` to pick each character. That is a
+ * non-cryptographic PRNG whose state is recoverable from observed output, so
+ * the credential it produced was predictable — and it is a password, handed to
+ * a real account, over a channel the recipient does not control.
+ *
+ * `randomInt` draws from the OS CSPRNG and rejection-samples, so there is no
+ * modulo bias across the 59-character alphabet either. Alphabet and length are
+ * unchanged.
+ */
 const generateTempPassword = (): string => {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$";
-    return Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+    return Array.from({ length: 12 }, () => chars[randomInt(chars.length)]).join("");
 };
 
 const addEmployees = async (employees: EmployeeInput[]) => {

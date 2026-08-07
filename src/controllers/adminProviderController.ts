@@ -8,6 +8,8 @@ import * as areaEngine  from '../services/providerServiceAreaEngine';
 import * as eligEngine  from '../services/providerEligibilityEngine';
 import * as autoOnlineEngine from '../services/providerAutoOnlineEngine';
 import * as availabilityService from '../services/providerOperationalAvailabilityService';
+import * as mediaService from '../services/providerProfileMediaService';
+import * as technicianService from '../services/technicianService';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -28,6 +30,43 @@ const parseIntQ = (val: any, fallback: number) => {
 
 const adminUid = (req: Request): string => req.user?.uid ?? '';
 
+export const getProviderProfilePhotoSubmissions = async (req: Request, res: Response) => {
+  try {
+    return ok(res, await mediaService.listProfilePhotos(String(req.params.uid ?? '')));
+  } catch (error: any) {
+    return fail(res, Number(error?.statusCode ?? 500), Number(error?.statusCode) === 500 ? 'Profile photo submissions are temporarily unavailable' : error.message);
+  }
+};
+
+export const getProviderProfilePhotoPreview = async (req: Request, res: Response) => {
+  try {
+    return ok(res, await mediaService.previewProfilePhoto(
+      String(req.params.uid ?? ''),
+      String(req.params.submissionId ?? ''),
+    ));
+  } catch (error: any) {
+    return fail(res, Number(error?.statusCode ?? 500), Number(error?.statusCode) === 500 ? 'Profile photo preview is temporarily unavailable' : error.message);
+  }
+};
+
+export const decideProviderProfilePhoto = async (req: Request, res: Response) => {
+  try {
+    const decision = String(req.body?.decision ?? '') as 'approved' | 'rejected';
+    if (!['approved', 'rejected'].includes(decision)) return fail(res, 422, 'Decision must be approved or rejected');
+    return ok(res, await mediaService.decideProfilePhoto({
+      providerUid: String(req.params.uid ?? ''),
+      submissionId: String(req.params.submissionId ?? ''),
+      adminUid: adminUid(req),
+      decision,
+      providerReasonCode: req.body?.providerReasonCode == null ? null : String(req.body.providerReasonCode),
+      providerReasonDetail: req.body?.providerReasonDetail == null ? null : String(req.body.providerReasonDetail),
+      internalNote: req.body?.internalNote == null ? null : String(req.body.internalNote),
+    }));
+  } catch (error: any) {
+    return fail(res, Number(error?.statusCode ?? 500), Number(error?.statusCode) === 500 ? 'Profile photo decision could not be saved' : error.message);
+  }
+};
+
 // ── Provider List ─────────────────────────────────────────────────────────────
 
 export const listProviders = async (req: Request, res: Response) => {
@@ -35,8 +74,8 @@ export const listProviders = async (req: Request, res: Response) => {
     const { role, account_status, is_archive, sort_by, sort_dir,
             has_documents, has_pending_apps, has_active_services, has_availability, has_service_area,
             has_auto_online, has_bookable } = req.query;
-    const page = parseIntQ(req.query.page, 1);
-    const limit = Math.min(parseIntQ(req.query.limit, 50), 200);
+    const page = Math.max(1, parseIntQ(req.query.page, 1));
+    const limit = Math.min(Math.max(1, parseIntQ(req.query.limit, 50)), 200);
 
     const parseBool = (v: any) => v === undefined ? undefined : v === 'true';
 
@@ -53,7 +92,7 @@ export const listProviders = async (req: Request, res: Response) => {
 
     const result = await svc.listProviders({
       search,
-      role: role !== undefined ? Number(role) : undefined,
+      role: role !== undefined && [2, 4].includes(Number(role)) ? Number(role) : undefined,
       accountStatus: account_status as string | undefined,
       isArchive: is_archive !== undefined ? is_archive === 'true' : undefined,
       hasDocuments:      parseBool(has_documents),
@@ -71,8 +110,10 @@ export const listProviders = async (req: Request, res: Response) => {
 
     const rows = result.rows.map((r: any) => ({
       uid:             r.uid,
+      providerUid:     r.uid,
       firstName:       r.first_name        ?? null,
       lastName:        r.last_name         ?? null,
+      displayName:     `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim() || r.email || r.uid,
       email:           r.email             ?? null,
       phoneNumber:     r.phone_number      ?? null,
       role:            Number(r.role),
@@ -235,66 +276,19 @@ export const approveServiceApplication = async (req: Request, res: Response) => 
       return fail(res, 400, 'expectedVersion (number) is required');
     }
 
-    const { default: dbQuery } = await import('../db/dbQuery');
-    const { db } = await import('../config');
-    const schema = db.schema;
-
-    const appRes = await dbQuery.query(
-      `SELECT * FROM ${schema}.worker_service_applications WHERE id = $1 LIMIT 1`,
-      [id]
-    );
-    if (!appRes.rowCount) return fail(res, 404, 'Application not found');
-
-    const app = appRes.rows[0];
-    if (app.version !== expectedVersion) {
-      return fail(res, 409, `Version conflict: expected ${expectedVersion}, got ${app.version}`);
-    }
-    if (app.status !== 'pending_review' && app.status !== 'action_required') {
-      return fail(res, 409, `Cannot approve an application with status '${app.status}'`);
-    }
-
-    await dbQuery.query('BEGIN');
-    try {
-      await dbQuery.query(
-        `UPDATE ${schema}.worker_service_applications
-         SET status = 'approved', approved_at = NOW(), reviewed_at = NOW(),
-             reviewed_by = $1, review_reason = $2, updated_at = NOW(), version = version + 1
-         WHERE id = $3`,
-        [admin, reason ?? null, id]
-      );
-
-      await dbQuery.query(
-        `INSERT INTO ${schema}.employee_services (employee_uid, service_id, created_at)
-         VALUES ($1, $2, NOW())
-         ON CONFLICT DO NOTHING`,
-        [app.worker_uid, app.service_id]
-      );
-
-      await dbQuery.query('COMMIT');
-    } catch (txErr) {
-      await dbQuery.query('ROLLBACK');
-      throw txErr;
-    }
-
-    // Awaited: high-risk action requires strong audit consistency
+    const approved = await appSvc.approveApplicationAtomic(id, admin, expectedVersion, reason ? String(reason) : undefined);
     await writeSuccess({
-      action: 'provider_application_approved',
-      actionCategory: 'provider',
-      actorUid: admin,
-      entityType: 'provider_application',
-      entityId: String(id),
-      relatedEntities: [{ entityType: 'provider', entityId: app.worker_uid }],
-      before: { status: app.status },
-      after: { status: 'approved' },
-      changedFields: ['status'],
-      reason: reason ?? null,
-      requestId: (req as any).id ?? null,
-      ipAddress: req.ip ?? null,
+      action: 'provider_application_approved', actionCategory: 'provider',
+      actorUid: admin, entityType: 'provider_application', entityId: id,
+      relatedEntities: [{ entityType: 'provider', entityId: approved.worker_uid }],
+      after: { status: 'approved', version: approved.version },
+      changedFields: ['status'], reason: reason ?? null,
+      requestId: (req as any).id ?? null, ipAddress: req.ip ?? null,
       userAgent: req.headers['user-agent'] ?? null,
     });
+    autoOnlineEngine.evaluateProvider(approved.worker_uid, 'admin', admin).catch(() => {});
+    return ok(res, { id, status: 'approved', version: approved.version });
 
-    autoOnlineEngine.evaluateProvider(app.worker_uid, 'admin', admin).catch(() => {});
-    return ok(res, { id, status: 'approved' });
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
     return fail(res, code, err?.message ?? 'Failed to approve application');
@@ -304,58 +298,32 @@ export const approveServiceApplication = async (req: Request, res: Response) => 
 export const rejectServiceApplication = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
-    const { expectedVersion, reason } = req.body ?? {};
+    const { expectedVersion, reasonCode, providerMessage, internalNote } = req.body ?? {};
     const admin = adminUid(req);
 
     if (typeof expectedVersion !== 'number') {
       return fail(res, 400, 'expectedVersion (number) is required');
     }
-
-    const { default: dbQuery } = await import('../db/dbQuery');
-    const { db } = await import('../config');
-    const schema = db.schema;
-
-    const appRes = await dbQuery.query(
-      `SELECT * FROM ${schema}.worker_service_applications WHERE id = $1 LIMIT 1`,
-      [id]
-    );
-    if (!appRes.rowCount) return fail(res, 404, 'Application not found');
-
-    const app = appRes.rows[0];
-    if (app.version !== expectedVersion) {
-      return fail(res, 409, `Version conflict: expected ${expectedVersion}, got ${app.version}`);
-    }
-    if (app.status !== 'pending_review' && app.status !== 'action_required') {
-      return fail(res, 409, `Cannot reject an application with status '${app.status}'`);
+    if (!reasonCode || !providerMessage) {
+      return fail(res, 400, 'reasonCode and providerMessage are required');
     }
 
-    await dbQuery.query(
-      `UPDATE ${schema}.worker_service_applications
-       SET status = 'rejected', reviewed_at = NOW(), reviewed_by = $1,
-           review_reason = $2, updated_at = NOW(), version = version + 1
-       WHERE id = $3`,
-      [admin, reason ?? null, id]
+    const rejected = await appSvc.decideApplicationAtomic(
+      id, admin, expectedVersion, 'rejected', String(reasonCode),
+      String(providerMessage), internalNote ? String(internalNote) : undefined,
     );
-
-    // Awaited: high-risk action requires strong audit consistency
     await writeSuccess({
-      action: 'provider_application_rejected',
-      actionCategory: 'provider',
-      actorUid: admin,
-      entityType: 'provider_application',
-      entityId: String(id),
-      relatedEntities: [{ entityType: 'provider', entityId: app.worker_uid }],
-      before: { status: app.status },
-      after: { status: 'rejected' },
-      changedFields: ['status'],
-      reason: reason ?? null,
-      requestId: (req as any).id ?? null,
-      ipAddress: req.ip ?? null,
+      action: 'provider_application_rejected', actionCategory: 'provider',
+      actorUid: admin, entityType: 'provider_application', entityId: id,
+      relatedEntities: [{ entityType: 'provider', entityId: rejected.worker_uid }],
+      after: { status: 'rejected', reasonCode, version: rejected.version },
+      changedFields: ['status'], reason: internalNote ?? null,
+      requestId: (req as any).id ?? null, ipAddress: req.ip ?? null,
       userAgent: req.headers['user-agent'] ?? null,
     });
+    autoOnlineEngine.evaluateProvider(rejected.worker_uid, 'admin', admin).catch(() => {});
+    return ok(res, { id, status: 'rejected', version: rejected.version });
 
-    autoOnlineEngine.evaluateProvider(app.worker_uid, 'admin', admin).catch(() => {});
-    return ok(res, { id, status: 'rejected' });
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
     return fail(res, code, err?.message ?? 'Failed to reject application');
@@ -365,30 +333,27 @@ export const rejectServiceApplication = async (req: Request, res: Response) => {
 export const flagServiceApplicationActionRequired = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
-    const { reason } = req.body ?? {};
+    const { expectedVersion, reasonCode, providerMessage, internalNote } = req.body ?? {};
     const admin = adminUid(req);
 
-    if (!reason || !String(reason).trim()) {
-      return fail(res, 400, 'reason is required when flagging action required');
+    if (typeof expectedVersion !== 'number' || !reasonCode || !providerMessage) {
+      return fail(res, 400, 'expectedVersion, reasonCode, and providerMessage are required');
     }
 
-    const app = await appSvc.flagApplicationActionRequired(id, admin, String(reason).trim());
-
+    const app = await appSvc.decideApplicationAtomic(
+      id, admin, expectedVersion, 'action_required', String(reasonCode),
+      String(providerMessage), internalNote ? String(internalNote) : undefined,
+    );
     auditFire({
-      action: 'provider_application_flagged_action_required',
-      actionCategory: 'provider',
-      outcome: 'success',
-      actorUid: admin,
-      entityType: 'provider_application',
-      entityId: id,
+      action: 'provider_application_flagged_action_required', actionCategory: 'provider',
+      outcome: 'success', actorUid: admin, entityType: 'provider_application', entityId: id,
       relatedEntities: [{ entityType: 'provider', entityId: app.worker_uid }],
-      after: { status: 'action_required', reason: reason.trim() },
-      requestId: (req as any).id ?? null,
-      ipAddress: req.ip ?? null,
+      after: { status: 'action_required', reasonCode, version: app.version },
+      requestId: (req as any).id ?? null, ipAddress: req.ip ?? null,
       userAgent: req.headers['user-agent'] ?? null,
     });
+    return ok(res, { id, status: 'action_required', version: app.version });
 
-    return ok(res, { id, status: 'action_required' });
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
     return fail(res, code, err?.message ?? 'Failed to flag application');
@@ -674,6 +639,9 @@ export const cancelProviderTimeOff = async (req: Request, res: Response) => {
   try {
     const uid      = String(req.params.uid);
     const timeOffId = Number(req.params.timeOffId);
+    if (!Number.isSafeInteger(timeOffId) || timeOffId <= 0) {
+      return fail(res, 400, 'timeOffId must be a positive integer');
+    }
     const cancelled = await availEngine.cancelTimeOff(uid, timeOffId, adminUid(req), req.body?.reason);
     auditFire({
       action: 'provider_time_off_cancelled',
@@ -979,6 +947,59 @@ export const removeProviderService = async (req: Request, res: Response) => {
   } catch (err: any) {
     const code = err.statusCode || (String(err.message || '').includes('not found') ? 404 : 500);
     return fail(res, code, err.message || 'Failed to remove provider service');
+  }
+};
+
+export const getProviderRequirementPreview = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid);
+    const id = Number(req.params.id);
+    if (!id) return fail(res, 400, 'Invalid requirement id');
+    const preview = await svc.getProviderRequirementPreview(uid, id);
+    auditFire({
+      action: 'provider_document_previewed',
+      actionCategory: 'file',
+      outcome: 'success',
+      actorUid: adminUid(req),
+      entityType: 'provider_requirement',
+      entityId: String(id),
+      relatedEntities: [{ entityType: 'provider', entityId: uid }],
+      requestId: (req as any).id ?? null,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return ok(res, preview);
+  } catch (err: any) {
+    return fail(res, err?.statusCode ?? 500, err?.message ?? 'Document preview is temporarily unavailable');
+  }
+};
+
+export const assignProviderServices = async (req: Request, res: Response) => {
+  try {
+    const uid = String(req.params.uid ?? '').trim();
+    const serviceIds: number[] = Array.isArray(req.body?.serviceIds)
+      ? [...new Set<number>(
+          (req.body.serviceIds as unknown[])
+            .map((value) => Number(value))
+            .filter((value) => Number.isInteger(value)),
+        )]
+      : [];
+    const reason = String(req.body?.reason ?? '').trim();
+    if (!uid || serviceIds.length === 0 || !reason) {
+      return fail(res, 400, 'uid, serviceIds[] and reason are required');
+    }
+    const assigned = await technicianService.assignServicesToEmployee(uid, serviceIds);
+    auditFire({
+      action: 'provider_services_assigned', actionCategory: 'provider', outcome: 'success',
+      actorUid: adminUid(req), entityType: 'provider', entityId: uid,
+      after: { serviceIds }, reason, source: 'admin_portal',
+      requestId: (req as any).id ?? null, ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    autoOnlineEngine.evaluateProvider(uid, 'admin', adminUid(req)).catch(() => {});
+    return ok(res, { providerUid: uid, serviceIds, assigned });
+  } catch (error: any) {
+    return fail(res, Number(error?.statusCode ?? 500), error?.message ?? 'Failed to assign provider services');
   }
 };
 

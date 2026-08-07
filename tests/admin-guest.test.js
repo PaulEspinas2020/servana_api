@@ -363,6 +363,12 @@ describe('listAllCustomers — UNION ALL structure', () => {
     expect(svc).toContain("WHERE uc.role::int = 3");
   });
 
+  test('maps the user_credentials created_date column to the unified created_at contract', () => {
+    expect(svc).toContain('uc.created_date');
+    expect(svc).toContain('AS created_at');
+    expect(svc).not.toMatch(/uc\.created_at/);
+  });
+
   test('guests come from guest_customers table', () => {
     expect(svc).toContain('FROM ${s}.guest_customers gc');
   });

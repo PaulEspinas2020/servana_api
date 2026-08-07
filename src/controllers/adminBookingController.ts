@@ -8,6 +8,9 @@ import { listAssignmentCandidates } from "../services/providerEligibilityEngine"
 const actorUid = (req: any): string | null =>
   req.user?.uid ?? null;
 
+const isPositiveId = (value: number): boolean =>
+  Number.isSafeInteger(value) && value > 0;
+
 export const listBookings = async (req: Request, res: Response) => {
   try {
     const { search, operationsStatus, paymentMethod, paymentStatus,
@@ -30,17 +33,14 @@ export const listBookings = async (req: Request, res: Response) => {
       needsAdminAction: needsAdminAction === 'true',
     });
 
-    const pg = page ? Number(page) : 1;
-    const lm = limit ? Number(limit) : 25;
-
     return res.json({
       status: 'success',
       data: result.rows,
       meta: {
         total: result.total,
-        page: pg,
-        limit: lm,
-        totalPages: Math.ceil(result.total / lm),
+        page: result.page,
+        limit: result.limit,
+        totalPages: Math.ceil(result.total / result.limit),
         generatedAt: new Date().toISOString(),
       },
     });
@@ -61,7 +61,7 @@ export const getMetrics = async (_req: Request, res: Response) => {
 export const getBookingDetail = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    if (!id || isNaN(id)) {
+    if (!isPositiveId(id)) {
       return adminBadRequest(res, 'Invalid booking id');
     }
     const detail = await svc.getAdminBookingDetail(id);
@@ -77,7 +77,7 @@ export const getBookingDetail = async (req: Request, res: Response) => {
 export const getTimeline = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    if (!id || isNaN(id)) {
+    if (!isPositiveId(id)) {
       return adminBadRequest(res, 'Invalid booking id');
     }
     const events = await svc.getBookingTimeline(id);
@@ -90,7 +90,7 @@ export const getTimeline = async (req: Request, res: Response) => {
 export const getNotes = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    if (!id || isNaN(id)) {
+    if (!isPositiveId(id)) {
       return adminBadRequest(res, 'Invalid booking id');
     }
     const notes = await svc.getBookingNotes(id);
@@ -104,7 +104,7 @@ export const addNote = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     const { text } = req.body;
-    if (!id || isNaN(id)) {
+    if (!isPositiveId(id)) {
       return adminBadRequest(res, 'Invalid booking id');
     }
     if (!text?.trim()) {
@@ -120,7 +120,7 @@ export const addNote = async (req: Request, res: Response) => {
 export const getCandidates = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    if (!id || isNaN(id)) {
+    if (!isPositiveId(id)) {
       return adminBadRequest(res, 'Invalid booking id');
     }
     const candidates = await listAssignmentCandidates(String(id));
@@ -146,7 +146,7 @@ export const assignProvider = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     const { providerUid, reason } = req.body;
-    if (!id || isNaN(id)) {
+    if (!isPositiveId(id)) {
       return adminBadRequest(res, 'Invalid booking id');
     }
     if (!providerUid) {
@@ -178,7 +178,7 @@ export const reassignProvider = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     const { toProviderUid, reason } = req.body;
-    if (!id || isNaN(id)) {
+    if (!isPositiveId(id)) {
       return adminBadRequest(res, 'Invalid booking id');
     }
     if (!toProviderUid) {
@@ -213,11 +213,14 @@ export const rescheduleBooking = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     const { scheduledAt, reason } = req.body;
-    if (!id || isNaN(id)) {
+    if (!isPositiveId(id)) {
       return adminBadRequest(res, 'Invalid booking id');
     }
     if (!scheduledAt) {
       return adminBadRequest(res, 'scheduledAt is required');
+    }
+    if (isNaN(Date.parse(scheduledAt))) {
+      return adminBadRequest(res, 'scheduledAt must be a valid ISO 8601 date-time');
     }
     if (!reason?.trim()) {
       return adminBadRequest(res, 'reason is required for reschedule');
@@ -248,7 +251,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     const { reason, reasonCode, refundAction } = req.body;
-    if (!id || isNaN(id)) {
+    if (!isPositiveId(id)) {
       return adminBadRequest(res, 'Invalid booking id');
     }
     if (!reason?.trim()) {
@@ -279,7 +282,7 @@ export const escalateBooking = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     const { reason, severity, reasonCode, assignedTeam } = req.body;
-    if (!id || isNaN(id)) {
+    if (!isPositiveId(id)) {
       return adminBadRequest(res, 'Invalid booking id');
     }
     if (!reason?.trim()) {
@@ -316,7 +319,7 @@ export const confirmProviderAssignment = async (req: Request, res: Response) => 
   try {
     const id = Number(req.params.id);
     const { providerUid, reason, consentMethod, consentReference } = req.body;
-    if (!id || isNaN(id))                           return adminBadRequest(res, 'Invalid booking id');
+    if (!isPositiveId(id))                          return adminBadRequest(res, 'Invalid booking id');
     if (!providerUid)                               return adminBadRequest(res, 'providerUid is required');
     if (typeof providerUid !== 'string' || providerUid.length > 256) return adminBadRequest(res, 'providerUid invalid');
     if (!reason?.trim())                            return adminBadRequest(res, 'reason is required');
@@ -386,6 +389,8 @@ export const getSlotCandidates = async (req: Request, res: Response) => {
     const { startAt, endAt, serviceId, cityId, branchId, serviceOptionId } = req.query as any;
     if (!startAt) return adminBadRequest(res, 'startAt is required');
     if (isNaN(Date.parse(startAt))) return adminBadRequest(res, 'startAt must be a valid ISO 8601 date-time');
+    if (endAt && isNaN(Date.parse(endAt))) return adminBadRequest(res, 'endAt must be a valid ISO 8601 date-time');
+    if (endAt && Date.parse(endAt) <= Date.parse(startAt)) return adminBadRequest(res, 'endAt must be after startAt');
     // derivedEnd is the fallback when no serviceOptionId is given; listCandidatesForSlot
     // overrides it with the real duration when serviceOptionId is known.
     const derivedEnd = endAt ?? new Date(new Date(startAt).getTime() + 2 * 60 * 60 * 1000).toISOString();
@@ -421,7 +426,7 @@ export const createAdminBooking = async (req: Request, res: Response) => {
     if (!idempotencyKey?.trim())           return adminBadRequest(res, 'idempotencyKey is required');
     if (idempotencyKey.trim().length > 64) return adminBadRequest(res, 'idempotencyKey must be ≤ 64 characters');
     if (!['guest','client'].includes(customerType)) return adminBadRequest(res, 'customerType must be guest or client');
-    if (!serviceOptionId)                  return adminBadRequest(res, 'serviceOptionId is required');
+    if (!isPositiveId(Number(serviceOptionId))) return adminBadRequest(res, 'serviceOptionId must be a positive integer');
     if (!scheduledAt)                      return adminBadRequest(res, 'scheduledAt is required');
     if (isNaN(Date.parse(scheduledAt)))    return adminBadRequest(res, 'scheduledAt must be a valid ISO 8601 date-time');
     if (!addressLine?.trim())              return adminBadRequest(res, 'addressLine is required');
@@ -503,7 +508,7 @@ export const approveCompletion = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     const { reason } = req.body;
-    if (!id || isNaN(id)) {
+    if (!isPositiveId(id)) {
       return adminBadRequest(res, 'Invalid booking id');
     }
     const result = await svc.adminApproveCompletion(id, actorUid(req), reason);

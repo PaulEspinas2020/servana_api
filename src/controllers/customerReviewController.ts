@@ -27,7 +27,7 @@ export async function checkEligibility(req: Request, res: Response) {
     const result = await getReviewEligibility(bookingId, customerUid);
     return res.json(result);
   } catch (e: any) {
-    return res.status(e.status || 500).json({ error: e.code || "SERVER_ERROR" });
+    return res.status(e.statusCode || e.status || 500).json({ error: e.code || "SERVER_ERROR" });
   }
 }
 
@@ -61,7 +61,7 @@ export async function create(req: Request, res: Response) {
     if (e.code === "REVIEW_DUPLICATE_REQUEST") {
       return res.status(409).json({ error: e.code, message: e.message });
     }
-    return res.status(e.status || 500).json({ error: e.code || "SERVER_ERROR", message: e.message });
+    return res.status(e.statusCode || e.status || 500).json({ error: e.code || "SERVER_ERROR", message: e.message });
   }
 }
 

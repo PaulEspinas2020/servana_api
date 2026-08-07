@@ -92,6 +92,9 @@ describe('server-sourced prices still work', () => {
       base: 3190,
       final: 3190,
     });
+    expect(q.mock.calls[0][0]).toMatch(
+      /option_type='MAIN'\s+AND is_active=true/,
+    );
   });
 
   it('modifiers are added when pricing_modifiers has a row', async () => {
@@ -117,6 +120,10 @@ describe('server-sourced prices still work', () => {
     const quote = await computeQuote({ optionId: 1, addonOptionIds: [9] } as any);
     expect(quote.addonsTotal).toBe(150);
     expect(quote.final).toBe(1150);
+    expect(q.mock.calls[1][0]).toMatch(
+      /option_type='ADD_ON'[\s\S]*parent_option_id=\$2[\s\S]*is_active=true/,
+    );
+    expect(q.mock.calls[1][1]).toEqual([[9], 1]);
   });
 
   it('an unknown option is rejected rather than priced at zero', async () => {
@@ -130,6 +137,7 @@ describe('server-sourced prices still work', () => {
 
 describe('the shape of the fix', () => {
   const svc = read('services', 'pricingService.ts');
+  const bookingSvc = read('services', 'bookingService.ts');
 
   it('no request-supplied price is multiplied into the total', () => {
     expect(svc).not.toMatch(/p\.qty\s*\*\s*p\.unit_price/);
@@ -144,6 +152,12 @@ describe('the shape of the fix', () => {
       types.indexOf('interface QuoteRequest') + 700,
     );
     expect(iface).not.toMatch(/unit_price\s*:/);
+  });
+
+  it('booking creation only resolves an active MAIN service option', () => {
+    expect(bookingSvc).toMatch(
+      /WHERE so\.id = \$1[\s\S]*so\.option_type = 'MAIN'[\s\S]*so\.is_active = true/,
+    );
   });
 });
 

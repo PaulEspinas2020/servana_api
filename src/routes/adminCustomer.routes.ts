@@ -15,6 +15,7 @@ router.get('/admin/customers/metrics', ...adminOnly, requirePermission('customer
 
 // Client-specific endpoints
 router.get('/admin/customers/clients/:identityId', ...adminOnly, requirePermission('customers.read'), ctrl.getClientDetail);
+router.get('/admin/customers/clients/:identityId/addresses', ...adminOnly, requirePermission('customers.addresses.view'), ctrl.getClientAddresses);
 
 // Guest-specific endpoints
 router.get('/admin/customers/guests',                   ...adminOnly, requirePermission('customers.read_guests'),         ctrl.listGuests);

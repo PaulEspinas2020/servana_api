@@ -4,11 +4,11 @@
  * Automatically activates providers as online + bookable when they satisfy
  * all three readiness criteria:
  *   1. Complete details (name, contact, valid role, account not blocked)
- *   2. Required documents submitted (typed or legacy count ≥ 3)
- *   3. Catalog/service association (employee_services OR pending/approved application)
+ *   2. Required documents verified and current under Command 24 compliance
+ *   3. Active operational employee_services association
  *
- * Document approval is NOT required — pending_review counts as submitted.
- * Service application approval is NOT required — pending_review counts as associated.
+ * Uploaded/pending documents and pending service applications are diagnostic
+ * context only. Neither is work authorization.
  *
  * MOBILE CONTRACT PROTECTION:
  *   - MongoDB worker_locations is updated additively (is_online + auto_online flags)
@@ -22,6 +22,7 @@ import mongoDb from '../db/mongodbQuery';
 import * as availEngine from './providerAvailabilityEngine';
 import * as areaEngine from './providerServiceAreaEngine';
 import * as availabilityService from './providerOperationalAvailabilityService';
+import { calculateCompliance } from './providerProfileComplianceService';
 
 const s = db.schema;
 
@@ -163,6 +164,10 @@ export const bootstrap = async (): Promise<void> => {
     ON ${s}.provider_provisional_bookable_services (provider_uid)
     WHERE status = 'active'
   `, []);
+  await dbQuery.query(
+    `ALTER TABLE ${s}.employee_services ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`,
+    [],
+  );
 
   _bootstrapped = true;
 };
@@ -253,7 +258,8 @@ const checkDocuments = async (providerUid: string): Promise<ProviderAutoOnlineRe
 const checkServiceAssociation = async (providerUid: string): Promise<ProviderAutoOnlineReadiness['serviceAssociation']> => {
   const [svcRes, appRes] = await Promise.all([
     dbQuery.query(
-      `SELECT service_id FROM ${s}.employee_services WHERE employee_uid = $1`,
+      `SELECT service_id FROM ${s}.employee_services
+       WHERE employee_uid = $1 AND COALESCE(status, 'active') = 'active'`,
       [providerUid]
     ),
     dbQuery.query(
@@ -275,7 +281,10 @@ const checkServiceAssociation = async (providerUid: string): Promise<ProviderAut
     fromApps                         ? 'service_applications' : 'none';
 
   return {
-    complete: allIds.length > 0,
+    // An application is diagnostic context, never work authorization. Only an
+    // approved, operational employee_services relationship can make this
+    // readiness check complete.
+    complete: activeServiceIds.length > 0,
     associatedServiceIds: allIds,
     associatedOfferingIds: [],
     associatedCatalogKeys: [],
@@ -321,16 +330,18 @@ export const evaluateProvider = async (
 ): Promise<ProviderAutoOnlineReadiness> => {
   await bootstrap();
 
-  const [details, documents, serviceAssociation, source, currentState] = await Promise.all([
+  const [details, documents, serviceAssociation, source, currentState, compliance] = await Promise.all([
     checkDetails(providerUid),
     checkDocuments(providerUid),
     checkServiceAssociation(providerUid),
     getSource(providerUid),
     getCurrentAutoOnlineState(providerUid),
+    calculateCompliance(providerUid).catch(() => null),
   ]);
 
   const isAdminDisabled = currentState?.activation_mode === 'manual_admin_disabled';
-  const eligible = details.complete && documents.complete && serviceAssociation.complete && !isAdminDisabled;
+  const complianceCurrent = compliance?.state === 'compliant' || compliance?.state === 'expiring_soon';
+  const eligible = details.complete && documents.complete && complianceCurrent && serviceAssociation.complete && !isAdminDisabled;
 
   const blockers: string[] = [];
   const warnings: string[] = [];
@@ -338,13 +349,14 @@ export const evaluateProvider = async (
 
   if (!details.complete)        blockers.push(...details.missingFields.map(f => `missing_${f}`));
   if (!documents.complete)      blockers.push(...documents.missingRequiredTypes.map(t => `missing_doc_${t}`));
+  if (!complianceCurrent)       blockers.push(compliance ? 'provider_compliance_action_required' : 'provider_compliance_unavailable');
   if (!serviceAssociation.complete) blockers.push('no_service_association');
   if (isAdminDisabled)          blockers.push('admin_disabled');
 
   if (documents.classification === 'legacy_inferred') warnings.push('documents_legacy_inferred');
-  if (serviceAssociation.source === 'service_applications') warnings.push('bookable_while_application_under_review');
+  if (serviceAssociation.source === 'service_applications') warnings.push('application_present_without_operational_service');
 
-  if (eligible) reasonCodes.push('details_complete', 'documents_submitted', 'service_associated');
+  if (eligible) reasonCodes.push('details_complete', 'documents_verified', 'compliance_current', 'service_associated');
 
   let activationResult: { activatedAt: string | null; active: boolean } = {
     activatedAt: currentState?.activated_at ?? null,
@@ -615,29 +627,20 @@ export const syncAllAreaServiceArea = async (providerUid: string): Promise<void>
 export const syncProvisionalBookableServices = async (providerUid: string): Promise<void> => {
   await bootstrap();
 
-  const [svcRes, appRes] = await Promise.all([
-    dbQuery.query(
-      `SELECT service_id FROM ${s}.employee_services WHERE employee_uid = $1`,
-      [providerUid]
-    ),
-    dbQuery.query(
-      `SELECT id, service_id, status FROM ${s}.worker_service_applications
-       WHERE worker_uid = $1 AND status IN ('pending_review', 'action_required', 'approved')`,
-      [providerUid]
-    ),
-  ]);
+  const svcRes = await dbQuery.query(
+    `SELECT service_id FROM ${s}.employee_services
+     WHERE employee_uid = $1 AND COALESCE(status, 'active') = 'active'`,
+    [providerUid]
+  );
 
   // Build a deduped map: service_id → {source, source_id}
   const services = new Map<number, { source: string; sourceId: string }>();
   for (const r of svcRes.rows) {
     services.set(Number(r.service_id), { source: 'employee_services', sourceId: String(r.service_id) });
   }
-  for (const r of appRes.rows) {
-    const id = Number(r.service_id);
-    if (!services.has(id)) {
-      services.set(id, { source: 'worker_service_applications', sourceId: String(r.id) });
-    }
-  }
+  // Applications are intentionally not read here. Approval must first create
+  // the transactional employee_services row; application state alone is never
+  // work authorization.
 
   if (services.size === 0) return;
 

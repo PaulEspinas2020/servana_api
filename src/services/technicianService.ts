@@ -8,6 +8,8 @@ import { filterUidsAvailableAt } from "./providerAvailabilityEngine";
 import { getUserInfoByBookingId } from "./user.service";
 import { computeTranspoFee } from "./pricingService";
 import { createNotification } from "./notification.service";
+import { notifyAdminsSafely } from './adminNotificationService';
+import { classifyResponseMiss } from "./bookingResponseConflict";
 import { createDisbursement } from "./disbursement.service";
 import { getOrCreateConversation, postSystemMessageOnce } from "../chat/chat.service";
 import { findExistingConversationByBookingId } from "../chat/chat.repository";
@@ -693,6 +695,12 @@ export const assignNearestWorker = async (
     [bookingId]
   );
 
+  notifyAdminsSafely({
+    type: 'booking_auto_assigned', severity: 'success', title: 'Booking auto-assigned',
+    body: `Booking SVN-${String(bookingId).padStart(6, '0')} was automatically assigned to a provider.`,
+    bookingId, notificationKey: `booking_auto_assigned_${bookingId}_${best.uid}`,
+  });
+
   // Notify customer that a technician has been assigned
   try {
     const userInfo = await getUserInfoByBookingId(bookingId);
@@ -778,6 +786,8 @@ export const getJobCardsByWorker = async (workerId: string) => {
       b.id AS booking_id,
       b.status,
       b.schedule,
+      p.method AS payment_method,
+      p.status AS payment_status,
 
       -- Customer: for admin-created guest bookings user_id is NULL; LEFT JOIN
       -- still works, customer fields will be null and the mobile app must handle that.
@@ -817,11 +827,14 @@ export const getJobCardsByWorker = async (workerId: string) => {
     LEFT JOIN ${dbSchema}.service_options s
       ON s.id = b.service_option_id
 
+    LEFT JOIN ${dbSchema}.payments p
+      ON p.booking_id = b.id
+
     LEFT JOIN ${dbSchema}.booking_workers bw
       ON bw.booking_id = b.id AND bw.worker_uid = $1
 
     WHERE b.worker_uid = $1
-    AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
+    AND bw.status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
     ORDER BY b.schedule ASC
     `,
     [workerId]
@@ -993,10 +1006,14 @@ export const assignWorker = async (bookingId: number, workerUid: string) => {
 };
 
 export const acceptJob = async (bookingId: number, workerUid: string) => {
+  // accepted_at is added by this lazy DDL; the UPDATE below writes it.
+  await ensureArrivalColumns();
+
   const res = await dbQuery.query(
     `
     UPDATE ${dbSchema}.booking_workers
-    SET status = 'ACCEPTED'
+    SET status = 'ACCEPTED',
+        accepted_at = NOW()
     WHERE booking_id = $1
     AND worker_uid = $2
     AND status = 'ASSIGNED'
@@ -1006,8 +1023,17 @@ export const acceptJob = async (bookingId: number, workerUid: string) => {
   );
 
   if (!res.rowCount) {
-    throw new Error("Job not available for acceptance");
+    // The CAS found no ASSIGNED row. Explain why rather than throwing a bare
+    // Error that every controller flattened into "500 Server error" — a
+    // double-tap and a reassignment are different things (C18 §12).
+    throw await classifyResponseMiss(bookingId, workerUid, "ACCEPT");
   }
+
+  notifyAdminsSafely({
+    type: 'provider_accepted', severity: 'success', title: 'Provider accepted booking',
+    body: `The auto-assigned provider accepted booking SVN-${String(bookingId).padStart(6, '0')}.`,
+    bookingId, notificationKey: `provider_accepted_${bookingId}_${workerUid}`,
+  });
 
   // Notify customer that the technician has accepted and is on the way
   try {
@@ -1057,24 +1083,107 @@ export const acceptJob = async (bookingId: number, workerUid: string) => {
   return res.rows[0];
 };
 
-export const declineJob = async (bookingId: number, workerUid: string) => {
-  // 1. Mark the booking_workers row as DECLINED (only if currently ASSIGNED)
-  const declineRes = await dbQuery.query(
+/**
+ * Releases a booking back to the pool and finds the next nearest provider.
+ *
+ * Extracted from declineJob so provider CANCELLATION reuses exactly the same
+ * path (C18 §26 requires cancellation to auto-reassign, like decline). One
+ * implementation means the two can never drift into reassigning differently.
+ *
+ * `trackingNote` and the system-message text differ between the two because a
+ * decline and a post-acceptance cancellation are different events to a
+ * customer reading their booking history.
+ */
+/**
+ * Provider cancels a booking they already accepted (C18 §26).
+ *
+ * Operator policy, recorded not inferred: allowed up to 48 hours before the
+ * scheduled start, RECORD ONLY (no penalty, no fee, no rating impact), and it
+ * auto-reassigns exactly like a decline while notifying admin.
+ *
+ * The 48-hour check happens in the CONTROLLER against server time before this
+ * runs; the compare-and-swap here is what makes it safe against a double tap,
+ * mirroring acceptJob/declineJob.
+ */
+export const cancelAcceptedJob = async (
+  bookingId: number,
+  workerUid: string,
+  reasonCode: string,
+  note?: string | null
+) => {
+  await ensureArrivalColumns();
+  await ensureCancellationColumns();
+
+  const res = await dbQuery.query(
     `
     UPDATE ${dbSchema}.booking_workers
-    SET status = 'DECLINED'
+    SET status = 'CANCELLED',
+        cancelled_at = NOW(),
+        cancellation_reason_code = $3,
+        cancellation_note = $4
     WHERE booking_id = $1
       AND worker_uid = $2
-      AND status = 'ASSIGNED'
+      AND status IN ('ACCEPTED','EN_ROUTE','ARRIVED')
     RETURNING *
     `,
-    [bookingId, workerUid]
+    [bookingId, workerUid, reasonCode, note ?? null]
   );
 
-  if (!declineRes.rowCount) {
-    throw new Error("No ASSIGNED job found for this worker on this booking");
+  if (!res.rowCount) {
+    // Same classification the response path uses, so a double tap reads as
+    // "already done" rather than a server error.
+    throw await classifyResponseMiss(bookingId, workerUid, "DECLINE");
   }
 
+  const reassignment = await releaseBookingAndReassign(
+    bookingId,
+    workerUid,
+    "Provider cancelled — seeking reassignment",
+    "provider_cancelled",
+    "The assigned provider can no longer attend this booking. We are finding a new provider for you."
+  );
+
+  // §26 requires admin notification. Fire-and-forget: a notification failure
+  // must not roll back a cancellation the provider has already been told about.
+  createNotification(workerUid, {
+    type: "booking_cancelled_by_you",
+    severity: "info",
+    title: "Booking cancelled",
+    safeBody: `You cancelled booking SVN-${String(bookingId).padStart(6, "0")}. We are finding a replacement provider.`,
+    safeContextLabel: `SVN-${String(bookingId).padStart(6, "0")}`,
+    canOpenDetail: false,
+  }).catch((e: any) => console.error("cancellation notification failed:", e?.message));
+
+  return { cancelled: true, bookingId, workerUid, reasonCode, reassignment };
+};
+
+let cancellationColumnsReady: Promise<void> | null = null;
+
+/** Lazily adds the cancellation record columns, like the arrival ones. */
+const ensureCancellationColumns = (): Promise<void> => {
+  cancellationColumnsReady ??= dbQuery
+    .query(
+      `ALTER TABLE ${dbSchema}.booking_workers
+         ADD COLUMN IF NOT EXISTS cancelled_at             TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS cancellation_reason_code VARCHAR(60),
+         ADD COLUMN IF NOT EXISTS cancellation_note        TEXT`,
+      []
+    )
+    .then(() => undefined)
+    .catch((e: any) => {
+      cancellationColumnsReady = null;
+      throw e;
+    });
+  return cancellationColumnsReady;
+};
+
+export const releaseBookingAndReassign = async (
+  bookingId: number,
+  workerUid: string,
+  trackingNote: string,
+  eventKind: "provider_declined" | "provider_cancelled",
+  customerMessage: string
+) => {
   // 2. Get booking details needed for re-assignment
   const bookingRes = await dbQuery.query(
     `
@@ -1113,9 +1222,9 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
   await dbQuery.query(
     `
     INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note)
-    VALUES ($1, 'CONFIRMED', 'Worker declined — seeking reassignment')
+    VALUES ($1, 'CONFIRMED', $2)
     `,
-    [bookingId]
+    [bookingId, trackingNote]
   );
 
   // 4. Attempt to find the next nearest qualified worker
@@ -1147,15 +1256,55 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
       if (existing) {
         await postSystemMessageOnce(
           existing.id,
-          `provider_declined_${bookingId}_${workerUid}`,
-          'The assigned provider was unable to accept this booking. We are finding a new provider for you.',
-          { bookingId, providerUid: workerUid, eventType: 'provider_declined' }
+          `${eventKind}_${bookingId}_${workerUid}`,
+          customerMessage,
+          { bookingId, providerUid: workerUid, eventType: eventKind }
         );
       }
     } catch (chatErr) {
       console.error('system message failed (declineJob):', chatErr);
     }
   })();
+
+  return reassignment;
+};
+
+export const declineJob = async (bookingId: number, workerUid: string) => {
+  await ensureArrivalColumns();
+
+  // 1. Mark the booking_workers row as DECLINED (only if currently ASSIGNED)
+  const declineRes = await dbQuery.query(
+    `
+    UPDATE ${dbSchema}.booking_workers
+    SET status = 'DECLINED',
+        declined_at = NOW()
+    WHERE booking_id = $1
+      AND worker_uid = $2
+      AND status = 'ASSIGNED'
+    RETURNING *
+    `,
+    [bookingId, workerUid]
+  );
+
+  if (!declineRes.rowCount) {
+    throw await classifyResponseMiss(bookingId, workerUid, "DECLINE");
+  }
+
+  const reassignment = await releaseBookingAndReassign(
+    bookingId,
+    workerUid,
+    "Worker declined — seeking reassignment",
+    "provider_declined",
+    "The assigned provider was unable to accept this booking. We are finding a new provider for you."
+  );
+
+  notifyAdminsSafely({
+    type: 'provider_declined', severity: 'warning', title: 'Provider declined booking',
+    body: reassignment?.assigned
+      ? `A provider declined booking SVN-${String(bookingId).padStart(6, '0')}; another provider was auto-assigned.`
+      : `A provider declined booking SVN-${String(bookingId).padStart(6, '0')}. Please assign a provider.`,
+    bookingId, notificationKey: `provider_declined_${bookingId}_${workerUid}`,
+  });
 
   return {
     declined: true,
@@ -1199,6 +1348,14 @@ export const declineJob = async (bookingId: number, workerUid: string) => {
  */
 let arrivalColumnsReady: Promise<void> | null = null;
 
+/**
+ * Lazily adds the optional lifecycle timestamp columns.
+ *
+ * Named for arrival historically; it now also covers accepted_at/declined_at,
+ * so EVERY writer of those columns must await it first. acceptJob and
+ * declineJob do — without that, the first accept after deploy would fail on a
+ * column that does not exist yet.
+ */
 const ensureArrivalColumns = (): Promise<void> => {
   // Memoised: this runs on the first arrival transition rather than at boot, so
   // it must not issue a DDL statement on every tap.
@@ -1206,7 +1363,9 @@ const ensureArrivalColumns = (): Promise<void> => {
     .query(
       `ALTER TABLE ${dbSchema}.booking_workers
          ADD COLUMN IF NOT EXISTS en_route_at TIMESTAMPTZ,
-         ADD COLUMN IF NOT EXISTS arrived_at  TIMESTAMPTZ`,
+         ADD COLUMN IF NOT EXISTS arrived_at  TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS declined_at TIMESTAMPTZ`,
       []
     )
     .then(() => undefined)
@@ -1372,21 +1531,47 @@ export const startJob = async (
   return res.rows[0];
 };
 
+export class UnpaidCashBookingError extends Error {
+  readonly code = "CASH_PAYMENT_REQUIRED";
+
+  constructor() {
+    super("Record the customer's cash payment before completing this job");
+    this.name = "UnpaidCashBookingError";
+  }
+}
+
 export const completeJob = async (bookingId: number, workerUid: string) => {
   const res = await dbQuery.query(
     `
-    UPDATE ${dbSchema}.booking_workers
+    UPDATE ${dbSchema}.booking_workers bw
     SET status = 'COMPLETED',
         completed_at = NOW()
-    WHERE booking_id = $1
-    AND worker_uid = $2
-    AND status = 'IN_PROGRESS'
-    RETURNING *
+    WHERE bw.booking_id = $1
+    AND bw.worker_uid = $2
+    AND bw.status = 'IN_PROGRESS'
+    AND EXISTS (
+      SELECT 1
+      FROM ${dbSchema}.payments p
+      WHERE p.booking_id = bw.booking_id
+        AND (UPPER(COALESCE(p.method, '')) <> 'CASH' OR UPPER(COALESCE(p.status, '')) = 'PAID')
+    )
+    RETURNING bw.*
     `,
     [bookingId, workerUid]
   );
 
   if (!res.rowCount) {
+    const payment = await dbQuery.query(
+      `SELECT method, status FROM ${dbSchema}.payments WHERE booking_id = $1`,
+      [bookingId]
+    );
+    const row = payment.rows[0];
+    if (
+      String(row?.method ?? '').toUpperCase() === 'CASH' &&
+      String(row?.status ?? '').toUpperCase() !== 'PAID'
+    ) {
+      throw new UnpaidCashBookingError();
+    }
     throw new Error("Job cannot be completed");
   }
 

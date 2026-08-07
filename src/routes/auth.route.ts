@@ -52,6 +52,7 @@ router.post("/auth/signup", signupLimiter, authController.signup);
 router.post("/auth/verify-email-otp", otpLimiter, authController.verifyEmailOtpController);
 router.post("/auth/resend-email-otp", otpLimiter, authController.resendEmailOtpController);
 router.post("/auth/signin", signInLimiter, authController.signin);
+router.post("/auth/admin-signin", signInLimiter, authController.adminSignin);
 
 // Unauthenticated by design: the caller is here BECAUSE their ID token expired,
 // so requiring a valid one would be circular. The refresh token in the body is

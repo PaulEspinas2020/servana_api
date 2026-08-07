@@ -31,6 +31,7 @@ export const getLevel2List = async (serviceId: number) => {
     FROM ${dbSchema}.service_options
     WHERE service_id = $1
       AND option_type = 'MAIN'
+      AND is_active = true
       AND level_2 IS NOT NULL
     ORDER BY level_2
     `,
@@ -604,6 +605,7 @@ export const getFullServiceCatalog = async () => {
         LEFT JOIN ${dbSchema}.service_option_meta m
             ON m.service_option_id = so.id
         WHERE so.option_type = 'MAIN'
+          AND so.is_active = true
         ORDER BY so.service_id, so.level_2, so.level_3
     `, []);
 
@@ -611,6 +613,7 @@ export const getFullServiceCatalog = async () => {
         SELECT *
         FROM ${dbSchema}.service_options
         WHERE option_type = 'ADD_ON'
+          AND is_active = true
         ORDER BY service_id, level_2, level_3
     `, []);
 

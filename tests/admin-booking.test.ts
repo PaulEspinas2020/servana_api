@@ -224,6 +224,36 @@ const svcSrc  = fs.readFileSync(path.join(__dirname, '../src/services/adminBooki
 const ctrlSrc = fs.readFileSync(path.join(__dirname, '../src/controllers/adminBookingController.ts'), 'utf-8').replace(/\r\n/g, '\n');
 const routeSrc = fs.readFileSync(path.join(__dirname, '../src/routes/adminBooking.routes.ts'), 'utf-8').replace(/\r\n/g, '\n');
 
+describe('Admin booking list query contracts', () => {
+  const listFn = svcSrc.slice(
+    svcSrc.indexOf('export const getAdminBookings'),
+    svcSrc.indexOf('export const getAdminBookingMetrics')
+  );
+
+  it('filters payment status through the latest_payment CTE alias', () => {
+    expect(listFn).toContain('lp.payment_status = $${pi}');
+    expect(listFn).not.toContain('lp.status = $${pi}');
+  });
+
+  it('applies needsAdminAction before count and pagination', () => {
+    expect(listFn).toContain("filter.needsAdminAction === true");
+    expect(listFn).toContain("b.status IN ('PENDING_OTP', 'CONFIRMED', 'PAID')");
+    expect(listFn).not.toContain('rows = rows.filter');
+  });
+
+  it('classifies cancellation before historical worker assignment states', () => {
+    const cancelled = listFn.indexOf("WHEN b.status IN ('CANCELLED','CANCELED')");
+    const assigned = listFn.indexOf("WHEN la.worker_status = 'ASSIGNED'");
+    expect(cancelled).toBeGreaterThan(-1);
+    expect(cancelled).toBeLessThan(assigned);
+  });
+
+  it('returns guestCustomerId on unified guest booking rows', () => {
+    expect(listFn).toContain('b.guest_customer_id::text                    AS guest_customer_id');
+    expect(listFn).toContain('guestCustomerId: row.guest_customer_id ?? null');
+  });
+});
+
 describe('adminConfirmProviderAssignment — source contracts', () => {
   it('accepts exactly verbal | written | chat_message as consent methods', () => {
     expect(svcSrc).toContain("'verbal'");

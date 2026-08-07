@@ -75,7 +75,11 @@ describe('REPEAT — WORKER.TIME_OFF canonical storage', () => {
 
   it('Provider Web /worker/time-off POST delegates to availEngine.createTimeOff', () => {
     const ctrl = fs.readFileSync(CTRL('providerController.ts'), 'utf8');
-    expect(ctrl).toContain("availEngine.createTimeOff(uid");
+    // Whitespace-tolerant: the intent is "this route delegates to the engine",
+    // not "the call fits on one line". C22 §17 made this a multi-line call to
+    // pass the partial-day fields, and the literal-substring form failed on a
+    // reformat that changed no behaviour.
+    expect(ctrl).toMatch(/availEngine\.createTimeOff\(\s*uid/);
   });
 
   it('Provider Web /worker/time-off DELETE delegates to availEngine.cancelTimeOff', () => {

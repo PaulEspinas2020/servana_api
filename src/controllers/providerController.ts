@@ -1,12 +1,23 @@
 ﻿import { Request, Response } from "express";
 import { db } from "../config";
 import { providerShareOf, PROVIDER_SHARE_RATE, PROVIDER_SHARE_PERCENT } from '../services/revenueSplit';
+import {
+  canonicalPayoutStatus,
+  earningsPayoutDialect,
+  payoutsPayoutDialect,
+  ledgerPayoutDialect,
+} from '../services/payoutStatus';
 import dbQuery from "../db/dbQuery";
 import * as technicianService from "../services/technicianService";
 import * as userService from "../services/user.service";
 import mongoDb from "../db/mongodbQuery";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import * as notificationService from "../services/notification.service";
+import { getProviderAggregate } from "../services/customerReviewService";
+import { BookingResponseConflict } from "../services/bookingResponseConflict";
+import { buildBookingTimeline, currentTimelineStep, mergeStoredEvents } from "./bookingTimeline";
+import { buildDisputeSummary } from "./bookingDisputeView";
+import { evaluateCancellation, CANCELLATION_NOTICE_HOURS } from "./bookingCancellationPolicy";
 import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
 import * as serviceApplicationService from "../services/serviceApplicationService";
 import * as onboardingService from "../services/providerOnboardingService";
@@ -17,6 +28,8 @@ import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 import * as availabilityService from "../services/providerOperationalAvailabilityService";
 import { touchProviderActivity } from "../services/adminProviderService";
 import { getProviderPerformance } from "../services/providerPerformanceService";
+import { randomUUID } from 'crypto';
+import { submitProfilePhoto } from '../services/providerProfileMediaService';
 
 const dbSchema = db.schema;
 
@@ -66,11 +79,11 @@ function bridgeToWebTimeOff(timeOff: availEngine.ProviderTimeOff[]): any[] {
       id:        String(t.id),
       startDate: t.startDate,
       endDate:   t.endDate,
-      allDay:    true,
-      startTime: null,
-      endTime:   null,
+      allDay:    t.allDay,
+      startTime: t.startTime,
+      endTime:   t.endTime,
       reason:    t.reason ?? 'other',
-      note:      null,
+      note:      t.note,
       createdAt: t.createdAt,
     }));
 }
@@ -220,7 +233,7 @@ export const getDashboard = async (req: Request, res: Response) => {
     const jobSql = (filter: string, limit?: number) =>
       JOB_SELECT(filter).replace(/\{SCHEMA\}/g, schema) + (limit ? ` LIMIT ${limit}` : "");
 
-    const [activeJobRes, upcomingRes, todayStatsRes, locationDoc] = await Promise.all([
+    const [activeJobRes, upcomingRes, todayStatsRes, locationDoc, ratingAgg] = await Promise.all([
       // `bookings.status` is NEVER written 'IN_PROGRESS' — startJob writes that to
       // booking_workers only (technicianService.ts:1139). This filter therefore
       // matched nothing, and the dashboard reported no active job while the
@@ -265,6 +278,19 @@ export const getDashboard = async (req: Request, res: Response) => {
         const col = (await mongoDb).collection("worker_locations");
         return col.findOne({ uid }, { projection: { is_online: 1, updatedAt: 1 } });
       })(),
+      // `rating` was a hardcoded 0 while `provider_rating_aggregates` held the
+      // real figure, recomputed on every review create/update/delete. Every
+      // consumer of this endpoint — the provider web portal's dashboard facade
+      // among them — was being told each provider had a zero rating.
+      //
+      // Additive by construction: same key, same type, real value. No consumer
+      // needs a change, and one that renders `rating` starts being correct.
+      //
+      // Failure is non-fatal: a rating is not worth failing a whole dashboard
+      // over, so an error here degrades to the previous behaviour.
+      uid
+        ? getProviderAggregate(uid).catch(() => null)
+        : Promise.resolve(null),
     ]);
 
     const stats = todayStatsRes.rows[0] || {};
@@ -280,7 +306,10 @@ export const getDashboard = async (req: Request, res: Response) => {
         completedJobsToday: Number(stats.completed_today ?? 0),
         todayEarnings: Number(stats.today_earnings ?? 0),
         pendingPayout: Number(stats.total_earned ?? 0),
-        rating: 0,
+        rating: ratingAgg?.averageRating ?? 0,
+        // Still hardcoded, and deliberately so — there is no chat/messages
+        // system in this API, and no requirements-expiry source. Inventing a
+        // number for either would be worse than a zero. Recorded as C17-01.
         unreadMessages: 0,
         requirementsAlerts: 0,
         currency: "PHP",
@@ -293,13 +322,11 @@ export const getDashboard = async (req: Request, res: Response) => {
 
 // ─── Earnings ─────────────────────────────────────────────────────────────────
 
-const normalizePayoutStatus = (raw: string | null | undefined): string => {
-  if (!raw) return "pending";
-  const s = raw.toLowerCase();
-  if (s === "released") return "disbursed";
-  if (s === "failed")   return "failed_or_on_hold";
-  return s;
-};
+// C20 F-03. This was one of three hand-written mappings over the same column,
+// each answering a different word. It now derives from `payoutStatus.ts`, which
+// emits exactly what this function always emitted — the point is that the three
+// dialects can no longer drift apart, not that any value changed.
+const normalizePayoutStatus = earningsPayoutDialect;
 
 export const getEarnings = async (req: Request, res: Response) => {
   try {
@@ -363,6 +390,9 @@ export const getEarnings = async (req: Request, res: Response) => {
         clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
         bookingStatus: r.status ? r.status.toLowerCase() : "completed",
         providerPayoutStatus: normalizePayoutStatus(r.payout_status),
+        // Additive (C20 F-03). Keeps PROCESSING distinct from PENDING, which
+        // the dialect above cannot express and §1 requires.
+        payoutStatusCanonical: canonicalPayoutStatus(r.payout_status),
         disbursedAt: r.released_at || null,
         paymentMethod: (r.payment_method || "cash").toLowerCase(),
         currency: "PHP",
@@ -419,6 +449,8 @@ export const getEarningById = async (req: Request, res: Response) => {
       clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
       bookingStatus:       r.status ? r.status.toLowerCase() : "completed",
       providerPayoutStatus: normalizePayoutStatus(r.payout_status),
+      // Additive (C20 F-03). Keeps PROCESSING distinct from PENDING.
+      payoutStatusCanonical: canonicalPayoutStatus(r.payout_status),
       disbursedAt:         r.released_at || null,
       paymentMethod:       (r.payment_method || "cash").toLowerCase(),
       currency:            "PHP",
@@ -445,13 +477,35 @@ export const getEarningsSummary = async (req: Request, res: Response) => {
       dateFilter = `AND b.schedule >= $2 AND b.schedule <= $3`;
     }
 
+    // C20 F-04. This query had three defects, all of the same shape: it
+    // recomputed money that had already been calculated authoritatively.
+    //
+    //   1. `final_price * RATE` DROPPED ON-SITE UPSELL REVENUE. Disbursements
+    //      are computed from `final_price + additional_paid` (see
+    //      createDisbursement, whose own comment records fixing exactly this
+    //      bug at the writer). The fix never reached this reader, so a provider
+    //      who did approved additional work saw a total that omitted it.
+    //   2. `PROCESSING` WAS COUNTED NOWHERE. `total_paid` took RELEASED only
+    //      and `total_pending` took PENDING/FAILED/no-row, so money in flight
+    //      vanished from both — it left "pending" without arriving in "paid".
+    //   3. `FAILED` WAS COUNTED AS PENDING. That is the C20 F-01 defect in a
+    //      second endpoint: a payout that will not arrive without intervention,
+    //      presented as one that is on its way.
+    //
+    // The authoritative `d.worker_share` is now preferred wherever a
+    // disbursement row exists. The `final_price` fallback survives only for a
+    // completed booking that has no row yet — which is a genuine ESTIMATE, and
+    // is reported as one rather than sitting unlabelled beside settled fact.
     const result = await dbQuery.query(
       `SELECT
          COUNT(*) AS total_jobs,
          COALESCE(SUM(b.final_price), 0) AS total_gross,
          COALESCE(SUM(CASE WHEN d.status = 'RELEASED' THEN d.worker_share ELSE 0 END), 0) AS total_paid,
-         COALESCE(SUM(CASE WHEN d.status IN ('PENDING','FAILED') OR d.id IS NULL
-                           THEN b.final_price * ${PROVIDER_SHARE_RATE} ELSE 0 END), 0) AS total_pending
+         COALESCE(SUM(CASE WHEN d.status IN ('PENDING','PROCESSING') THEN d.worker_share ELSE 0 END), 0) AS pending_recorded,
+         COALESCE(SUM(CASE WHEN d.id IS NULL
+                           THEN b.final_price * ${PROVIDER_SHARE_RATE} ELSE 0 END), 0) AS pending_estimated,
+         COALESCE(SUM(CASE WHEN d.status = 'FAILED' THEN d.worker_share ELSE 0 END), 0) AS total_failed,
+         COUNT(*) FILTER (WHERE d.id IS NULL) AS estimated_jobs
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.disbursements d ON d.booking_id = b.id AND d.worker_uid = $1
        WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
@@ -460,19 +514,44 @@ export const getEarningsSummary = async (req: Request, res: Response) => {
     );
 
     const s = result.rows[0] || {};
-    const totalPaid    = Math.round(Number(s.total_paid    ?? 0) * 100) / 100;
-    const totalPending = Math.round(Number(s.total_pending ?? 0) * 100) / 100;
+    const money = (v: any) => Math.round(Number(v ?? 0) * 100) / 100;
+
+    const totalPaid        = money(s.total_paid);
+    const pendingRecorded  = money(s.pending_recorded);
+    const pendingEstimated = money(s.pending_estimated);
+    const totalFailed      = money(s.total_failed);
+    const estimatedJobs    = Number(s.estimated_jobs ?? 0);
+
+    // Rounded after summing, not before: rounding each part and adding would
+    // let the displayed total drift from the parts by a centavo.
+    const totalPending = money(Number(s.pending_recorded ?? 0) + Number(s.pending_estimated ?? 0));
 
     return res.status(200).json({
       status: "success",
       data: {
-        totalEarned:  providerShareOf(Number(s.total_gross ?? 0)),
+        // Every peso of provider share for completed bookings, authoritative
+        // where a disbursement exists. The old value was
+        // `providerShareOf(total_gross)`, which carried defect (1) above.
+        totalEarned:  money(totalPaid + totalPending + totalFailed),
         totalPaid,
         totalPending,
         totalRefunded: 0,
         periodLabel: startDate ? "Custom range" : "All time",
         currency: "PHP",
         jobsCount: Number(s.total_jobs ?? 0),
+
+        // ── Additive: existing consumers ignore these ────────────────────
+        // Money owed whose payout FAILED. Split out of totalPending because a
+        // failed payout needs intervention rather than patience, and folding
+        // it into "pending" tells the provider it is coming.
+        totalFailed,
+        // The portion of totalPending that is a real recorded amount, and the
+        // portion still estimated from final_price because no disbursement
+        // row exists yet. §9 requires estimates to be labelled as estimates.
+        pendingRecordedAmount:  pendingRecorded,
+        pendingEstimatedAmount: pendingEstimated,
+        pendingIsEstimate:      estimatedJobs > 0,
+        estimatedJobsCount:     estimatedJobs,
       },
     });
   } catch (error: any) {
@@ -486,9 +565,14 @@ export const getLedger = async (req: Request, res: Response) => {
 
     const result = await dbQuery.query(
       `SELECT b.id, b.schedule, b.final_price, b.payment_method, b.status,
-              so.level_2 AS service_name
+              so.level_2   AS service_name,
+              d.status     AS payout_status,
+              d.worker_share,
+              d.released_at
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+       LEFT JOIN ${dbSchema}.disbursements d
+              ON d.booking_id = b.id AND d.worker_uid = $1
        WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
        ORDER BY b.schedule DESC
        LIMIT 50`,
@@ -498,12 +582,38 @@ export const getLedger = async (req: Request, res: Response) => {
     const data = result.rows.map((r: any) => {
       const gross = Number(r.final_price || 0);
       const code = bookingCode(r.id);
+
+      // C20 F-01. This used to hardcode `status: "settled"` for every completed
+      // booking and recompute the amount from final_price, without joining
+      // `disbursements` at all — so a payout that had FAILED, or had not been
+      // calculated yet, was reported to the provider as settled money.
+      //
+      // /provider/earnings/summary reads the same figures correctly, which meant
+      // two endpoints disagreed about one booking. §1 requires pending,
+      // available, held, processing, paid and reversed to stay distinct; one
+      // word for all of them is the opposite.
+      // C20 F-03. The third dialect, and the one this command introduced: the
+      // F-01 fix had to stop hardcoding `settled`, and added `settled` as a
+      // value in doing so. Derived from the same canonical source now.
+      const status = ledgerPayoutDialect(r.payout_status);
+      const payoutCanonical = canonicalPayoutStatus(r.payout_status);
+
+      // Prefer the authoritative disbursed amount. final_price × rate is only
+      // an ESTIMATE, used where no disbursement row exists yet, and it is
+      // labelled as one rather than presented as a settled figure.
+      const hasDisbursement = r.worker_share != null;
+      const amountMinor = hasDisbursement
+        ? Math.round(Number(r.worker_share) * 100)
+        : Math.round(providerShareOf(gross) * 100);
+
       return {
         id: `led-${r.id}`,
         type: "booking_earning",
         direction: "credit",
-        status: "settled",
-        amountMinor: Math.round(providerShareOf(gross) * 100),
+        status,
+        payoutStatusCanonical: payoutCanonical,
+        isEstimate: !hasDisbursement,
+        amountMinor,
         currency: "PHP",
         description: `${r.service_name || "Service"} · ${code}`,
         bookingId: String(r.id),
@@ -513,7 +623,9 @@ export const getLedger = async (req: Request, res: Response) => {
         reference: code,
         occurredAt: r.schedule,
         availableAt: null,
-        settledAt: r.schedule,
+        // Only a RELEASED disbursement has actually settled, and it settled
+        // when it was released — not when the booking was scheduled.
+        settledAt: payoutCanonical === "paid" ? (r.released_at ?? null) : null,
       };
     });
 
@@ -523,13 +635,11 @@ export const getLedger = async (req: Request, res: Response) => {
   }
 };
 
-const _mapPayoutStatus = (raw: string): string => {
-  const s = (raw || "").toUpperCase();
-  if (s === "RELEASED")   return "paid";
-  if (s === "FAILED")     return "failed";
-  if (s === "PROCESSING") return "pending";
-  return "pending";
-};
+// C20 F-03. Same column, second dialect — now derived rather than rewritten.
+// Note it still collapses PROCESSING into "pending", which §1 says must stay
+// distinct; that is preserved because consumers branch on these literals, and
+// the distinction is carried by `payoutStatusCanonical` alongside it.
+const _mapPayoutStatus = payoutsPayoutDialect;
 
 export const getPayouts = async (req: Request, res: Response) => {
   try {
@@ -541,6 +651,7 @@ export const getPayouts = async (req: Request, res: Response) => {
       amountMinor:       Math.round(Number(r.worker_share || 0) * 100),
       currency:          "PHP",
       status:            _mapPayoutStatus(r.status),
+      payoutStatusCanonical: canonicalPayoutStatus(r.status),
       payoutMethodSummary: null,
       initiatedAt:       r.created_at    ? new Date(r.created_at).toISOString()    : null,
       expectedArrivalAt: r.release_after ? new Date(r.release_after).toISOString() : null,
@@ -684,22 +795,52 @@ export const createWorkerTimeOff = async (req: Request, res: Response) => {
     if (!startDate || !endDate || !reason) {
       return res.status(400).json({ status: "failed", message: "startDate, endDate, and reason are required" });
     }
-    const record = await availEngine.createTimeOff(uid, { startDate, endDate, reason }, uid);
+    // C22 §17. These four fields were destructured above and then dropped:
+    // only startDate, endDate and reason were passed on. The provider web
+    // portal has shipped a partial-day form the whole time, so a provider
+    // asking for two hours off lost the entire day and the response told them
+    // it was all-day.
+    const record = await availEngine.createTimeOff(
+      uid,
+      { startDate, endDate, reason, allDay, startTime, endTime, note },
+      uid,
+    );
+    // Report what was STORED, not what was asked for. Echoing the request
+    // makes the response agree with the client by construction, which is
+    // exactly how the original defect stayed invisible: the portal sent
+    // partial-day fields, nothing persisted them, and the reply said allDay.
     const dto = {
       id:        String(record.id),
       startDate: record.startDate,
       endDate:   record.endDate,
-      allDay:    allDay ?? true,
-      startTime: startTime ?? null,
-      endTime:   endTime ?? null,
+      allDay:    record.allDay,
+      startTime: record.startTime,
+      endTime:   record.endTime,
       reason:    record.reason ?? reason,
-      note:      note ?? null,
+      note:      record.note,
       createdAt: record.createdAt,
+
+      // C22 §18. Confirmed bookings this time off collides with. The time off
+      // WAS created — a provider who is ill must be able to say so — but the
+      // work is still theirs, and the client is required to say that rather
+      // than let them assume leave cancels it.
+      bookingConflicts: record.bookingConflicts,
+      conflictNotice: record.bookingConflicts.length > 0
+        ? "Your time off is saved, but these bookings are still assigned to " +
+          "you. Creating time off does not cancel accepted work — open each " +
+          "booking to cancel or request a reschedule."
+        : null,
     };
     return res.status(201).json({ status: "success", data: dto });
   } catch (error: any) {
     const code = error?.statusCode ?? 500;
-    return res.status(code).json({ status: "failed", message: "Server error" });
+    // A 422 carries an actionable reason ("endTime must be later than
+    // startTime"). Flattening every status to "Server error" would hide the
+    // validation this endpoint just gained and leave the provider guessing.
+    const message = code === 422 || code === 400 || code === 404
+      ? (error?.message ?? "Invalid request")
+      : "Server error";
+    return res.status(code).json({ status: "failed", message });
   }
 };
 
@@ -723,7 +864,16 @@ export const deleteWorkerTimeOff = async (req: Request, res: Response) => {
 
 // ─── Requirements (Firebase Storage, scoped to authenticated worker) ──────────
 
-const ALLOWED_REQUIREMENT_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+const ALLOWED_REQUIREMENT_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] as const;
+
+/**
+ * Ceiling for a provider compliance document.
+ *
+ * The old path had no size check at all: a data URI of any length was decoded
+ * and uploaded. 10 MB is comfortably above a phone photo of an ID or permit and
+ * well below anything that threatens the request pipeline.
+ */
+const MAX_REQUIREMENT_BYTES = 10 * 1024 * 1024;
 
 export const uploadWorkerRequirement = async (req: Request, res: Response) => {
   try {
@@ -736,10 +886,25 @@ export const uploadWorkerRequirement = async (req: Request, res: Response) => {
     if (!file.startsWith("data:")) {
       return res.status(422).json({ status: "failed", message: "file must be a data URI" });
     }
-    const mimeType = file.slice(file.indexOf(":") + 1, file.indexOf(";"));
-    if (!ALLOWED_REQUIREMENT_MIMES.includes(mimeType)) {
-      return res.status(422).json({ status: "failed", message: "File type not allowed. Use JPG, PNG, WebP, or PDF." });
+    // C19 §18/§54 (LJ-08). This used to read the MIME out of the data URI the
+    // CLIENT sent and check THAT against the allowlist — asking the uploader
+    // what the file is and believing the answer, so
+    // `data:image/png;base64,<any bytes>` passed a check that looked strict.
+    //
+    // Now validated by magic bytes, with the declared type required to match
+    // the actual content, plus a size ceiling the old path had no equivalent of.
+    const validation = validateDataUri(file, {
+      allowed: ALLOWED_REQUIREMENT_MIMES as readonly AllowedUploadMime[],
+      maxBytes: MAX_REQUIREMENT_BYTES,
+    });
+    if (!validation.ok) {
+      return res.status(422).json({
+        status: "failed",
+        code: validation.code,
+        message: validation.message,
+      });
     }
+    const mimeType = validation.mime;
     const sanitizedName = String(name).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
     const sanitizedType = requirementType ? String(requirementType).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 50) : undefined;
     const fileUrl = await uploadFileToStorage("provider-requirements", `${uid}_${Date.now()}`, file);
@@ -808,6 +973,28 @@ export const submitOnboarding = async (req: Request, res: Response) => {
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
     const code = (error as any).statusCode;
+
+    /**
+     * A refused submit must say WHAT is outstanding.
+     *
+     * submitOnboarding throws 422 with a `blockers` array — each entry carrying
+     * the label a person needs ("No documents uploaded") — and this handler
+     * collapsed all of it to "Server error". A provider was told only that
+     * something was wrong with a form showing every field filled in, with no
+     * way to discover which condition had failed. The labels are authored copy,
+     * not exception text, so they are safe to return (§21).
+     *
+     * Anything that is not a 422 keeps the generic message: those are genuine
+     * faults and their detail is not fit for a client.
+     */
+    const blockers = (error as any).blockers;
+    if (code === 422 && Array.isArray(blockers)) {
+      return res.status(422).json({
+        status: "failed",
+        message: "Some information still needs to be completed.",
+        blockers,
+      });
+    }
     return res.status(code ?? 500).json({ status: "failed", message: "Server error" });
   }
 };
@@ -1481,26 +1668,23 @@ export const uploadWorkerProfilePhoto = async (req: Request, res: Response) => {
     if (!file) {
       return res.status(400).json({ status: "failed", message: "file (data URI) is required" });
     }
-    if (!String(file).startsWith("data:")) {
-      return res.status(422).json({ status: "failed", message: "file must be a data URI" });
-    }
-    const mimeType = String(file).slice(file.indexOf(":") + 1, file.indexOf(";"));
-    if (!ALLOWED_PHOTO_MIMES.includes(mimeType)) {
-      return res.status(422).json({ status: "failed", message: "File type not allowed. Use JPG, PNG, or WebP." });
-    }
-    await ensureProfileTable();
-    const safeUrl = await uploadFileToStorage("provider-profile-photos", `${uid}_photo`, file);
-    const uploadedAt = new Date().toISOString();
-    await dbQuery.query(
-      `INSERT INTO ${dbSchema}.user_profile (uid, photo_url, updated_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (uid) DO UPDATE SET photo_url = EXCLUDED.photo_url, updated_at = NOW()`,
-      [uid, safeUrl]
-    );
-    return res.status(200).json({ status: "success", data: { safeUrl, uploadedAt } });
+    const submission = await submitProfilePhoto(uid, {
+      file: String(file),
+      clientRequestId: String(req.body?.clientRequestId ?? `legacy-photo-${randomUUID()}`),
+    });
+    // Compatibility: legacy web clients expect safeUrl. A pending submission
+    // never replaces the currently approved public URL.
+    const current = await dbQuery.query(`SELECT photo_url FROM ${dbSchema}.user_profile WHERE uid = $1 LIMIT 1`, [uid]);
+    return res.status(202).json({ status: "success", data: {
+      safeUrl: current.rows[0]?.photo_url ?? '',
+      uploadedAt: submission.submittedAt,
+      submissionId: submission.submissionId,
+      reviewState: submission.state,
+    } });
   } catch (error: any) {
-    console.error("[uploadWorkerProfilePhoto] 500:", error?.message ?? error);
-    return res.status(500).json({ status: "failed", message: "Server error" });
+    const status = Number(error?.statusCode ?? 500);
+    if (status === 500) console.error("[uploadWorkerProfilePhoto] 500:", error?.message ?? error);
+    return res.status(status).json({ status: "failed", code: error?.code ?? 'PROFILE_PHOTO_SUBMISSION_FAILED', message: status === 500 ? "Server error" : error.message });
   }
 };
 
@@ -1922,13 +2106,26 @@ export const recordSafetyCheckIn = async (req: Request, res: Response) => {
 const toApplicationDto = (app: any) => ({
   id: app.id,
   serviceId: Number(app.service_id),
+  serviceName: app.service_name ?? app.service_snapshot?.name ?? null,
+  serviceCategory: app.service_category ?? app.service_snapshot?.category ?? null,
   status: app.status,
   submittedAt: app.submitted_at,
   updatedAt: app.updated_at,
   cancelledAt: app.cancelled_at ?? null,
   approvedAt: app.approved_at ?? null,
-  reviewReason: app.review_reason ?? null,
+  providerReasonCode: app.provider_reason_code ?? null,
+  providerReasonDetail: app.provider_reason_detail ?? null,
+  requirementsVersion: Number(app.requirements_version ?? 1),
   version: Number(app.version),
+  ...(Array.isArray(app.timeline) ? {
+    timeline: app.timeline.map((event: any) => ({
+      code: event.event_code,
+      label: event.provider_label,
+      explanation: event.provider_explanation ?? null,
+      actorCategory: event.actor_category,
+      createdAt: event.created_at,
+    })),
+  } : {}),
 });
 
 export const getServiceApplications = async (req: Request, res: Response) => {
@@ -1953,7 +2150,18 @@ export const submitServiceApplication = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "serviceId (positive integer) is required" });
     }
 
-    const app = await serviceApplicationService.submitApplication(uid, serviceId);
+    const clientRequestId = typeof req.body?.clientRequestId === 'string'
+      ? req.body.clientRequestId.trim()
+      : '';
+    const requirementsVersion = Number(req.body?.requirementsVersion);
+    if (clientRequestId.length < 16 || clientRequestId.length > 128) {
+      return res.status(400).json({ success: false, code: 'INVALID_IDEMPOTENCY_KEY', message: 'clientRequestId must be between 16 and 128 characters' });
+    }
+    if (!Number.isInteger(requirementsVersion) || requirementsVersion <= 0) {
+      return res.status(400).json({ success: false, code: 'INVALID_REQUIREMENTS_VERSION', message: 'requirementsVersion (positive integer) is required' });
+    }
+
+    const app = await serviceApplicationService.submitApplication(uid, serviceId, { clientRequestId, requirementsVersion });
     autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
     return res.status(201).json({ success: true, application: toApplicationDto(app) });
   } catch (error: any) {
@@ -1964,6 +2172,49 @@ export const submitServiceApplication = async (req: Request, res: Response) => {
       message: error.message || "Failed to submit application",
       ...(error.application ? { application: toApplicationDto(error.application) } : {}),
     });
+  }
+};
+
+export const getServiceApplicationDetail = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const applicationId = String(req.params.applicationId ?? '').trim();
+    if (!applicationId) return res.status(400).json({ success: false, message: 'applicationId is required' });
+    const app = await serviceApplicationService.getApplicationByWorker(applicationId, uid);
+    return res.json({ success: true, application: toApplicationDto(app) });
+  } catch (error: any) {
+    return res.status(error.statusCode ?? 500).json({ success: false, code: error.code ?? 'INTERNAL_ERROR', message: error.message || 'Failed to load application' });
+  }
+};
+
+export const getServiceApplicationEligibility = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const serviceId = Number(req.params.serviceId);
+    if (!Number.isInteger(serviceId) || serviceId <= 0) {
+      return res.status(400).json({ success: false, message: 'serviceId must be a positive integer' });
+    }
+    const eligibility = await serviceApplicationService.evaluateApplicationEligibility(uid, serviceId);
+    return res.json({ success: true, eligibility });
+  } catch (error: any) {
+    return res.status(error.statusCode ?? 500).json({ success: false, code: error.code ?? 'INTERNAL_ERROR', message: 'Failed to evaluate service eligibility' });
+  }
+};
+
+export const getProviderServicesOverview = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const overview = await serviceApplicationService.getProviderServicesOverview(uid);
+    return res.json({
+      success: true,
+      services: overview.services,
+      applications: overview.applications.map(toApplicationDto),
+    });
+  } catch {
+    return res.status(500).json({ success: false, message: 'Failed to load provider services' });
   }
 };
 
@@ -1996,7 +2247,12 @@ export const resubmitServiceApplication = async (req: Request, res: Response) =>
     const { applicationId } = req.params as { applicationId: string };
     if (!applicationId) return res.status(400).json({ success: false, message: "applicationId is required" });
 
-    const app = await serviceApplicationService.resubmitApplication(applicationId, uid);
+    const clientRequestId = typeof req.body?.clientRequestId === 'string' ? req.body.clientRequestId.trim() : '';
+    const expectedVersion = Number(req.body?.expectedVersion);
+    if (clientRequestId.length < 16 || clientRequestId.length > 128 || !Number.isInteger(expectedVersion)) {
+      return res.status(400).json({ success: false, code: 'INVALID_RESUBMISSION', message: 'clientRequestId and expectedVersion are required' });
+    }
+    const app = await serviceApplicationService.resubmitApplication(applicationId, uid, { clientRequestId, expectedVersion });
     return res.json({ success: true, application: toApplicationDto(app) });
   } catch (error: any) {
     const status = error.statusCode ?? 500;
@@ -2128,21 +2384,414 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
 // ─── Job cards — web portal (UID from Firebase token, not URL param) ──────────
 
 // Shared formatter to avoid duplication between list and single-card endpoints
-function formatJobCard(job: any) {
-  return {
-    bookingId:    job.booking_id,
-    status:       job.status,
-    scheduleAt:   job.schedule,
-    customer:     { uid: job.customer_id, name: `${job.first_name} ${job.last_name}`, phone: job.phone_number },
-    address:      { addressOne: job.address_one, addressTwo: job.address_two, city: job.post_town, zipCode: job.zip_code, country: job.country, label: job.label },
-    service:      { name: job.service_name, type: job.service_type },
-    addOns:       job.pricing_breakdown,
-    workerStatus: job.worker_status,
-    assignedAt:   job.assigned_at,
-    startedAt:    job.started_at,
-    completedAt:  job.completed_at,
-  };
-}
+import { formatJobCard } from "./jobCardView";
+import { validateDataUri, AllowedUploadMime } from "../helpers/fileSignature";
+import { stripImageMetadata } from "../helpers/stripImageMetadata";
+import * as evidenceService from "../services/bookingEvidenceService";
+import { actionsForWorkerStatus } from "./bookingActions";
+
+/**
+ * GET /api/provider/bookings/:bookingId/timeline
+ *
+ * C18 §21. Provider-scoped by construction: the worker uid comes from the
+ * token and is a bound parameter of the query, so there is no way to ask about
+ * another provider's booking. An unrelated booking id returns 404 rather than
+ * an empty timeline, so the endpoint cannot be used to probe which booking ids
+ * exist (§46, ID enumeration).
+ */
+export const getBookingTimeline = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
+
+    const schema = dbSchema || "";
+    const result = await dbQuery.query(
+      `SELECT b.created_at,
+              b.status                AS booking_status,
+              bw.status               AS worker_status,
+              bw.assigned_at,
+              bw.started_at,
+              bw.completed_at,
+              to_jsonb(bw) ->> 'accepted_at' AS accepted_at,
+              to_jsonb(bw) ->> 'declined_at' AS declined_at,
+              to_jsonb(bw) ->> 'en_route_at' AS en_route_at,
+              to_jsonb(bw) ->> 'arrived_at'  AS arrived_at,
+              -- C18-04. The reassignment gate: admin-side events cross only
+              -- while the caller still holds the booking.
+              (b.worker_uid = $2) AS is_current_assignee
+         FROM ${schema}.bookings b
+         JOIN ${schema}.booking_workers bw
+           ON bw.booking_id = b.id
+        WHERE b.id = $1 AND bw.worker_uid = $2
+        ORDER BY bw.id DESC
+        LIMIT 1`,
+      [bookingId, uid]
+    );
+
+    if (!result.rowCount) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    const row = result.rows[0];
+
+    // C18-04. Stored admin-side history — reschedules, cancellations, disputes.
+    // Only the event type and timestamp are selected: `title`, `description`
+    // and `metadata` are admin-authored and never cross (§21/§22).
+    const stored = await dbQuery.query(
+      `SELECT event_type, created_at
+         FROM ${schema}.booking_timeline_events
+        WHERE booking_id = $1
+        ORDER BY created_at ASC`,
+      [bookingId]
+    ).catch(() => null);
+
+    const events = mergeStoredEvents(
+      buildBookingTimeline(row),
+      stored?.rows ?? [],
+      row.is_current_assignee === true
+    );
+
+    return res.json({
+      status: "success",
+      data: {
+        bookingId,
+        events,
+        currentStep: currentTimelineStep(events),
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/**
+ * GET /api/provider/bookings/:bookingId/dispute-status
+ *
+ * C18 §29 — the safe entry point and status summary only. Opening a dispute is
+ * a later command; this tells the client whether to offer the entry at all.
+ *
+ * Reads `booking_escalations`, the table the admin portal already derives
+ * `hasDispute` from, so admin and provider cannot disagree about whether a
+ * booking is disputed.
+ *
+ * The escalation row is an ADMIN record: `reason` is free text an admin typed,
+ * `assigned_team` is internal routing, `severity` is internal triage and
+ * `actor_uid` names a person. None are selected here.
+ */
+export const getBookingDisputeStatus = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
+
+    const schema = dbSchema || "";
+
+    // Assignment check first: an unrelated booking must 404 rather than reveal
+    // whether it exists or is disputed (§46, ID enumeration).
+    const assignment = await dbQuery.query(
+      `SELECT status FROM ${schema}.booking_workers
+        WHERE booking_id = $1 AND worker_uid = $2
+        ORDER BY id DESC LIMIT 1`,
+      [bookingId, uid]
+    );
+    if (!assignment.rowCount) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    const esc = await dbQuery.query(
+      `SELECT actor_uid, resolved_at, created_at
+         FROM ${schema}.booking_escalations
+        WHERE booking_id = $1
+        ORDER BY id DESC LIMIT 1`,
+      [bookingId]
+    ).catch(() => null);
+
+    return res.json({
+      status: "success",
+      data: {
+        bookingId,
+        ...buildDisputeSummary({
+          workerStatus: assignment.rows[0]?.status,
+          callerUid: uid,
+          escalation: esc?.rows?.[0] ?? null,
+        }),
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/**
+ * GET  /api/provider/bookings/:bookingId/cancellation-eligibility
+ * POST /api/provider/bookings/:bookingId/cancel
+ *
+ * C18 §26. Operator policy: 48 hours notice, RECORD ONLY (no penalty), auto
+ * reassign, admin notified. Nothing here computes a consequence — §26 says
+ * "Do not invent penalties", and none were specified.
+ *
+ * The window is evaluated against SERVER time, never a client timestamp.
+ */
+const loadCancellationContext = async (bookingId: number, uid: string) => {
+  const schema = dbSchema || "";
+  const res = await dbQuery.query(
+    `SELECT bw.status AS worker_status, b.schedule
+       FROM ${schema}.booking_workers bw
+       JOIN ${schema}.bookings b ON b.id = bw.booking_id
+      WHERE bw.booking_id = $1 AND bw.worker_uid = $2
+      ORDER BY bw.id DESC LIMIT 1`,
+    [bookingId, uid]
+  );
+  return res.rowCount ? res.rows[0] : null;
+};
+
+export const getCancellationEligibility = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
+
+    const ctx = await loadCancellationContext(bookingId, uid);
+    if (!ctx) return res.status(404).json({ success: false, message: "Booking not found" });
+
+    return res.json({
+      status: "success",
+      data: {
+        bookingId,
+        ...evaluateCancellation({
+          workerStatus: ctx.worker_status,
+          schedule: ctx.schedule,
+          now: new Date(),
+        }),
+      },
+    });
+  } catch {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const cancelAcceptedBooking = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
+    const reasonCode = String(req.body?.reasonCode ?? "");
+    const note = req.body?.note ? String(req.body.note).slice(0, 1000) : null;
+
+    const ctx = await loadCancellationContext(bookingId, uid);
+    if (!ctx) return res.status(404).json({ success: false, message: "Booking not found" });
+
+    // Re-evaluated at mutation time (§1), not trusted from whatever the client
+    // was shown when it rendered the button.
+    const eligibility = evaluateCancellation({
+      workerStatus: ctx.worker_status,
+      schedule: ctx.schedule,
+      now: new Date(),
+      reasonCode,
+    });
+
+    if (!eligibility.canCancel) {
+      return res.status(409).json({
+        success: false,
+        code: eligibility.blockCode,
+        message: CANCELLATION_BLOCK_MESSAGES[eligibility.blockCode!] ?? "Cancellation is not available.",
+        data: eligibility,
+      });
+    }
+
+    const result = await technicianService.cancelAcceptedJob(bookingId, uid, reasonCode, note);
+    return res.json({ success: true, message: "Booking cancelled", data: result });
+  } catch (error: any) {
+    return sendBookingResponseOutcome(res, error, "Booking cancelled");
+  }
+};
+
+const CANCELLATION_BLOCK_MESSAGES: Record<string, string> = {
+  INSIDE_NOTICE_WINDOW: `Cancellation closes ${CANCELLATION_NOTICE_HOURS} hours before the booking. Contact support if you cannot attend.`,
+  NOT_CANCELLABLE_AT_THIS_STAGE: "This booking can no longer be cancelled from here.",
+  SCHEDULE_UNKNOWN: "This booking has no confirmed schedule yet. Contact support.",
+  INVALID_REASON: "Choose a reason for cancelling.",
+};
+
+/**
+ * Job evidence (C19 §17–§19).
+ *
+ *   GET    /api/provider/bookings/:bookingId/evidence
+ *   POST   /api/provider/bookings/:bookingId/evidence
+ *   DELETE /api/provider/bookings/:bookingId/evidence/:evidenceId
+ *
+ * Every route resolves the provider from the token and proves the booking is
+ * theirs before touching evidence, so a guessed booking id 404s rather than
+ * revealing that it exists (§54, enumeration).
+ */
+const assertOwnBooking = async (bookingId: number, uid: string) => {
+  const schema = dbSchema || "";
+  const res = await dbQuery.query(
+    `SELECT status FROM ${schema}.booking_workers
+      WHERE booking_id = $1 AND worker_uid = $2
+      ORDER BY id DESC LIMIT 1`,
+    [bookingId, uid]
+  );
+  return res.rowCount ? String(res.rows[0].status ?? "") : null;
+};
+
+export const getBookingEvidence = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
+    if (!(await assertOwnBooking(bookingId, uid))) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    const items = await evidenceService.listEvidence(bookingId, uid);
+    const requirements = evidenceService.requirementsForBooking().map((r) => ({
+      ...r,
+      satisfied: evidenceService.isRequirementSatisfied(r, items),
+      uploadedCount: evidenceService.countFor(r.code, items),
+    }));
+
+    return res.json({
+      status: "success",
+      data: {
+        bookingId,
+        requirements,
+        items,
+        // §34: completion readiness comes from the backend, not a local
+        // checklist. Uploaded-but-rejected never counts as satisfied.
+        blocking: {
+          BEFORE_SERVICE: evidenceService.blockingRequirements("BEFORE_SERVICE", items),
+          AFTER_SERVICE: evidenceService.blockingRequirements("AFTER_SERVICE", items),
+        },
+      },
+    });
+  } catch {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const uploadBookingEvidence = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    if (!bookingId || isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid bookingId" });
+    }
+    const workerStatus = await assertOwnBooking(bookingId, uid);
+    if (!workerStatus) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+    // Evidence belongs to a visit in progress. A booking that is finished,
+    // declined or cancelled must not accept new files.
+    if (!["ACCEPTED", "EN_ROUTE", "ARRIVED", "IN_PROGRESS"].includes(workerStatus.toUpperCase())) {
+      return res.status(409).json({
+        success: false,
+        code: "NOT_ACCEPTING_EVIDENCE",
+        message: "This booking is not accepting evidence.",
+      });
+    }
+
+    const { file, requirementCode } = req.body ?? {};
+    const requirement = evidenceService.findRequirement(String(requirementCode ?? ""));
+    if (!requirement) {
+      return res.status(422).json({
+        success: false,
+        code: "UNKNOWN_REQUIREMENT",
+        message: "Unknown evidence requirement.",
+      });
+    }
+
+    const existing = await evidenceService.listEvidence(bookingId, uid);
+    if (evidenceService.countFor(requirement.code, existing) >= requirement.maxCount) {
+      return res.status(409).json({
+        success: false,
+        code: "TOO_MANY_FILES",
+        message: `You can attach at most ${requirement.maxCount} for this requirement. Remove one first.`,
+      });
+    }
+
+    // Content-based validation (LJ-08). The declared type must be allowed AND
+    // match the actual bytes.
+    const validation = validateDataUri(file, {
+      allowed: requirement.acceptedMimeTypes as readonly AllowedUploadMime[],
+      maxBytes: requirement.maxBytes,
+    });
+    if (!validation.ok) {
+      return res.status(422).json({
+        success: false,
+        code: validation.code,
+        message: validation.message,
+      });
+    }
+
+    // §18. A photo taken at a customer address carries GPS in EXIF by default;
+    // storing it would attach a precise home location to every file.
+    const cleaned = stripImageMetadata(validation.buffer, validation.mime);
+    const dataUri = `data:${validation.mime};base64,${cleaned.toString("base64")}`;
+
+    const fileUrl = await uploadFileToStorage(
+      `booking-evidence/${bookingId}`,
+      `${uid}_${requirement.code}_${Date.now()}`,
+      dataUri
+    );
+
+    const item = await evidenceService.attachEvidence({
+      bookingId,
+      workerUid: uid,
+      requirement,
+      fileUrl,
+      mimeType: validation.mime,
+      bytes: cleaned.length,
+    });
+
+    // §19: attached is not approved. The client must not read 201 as accepted.
+    return res.status(201).json({
+      status: "success",
+      data: { ...item, approved: false },
+    });
+  } catch {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const deleteBookingEvidence = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    const evidenceId = Number(req.params.evidenceId);
+    if (!bookingId || isNaN(bookingId) || !evidenceId || isNaN(evidenceId)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
+    if (!(await assertOwnBooking(bookingId, uid))) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+    const removed = await evidenceService.removeEvidence(bookingId, uid, evidenceId);
+    if (!removed) {
+      return res.status(404).json({ success: false, message: "Evidence not found" });
+    }
+    return res.json({ status: "success", data: { evidenceId: String(evidenceId) } });
+  } catch {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
 
 export const getWorkerJobCards = async (req: Request, res: Response) => {
   try {
@@ -2176,6 +2825,33 @@ export const getWorkerJobCard = async (req: Request, res: Response) => {
 
 // ─── Booking lifecycle — web portal (UID from Firebase token; BOLA enforced in service via SQL WHERE) ──
 
+/**
+ * Turns an assignment-response failure into a result the provider can act on.
+ *
+ * C18 §12/§52. Acceptance and decline must be idempotent, so a repeat of the
+ * caller's own response is a 200 success carrying `idempotent: true` — not an
+ * error the UI has to apologise for. A genuine conflict is a 409 with a code
+ * the client can branch on. Anything else stays a 500.
+ *
+ * `success` and `message` keep their existing shape and meaning, so no client
+ * needs a change to keep working; the new fields are additive.
+ */
+function sendBookingResponseOutcome(res: Response, error: any, successMessage: string) {
+  if (error instanceof BookingResponseConflict) {
+    return res.status(error.httpStatus).json({
+      success: error.isAlreadySatisfied,
+      message: error.isAlreadySatisfied ? successMessage : error.providerMessage,
+      idempotent: error.isAlreadySatisfied || undefined,
+      conflict: {
+        code: error.code,
+        currentStatus: error.currentStatus,
+        providerMessage: error.providerMessage,
+      },
+    });
+  }
+  return res.status(500).json({ success: false, message: "Server error" });
+}
+
 export const acceptBooking = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
@@ -2186,7 +2862,7 @@ export const acceptBooking = async (req: Request, res: Response) => {
     touchProviderActivity(uid).catch(() => {});
     return res.json({ success: true, message: "Job accepted", data: result });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: "Server error" });
+    return sendBookingResponseOutcome(res, error, "Job accepted");
   }
 };
 
@@ -2205,7 +2881,7 @@ export const declineBooking = async (req: Request, res: Response) => {
       data: result,
     });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: "Server error" });
+    return sendBookingResponseOutcome(res, error, "Job declined");
   }
 };
 
@@ -2231,7 +2907,24 @@ const arrivalHandler = (
 
     const result = await advance(bookingId, uid);
     touchProviderActivity(uid).catch(() => {});
-    return res.json({ success: true, message: successMessage, data: result });
+
+    // C19 §11/§12 (LJ-07). Servana verifies at START, not at arrival: there is
+    // no ARRIVAL_VERIFICATION_REQUIRED state, and §3 forbids inventing one.
+    //
+    // What was missing is not a state but an ANSWER — after marking arrived the
+    // provider had no way to learn that a customer code is still needed before
+    // work can begin, short of trying and failing. Returning the new action set
+    // makes the requirement explicit at the moment it becomes relevant:
+    // START_JOB carries requiresCode, so the client can prompt for the code
+    // instead of surfacing a refusal.
+    //
+    // Additive: `success`, `message` and `data` are unchanged.
+    return res.json({
+      success: true,
+      message: successMessage,
+      data: result,
+      availableActions: actionsForWorkerStatus(result?.status),
+    });
   } catch (error: any) {
     // The guard rejects an out-of-order call by matching no row, which is a
     // client-state problem rather than a server fault — 409, not 500, so the
@@ -2295,6 +2988,13 @@ export const completeBooking = async (req: Request, res: Response) => {
     touchProviderActivity(uid).catch(() => {});
     return res.json({ success: true, message: "Job completed successfully", data: result });
   } catch (error: any) {
+    if (error instanceof technicianService.UnpaidCashBookingError) {
+      return res.status(409).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
+    }
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };

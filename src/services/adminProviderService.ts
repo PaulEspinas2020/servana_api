@@ -6,14 +6,16 @@
  * breakdowns are shown to role=1 admins only.
  */
 
-import dbQuery from '../db/dbQuery';
+import { createHash, randomUUID } from 'crypto';
+import dbQuery, { pool } from '../db/dbQuery';
 import { providerShareOf, PROVIDER_SHARE_PERCENT } from './revenueSplit';
 import { db } from '../config';
 import mongoDb from '../db/mongodbQuery';
 import * as serviceApplicationService from './serviceApplicationService';
 import * as technicianService from './technicianService';
-import { uploadFileToStorage } from '../helpers/firebaseStorageUploader';
 import * as onboardingService from './adminOnboardingService';
+import { validateDataUri } from '../helpers/fileSignature';
+import { assertCleanScan, scanProviderFile } from './providerManagedFileScanner';
 
 const dbSchema = db.schema;
 
@@ -275,7 +277,12 @@ export const getProviderMetrics = async () => {
       `SELECT COUNT(DISTINCT uc.uid) AS cnt
        FROM ${s}.user_credentials uc
        WHERE uc.role::int IN (2,4)
-         AND NOT EXISTS (SELECT 1 FROM ${s}.worker_service_areas wsa WHERE wsa.worker_uid = uc.uid)`, []
+         AND EXISTS (
+           SELECT 1 FROM ${s}.worker_service_areas wsa
+           WHERE wsa.worker_uid = uc.uid
+             AND wsa.coverage_mode = 'city'
+             AND (wsa.city_ids IS NULL OR wsa.city_ids = '[]'::jsonb)
+         )`, []
     ),
   ]);
 
@@ -309,7 +316,7 @@ export const getProviderIdentity = async (uid: string) => {
     dbQuery.query(
       `SELECT uid, email, first_name, last_name, phone_number, role,
               account_status, is_archive, is_email_verified, created_date
-       FROM ${dbSchema}.user_credentials WHERE uid = $1 LIMIT 1`,
+       FROM ${dbSchema}.user_credentials WHERE uid = $1 AND role::int IN (2,4) LIMIT 1`,
       [uid]
     ),
     dbQuery.query(
@@ -469,7 +476,9 @@ export const getProviderCatalogCapabilities = async (uid: string) => {
 
 export const getProviderRequirements = async (uid: string) => {
   const res = await dbQuery.query(
-    `SELECT wr.id, wr.file_url, wr.file_name, wr.uploaded_at, wr.requirement_type,
+    `SELECT wr.id, wr.file_url, wr.storage_path, wr.file_name, wr.uploaded_at, wr.requirement_type,
+            wr.mime_type, wr.byte_size, wr.lifecycle_state, wr.scan_status,
+            wr.issue_date, wr.expires_at, wr.identifier_mask, wr.version,
             COALESCE(ld.decision, 'pending_review')          AS current_decision,
             ld.reason_code,
             ld.provider_message,
@@ -498,9 +507,22 @@ export const getProviderRequirements = async (uid: string) => {
   return res.rows.map((r: any) => ({
     id: r.id,
     fileName: r.file_name,
-    fileUrl: r.file_url,
+    // Canonical private rows never leak signed URLs through list responses.
+    // Legacy rows keep their compatibility URL until the controlled backfill.
+    fileUrl: r.storage_path ? null : r.file_url,
+    previewExpiresAt: null,
+    previewAvailable: Boolean(r.storage_path || r.file_url),
+    legacyStorage: !r.storage_path,
     uploadedAt: r.uploaded_at,
     requirementType: r.requirement_type ?? null,
+    mimeType: r.mime_type ?? null,
+    byteSize: r.byte_size == null ? null : Number(r.byte_size),
+    lifecycleState: r.lifecycle_state ?? 'legacy_review_required',
+    scanState: r.scan_status ?? 'legacy_review_required',
+    issueDate: r.issue_date ?? null,
+    expiresAt: r.expires_at ?? null,
+    identifierMask: r.identifier_mask ?? null,
+    version: Number(r.version ?? 1),
     currentDecision: r.current_decision ?? 'pending_review',
     reasonCode: r.reason_code ?? null,
     providerMessage: r.provider_message ?? null,
@@ -511,6 +533,43 @@ export const getProviderRequirements = async (uid: string) => {
   }));
 };
 
+export const getProviderRequirementPreview = async (uid: string, id: number) => {
+  const found = await dbQuery.query(
+    `SELECT id, storage_path, file_url, file_name, mime_type
+     FROM ${dbSchema}.worker_requirements
+     WHERE id = $1 AND worker_uid = $2 LIMIT 1`,
+    [id, uid],
+  );
+  if (!found.rowCount) {
+    throw Object.assign(new Error('Provider document not found'), { statusCode: 404 });
+  }
+  const row = found.rows[0];
+  if (row.storage_path) {
+    const { createPrivatePreviewUrl } = await import('../helpers/firebaseStorageUploader');
+    return {
+      documentId: String(row.id),
+      fileName: row.file_name,
+      mimeType: row.mime_type ?? null,
+      legacyStorage: false,
+      ...(await createPrivatePreviewUrl(row.storage_path, 300)),
+    };
+  }
+  if (!String(row.file_url ?? '').startsWith('https://')) {
+    throw Object.assign(new Error('This legacy document must be re-uploaded before preview is available'), {
+      statusCode: 409,
+      code: 'LEGACY_DOCUMENT_REUPLOAD_REQUIRED',
+    });
+  }
+  return {
+    documentId: String(row.id),
+    fileName: row.file_name,
+    mimeType: row.mime_type ?? null,
+    legacyStorage: true,
+    url: row.file_url,
+    expiresAt: null,
+  };
+};
+
 const ALLOWED_DOC_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
 
 export const uploadProviderRequirement = async (
@@ -519,18 +578,69 @@ export const uploadProviderRequirement = async (
   fileName: string,
   requirementType?: string,
 ) => {
-  const mimeType = fileDataUri.slice(fileDataUri.indexOf(':') + 1, fileDataUri.indexOf(';'));
-  if (!ALLOWED_DOC_MIMES.includes(mimeType)) {
-    throw new Error('File type not allowed. Use JPG, PNG, WebP, or PDF.');
-  }
+  const validation = validateDataUri(fileDataUri, {
+    allowed: ALLOWED_DOC_MIMES as any,
+    maxBytes: 10 * 1024 * 1024,
+  });
+  if (!validation.ok) throw Object.assign(new Error(validation.message), { statusCode: 422, code: validation.code });
   const sanitizedName = String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
-  const fileUrl = await uploadFileToStorage('admin-requirements', `${workerUid}_${Date.now()}`, fileDataUri);
-  const inserted = await technicianService.addWorkerRequirements(workerUid, [{
-    fileUrl,
-    fileName: sanitizedName,
-    requirementType: requirementType || undefined,
-  }]);
-  return inserted[0];
+  const sanitizedType = String(requirementType ?? 'admin_supplied').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100);
+  const scan = await scanProviderFile({ buffer: validation.buffer, mimeType: validation.mime, fileName: sanitizedName });
+  assertCleanScan(scan);
+  const persistenceBuffer = scan.sanitizedBuffer ?? validation.buffer;
+  const persistenceDataUri = `data:${validation.mime};base64,${persistenceBuffer.toString('base64')}`;
+  const requestId = `admin-document-${randomUUID()}`;
+  const storage = await import('../helpers/firebaseStorageUploader');
+  const stored = await storage.uploadPrivateFileToStorage(`provider-compliance/${workerUid}`, requestId, persistenceDataUri);
+  let client;
+  try {
+    client = await pool.connect();
+  } catch (error) {
+    await storage.deletePrivateStoredFile(stored.storagePath).catch(() => {});
+    throw error;
+  }
+  let commitAttempted = false;
+  try {
+    await client.query('BEGIN');
+    const inserted = await client.query(
+      `INSERT INTO ${dbSchema}.worker_requirements
+         (worker_uid, file_url, file_name, requirement_type, storage_path,
+          mime_type, byte_size, content_sha256, scanner_engine, client_request_id,
+          lifecycle_state, scan_status, version, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'under_review','clean',1,NOW())
+       RETURNING id, file_name, uploaded_at, requirement_type`,
+      [workerUid, `private://${stored.storagePath}`, sanitizedName, sanitizedType,
+        stored.storagePath, stored.mimeType, stored.byteSize,
+        createHash('sha256').update(persistenceBuffer).digest('hex'), scan.engine, requestId],
+    );
+    const id = Number(inserted.rows[0].id);
+    await client.query(
+      `INSERT INTO ${dbSchema}.provider_verification_events
+         (provider_uid, domain, source_type, source_id, event_type, event_key, internal_metadata)
+       VALUES ($1,'document','worker_requirement',$2,'document_submitted',$3,$4::jsonb)
+       ON CONFLICT (provider_uid, event_key) DO NOTHING`,
+      [workerUid, String(id), `document-submitted:${id}:v1`, JSON.stringify({ source: 'admin' })],
+    );
+    commitAttempted = true;
+    await client.query('COMMIT');
+    return {
+      id,
+      fileName: inserted.rows[0].file_name,
+      fileUrl: null,
+      uploadedAt: inserted.rows[0].uploaded_at,
+      requirementType: inserted.rows[0].requirement_type,
+      currentDecision: 'pending_review',
+      previewAvailable: true,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (!commitAttempted) {
+      await storage.deletePrivateStoredFile(stored.storagePath).catch(() => {});
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 };
 
 export const deleteProviderRequirement = async (workerUid: string, id: number) => {

@@ -42,6 +42,33 @@ const signin = async (req: Request, res: Response) => {
     }
 };
 
+/** Admin portal sign-in. Authentication succeeds only for an active role-1 account. */
+const adminSignin = async (req: Request, res: Response) => {
+    const { email, password } = req.body ?? {};
+    try {
+        const session = await authService.loggedInUser(email, password);
+        if (Number(session?.role) !== 1) {
+            return res.status(403).json({
+                status: 'failed', code: 'ADMIN_ACCESS_REQUIRED',
+                message: 'Access denied. This portal is for admin accounts only.',
+            });
+        }
+        return res.status(200).json({ status: 'success', data: session });
+    } catch (error: any) {
+        if (error?.statusCode === 401 || error?.message === 'Invalid email or password.') {
+            return sendAuthError(res, 'INVALID_CREDENTIALS');
+        }
+        if (error?.statusCode === 403) {
+            return res.status(403).json({ status: 'failed', code: 'ACCOUNT_UNAVAILABLE', message: error.message });
+        }
+        const msg = typeof error === 'string' ? error : error?.message;
+        if (msg && /valid (email|password)/i.test(msg)) {
+            return res.status(400).json({ status: 'error', message: 'Please enter a valid email and password.' });
+        }
+        return res.status(500).json({ status: 'failed', message: 'An unexpected error occurred. Please try again.' });
+    }
+};
+
 const signup = async (req: Request, res: Response) => {
     try {
         const dbResponse = await authService.registerUser(req.body);
@@ -369,7 +396,7 @@ export const logoutController = async (req: Request, res: Response) => {
 };
 
 
-export { signup, signin, resendVerification, verifyEmailOtpController, resendEmailOtpController };
+export { signup, signin, adminSignin, resendVerification, verifyEmailOtpController, resendEmailOtpController };
 
 /**
  * POST /api/auth/refresh — exchange a refresh token for a fresh ID token.
