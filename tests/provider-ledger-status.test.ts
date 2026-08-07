@@ -5,10 +5,15 @@
  * `disbursements`, and hardcoded `status: "settled"` on every completed
  * booking while recomputing the amount from `final_price`.
  *
- * `/provider/earnings/summary` reads the same money correctly — RELEASED
- * disbursements as paid, PENDING/FAILED/absent as pending — so the two
- * endpoints disagreed about one booking, and a payout that had FAILED was
+ * `/provider/earnings/summary` read the same money differently, so the two
+ * endpoints disagreed about one booking and a payout that had FAILED was
  * reported to the provider as settled.
+ *
+ * CORRECTION (C20 F-04): this header originally said the summary "reads the
+ * same money correctly". It did not. It also folded FAILED into pending, lost
+ * PROCESSING entirely, and recomputed from `final_price` — see
+ * provider-earnings-summary.test.ts. The ledger was the worse of the two, not
+ * the only wrong one.
  *
  * §1: "Pending, available, held, processing, paid, reversed, and disputed
  * values must remain distinct."

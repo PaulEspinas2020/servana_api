@@ -466,13 +466,35 @@ export const getEarningsSummary = async (req: Request, res: Response) => {
       dateFilter = `AND b.schedule >= $2 AND b.schedule <= $3`;
     }
 
+    // C20 F-04. This query had three defects, all of the same shape: it
+    // recomputed money that had already been calculated authoritatively.
+    //
+    //   1. `final_price * RATE` DROPPED ON-SITE UPSELL REVENUE. Disbursements
+    //      are computed from `final_price + additional_paid` (see
+    //      createDisbursement, whose own comment records fixing exactly this
+    //      bug at the writer). The fix never reached this reader, so a provider
+    //      who did approved additional work saw a total that omitted it.
+    //   2. `PROCESSING` WAS COUNTED NOWHERE. `total_paid` took RELEASED only
+    //      and `total_pending` took PENDING/FAILED/no-row, so money in flight
+    //      vanished from both — it left "pending" without arriving in "paid".
+    //   3. `FAILED` WAS COUNTED AS PENDING. That is the C20 F-01 defect in a
+    //      second endpoint: a payout that will not arrive without intervention,
+    //      presented as one that is on its way.
+    //
+    // The authoritative `d.worker_share` is now preferred wherever a
+    // disbursement row exists. The `final_price` fallback survives only for a
+    // completed booking that has no row yet — which is a genuine ESTIMATE, and
+    // is reported as one rather than sitting unlabelled beside settled fact.
     const result = await dbQuery.query(
       `SELECT
          COUNT(*) AS total_jobs,
          COALESCE(SUM(b.final_price), 0) AS total_gross,
          COALESCE(SUM(CASE WHEN d.status = 'RELEASED' THEN d.worker_share ELSE 0 END), 0) AS total_paid,
-         COALESCE(SUM(CASE WHEN d.status IN ('PENDING','FAILED') OR d.id IS NULL
-                           THEN b.final_price * ${PROVIDER_SHARE_RATE} ELSE 0 END), 0) AS total_pending
+         COALESCE(SUM(CASE WHEN d.status IN ('PENDING','PROCESSING') THEN d.worker_share ELSE 0 END), 0) AS pending_recorded,
+         COALESCE(SUM(CASE WHEN d.id IS NULL
+                           THEN b.final_price * ${PROVIDER_SHARE_RATE} ELSE 0 END), 0) AS pending_estimated,
+         COALESCE(SUM(CASE WHEN d.status = 'FAILED' THEN d.worker_share ELSE 0 END), 0) AS total_failed,
+         COUNT(*) FILTER (WHERE d.id IS NULL) AS estimated_jobs
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.disbursements d ON d.booking_id = b.id AND d.worker_uid = $1
        WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
@@ -481,19 +503,44 @@ export const getEarningsSummary = async (req: Request, res: Response) => {
     );
 
     const s = result.rows[0] || {};
-    const totalPaid    = Math.round(Number(s.total_paid    ?? 0) * 100) / 100;
-    const totalPending = Math.round(Number(s.total_pending ?? 0) * 100) / 100;
+    const money = (v: any) => Math.round(Number(v ?? 0) * 100) / 100;
+
+    const totalPaid        = money(s.total_paid);
+    const pendingRecorded  = money(s.pending_recorded);
+    const pendingEstimated = money(s.pending_estimated);
+    const totalFailed      = money(s.total_failed);
+    const estimatedJobs    = Number(s.estimated_jobs ?? 0);
+
+    // Rounded after summing, not before: rounding each part and adding would
+    // let the displayed total drift from the parts by a centavo.
+    const totalPending = money(Number(s.pending_recorded ?? 0) + Number(s.pending_estimated ?? 0));
 
     return res.status(200).json({
       status: "success",
       data: {
-        totalEarned:  providerShareOf(Number(s.total_gross ?? 0)),
+        // Every peso of provider share for completed bookings, authoritative
+        // where a disbursement exists. The old value was
+        // `providerShareOf(total_gross)`, which carried defect (1) above.
+        totalEarned:  money(totalPaid + totalPending + totalFailed),
         totalPaid,
         totalPending,
         totalRefunded: 0,
         periodLabel: startDate ? "Custom range" : "All time",
         currency: "PHP",
         jobsCount: Number(s.total_jobs ?? 0),
+
+        // ── Additive: existing consumers ignore these ────────────────────
+        // Money owed whose payout FAILED. Split out of totalPending because a
+        // failed payout needs intervention rather than patience, and folding
+        // it into "pending" tells the provider it is coming.
+        totalFailed,
+        // The portion of totalPending that is a real recorded amount, and the
+        // portion still estimated from final_price because no disbursement
+        // row exists yet. §9 requires estimates to be labelled as estimates.
+        pendingRecordedAmount:  pendingRecorded,
+        pendingEstimatedAmount: pendingEstimated,
+        pendingIsEstimate:      estimatedJobs > 0,
+        estimatedJobsCount:     estimatedJobs,
       },
     });
   } catch (error: any) {
