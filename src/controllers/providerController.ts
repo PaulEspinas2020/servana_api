@@ -767,6 +767,18 @@ export const saveWorkerAvailability = async (req: Request, res: Response) => {
     if (!Array.isArray(schedule)) {
       return res.status(400).json({ status: "failed", message: "schedule must be an array" });
     }
+    const submittedDays = schedule.map((day: any) => day?.day);
+    const hasCanonicalWeek = schedule.length === WEB_ALL_DAYS.length
+      && new Set(submittedDays).size === WEB_ALL_DAYS.length
+      && WEB_ALL_DAYS.every(day => submittedDays.includes(day));
+    const hasInvalidShape = schedule.some((day: any) =>
+      typeof day?.enabled !== 'boolean' || !Array.isArray(day?.slots));
+    if (!hasCanonicalWeek || hasInvalidShape) {
+      return res.status(422).json({
+        status: "failed",
+        message: "schedule must contain each weekday exactly once with enabled and slots fields",
+      });
+    }
     const engineSlots = bridgeToEngineSlots(schedule);
     const result = await availEngine.saveWeeklySchedule(uid, engineSlots, timezone ?? "Asia/Manila", uid);
     return res.status(200).json({ status: "success", data: { success: true, updatedAt: result.updatedAt } });
