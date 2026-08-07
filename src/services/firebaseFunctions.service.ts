@@ -121,6 +121,16 @@ const firebaseAuthLogin = async (idToken: string, role: string = "2") => {
 
       throw new AccountLinkRequiredError(collision.via);
     }
+
+    // Login is not registration. Provider identities must be created through
+    // /auth/provider/register so profile and onboarding invariants cannot be
+    // bypassed with an arbitrary first-sight Firebase account.
+    if (role === "2") {
+      throw Object.assign(new Error("Provider account not found"), {
+        statusCode: 403,
+        code: "PROVIDER_ACCOUNT_NOT_FOUND",
+      });
+    }
   }
 
   const dbUser = await userService.upsertFirebaseUser({
@@ -154,8 +164,8 @@ const firebaseAuthLogin = async (idToken: string, role: string = "2") => {
       firebaseUser.uid,
       provenFrom(decoded, firebaseUser)
     );
-  } catch (err) {
-    console.warn("[firebase-login] could not record proven identifiers:", err);
+  } catch {
+    console.warn("[firebase-login] identifier verification sync deferred");
   }
 
   return {

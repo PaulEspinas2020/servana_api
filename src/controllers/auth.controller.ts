@@ -174,6 +174,15 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
 
     const result = await firebaseFunction.firebaseAuthLogin(idToken, role);
 
+    const requestedRole = role === undefined ? 2 : Number(role);
+    const resolvedRole = Number(result?.data?.role);
+    if (requestedRole === 2 && ![2, 4].includes(resolvedRole)) {
+      return res.status(403).json({
+        status: "failed",
+        message: "This account is not registered as a service provider.",
+      });
+    }
+
     // Non-blocking attribution: only record when sourceClient is explicitly sent
     if (sourceClient && result?.data?.uid) {
       upsertSourceAttribution(result.data.uid, sourceClient, false).catch(() => {});
@@ -196,7 +205,6 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
     // the cause discarded, so a database constraint, a Firebase outage and a
     // genuinely bad token were indistinguishable in production — and the portal
     // renders all of them as "session expired", which points at the wrong thing.
-    console.error("[firebase-login] failed:", error?.code ?? "", error?.message ?? error);
 
     // Signing in with an identifier that belongs to an existing account is not
     // an authentication failure. Told to try again, the person will keep failing
@@ -205,6 +213,14 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
       // Keeps the specific message — it names which identifier to use, which is
       // the whole point. The generic one would send them round the same loop.
       return sendAuthError(res, "ACCOUNT_LINK_REQUIRED", error.message);
+    }
+
+    if (error?.code === "PROVIDER_ACCOUNT_NOT_FOUND") {
+      return res.status(403).json({
+        status: "failed",
+        code: "PROVIDER_ACCOUNT_NOT_FOUND",
+        message: "Create your provider account before signing in.",
+      });
     }
 
     if (error?.message?.includes("disabled")) {
