@@ -3,12 +3,15 @@ import { additionalService } from "../services/additional.service";
 
 export const createRequest = async (req: Request, res: Response) => {
   try {
-    const { userId } = req.params as { userId: string };
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
     const { bookingId, items } = req.body;
-    const result = await additionalService.createRequest(bookingId, items, userId);
+    const booking = await additionalService.authorizeBookingActor(Number(bookingId), uid, "provider");
+    const result = await additionalService.createRequest(Number(bookingId), items, String(booking.user_id));
     res.json({ success: true, data: result });
   } catch (e: any) {
-    res.status(500).json({ success: false, message: e.message });
+    const status = e?.statusCode ?? 500;
+    res.status(status).json({ success: false, message: status === 500 ? "Server error" : e.message });
   }
 };
 
@@ -60,9 +63,14 @@ export const workerConfirmProceed = async (req: Request, res: Response) => {
 
 export const getByBooking = async (req: Request, res: Response) => {
   try {
-    const data = await additionalService.getByBooking(Number(req.params.bookingId));
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const bookingId = Number(req.params.bookingId);
+    await additionalService.authorizeBookingActor(bookingId, uid, "participant");
+    const data = await additionalService.getByBooking(bookingId);
     res.json({ success: true, data });
   } catch (e: any) {
-    res.status(500).json({ success: false, message: e.message });
+    const status = e?.statusCode ?? 500;
+    res.status(status).json({ success: false, message: status === 500 ? "Server error" : e.message });
   }
 };

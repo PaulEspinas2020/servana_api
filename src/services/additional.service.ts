@@ -8,6 +8,29 @@ import { getUserInfoByBookingId } from "./user.service";
 
 class AdditionalService {
 
+  async authorizeBookingActor(
+    bookingId: number,
+    actorUid: string,
+    access: "provider" | "participant",
+  ) {
+    if (!Number.isInteger(bookingId) || bookingId <= 0) {
+      throw Object.assign(new Error("Booking not found"), { statusCode: 404 });
+    }
+    const result = await dbQuery.query(
+      `SELECT id, user_id, worker_uid FROM ${dbSchema}.bookings WHERE id = $1 LIMIT 1`,
+      [bookingId],
+    );
+    const booking = result.rows[0];
+    const authorized = booking && (
+      booking.worker_uid === actorUid ||
+      (access === "participant" && booking.user_id === actorUid)
+    );
+    if (!authorized) {
+      throw Object.assign(new Error("Booking not found"), { statusCode: 404 });
+    }
+    return booking;
+  }
+
   async createRequest(bookingId: number, items: any[], userId: string) {
 
     const booking = await dbQuery.query(
