@@ -56,7 +56,7 @@ describe('booking detail payload', () => {
   });
 
   it('returns the technician ETA', () => {
-    expect(getBookingByIdQuery()).toContain('bw.eta_minutes');
+    expect(getBookingByIdQuery()).toContain('b.eta_minutes');
   });
 
   it('still joins the service, so the booking has a name', () => {
