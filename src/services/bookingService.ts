@@ -548,6 +548,29 @@ export const getBookingsByUserId = async (userId: string) => {
       br.name AS branch_name,
       br.address AS branch_address,
       br.city AS branch_city,
+      -- Service identity and money, matching the detail query above.
+      --
+      -- The detail query gained these joins when the booking detail screen was
+      -- found rendering a bare "Service" label with nothing beside it. The LIST
+      -- query was never given the same treatment, so every consumer that shows
+      -- a list of bookings has had to invent the name of the thing booked.
+      --
+      -- The customer app's live list mapper does exactly that
+      -- (http_backend.dart:491-502): it digs the name out of
+      -- pricingBreakdown.addons[0].level_3 and, when a booking has no addons,
+      -- falls back to the literal string 'Beauty & Wellness'. A plumbing
+      -- booking with no addons is currently labelled Beauty & Wellness in a
+      -- shipped app. That is not a name the customer chose and not one anybody
+      -- can act on.
+      --
+      -- Same columns and same aliases as the detail query, deliberately: a list
+      -- row and a detail page describing the same booking differently is the
+      -- drift this is meant to remove, not create.
+      so.service_id,
+      so.level_2 AS service_name,
+      so.level_3 AS service_option_name,
+      s.name     AS service_category,
+      COALESCE(b.final_price, b.quoted_price) AS total_amount,
       -- Admin-created bookings store address in service_address JSONB; COALESCE
       -- ensures customer mobile always receives a readable address line.
       COALESCE(ua.address_one, b.service_address->>'addressLine') AS address,
@@ -561,6 +584,13 @@ export const getBookingsByUserId = async (userId: string) => {
     FROM ${dbSchema}.bookings b
     LEFT JOIN ${dbSchema}.payments p
       ON p.booking_id = b.id
+    -- LEFT, not INNER. A booking whose service_option row was deleted or is
+    -- null must still appear in its owner's list; an inner join would delete
+    -- bookings from a customer's history to avoid a missing label.
+    LEFT JOIN ${dbSchema}.service_options so
+      ON so.id = b.service_option_id
+    LEFT JOIN ${dbSchema}.services s
+      ON s.id = so.service_id
     LEFT JOIN ${dbSchema}.branches br
       ON br.id = b.branch_id
     LEFT JOIN ${dbSchema}.user_address ua
