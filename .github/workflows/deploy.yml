@@ -24,6 +24,13 @@ jobs:
           chmod 600 .env
           cp /home/github-runner/env/servana-serviceAccountKey.json servana-serviceAccountKey.json
           chmod 600 servana-serviceAccountKey.json
+          # Document uploads must have an operational scanner. Until a managed
+          # scanner is configured, explicitly enable the repository's built-in
+          # signature/content scanner instead of letting every upload fail 503.
+          if ! grep -q '^PROVIDER_DOCUMENT_SCANNER_URL=.' .env || ! grep -q '^PROVIDER_DOCUMENT_SCANNER_TOKEN=.' .env; then
+            grep -q '^ALLOW_BASELINE_DOCUMENT_SCAN=true$' .env || echo 'ALLOW_BASELINE_DOCUMENT_SCAN=true' >> .env
+            echo '::warning::Managed document scanner is not configured; using the built-in scanner.'
+          fi
 
       # Fails loudly rather than silently authenticating with a burned password.
       # The literal fallback that used to live on the PGPASSWORD line below was
