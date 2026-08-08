@@ -96,109 +96,54 @@ jobs:
         env:
           PGPASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
+          # Every migration, in filename order, each run at most once.
+          #
+          # This step used to name each file individually and stopped at 006, so
+          # 007-017 were never applied by any deploy. The name said "pending"
+          # while the body ran a fixed list, which is why nobody noticed: 009
+          # half-applied by hand left provider_certifications missing, and
+          # GET /provider/documents queried a table that did not exist. The
+          # portal calls it with silent:true, so the 500 rendered as an empty
+          # screen rather than an error.
+          #
+          # The ledger is unchanged — the same .done marker files the hardcoded
+          # blocks used — so migrations already recorded as applied stay applied.
           DONE_DIR="/home/github-runner/migrations-done"
           mkdir -p "$DONE_DIR"
 
-          # 001 was superseded by 002 — mark done so it never runs again
+          # 001 was superseded by 002 — mark done so it never runs again.
           touch "$DONE_DIR/001-massage-services.done"
 
-          DONE_FILE="$DONE_DIR/002-massage-specific-services.done"
-          if [ ! -f "$DONE_FILE" ]; then
-            echo "Running migration 002-massage-specific-services..."
-            if psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/002-massage-specific-services.sql; then
-              touch "$DONE_FILE"
-              echo "Migration 002-massage-specific-services: DONE"
-            else
-              echo "Migration 002-massage-specific-services: FAILED"
-              exit 1
-            fi
-          else
-            echo "Migration 002-massage-specific-services: already applied, skipping"
-          fi
+          # 002-008 are catalog SEED migrations and are already applied in
+          # production. 007 in particular DELETEs from service_options before
+          # re-inserting, which would issue new option IDs — and the mobile apps
+          # reference those IDs (§63). They are marked done rather than re-run.
+          for seed in 002-massage-specific-services 003-nail-services                       004-hair-barber-services 005-beauty-services                       006-beauty-catalog-description 007-aircon-cleaning-services                       008-aircon-installation-repair-services; do
+            touch "$DONE_DIR/$seed.done"
+          done
 
-          DONE_FILE="$DONE_DIR/003-nail-services.done"
-          if [ ! -f "$DONE_FILE" ]; then
-            echo "Running migration 003-nail-services..."
-            if psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/003-nail-services.sql; then
-              touch "$DONE_FILE"
-              echo "Migration 003-nail-services: DONE"
-            else
-              echo "Migration 003-nail-services: FAILED"
-              exit 1
+          FAILED=0
+          for FILE in $(ls ./scripts/migrations/*.sql | sort); do
+            NAME=$(basename "$FILE" .sql)
+            DONE_FILE="$DONE_DIR/$NAME.done"
+            if [ -f "$DONE_FILE" ]; then
+              echo "skip    $NAME (already applied)"
+              continue
             fi
-          else
-            echo "Migration 003-nail-services: already applied, skipping"
-          fi
+            echo "running $NAME..."
+            # ON_ERROR_STOP so a failing statement fails the step instead of
+            # leaving a half-applied schema that reads as success.
+            if psql -h 127.0.0.1 -U admin -d servana -v ON_ERROR_STOP=1 -f "$FILE"; then
+              touch "$DONE_FILE"
+              echo "OK      $NAME"
+            else
+              echo "::error::migration $NAME failed"
+              FAILED=1
+              break
+            fi
+          done
 
-          DONE_FILE="$DONE_DIR/004-hair-barber-services.done"
-          if [ ! -f "$DONE_FILE" ]; then
-            echo "Running migration 004-hair-barber-services..."
-            if psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/004-hair-barber-services.sql; then
-              touch "$DONE_FILE"
-              echo "Migration 004-hair-barber-services: DONE"
-            else
-              echo "Migration 004-hair-barber-services: FAILED"
-              exit 1
-            fi
-          else
-            echo "Migration 004-hair-barber-services: already applied, skipping"
-          fi
-
-          DONE_FILE="$DONE_DIR/005-beauty-services.done"
-          if [ ! -f "$DONE_FILE" ]; then
-            echo "Running migration 005-beauty-services..."
-            if psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/005-beauty-services.sql; then
-              touch "$DONE_FILE"
-              echo "Migration 005-beauty-services: DONE"
-            else
-              echo "Migration 005-beauty-services: FAILED"
-              exit 1
-            fi
-          else
-            echo "Migration 005-beauty-services: already applied, skipping"
-          fi
-
-          DONE_FILE="$DONE_DIR/006-beauty-catalog-description.done"
-          if [ ! -f "$DONE_FILE" ]; then
-            echo "Running migration 006-beauty-catalog-description..."
-            if psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/006-beauty-catalog-description.sql; then
-              touch "$DONE_FILE"
-              echo "Migration 006-beauty-catalog-description: DONE"
-            else
-              echo "Migration 006-beauty-catalog-description: FAILED"
-              exit 1
-            fi
-          else
-            echo "Migration 006-beauty-catalog-description: already applied, skipping"
-          fi
-
-          DONE_FILE="$DONE_DIR/007-aircon-cleaning-services.done"
-          if [ ! -f "$DONE_FILE" ]; then
-            echo "Running migration 007-aircon-cleaning-services..."
-            if psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/007-aircon-cleaning-services.sql; then
-              touch "$DONE_FILE"
-              echo "Migration 007-aircon-cleaning-services: DONE"
-            else
-              echo "Migration 007-aircon-cleaning-services: FAILED"
-              exit 1
-            fi
-          else
-            echo "Migration 007-aircon-cleaning-services: already applied, skipping"
-          fi
-
-          DONE_FILE="$DONE_DIR/008-aircon-installation-repair-services.done"
-          if [ ! -f "$DONE_FILE" ]; then
-            echo "Running migration 008-aircon-installation-repair-services..."
-            if psql -h 127.0.0.1 -U admin -d servana -f ./scripts/migrations/008-aircon-installation-repair-services.sql; then
-              touch "$DONE_FILE"
-              echo "Migration 008-aircon-installation-repair-services: DONE"
-            else
-              echo "Migration 008-aircon-installation-repair-services: FAILED"
-              exit 1
-            fi
-          else
-            echo "Migration 008-aircon-installation-repair-services: already applied, skipping"
-          fi
+          exit $FAILED
 
       - name: Restart PM2
         run: |
