@@ -122,7 +122,8 @@ export const createBooking = async (req: any, res: any) => {
         });
       }
     }
-    res.status(400).json({ success: false, message: e.message });
+    const status = Number.isInteger(e?.statusCode) ? e.statusCode : 400;
+    res.status(status).json({ success: false, code: e?.code, message: e.message });
   }
 };
 
@@ -332,5 +333,54 @@ export const cancelBooking = async (req: Request, res: Response) => {
   } catch (e: any) {
     const status = e.statusCode === 403 ? 403 : 400;
     return res.status(status).json({ success: false, message: e.message || 'Cancellation failed' });
+  }
+};
+
+/**
+ * The customer-facing booking timeline.
+ *
+ * Command 6 §11. The timeline logic already existed and was reachable only at
+ * `GET /provider/bookings/:bookingId/timeline`, behind `requireProviderRole` —
+ * so a customer had no authoritative history of their own booking, and the
+ * customer mobile app worked around it by delegating to `/:id/tracking`
+ * (BACKEND_GAP-C15-002 in `servana_api_client.dart`).
+ *
+ * This exposes the same builder to the booking's owner. It is additive: the
+ * provider route, its query and its response are untouched, and
+ * `booking-timeline-projection.test.ts` pins that the provider projection still
+ * reads in provider voice.
+ *
+ * ## Two differences from the provider handler, both deliberate
+ *
+ * **The events are re-voiced.** `buildBookingTimeline` is provider-seat
+ * throughout — see `projectTimelineForCustomer`. Serving its output verbatim
+ * would tell a customer "You marked yourself arrived" about their professional
+ * while attributing their own booking creation to somebody else.
+ *
+ * **The reassignment gate is not applied.** In the provider handler,
+ * `is_current_assignee` stops a replaced provider seeing admin events that
+ * happened after they lost the booking. A customer never loses their own
+ * booking, so the gate has nothing to protect against here and withholding
+ * their own history would be the bug.
+ *
+ * Access is `assertBookingAccess`, the same check `GET /:id` and `/:id/tracking`
+ * use: the customer, the actively-assigned provider, or an admin. A booking
+ * belonging to somebody else answers 403, and an unknown id answers 404, so this
+ * cannot be used to probe which booking ids exist.
+ */
+export const getCustomerBookingTimeline = async (req: Request, res: Response) => {
+  try {
+    const bookingId = Number(req.params.id);
+    if (!bookingId || Number.isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid booking id" });
+    }
+
+    await assertBookingAccess(bookingId, (req as any).user?.uid);
+
+    const timeline = await bookingService.getCustomerBookingTimeline(bookingId);
+    return res.json({ success: true, timeline });
+  } catch (e: any) {
+    if (sendBookingAccessError(res, e)) return;
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };

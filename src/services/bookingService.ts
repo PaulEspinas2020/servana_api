@@ -1,4 +1,5 @@
 import { db } from "../config";
+import { deriveEffectiveBookingStatus } from "./bookingStatusProjection";
 import dbQuery, { pool } from "../db/dbQuery";
 const dbSchema = db.schema;
 import { generateOTP } from "../helpers/otp";
@@ -12,7 +13,13 @@ import { send } from "../helpers/mailer";
 import { getEmailById, getNameByEmail } from "./user.service";
 import { closeConversationForCancellation } from "../chat/chat.service";
 import { toCamel } from "../helpers/idGenerator";
-import { assertBookingAccess } from "./bookingAccessService";
+import { assertBookingAccess, BookingAccessError } from "./bookingAccessService";
+import {
+  buildBookingTimeline,
+  currentTimelineStep,
+  mergeStoredEvents,
+  projectTimelineForCustomer,
+} from "../controllers/bookingTimeline";
 import { notifyAdminsSafely } from './adminNotificationService';
 
 export const createBooking = async (
@@ -20,6 +27,7 @@ export const createBooking = async (
   payload: {
     userAddressId: string;
     serviceOptionId: number;
+    branchId?: number;
     schedule: string;
     paymentMethod: "CASH" | "GCASH" | "PAYMONGO";
     pricing: any;
@@ -85,14 +93,53 @@ export const createBooking = async (
     let booking: any;
     try {
       await client.query('BEGIN');
+      if (payload.branchId !== undefined) {
+        // Lock the concrete branch slot before counting and inserting. This
+        // makes capacity enforcement atomic under concurrent checkouts.
+        const slotRes = await client.query(
+          `SELECT bs.max_capacity
+             FROM ${dbSchema}.branch_slots bs
+             JOIN ${dbSchema}.branches br ON br.id = bs.branch_id
+            WHERE bs.branch_id = $1
+              AND br.service_id = $2
+              AND br.is_active = TRUE
+              AND bs.slot_time::time = ($3::timestamptz AT TIME ZONE 'Asia/Manila')::time
+            FOR UPDATE OF bs`,
+          [payload.branchId, serviceId, payload.schedule],
+        );
+        if (!slotRes.rowCount) {
+          throw Object.assign(new Error('The selected branch slot is no longer available.'), {
+            statusCode: 409,
+            code: 'SLOT_UNAVAILABLE',
+          });
+        }
+        const bookedRes = await client.query(
+          `SELECT COUNT(*)::integer AS booked_count
+             FROM ${dbSchema}.bookings b
+            WHERE b.branch_id = $1
+              AND (b.schedule AT TIME ZONE 'Asia/Manila')::date =
+                  ($2::timestamptz AT TIME ZONE 'Asia/Manila')::date
+              AND (b.schedule AT TIME ZONE 'Asia/Manila')::time =
+                  ($2::timestamptz AT TIME ZONE 'Asia/Manila')::time
+              AND UPPER(COALESCE(b.status, '')) NOT IN
+                  ('CANCELLED','CANCELED','COMPLETED','REVIEWED','EXPIRED','FAILED','REFUNDED')`,
+          [payload.branchId, payload.schedule],
+        );
+        if (Number(bookedRes.rows[0]?.booked_count ?? 0) >= Number(slotRes.rows[0].max_capacity)) {
+          throw Object.assign(new Error('That branch slot just filled up. Choose another time.'), {
+            statusCode: 409,
+            code: 'SLOT_FULL',
+          });
+        }
+      }
       const bookingRes = await client.query(
         `
         INSERT INTO ${dbSchema}.bookings
           (user_id, user_address_id, service_option_id,
-           schedule, payment_method,
+           schedule, payment_method, branch_id,
            otp_code, status,
            quoted_price, final_price, pricing_breakdown)
-        VALUES ($1,$2,$3,$4,$5,$6,'PENDING_OTP',$7,$8,$9)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,'PENDING_OTP',$8,$9,$10)
         RETURNING *
         `,
         [
@@ -101,6 +148,7 @@ export const createBooking = async (
           payload.serviceOptionId,
           payload.schedule,
           payload.paymentMethod,
+          payload.branchId ?? null,
           otp,
           quote.final,
           quote.final,
@@ -372,10 +420,9 @@ export const getBookingById = async (
       bw.started_at,
       bw.completed_at,
       -- The customer app reads etaMinutes on the booking detail screen.
-      -- booking_workers was joined for its status and timestamps but never for
-      -- the ETA, so the key was always absent from the response and the app had
-      -- nothing to show.
-      bw.eta_minutes,
+      -- Travel ETA belongs to the booking assignment projection and is stored
+      -- on bookings by the assignment transaction.
+      b.eta_minutes,
       -- Money. The app renders "Amount" from totalAmount, which is not a column
       -- on this table and never was — bookings stores quoted_price and
       -- final_price. The key was simply missing from the payload, the client's
@@ -394,8 +441,12 @@ export const getBookingById = async (
       ON br.id = b.branch_id
     LEFT JOIN ${dbSchema}.user_address ua
       ON ua.address_id = b.user_address_id
-    LEFT JOIN ${dbSchema}.booking_workers bw
-      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
+    LEFT JOIN LATERAL (
+      SELECT bw0.* FROM ${dbSchema}.booking_workers bw0
+      WHERE bw0.booking_id = b.id
+      ORDER BY bw0.assigned_at DESC NULLS LAST, bw0.id DESC
+      LIMIT 1
+    ) bw ON TRUE
     WHERE b.id = $1
     `,
     [bookingId]
@@ -468,9 +519,12 @@ export const getAllBookings = async (from?: string, to?: string) => {
       ON br.id = b.branch_id
     LEFT JOIN ${dbSchema}.user_address ua
       ON ua.address_id = b.user_address_id
-    LEFT JOIN ${dbSchema}.booking_workers bw
-      ON bw.booking_id = b.id
-      AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
+    LEFT JOIN LATERAL (
+      SELECT bw0.* FROM ${dbSchema}.booking_workers bw0
+      WHERE bw0.booking_id = b.id
+      ORDER BY bw0.assigned_at DESC NULLS LAST, bw0.id DESC
+      LIMIT 1
+    ) bw ON TRUE
     LEFT JOIN ${dbSchema}.user_credentials w
       ON w.uid = bw.worker_uid
     ${whereClause}
@@ -511,8 +565,12 @@ export const getBookingsByUserId = async (userId: string) => {
       ON br.id = b.branch_id
     LEFT JOIN ${dbSchema}.user_address ua
       ON ua.address_id = b.user_address_id
-    LEFT JOIN ${dbSchema}.booking_workers bw
-      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
+    LEFT JOIN LATERAL (
+      SELECT bw0.* FROM ${dbSchema}.booking_workers bw0
+      WHERE bw0.booking_id = b.id
+      ORDER BY bw0.assigned_at DESC NULLS LAST, bw0.id DESC
+      LIMIT 1
+    ) bw ON TRUE
     -- Guest bookings surface to a registered customer only through the
     -- explicit link an admin created (linked_customer_uid, alongside
     -- linked_at / linked_by_admin_uid / link_reason). That link is deliberate
@@ -664,6 +722,7 @@ export const formatBooking = (raw: any): Record<string, unknown> => {
   const userIdVal = c.userId ?? raw.user_id ?? null;
   const statusVal: string = (c.status ?? raw.status ?? '');
   const workerStatusVal = c.workerStatus ?? raw.worker_status ?? null;
+  const effectiveStatus = deriveEffectiveBookingStatus(statusVal, workerStatusVal);
 
   return {
     ...c,
@@ -680,6 +739,7 @@ export const formatBooking = (raw: any): Record<string, unknown> => {
     ...(userIdVal !== null && !('customerUid' in c) ? { customerUid: userIdVal } : {}),
     // Status: UPPERCASE from DB stays, lowercase variant added for platforms that normalise
     ...(statusVal && !('statusLower' in c) ? { statusLower: statusVal.toLowerCase() } : {}),
+    effectiveStatus,
     // Worker/assignment status aliases
     ...(workerStatusVal !== null && !('assignmentStatus' in c) ? { assignmentStatus: workerStatusVal } : {}),
   };
@@ -783,4 +843,84 @@ export const customerCancelBooking = async (
     [bookingId],
   );
   return updatedRes.rows[0] ?? { id: bookingId, status: 'CANCELLED' };
+};
+
+/**
+ * The customer's own booking history, as authoritative events.
+ *
+ * Command 6 §11. Reuses `buildBookingTimeline` and `mergeStoredEvents` — the
+ * same derivation the provider timeline uses — then re-voices the result for
+ * the customer. One source of truth for what happened; two ways of telling it.
+ *
+ * ## The query is scoped by booking, not by worker
+ *
+ * The provider handler filters `bw.worker_uid = $2` because a provider may only
+ * see the assignment row that is theirs. A customer owns the booking itself, so
+ * the join takes the most recent assignment regardless of who holds it — which
+ * is what makes a reassigned booking still show its full history.
+ *
+ * LEFT JOIN, not JOIN: a booking at PENDING_OTP or CONFIRMED has no
+ * `booking_workers` row at all. An inner join would return zero rows and the
+ * caller would report "no timeline" for every booking that has not yet been
+ * assigned — which is every newly created one.
+ *
+ * Ownership is NOT checked here. `assertBookingAccess` in the controller is the
+ * authority, exactly as it is for `getTracking`; duplicating it would create a
+ * second rule that can drift from the first.
+ */
+export const getCustomerBookingTimeline = async (bookingId: number) => {
+  const schema = dbSchema || "";
+
+  const result = await dbQuery.query(
+    `SELECT b.created_at,
+            b.status                AS booking_status,
+            bw.status               AS worker_status,
+            bw.assigned_at,
+            bw.started_at,
+            bw.completed_at,
+            to_jsonb(bw) ->> 'accepted_at' AS accepted_at,
+            to_jsonb(bw) ->> 'declined_at' AS declined_at,
+            to_jsonb(bw) ->> 'en_route_at' AS en_route_at,
+            to_jsonb(bw) ->> 'arrived_at'  AS arrived_at
+       FROM ${schema}.bookings b
+       LEFT JOIN ${schema}.booking_workers bw
+         ON bw.booking_id = b.id
+      WHERE b.id = $1
+      ORDER BY bw.id DESC NULLS LAST
+      LIMIT 1`,
+    [bookingId]
+  );
+
+  if (!result.rowCount) {
+    throw new BookingAccessError("Booking not found", 404, "BOOKING_NOT_FOUND");
+  }
+
+  // Only `event_type` and `created_at` cross. `title`, `description` and
+  // `metadata` on booking_timeline_events are admin-authored and must never
+  // reach a customer — the same rule the provider handler applies.
+  const stored = await dbQuery
+    .query(
+      `SELECT event_type, created_at
+         FROM ${schema}.booking_timeline_events
+        WHERE booking_id = $1
+        ORDER BY created_at ASC`,
+      [bookingId]
+    )
+    .catch(() => null);
+
+  // `true` for the assignee gate: a customer never stops owning their booking,
+  // so every admin event on it is theirs to see. See the controller's note.
+  const events = mergeStoredEvents(
+    buildBookingTimeline(result.rows[0]),
+    stored?.rows ?? [],
+    true
+  );
+
+  const projected = projectTimelineForCustomer(events);
+
+  return {
+    bookingId,
+    events: projected,
+    currentStep: currentTimelineStep(events),
+  };
 };
