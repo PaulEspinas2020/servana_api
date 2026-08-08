@@ -138,22 +138,30 @@ export const upsertParticipant = async (
     `INSERT INTO ${dbSchema}.chat_participants (conversation_id, user_uid, role)
      VALUES ($1, $2, $3)
      ON CONFLICT (conversation_id, user_uid)
-       DO UPDATE SET role = EXCLUDED.role, left_at = NULL
+       DO UPDATE SET role = EXCLUDED.role,
+                     joined_at = CASE
+                       WHEN ${dbSchema}.chat_participants.left_at IS NOT NULL THEN NOW()
+                       ELSE ${dbSchema}.chat_participants.joined_at
+                     END,
+                     left_at = NULL,
+                     can_read = TRUE,
+                     can_send = TRUE
      RETURNING *`,
     [conversationId, userUid, role]
   );
   return r.rows[0];
 };
 
-export const listParticipants = async (conversationId: number) => {
+export const listParticipants = async (conversationId: number, includeDeparted = false) => {
   const r = await dbQuery.query(
     `SELECT p.*, u.first_name, u.last_name, up.photo_url
        FROM ${dbSchema}.chat_participants p
        LEFT JOIN ${dbSchema}.user_credentials u ON u.uid = p.user_uid
        LEFT JOIN ${dbSchema}.user_profile up ON up.uid = p.user_uid
       WHERE p.conversation_id = $1
+        AND ($2::boolean = TRUE OR p.left_at IS NULL)
       ORDER BY p.joined_at ASC`,
-    [conversationId]
+    [conversationId, includeDeparted]
   );
   return r.rows;
 };
@@ -163,12 +171,21 @@ export const setLastRead = async (
   userUid: string,
   lastReadMessageId: number
 ) => {
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.chat_participants
-     SET last_read_message_id = $3
-     WHERE conversation_id = $1 AND user_uid = $2`,
+  const r = await dbQuery.query(
+    `UPDATE ${dbSchema}.chat_participants p
+        SET last_read_message_id = $3
+      WHERE p.conversation_id = $1 AND p.user_uid = $2
+        AND (p.last_read_message_id IS NULL OR p.last_read_message_id < $3)
+        AND EXISTS (
+          SELECT 1 FROM ${dbSchema}.chat_messages m
+           WHERE m.id = $3
+             AND m.conversation_id = $1
+             AND m.created_at >= p.joined_at
+        )
+      RETURNING p.last_read_message_id`,
     [conversationId, userUid, lastReadMessageId]
   );
+  return r.rowCount > 0;
 };
 
 // ---- Messages --------------------------------------------------------------
@@ -267,18 +284,15 @@ export const getMessageById = async (messageId: number) => {
 export const listMessages = async (
   conversationId: number,
   limit: number,
-  before?: number
+  before?: number,
+  visibleAfter?: string | null,
 ) => {
-  const params: any[] = [conversationId, limit];
-  let cursor = "";
-  if (before) {
-    cursor = `AND id < $3`;
-    params.push(before);
-  }
+  const params: any[] = [conversationId, limit, before ?? null, visibleAfter ?? null];
   const r = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.chat_messages
       WHERE conversation_id = $1
-        ${cursor}
+        AND ($3::bigint IS NULL OR id < $3)
+        AND ($4::timestamptz IS NULL OR created_at >= $4)
       ORDER BY id DESC
       LIMIT $2`,
     params
@@ -326,7 +340,9 @@ export const insertAttachment = async (
 
 export const listAttachments = async (messageId: number) => {
   const r = await dbQuery.query(
-    `SELECT * FROM ${dbSchema}.chat_message_attachments WHERE message_id = $1`,
+    `SELECT a.* FROM ${dbSchema}.chat_message_attachments a
+       JOIN ${dbSchema}.chat_messages m ON m.id = a.message_id
+      WHERE a.message_id = $1 AND m.deleted_at IS NULL`,
     [messageId]
   );
   return r.rows;
@@ -353,6 +369,7 @@ export const listConversationsForUser = async (userUid: string) => {
             (SELECT COUNT(*) FROM ${dbSchema}.chat_messages m
                WHERE m.conversation_id = c.id
                  AND m.deleted_at IS NULL
+                 AND m.created_at >= p.joined_at
                  AND (p.last_read_message_id IS NULL OR m.id > p.last_read_message_id)
                  AND m.sender_uid IS DISTINCT FROM $1
             ) AS unread_count

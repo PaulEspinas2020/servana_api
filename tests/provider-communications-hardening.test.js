@@ -33,7 +33,8 @@ describe('provider communications hardening', () => {
 
   test('message body and type are bounded server-side', () => {
     const service = read('chat', 'chat.service.ts');
-    expect(service).toMatch(/body\.length > 4000/);
+    expect(service).toMatch(/body\.length > MESSAGE_BODY_MAX/);
+    expect(service).toMatch(/const MESSAGE_BODY_MAX = 4000/);
     expect(service).toMatch(/allowedTypes/);
     expect(service).toMatch(/\["text", "image", "file"\]/);
   });

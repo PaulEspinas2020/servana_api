@@ -9,6 +9,11 @@ const dbSchema = db.schema;
 // Rates live in revenueSplit.ts — see that file for why they are not here.
 const PAYMONGO_BASE_URL  = "https://api.paymongo.com/v1";
 const RELEASE_HOURS      = 72;
+const PAYMONGO_TIMEOUT_MS = 15_000;
+
+const PAYOUT_SUCCEEDED_STATUSES = new Set(["succeeded", "deposited"]);
+const PAYOUT_PENDING_STATUSES = new Set(["pending", "processing", "in_transit", "on_hold"]);
+const PAYOUT_FAILED_STATUSES = new Set(["failed", "returned", "cancelled", "rejected"]);
 
 const getAuthHeader = () => {
   // Use the same key contract as checkout and refunds. Keeping a separate
@@ -21,6 +26,41 @@ const getAuthHeader = () => {
 const computeSplit = (total: number) => {
   const { totalAmount, servanaShare, providerShare } = splitRevenue(total);
   return { totalAmount, servanaShare, workerShare: providerShare };
+};
+
+const payoutStatus = (response: any) =>
+  String(response?.data?.data?.attributes?.status || "").trim().toLowerCase();
+
+// A timeout, network failure, rate limit, conflict or server error can happen
+// after PayMongo accepted the transfer. Those outcomes must be reconciled,
+// never changed to FAILED and submitted again as a new payout.
+const isDefinitivePayoutRejection = (err: any) => {
+  const status = Number(err?.response?.status);
+  return Number.isInteger(status)
+    && status >= 400
+    && status < 500
+    && ![408, 409, 425, 429].includes(status);
+};
+
+const markPayoutFailure = async (id: number, code: string) => {
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.disbursements
+     SET status = 'FAILED', payout_error = $2, updated_at = NOW()
+     WHERE id = $1 AND status = 'PROCESSING'`,
+    [id, code]
+  );
+};
+
+const markPayoutForReconciliation = async (id: number, payoutId?: string) => {
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.disbursements
+     SET status = 'PROCESSING',
+         paymongo_payout_id = COALESCE($2, paymongo_payout_id),
+         payout_error = 'PAYOUT_RECONCILIATION_REQUIRED',
+         updated_at = NOW()
+     WHERE id = $1 AND status = 'PROCESSING'`,
+    [id, payoutId || null]
+  );
 };
 
 // ---------------------------------------------------------------------------
@@ -92,10 +132,14 @@ export const createDisbursement = async (bookingId: number) => {
 // ---------------------------------------------------------------------------
 
 const releaseDisbursement = async (disbursement: any) => {
-  // Atomically claim the row — prevents double-payout if scheduler + manual retry run concurrently
+  // Atomically claim the row and allocate one logical processor attempt.
   const claim = await dbQuery.query(
-    `UPDATE ${dbSchema}.disbursements SET status = 'PROCESSING', updated_at = NOW()
-     WHERE id = $1 AND status = 'PENDING' RETURNING id`,
+    `UPDATE ${dbSchema}.disbursements
+     SET status = 'PROCESSING',
+         payout_attempt = COALESCE(payout_attempt, 0) + 1,
+         updated_at = NOW()
+     WHERE id = $1 AND status = 'PENDING'
+     RETURNING id, payout_attempt`,
     [disbursement.id]
   );
   if (!claim.rowCount) {
@@ -103,23 +147,31 @@ const releaseDisbursement = async (disbursement: any) => {
     return;
   }
 
-  const bank = await getWorkerBankAccount(disbursement.worker_uid);
+  const attempt = Number(claim.rows[0].payout_attempt);
+  let bank: any;
+  try {
+    bank = await getWorkerBankAccount(disbursement.worker_uid);
+  } catch {
+    await markPayoutFailure(disbursement.id, "PAYOUT_PRECONDITION_CHECK_FAILED");
+    return;
+  }
 
   if (!bank) {
-    const msg = `Worker ${disbursement.worker_uid} has no registered bank account`;
-    await dbQuery.query(
-      `UPDATE ${dbSchema}.disbursements SET status = 'FAILED', payout_error = $2, updated_at = NOW() WHERE id = $1`,
-      [disbursement.id, msg]
-    );
-    console.warn(`[disbursement] ${msg}`);
+    await markPayoutFailure(disbursement.id, "BANK_ACCOUNT_REQUIRED");
+    console.warn("[disbursement] Payout precondition failed: bank account required");
     return;
   }
   const amountCentavos = Math.round(Number(disbursement.worker_share) * 100);
   if (!Number.isSafeInteger(amountCentavos) || amountCentavos <= 0) {
-    await dbQuery.query(
-      `UPDATE ${dbSchema}.disbursements SET status = 'FAILED', payout_error = $2, updated_at = NOW() WHERE id = $1`,
-      [disbursement.id, "Invalid payout amount"]
-    );
+    await markPayoutFailure(disbursement.id, "INVALID_PAYOUT_AMOUNT");
+    return;
+  }
+
+  let authorization: string;
+  try {
+    authorization = getAuthHeader();
+  } catch {
+    await markPayoutFailure(disbursement.id, "PAYMONGO_NOT_CONFIGURED");
     return;
   }
 
@@ -141,12 +193,47 @@ const releaseDisbursement = async (disbursement: any) => {
           },
         },
       },
-      { headers: { Authorization: getAuthHeader(), "Content-Type": "application/json" } }
+      {
+        headers: {
+          Authorization: authorization,
+          "Content-Type": "application/json",
+          "Idempotency-Key": `servana-disbursement-${disbursement.id}-attempt-${attempt}`,
+        },
+        timeout: PAYMONGO_TIMEOUT_MS,
+      }
     );
 
     const payoutId = response.data?.data?.id;
     if (!payoutId || typeof payoutId !== "string") {
       throw new Error("PayMongo returned an incomplete disbursement response");
+    }
+
+    const processorStatus = payoutStatus(response);
+
+    if (PAYOUT_FAILED_STATUSES.has(processorStatus)) {
+      await dbQuery.query(
+        `UPDATE ${dbSchema}.disbursements
+         SET status = 'FAILED', paymongo_payout_id = $2,
+             payout_error = 'PAYMONGO_PAYOUT_REJECTED', updated_at = NOW()
+         WHERE id = $1 AND status = 'PROCESSING'`,
+        [disbursement.id, payoutId]
+      );
+      return;
+    }
+
+    if (PAYOUT_PENDING_STATUSES.has(processorStatus)) {
+      await dbQuery.query(
+        `UPDATE ${dbSchema}.disbursements
+         SET paymongo_payout_id = $2, payout_error = NULL, updated_at = NOW()
+         WHERE id = $1 AND status = 'PROCESSING'`,
+        [disbursement.id, payoutId]
+      );
+      return;
+    }
+
+    if (!PAYOUT_SUCCEEDED_STATUSES.has(processorStatus)) {
+      await markPayoutForReconciliation(disbursement.id, payoutId);
+      return;
     }
 
     await dbQuery.query(
@@ -157,28 +244,21 @@ const releaseDisbursement = async (disbursement: any) => {
           payout_error       = NULL,
           released_at        = NOW(),
           updated_at         = NOW()
-      WHERE id = $1
+      WHERE id = $1 AND status = 'PROCESSING'
       `,
       [disbursement.id, payoutId]
     );
 
-    console.log(`[disbursement] Released booking #${disbursement.booking_id} → payout ${payoutId}`);
+    console.log(`[disbursement] Released booking #${disbursement.booking_id}`);
   } catch (err: any) {
-    const errMsg =
-      err?.response?.data?.errors?.[0]?.detail || err.message || "PayMongo payout failed";
+    if (isDefinitivePayoutRejection(err)) {
+      await markPayoutFailure(disbursement.id, "PAYMONGO_PAYOUT_REJECTED");
+      console.warn(`[disbursement] Processor rejected booking #${disbursement.booking_id}`);
+      return;
+    }
 
-    await dbQuery.query(
-      `
-      UPDATE ${dbSchema}.disbursements
-      SET status       = 'FAILED',
-          payout_error = $2,
-          updated_at   = NOW()
-      WHERE id = $1
-      `,
-      [disbursement.id, errMsg]
-    );
-
-    console.error(`[disbursement] FAILED booking #${disbursement.booking_id}: ${errMsg}`);
+    await markPayoutForReconciliation(disbursement.id);
+    console.error(`[disbursement] Booking #${disbursement.booking_id} requires payout reconciliation`);
   }
 };
 

@@ -200,7 +200,10 @@ const firebaseProviderRegister = async (
   if (!idToken) { throw new Error("Missing Firebase ID token"); }
   if (!firstName || !lastName) { throw new Error("firstName and lastName are required"); }
 
-  const decoded = await defaultAuthAdmin.verifyIdToken(idToken);
+  // A registration token is a credential just like a login token. Checking
+  // revocation here prevents a signed-out/revoked Firebase session from being
+  // replayed to create or rewrite the local provider profile.
+  const decoded = await defaultAuthAdmin.verifyIdToken(idToken, /* checkRevoked */ true);
   const firebaseUser = await defaultAuthAdmin.getUser(decoded.uid);
 
   // Persist the name on the Firebase user record so firebase-login picks it up on next sign-in.

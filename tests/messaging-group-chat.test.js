@@ -56,12 +56,12 @@ describe('technicianService — auto group-chat trigger on acceptJob', function 
 
   it('calls getOrCreateConversation inside acceptJob body', function () {
     // Find the acceptJob function block and assert getOrCreateConversation is inside it.
-    var acceptBlock = src.match(/acceptJob[\s\S]{0,3000}/)?.[0] || '';
+    var acceptBlock = src.match(/acceptJob[\s\S]{0,7000}/)?.[0] || '';
     expect(acceptBlock).toMatch(/getOrCreateConversation/);
   });
 
   it('uses fire-and-forget async IIFE pattern in acceptJob (never blocks response)', function () {
-    var acceptBlock = src.match(/acceptJob[\s\S]{0,3000}/)?.[0] || '';
+    var acceptBlock = src.match(/acceptJob[\s\S]{0,7000}/)?.[0] || '';
     expect(acceptBlock).toMatch(/\(async\s*\(\)/);
   });
 
@@ -397,8 +397,9 @@ describe('adminCommunicationService — MESSAGING additions present', function (
     expect(block).toMatch(/await import/);
   });
 
-  it('resolveMessageReport with action=redact sets body to [Message removed]', function () {
-    expect(src).toMatch(/\[Message removed/);
-    expect(src).toMatch(/redact/i);
+  it('resolveMessageReport with action=redact uses the canonical delete service', function () {
+    expect(src).toMatch(/import\('\.\.\/chat\/chat\.service'\)/);
+    expect(src).toMatch(/await deleteMessage\(/);
+    expect(src).toMatch(/action === 'redact'/);
   });
 });

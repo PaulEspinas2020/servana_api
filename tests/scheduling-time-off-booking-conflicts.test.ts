@@ -14,9 +14,19 @@
  * the conflicts come back with it, and the copy says the booking is still
  * theirs.
  */
+const mockDbQuery = jest.fn();
+const mockTxQuery = jest.fn((sql: string, params?: any[]) => {
+  const text = String(sql);
+  if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(text) || text.includes('pg_advisory_xact_lock'))
+    return Promise.resolve({ rows: [], rowCount: 0 });
+  if (text.includes('SELECT id FROM test.worker_time_off'))
+    return Promise.resolve({ rows: [], rowCount: 0 });
+  return mockDbQuery(sql, params);
+});
 jest.mock("../src/db/dbQuery", () => ({
   __esModule: true,
-  default: { query: jest.fn() },
+  default: { query: mockDbQuery },
+  pool: { connect: jest.fn(async () => ({ query: mockTxQuery, release: jest.fn() })) },
 }));
 jest.mock("../src/config", () => ({ __esModule: true, db: { schema: "test" } }));
 

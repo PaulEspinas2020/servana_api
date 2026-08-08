@@ -22,12 +22,19 @@ const code = (s: string) =>
   s.split('\n').map((l) => l.replace(/--.*/, '').replace(/^\s*\/\/.*/, '')).join('\n');
 
 const ctrl = flat(code(read('controllers/providerController.ts')));
+const service = flat(code(read('services/notification.service.ts')));
 const routes = flat(code(read('routes/provider.routes.ts')));
 
 const block = (name: string) => {
   const i = ctrl.indexOf(`export const ${name}`);
   expect(i).toBeGreaterThan(-1);
   return ctrl.slice(i, i + 1600);
+};
+
+const serviceBlock = (name: string) => {
+  const i = service.indexOf(`export async function ${name}`);
+  expect(i).toBeGreaterThan(-1);
+  return service.slice(i, i + 2600);
 };
 
 describe('binding a token', () => {
@@ -41,12 +48,15 @@ describe('binding a token', () => {
   test('releases the device from whoever held it before', () => {
     // The shared-handset case. Without this the previous provider stays
     // addressable at a phone someone else is now carrying.
-    expect(save()).toMatch(/SET fcm_token = NULL WHERE fcm_token = \$1 AND uid <> \$2/);
+    expect(serviceBlock('registerProviderDeviceToken')).toMatch(
+      /ON CONFLICT \(token\) DO UPDATE SET worker_uid = EXCLUDED\.worker_uid/,
+    );
   });
 
-  test('releases BEFORE it claims, so no window has two owners', () => {
-    const s = save();
-    expect(s.indexOf('uid <> $2')).toBeLessThan(s.indexOf('SET fcm_token = $1 WHERE uid = $2'));
+  test('claims one authoritative token row atomically', () => {
+    const s = serviceBlock('registerProviderDeviceToken');
+    expect(s).toContain('provider_notification_device_tokens');
+    expect(service).toContain('token TEXT PRIMARY KEY');
   });
 
   test('rejects an empty or stub token', () => {
@@ -65,18 +75,23 @@ describe('releasing a token on sign-out', () => {
 
   test('is scoped to the caller', () => {
     expect(del()).toContain('req.user?.uid');
-    expect(del()).toMatch(/WHERE uid = \$1/);
+    expect(del()).toContain('releaseProviderDeviceToken(uid, token)');
+    expect(serviceBlock('releaseProviderDeviceToken')).toMatch(/WHERE worker_uid = \$1/);
   });
 
   test('one device signing out does not unsubscribe the provider elsewhere', () => {
     // Scoped to the token presented, so a provider signed in on two phones
     // keeps the other one.
-    expect(del()).toMatch(/WHERE uid = \$1 AND fcm_token = \$2/);
+    expect(serviceBlock('releaseProviderDeviceToken')).toMatch(
+      /WHERE worker_uid = \$1 AND token = \$2/,
+    );
   });
 
   test('a missing token still releases rather than refusing', () => {
     // A sign-out that leaves a live push registration behind is worse than a
     // slightly over-broad release.
-    expect(del()).toMatch(/SET fcm_token = NULL WHERE uid = \$1/);
+    const s = serviceBlock('releaseProviderDeviceToken');
+    expect(s).toMatch(/DELETE FROM .*provider_notification_device_tokens WHERE worker_uid = \$1/);
+    expect(s).toMatch(/SET fcm_token = NULL WHERE uid = \$1/);
   });
 });

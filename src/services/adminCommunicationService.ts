@@ -653,7 +653,7 @@ export async function getAdminConversationMessages(conversationId: number, limit
       `SELECT m.*,
               uc.first_name, uc.last_name,
               COALESCE(
-                json_agg(a.*) FILTER (WHERE a.id IS NOT NULL), '[]'
+                json_agg(a.*) FILTER (WHERE a.id IS NOT NULL AND m.deleted_at IS NULL), '[]'
               ) AS attachments
          FROM ${dbSchema}.chat_messages m
          LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = m.sender_uid
@@ -743,18 +743,18 @@ export async function resolveMessageReport(
   const { rows } = await dbQuery.query(
     `UPDATE ${dbSchema}.chat_message_reports
      SET status = $1, resolved_by = $2, resolved_at = NOW(), resolution_note = $3
-     WHERE id = $4 RETURNING *`,
+     WHERE id = $4 AND COALESCE(status, 'pending') = 'pending' RETURNING *`,
     [action === 'dismiss' ? 'dismissed' : 'actioned', adminUid, note || null, reportId]
   );
   if (!rows.length) return null;
 
   if (action === 'redact') {
     const report = rows[0];
-    await dbQuery.query(
-      `UPDATE ${dbSchema}.chat_messages
-       SET body = '[Message removed by Servana moderator]', deleted_at = NOW()
-       WHERE id = $1`,
-      [report.message_id]
+    const { deleteMessage } = await import('../chat/chat.service');
+    await deleteMessage(
+      { uid: adminUid, role: 1 },
+      Number(report.conversation_id),
+      Number(report.message_id),
     );
   }
   return rows[0];

@@ -1,0 +1,129 @@
+import fs from 'fs';
+import path from 'path';
+
+const read = (file: string) => fs.readFileSync(
+  path.join(__dirname, '..', 'src', file),
+  'utf8',
+);
+
+const auth = read('services/auth.service.ts');
+const users = read('services/user.service.ts');
+const controller = read('controllers/auth.controller.ts');
+
+describe('account creation is atomic and recoverable', () => {
+  test('classic signup derives normalized identifiers and creates the provider profile atomically', () => {
+    const register = users.slice(
+      users.indexOf('const registerUserInDB'),
+      users.indexOf('export const upsertFirebaseUser'),
+    );
+
+    expect(register).toContain('deriveNormalized(');
+    expect(register).toContain('email_normalized');
+    expect(register).toContain('phone_normalized');
+    expect(register).toContain('WITH inserted AS');
+    expect(register).toContain('INSERT INTO ${dbSchema}.user_profile (uid)');
+    expect(register).toContain('SELECT uid FROM inserted WHERE role::int = 2');
+    expect(register).not.toContain('await updateUserProfile');
+  });
+
+  test('Firebase registration also ensures the canonical provider profile in the same statement', () => {
+    const upsert = users.slice(
+      users.indexOf('export const upsertFirebaseUser'),
+      users.indexOf('const updateUserPasswordHash'),
+    );
+
+    expect(upsert).toContain('WITH upserted AS');
+    expect(upsert).toContain('INSERT INTO ${dbSchema}.user_profile (uid)');
+    expect(upsert).toContain('SELECT uid FROM upserted WHERE role::int = 2');
+  });
+
+  test('a failed DB write compensates the Firebase identity, but delivery failures do not delete a committed account', () => {
+    const register = auth.slice(
+      auth.indexOf('const registerUser = async'),
+      auth.indexOf('const verifyEmailOtp = async'),
+    );
+
+    expect(register).toContain('registrationCommitted = true');
+    expect(register).toContain('if (userData?.uid && !registrationCommitted)');
+    expect(register).toContain('deleteFirebaseUser(userData.uid)');
+    expect(register).toContain('verificationDeliveryPending = true');
+    expect(register.indexOf('registrationCommitted = true')).toBeLessThan(
+      register.indexOf('verificationDeliveryPending = true'),
+    );
+  });
+
+  test('mail promises are awaited so delivery failures enter the recovery path', () => {
+    const register = auth.slice(
+      auth.indexOf('const registerUser = async'),
+      auth.indexOf('const verifyEmailOtp = async'),
+    );
+    expect(register).toContain('await send(dbRegister.email, "verify_email_otp"');
+    expect(register).toContain('await send(dbRegister.email, "verify_email"');
+  });
+});
+
+describe('account identity and verification contracts', () => {
+  test('registration canonicalizes email and names before either identity store sees them', () => {
+    const register = auth.slice(
+      auth.indexOf('const registerUser = async'),
+      auth.indexOf('const verifyEmailOtp = async'),
+    );
+    const canonical = register.indexOf('const canonicalUser');
+    expect(register).toContain('normalizeEmail(email)');
+    expect(register).toContain('normalizeProfileName(firstName, "firstName")');
+    expect(register).toContain('normalizeProfileName(lastName, "lastName")');
+    expect(canonical).toBeLessThan(register.indexOf('registerNewUserInFirebase(canonicalUser)'));
+  });
+
+  test('OTP lookup is case-stable and consumption is single-use', () => {
+    expect(users).toContain('const canonicalEmail = normalizeEmail(email)');
+    expect(users).toContain('WHERE email_normalized = $1');
+    expect(users).toContain('WHERE id = $1 AND used = FALSE AND expires_at > NOW()');
+    expect(users).toContain('return result.rows.length === 1');
+    expect(auth).toContain('if (!claimed) throw "Invalid or expired OTP"');
+  });
+
+  test('the success response reports the real formatted DB id and additive recovery state', () => {
+    const signup = controller.slice(
+      controller.indexOf('const signup = async'),
+      controller.indexOf('const verifyEmailOtpController'),
+    );
+    expect(signup).toContain('dbRegister?.uid');
+    expect(signup).toContain('dbRegister?.id');
+    expect(signup).toContain('verificationDeliveryPending');
+    expect(signup).toContain('onboardingPending');
+  });
+
+  test('classic provider signup runs the same attribution and eligibility hooks as provider web', () => {
+    const signup = controller.slice(
+      controller.indexOf('const signup = async'),
+      controller.indexOf('const verifyEmailOtpController'),
+    );
+    expect(signup).toContain('normalizeProviderSourceClient');
+    expect(signup).toContain('upsertSourceAttribution(userId, sourceClient, true');
+    expect(signup).toContain("evaluateProvider(userId, 'system', null)");
+    expect(signup).toContain('.catch(() => {})');
+  });
+});
+
+describe('admin-created accounts use the same commit boundary', () => {
+  test('a failed authoritative profile write removes the just-created Firebase identity', () => {
+    const adminCreate = auth.slice(
+      auth.indexOf('const addEmployees = async'),
+      auth.indexOf('const updateEmployee = async'),
+    );
+    expect(adminCreate).toContain('deleteFirebaseUser(firebaseUser.uid).catch');
+    expect(adminCreate).toContain('Promise.allSettled');
+    expect(adminCreate).toContain('provisioningPending');
+    expect(adminCreate).toContain('inviteDeliveryPending');
+  });
+
+  test('an all-failed admin batch is not returned as a successful HTTP request', () => {
+    const addEmployees = controller.slice(
+      controller.indexOf('export const addEmployeesController'),
+      controller.indexOf('export const forgotPasswordController'),
+    );
+    expect(addEmployees).toContain('created === 0 ? 422 : 200');
+    expect(addEmployees).toContain('created === 0 ? "failed"');
+  });
+});

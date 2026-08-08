@@ -19,6 +19,7 @@ import { formatJobCard } from "../src/controllers/jobCardView";
 
 const row = (workerStatus: string) => ({
   booking_id: 101,
+  worker_uid: "provider-1",
   status: "CONFIRMED",
   schedule: "2026-08-10T09:00:00.000Z",
   payment_method: "CASH",
@@ -33,6 +34,7 @@ const row = (workerStatus: string) => ({
   zip_code: "1226",
   country: "PH",
   label: "Home",
+  delivery_instructions: "Use the side entrance",
   service_name: "Deep Clean",
   service_type: "standard",
   pricing_breakdown: {},
@@ -49,7 +51,7 @@ const TOP_KEYS = [
 ];
 const CUSTOMER_KEYS = ["uid", "name", "phone"];
 const ADDRESS_KEYS = [
-  "addressOne", "addressTwo", "city", "zipCode", "country", "label",
+  "addressOne", "addressTwo", "city", "zipCode", "country", "label", "instructions",
 ];
 
 const ALL_STATUSES = [
@@ -88,6 +90,7 @@ describe("before acceptance, the provider gets an area — not an identity", () 
     expect(out.address.addressOne).toBeNull();
     expect(out.address.addressTwo).toBeNull();
     expect(out.address.zipCode).toBeNull();
+    expect(out.address.instructions).toBeNull();
   });
 
   it("still gives enough to make a travel decision", () => {
@@ -136,6 +139,7 @@ describe("the operational window keeps full detail", () => {
     expect(out.address.addressTwo).toBe("Unit 5");
     expect(out.address.city).toBe("Makati");
     expect(out.address.zipCode).toBe("1226");
+    expect(out.address.instructions).toBe("Use the side entrance");
   });
 });
 

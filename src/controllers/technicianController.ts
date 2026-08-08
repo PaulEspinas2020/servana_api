@@ -13,6 +13,7 @@ import {
 } from "../services/providerProfileProjection";
 import dbQuery from "../db/dbQuery";
 import { db as dbCfg } from "../config";
+import { formatJobCard } from "./jobCardView";
 
 export const listByRole = async (req: Request, res: Response) => {
   try {
@@ -221,46 +222,7 @@ export const getJobCards = async (req: Request, res: Response) => {
 
     const jobs = await technician.getJobCardsByWorker(workerId);
 
-    const formatted = await Promise.all(
-      jobs.map(async (job: any) => {
-        // const addons = await technician.getJobCardAddons(job.booking_id);
-
-        return {
-          bookingId: job.booking_id,
-          status: job.status,
-          scheduleAt: job.schedule,
-
-          customer: {
-            uid: job.customer_id,
-            name: `${job.first_name} ${job.last_name}`,
-            phone: job.phone_number,
-          },
-
-          address: {
-            addressOne: job.address_one,
-            addressTwo: job.address_two,
-            city: job.post_town,
-            zipCode: job.zip_code,
-            country: job.country,
-            label: job.label,
-            instructions: job.delivery_instructions ?? null,
-          },
-
-          service: {
-            name: job.service_name,
-            type: job.service_type,
-          },
-
-          addOns: job.pricing_breakdown,
-          workerStatus: job.worker_status,
-          assignedAt: job.assigned_at,
-          startedAt: job.started_at,
-          completedAt: job.completed_at,
-        };
-      })
-    );
-
-    return res.json(formatted); // 👈 FLAT ARRAY RESPONSE
+    return res.json(jobs.map(formatJobCard));
   } catch (error: any) {
     return res.status(500).json({
       success: false,
@@ -489,7 +451,7 @@ export const assignWorker = async (req: Request, res: Response) => {
     const bookingId = Number(req.params.bookingId);
     const workerUid = req.query.workerUid as string;
 
-    if (!bookingId || !workerUid) {
+    if (!Number.isSafeInteger(bookingId) || bookingId <= 0 || !workerUid) {
       return res.status(400).json({
         success: false,
         message: "bookingId and workerUid are required",
@@ -575,7 +537,7 @@ export const acceptJob = async (req: Request, res: Response) => {
     const bookingId = Number(req.params.bookingId);
     const workerUid = actingWorkerUid(req);
 
-    if (!bookingId || !workerUid) {
+    if (!Number.isSafeInteger(bookingId) || bookingId <= 0 || !workerUid) {
       return res.status(400).json({
         success: false,
         message: "bookingId and workerUid are required",

@@ -32,7 +32,9 @@ jest.mock("../src/config", () => ({
 import {
   windowParts,
   scheduleCoversWindow,
+  validateWeeklySchedule,
 } from "../src/services/providerAvailabilityEngine";
+import { zonedDateTimeToUtc } from "../src/services/operationalTimezone";
 
 /** A provider working ordinary Philippine office hours, Monday to Friday. */
 const WEEKDAY_9_TO_5 = [1, 2, 3, 4, 5].map((dayOfWeek) => ({
@@ -41,6 +43,28 @@ const WEEKDAY_9_TO_5 = [1, 2, 3, 4, 5].map((dayOfWeek) => ({
   startTime: "08:00",
   endTime: "17:00",
 }));
+
+describe('schedule boundary hardening', () => {
+  it('rejects clock-shaped nonsense and invalid scalar types', () => {
+    const errors = validateWeeklySchedule([{
+      dayOfWeek: '1' as any,
+      dayLabel: 'Monday',
+      startTime: '29:99',
+      endTime: '17:00',
+      isAvailable: 'true' as any,
+      maxJobs: 0,
+    }]);
+    expect(errors.join(' ')).toMatch(/dayOfWeek/);
+    expect(errors.join(' ')).toMatch(/real HH:mm/);
+    expect(errors.join(' ')).toMatch(/isAvailable/);
+    expect(errors.join(' ')).toMatch(/maxJobs/);
+  });
+
+  it('converts Manila wall time without depending on the host clock', () => {
+    expect(zonedDateTimeToUtc('2026-08-10', '09:00').toISOString())
+      .toBe('2026-08-10T01:00:00.000Z');
+  });
+});
 
 /**
  * The point is that the answer no longer depends on where it is computed.

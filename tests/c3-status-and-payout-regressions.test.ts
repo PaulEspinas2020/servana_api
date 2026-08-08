@@ -192,8 +192,8 @@ describe('cancelled spelling normalisation', () => {
     // A query matching only the canonical spelling against un-normalised data
     // reintroduces exactly the bug this replaced. Reads stay tolerant until the
     // migration has run everywhere.
-    const provider = flat(code(read('controllers/providerController.ts')));
-    expect(provider).toMatch(/'CANCELED','CANCELLED'/);
+    const tech = flat(code(read('services/technicianService.ts')));
+    expect(tech).toMatch(/'CANCELED',\s*'CANCELLED'/);
   });
 
   test('the dashboard counter still matches both', () => {

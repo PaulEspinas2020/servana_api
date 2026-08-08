@@ -362,7 +362,7 @@ export async function listPayments(filter: PaymentFilter = {}): Promise<{
   const dataR = await dbQuery.query(
     `SELECT
        p.id, p.booking_id, p.method, p.amount, p.status, p.reference_no,
-       p.provider, p.provider_payment_id,
+       p.provider,
        p.paid_at, p.refunded_at, p.updated_at, p.submitted_at,
        b.booking_reference
      FROM ${s}.payments p
@@ -380,7 +380,7 @@ export async function getPaymentDetail(paymentId: number): Promise<unknown> {
   const r = await dbQuery.query(
     `SELECT
        p.id, p.booking_id, p.additional_request_id, p.method, p.amount, p.status,
-       p.reference_no, p.proof_url, p.provider, p.provider_payment_id,
+       p.reference_no, p.proof_url, p.provider,
        p.paid_at, p.refunded_at, p.refunded_amount, p.refund_reference,
        p.updated_at, p.submitted_at, p.reviewed_by, p.reviewed_at,
        p.rejection_reason, p.rejected_at,

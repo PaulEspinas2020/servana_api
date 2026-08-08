@@ -385,6 +385,9 @@ describe('job-card — instructions surface to provider (STITCH-003)', () => {
   const techCtrlSrc = require('fs').readFileSync(
     require('path').join(__dirname, '../src/controllers/technicianController.ts'), 'utf-8'
   ).replace(/\r\n/g, '\n');
+  const jobCardViewSrc = require('fs').readFileSync(
+    require('path').join(__dirname, '../src/controllers/jobCardView.ts'), 'utf-8'
+  ).replace(/\r\n/g, '\n');
 
   it('getJobCardsByWorker SELECT includes delivery_instructions from service_address JSONB', () => {
     const fnIdx = techSvcSrc.indexOf('getJobCardsByWorker');
@@ -395,9 +398,9 @@ describe('job-card — instructions surface to provider (STITCH-003)', () => {
 
   it('getJobCards controller maps delivery_instructions into address.instructions', () => {
     const fnIdx = techCtrlSrc.indexOf('getJobCards');
-    const fn = techCtrlSrc.slice(fnIdx, fnIdx + 1200);
-    expect(fn).toContain('instructions:');
-    expect(fn).toContain('delivery_instructions');
+    const fn = techCtrlSrc.slice(fnIdx, fnIdx + 500);
+    expect(fn).toContain('jobs.map(formatJobCard)');
+    expect(jobCardViewSrc).toContain('instructions: job.delivery_instructions ?? null');
   });
 });
 

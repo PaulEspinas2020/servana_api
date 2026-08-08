@@ -127,3 +127,36 @@ export const operationalDate = (
   instant: string | number | Date,
   timeZone: string = OPERATIONAL_TIMEZONE
 ): string => zonedParts(instant, timeZone).ymd;
+
+/** Convert a wall-clock date/time in an IANA zone into its UTC instant. */
+export const zonedDateTimeToUtc = (
+  ymd: string,
+  hhmm: string,
+  timeZone: string = OPERATIONAL_TIMEZONE,
+): Date => {
+  const date = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  const time = /^(\d{2}):(\d{2})$/.exec(hhmm);
+  if (!date || !time) throw new Error('A valid local date and time are required');
+
+  const desired = Date.UTC(
+    Number(date[1]), Number(date[2]) - 1, Number(date[3]),
+    Number(time[1]), Number(time[2]), 0, 0,
+  );
+  let guess = desired;
+  for (let i = 0; i < 3; i++) {
+    const actual = zonedParts(guess, timeZone);
+    const [year, month, day] = actual.ymd.split('-').map(Number);
+    const [hour, minute] = actual.hhmm.split(':').map(Number);
+    const actualAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+    const delta = desired - actualAsUtc;
+    guess += delta;
+    if (delta === 0) break;
+  }
+
+  const result = new Date(guess);
+  const rendered = zonedParts(result, timeZone);
+  if (rendered.ymd !== ymd || rendered.hhmm !== hhmm) {
+    throw new Error('The local schedule time does not exist in the configured timezone');
+  }
+  return result;
+};

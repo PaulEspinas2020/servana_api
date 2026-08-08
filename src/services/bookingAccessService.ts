@@ -36,6 +36,8 @@ export class BookingAccessError extends Error {
 const ACTIVE_WORKER_STATUSES = [
   "ASSIGNED",
   "ACCEPTED",
+  "EN_ROUTE",
+  "ARRIVED",
   "IN_PROGRESS",
   "COMPLETED",
 ];

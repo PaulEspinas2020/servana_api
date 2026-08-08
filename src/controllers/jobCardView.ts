@@ -69,13 +69,14 @@ export function formatJobCard(job: any) {
   // Pre-acceptance the provider gets the AREA, which is what a travel decision
   // needs. After declining they get nothing.
   const address = fullDisclosure
-    ? { addressOne: job.address_one, addressTwo: job.address_two, city: job.post_town, zipCode: job.zip_code, country: job.country, label: job.label }
+    ? { addressOne: job.address_one, addressTwo: job.address_two, city: job.post_town, zipCode: job.zip_code, country: job.country, label: job.label, instructions: job.delivery_instructions ?? null }
     : relinquished
-      ? { addressOne: null, addressTwo: null, city: null, zipCode: null, country: null, label: null }
-      : { addressOne: null, addressTwo: null, city: job.post_town, zipCode: null, country: job.country, label: job.label };
+      ? { addressOne: null, addressTwo: null, city: null, zipCode: null, country: null, label: null, instructions: null }
+      : { addressOne: null, addressTwo: null, city: job.post_town, zipCode: null, country: job.country, label: job.label, instructions: null };
 
   return {
     bookingId:    job.booking_id,
+    workerId:     job.worker_uid ?? null,
     status:       job.status,
     scheduleAt:   job.schedule,
     paymentMethod: job.payment_method,

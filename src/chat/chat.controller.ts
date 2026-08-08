@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import * as chatService from "./chat.service";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
 import { validateDataUri, AllowedUploadMime } from "../helpers/fileSignature";
+import { randomUUID } from "crypto";
 
 const ALLOWED_CHAT_MIMES: readonly AllowedUploadMime[] = [
   "image/jpeg",
@@ -19,6 +20,7 @@ const MAX_CHAT_ATTACHMENT_BYTES = 10 * 1024 * 1024;
  */
 const getActor = async (req: any): Promise<chatService.ChatActor> => {
   const uid = req.user?.uid;
+  if (!uid || typeof uid !== 'string') throw chatService.httpError(401, 'Unauthorized');
   // chat.service authorizes off uid; role only matters for admin shortcut.
   const repo = await import("./chat.repository");
   const role = (await repo.getUserRole(uid)) ?? 3;
@@ -26,8 +28,15 @@ const getActor = async (req: any): Promise<chatService.ChatActor> => {
 };
 
 const handle = (res: Response, e: any) => {
-  const status = e?.status || 500;
-  return res.status(status).json({ success: false, message: e?.message || "Server error" });
+  const status = e?.status || e?.statusCode || 500;
+  const message = status >= 400 && status < 500 ? (e?.message || 'Invalid request') : 'Server error';
+  return res.status(status).json({ success: false, message });
+};
+
+const positiveId = (raw: unknown, label: string): number => {
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) throw chatService.httpError(400, `Invalid ${label}`);
+  return value;
 };
 
 export const listConversations = async (req: any, res: Response) => {
@@ -54,10 +63,7 @@ export const listConversations = async (req: any, res: Response) => {
  */
 export const getBookingConversation = async (req: any, res: Response) => {
   try {
-    const bookingId = Number(req.params.bookingId);
-    if (!bookingId || Number.isNaN(bookingId)) {
-      return res.status(400).json({ success: false, message: "Invalid booking id" });
-    }
+    const bookingId = positiveId(req.params.bookingId, 'booking id');
     const actor = await getActor(req);
     const access = await chatService.resolveAccessForBooking(actor, bookingId);
     if (!access.allowed) {
@@ -70,7 +76,7 @@ export const getBookingConversation = async (req: any, res: Response) => {
         message: "No conversation for this booking yet",
       });
     }
-    const full = await chatService.getConversationWithParticipants(conversation.id);
+    const full = await chatService.getConversationWithParticipants(conversation.id, actor);
     return res.json({ success: true, conversation: full });
   } catch (e: any) {
     return handle(res, e);
@@ -79,11 +85,11 @@ export const getBookingConversation = async (req: any, res: Response) => {
 
 export const getConversation = async (req: any, res: Response) => {
   try {
-    const conversationId = Number(req.params.id);
+    const conversationId = positiveId(req.params.id, 'conversation id');
     const actor = await getActor(req);
     const { access } = await chatService.resolveAccessForConversation(actor, conversationId);
     if (!access.allowed) return res.status(403).json({ success: false, message: "Not allowed" });
-    const full = await chatService.getConversationWithParticipants(conversationId);
+    const full = await chatService.getConversationWithParticipants(conversationId, actor);
     if (!full) return res.status(404).json({ success: false, message: "Conversation not found" });
     return res.json({ success: true, conversation: full });
   } catch (e: any) {
@@ -93,9 +99,11 @@ export const getConversation = async (req: any, res: Response) => {
 
 export const getMessages = async (req: any, res: Response) => {
   try {
-    const conversationId = Number(req.params.id);
-    const limit = req.query.limit ? Number(req.query.limit) : 30;
-    const before = req.query.before ? Number(req.query.before) : undefined;
+    const conversationId = positiveId(req.params.id, 'conversation id');
+    const rawLimit = req.query.limit === undefined ? 30 : Number(req.query.limit);
+    if (!Number.isSafeInteger(rawLimit) || rawLimit < 1) throw chatService.httpError(400, 'Invalid message limit');
+    const limit = Math.min(rawLimit, 100);
+    const before = req.query.before === undefined ? undefined : positiveId(req.query.before, 'message cursor');
     const actor = await getActor(req);
     const result = await chatService.getMessages(actor, conversationId, limit, before);
     return res.json({ success: true, ...result });
@@ -106,14 +114,14 @@ export const getMessages = async (req: any, res: Response) => {
 
 export const sendMessage = async (req: any, res: Response) => {
   try {
-    const conversationId = Number(req.params.id);
+    const conversationId = positiveId(req.params.id, 'conversation id');
     const actor = await getActor(req);
     const message = await chatService.sendMessage(actor, conversationId, {
-      type: req.body.type,
-      body: req.body.body,
-      metadata: req.body.metadata,
-      clientMsgId: req.body.clientMsgId,
-      attachments: req.body.attachments,
+      type: req.body?.type,
+      body: req.body?.body,
+      metadata: req.body?.metadata,
+      clientMsgId: req.body?.clientMsgId,
+      attachments: req.body?.attachments,
     });
     return res.status(201).json({ success: true, message });
   } catch (e: any) {
@@ -123,10 +131,10 @@ export const sendMessage = async (req: any, res: Response) => {
 
 export const editMessage = async (req: any, res: Response) => {
   try {
-    const conversationId = Number(req.params.id);
-    const messageId = Number(req.params.msgId);
+    const conversationId = positiveId(req.params.id, 'conversation id');
+    const messageId = positiveId(req.params.msgId, 'message id');
     const actor = await getActor(req);
-    const message = await chatService.editMessage(actor, conversationId, messageId, req.body.body);
+    const message = await chatService.editMessage(actor, conversationId, messageId, req.body?.body);
     return res.json({ success: true, message });
   } catch (e: any) {
     return handle(res, e);
@@ -135,8 +143,8 @@ export const editMessage = async (req: any, res: Response) => {
 
 export const deleteMessage = async (req: any, res: Response) => {
   try {
-    const conversationId = Number(req.params.id);
-    const messageId = Number(req.params.msgId);
+    const conversationId = positiveId(req.params.id, 'conversation id');
+    const messageId = positiveId(req.params.msgId, 'message id');
     const actor = await getActor(req);
     const message = await chatService.deleteMessage(actor, conversationId, messageId);
     return res.json({ success: true, message });
@@ -147,9 +155,9 @@ export const deleteMessage = async (req: any, res: Response) => {
 
 export const markRead = async (req: any, res: Response) => {
   try {
-    const conversationId = Number(req.params.id);
+    const conversationId = positiveId(req.params.id, 'conversation id');
     const actor = await getActor(req);
-    await chatService.markRead(actor, conversationId, Number(req.body.lastReadMessageId));
+    await chatService.markRead(actor, conversationId, positiveId(req.body?.lastReadMessageId, 'last read message id'));
     return res.json({ success: true });
   } catch (e: any) {
     return handle(res, e);
@@ -166,7 +174,7 @@ export const uploadAttachment = async (req: any, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
-    const { file, name } = req.body;
+    const { file, name, conversationId: rawConversationId } = req.body ?? {};
     if (!file || !name) {
       return res.status(400).json({ success: false, message: "file (data URI) and name are required" });
     }
@@ -181,8 +189,14 @@ export const uploadAttachment = async (req: any, res: Response) => {
         message: validation.message,
       });
     }
-    const sanitizedName = String(name).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
-    const storageKey = `${uid}_${Date.now()}`;
+    if (rawConversationId !== undefined && rawConversationId !== null) {
+      const actor = await getActor(req);
+      const conversationId = positiveId(rawConversationId, 'conversation id');
+      const { access } = await chatService.resolveAccessForConversation(actor, conversationId);
+      if (!access.allowed || !access.canSend) throw chatService.httpError(403, 'Cannot upload to this conversation');
+    }
+    const sanitizedName = String(name).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100) || 'attachment';
+    const storageKey = `${uid}_${randomUUID()}`;
     const previewUrl = await uploadFileToStorage("chat-attachments", storageKey, file);
     return res.status(201).json({
       success: true,
@@ -203,9 +217,9 @@ export const uploadAttachment = async (req: any, res: Response) => {
  */
 export const reportMessage = async (req: any, res: Response) => {
   try {
-    const conversationId = Number(req.params.id);
-    const messageId = Number(req.params.msgId);
-    const { category, description } = req.body;
+    const conversationId = positiveId(req.params.id, 'conversation id');
+    const messageId = positiveId(req.params.msgId, 'message id');
+    const { category, description } = req.body ?? {};
     if (!category) {
       return res.status(400).json({ success: false, message: "category is required" });
     }
@@ -219,7 +233,7 @@ export const reportMessage = async (req: any, res: Response) => {
 
 export const closeConversation = async (req: any, res: Response) => {
   try {
-    const conversationId = Number(req.params.id);
+    const conversationId = positiveId(req.params.id, 'conversation id');
     const actor = await getActor(req);
     const { access } = await chatService.resolveAccessForConversation(actor, conversationId);
     if (!access.allowed) return res.status(403).json({ success: false, message: "Not allowed" });

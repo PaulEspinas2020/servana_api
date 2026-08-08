@@ -6,16 +6,33 @@ const dbSchema = db.schema;
 import dayjs from "dayjs";
 import uploadInStorage from "../helpers/firebaseStorageUploader";
 import { applyParity } from "../utils/fieldParity";
+import { normalizeEmail } from "../helpers/phoneIdentifier";
 
 const now = dayjs();
 const OTP_EXPIRY_MINUTES = 10;
 
 const registerUserInDB = async (user: UserCredentialsReq) => {
-    const insertQueryInCredentials = `INSERT INTO ${dbSchema}.user_credentials
+    const { emailNormalized, phoneNormalized } = deriveNormalized(
+        user.email,
+        user.phoneNumber,
+    );
+
+    // One statement is atomic in PostgreSQL: a provider credential and its
+    // profile row are created together, or neither is created.
+    const insertQueryInCredentials = `WITH inserted AS (
+      INSERT INTO ${dbSchema}.user_credentials
       (uid, email, first_name, last_name, "role", created_date, "password", phone_number,
             is_email_verified,
-            is_phone_verified)
-      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *;`;
+            is_phone_verified, email_normalized, phone_normalized)
+      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING *
+    ), ensured_profile AS (
+      INSERT INTO ${dbSchema}.user_profile (uid)
+      SELECT uid FROM inserted WHERE role::int = 2
+      ON CONFLICT (uid) DO NOTHING
+      RETURNING uid
+    )
+    SELECT * FROM inserted;`;
 
     try {
         const { rows } = await dbQuery.query(insertQueryInCredentials, [
@@ -29,16 +46,12 @@ const registerUserInDB = async (user: UserCredentialsReq) => {
             user.phoneNumber,
             user.isEmailVerified,
             user.isPhoneVerified,
+            emailNormalized,
+            phoneNormalized,
         ]);
 
-        if (!rows && rows.length == 0) {
+        if (!rows || rows.length === 0) {
             throw "User not save in DB";
-        }
-
-        if (user && user.role == 2) {
-            await updateUserProfile({
-                id: user.uid,
-            });
         }
 
         const dbResponse = formatUserCredentials(rows[0]);
@@ -76,32 +89,40 @@ export const upsertFirebaseUser = async (payload: {
 
   const result = await dbQuery.query(
     `
-    INSERT INTO ${dbSchema}.user_credentials (
-      uid,
-      email,
-      phone_number,
-      email_normalized,
-      phone_normalized,
-      first_name,
-      last_name,
-      "role",
-      created_date
-    )
-    VALUES ($1,$2,$3,$8,$9,$4,$5,$6,$7)
-    ON CONFLICT (uid)
-    DO UPDATE SET
-      email = COALESCE(EXCLUDED.email, user_credentials.email),
-      phone_number = COALESCE(EXCLUDED.phone_number, user_credentials.phone_number),
+    WITH upserted AS (
+      INSERT INTO ${dbSchema}.user_credentials (
+        uid,
+        email,
+        phone_number,
+        email_normalized,
+        phone_normalized,
+        first_name,
+        last_name,
+        "role",
+        created_date
+      )
+      VALUES ($1,$2,$3,$8,$9,$4,$5,$6,$7)
+      ON CONFLICT (uid)
+      DO UPDATE SET
+        email = COALESCE(EXCLUDED.email, user_credentials.email),
+        phone_number = COALESCE(EXCLUDED.phone_number, user_credentials.phone_number),
       -- COALESCE, matching the raw columns: signing in with a phone must not
       -- erase the email this account already links, and vice versa. This is the
       -- account-LINKING behaviour §13 requires, and it already worked for the
       -- raw columns — the normalized ones have to follow the same rule or the
       -- lookup key disagrees with the value it was derived from.
-      email_normalized = COALESCE(EXCLUDED.email_normalized, user_credentials.email_normalized),
-      phone_normalized = COALESCE(EXCLUDED.phone_normalized, user_credentials.phone_normalized),
-      first_name = CASE WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name ELSE user_credentials.first_name END,
-      last_name  = CASE WHEN EXCLUDED.last_name  <> '' THEN EXCLUDED.last_name  ELSE user_credentials.last_name  END
-    RETURNING *;
+        email_normalized = COALESCE(EXCLUDED.email_normalized, user_credentials.email_normalized),
+        phone_normalized = COALESCE(EXCLUDED.phone_normalized, user_credentials.phone_normalized),
+        first_name = CASE WHEN EXCLUDED.first_name <> '' THEN EXCLUDED.first_name ELSE user_credentials.first_name END,
+        last_name  = CASE WHEN EXCLUDED.last_name  <> '' THEN EXCLUDED.last_name  ELSE user_credentials.last_name  END
+      RETURNING *
+    ), ensured_profile AS (
+      INSERT INTO ${dbSchema}.user_profile (uid)
+      SELECT uid FROM upserted WHERE role::int = 2
+      ON CONFLICT (uid) DO NOTHING
+      RETURNING uid
+    )
+    SELECT * FROM upserted;
     `,
     [
       uid,
@@ -447,6 +468,8 @@ const formatUserProfile = (raw: any) => {
 };
 
 const storeEmailOtp = async (email: string, code: string) => {
+    const canonicalEmail = normalizeEmail(email);
+    if (!canonicalEmail) throw new Error("Invalid email address");
     const codeHash = await bcrypt.hash(code, 10);
 
     await dbQuery.query(
@@ -454,13 +477,15 @@ const storeEmailOtp = async (email: string, code: string) => {
         INSERT INTO ${dbSchema}.email_otps (email, code_hash, expires_at)
         VALUES ($1, $2, NOW() + ($3 || ' minutes')::interval)
         `,
-        [email, codeHash, OTP_EXPIRY_MINUTES]
+        [canonicalEmail, codeHash, OTP_EXPIRY_MINUTES]
     );
 
     return true;
 };
 
 const getLatestValidEmailOtp = async (email: string) => {
+    const canonicalEmail = normalizeEmail(email);
+    if (!canonicalEmail) return null;
     const result = await dbQuery.query(
         `
         SELECT *
@@ -471,26 +496,29 @@ const getLatestValidEmailOtp = async (email: string) => {
         ORDER BY created_at DESC
         LIMIT 1
         `,
-        [email]
+        [canonicalEmail]
     );
 
     return result.rows[0] || null;
 };
 
 const markEmailOtpAsUsed = async (id: number) => {
-    await dbQuery.query(
+    const result = await dbQuery.query(
         `
         UPDATE ${dbSchema}.email_otps
         SET used = TRUE
-        WHERE id = $1
+        WHERE id = $1 AND used = FALSE AND expires_at > NOW()
+        RETURNING id
         `,
         [id]
     );
 
-    return true;
+    return result.rows.length === 1;
 };
 
 const getUserByEmail = async (email: string) => {
+    const canonicalEmail = normalizeEmail(email);
+    if (!canonicalEmail) return null;
     const result = await dbQuery.query(
         `
         SELECT
@@ -504,10 +532,11 @@ const getUserByEmail = async (email: string) => {
             is_email_verified AS "isEmailVerified",
             is_phone_verified AS "isPhoneVerified"
         FROM ${dbSchema}.user_credentials
-        WHERE email = $1
+        WHERE email_normalized = $1
+           OR (email_normalized IS NULL AND LOWER(TRIM(email)) = $1)
         LIMIT 1
         `,
-        [email]
+        [canonicalEmail]
     );
 
     return result.rows[0] || null;

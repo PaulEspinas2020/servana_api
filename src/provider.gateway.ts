@@ -6,6 +6,7 @@ import { tempId, db } from "./config";
 import { setProviderIo, providerRoomKey } from "./provider.realtime";
 import * as repo from "./chat/chat.repository";
 import dbQuery from "./db/dbQuery";
+import { isProviderRole } from "./constants/providerRoles";
 
 const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
 
@@ -33,7 +34,8 @@ export const initProviderSocket = (io: Server): void => {
   io.use(async (socket: Socket, next) => {
     try {
       if (tempId) {
-        const role = (await repo.getUserRole(tempId)) || 3;
+        const role = await repo.getUserRole(tempId);
+        if (!isProviderRole(role)) return next(new Error("Unauthorized"));
         (socket as any).actor = { uid: tempId, role };
         return next();
       }
@@ -45,7 +47,8 @@ export const initProviderSocket = (io: Server): void => {
       if (!token) return next(new Error("Unauthorized"));
 
       const decoded = await defaultAuthAdmin.verifyIdToken(token);
-      const role = (await repo.getUserRole(decoded.uid)) || 3;
+      const role = await repo.getUserRole(decoded.uid);
+      if (!isProviderRole(role)) return next(new Error("Unauthorized"));
       (socket as any).actor = { uid: decoded.uid, role };
       return next();
     } catch {

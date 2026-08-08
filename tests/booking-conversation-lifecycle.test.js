@@ -135,19 +135,23 @@ describe('chat.repository — inbox excludes departed participants', function ()
 
 describe('adminBookingService — reassignment updates chat membership', function () {
   var code;
-  beforeAll(function () { code = readCode('services', 'adminBookingService.ts'); });
+  var fn;
+  beforeAll(function () {
+    code = readCode('services', 'adminBookingService.ts');
+    var start = code.indexOf('export const adminReassignProvider');
+    var end = code.indexOf('export const adminRescheduleBooking', start);
+    fn = code.slice(start, end);
+  });
 
   it('imports handleProviderReassignment', function () {
     expect(code).toMatch(/handleProviderReassignment/);
   });
 
   it('calls it inside adminReassignProvider', function () {
-    var fn = code.match(/adminReassignProvider[\s\S]{0,4000}/)[0];
     expect(fn).toMatch(/handleProviderReassignment\(/);
   });
 
   it('cannot fail the reassignment it follows (own try/catch)', function () {
-    var fn = code.match(/adminReassignProvider[\s\S]{0,4000}/)[0];
     var call = fn.slice(fn.indexOf('handleProviderReassignment('));
     expect(call).toMatch(/catch\s*\(/);
   });

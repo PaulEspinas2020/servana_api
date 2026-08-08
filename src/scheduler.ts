@@ -126,26 +126,11 @@ const runPaymentRetries = async () => {
 
     for (const row of res.rows) {
       try {
-        // Reset payment to PENDING then create a fresh checkout session
-        const claim = await dbQuery.query(
-          `UPDATE ${dbSchema}.payments SET status = 'PENDING', updated_at = NOW()
-           WHERE id = $1 AND status = 'FAILED' RETURNING id`,
-          [row.payment_id]
-        );
-        if (!claim.rowCount) continue;
-
-        let session;
-        try {
-          session = await createCheckoutSession(row.booking_id);
-        } catch (error) {
-          // A failed processor call must remain retryable on the next sweep.
-          await dbQuery.query(
-            `UPDATE ${dbSchema}.payments SET status = 'FAILED', updated_at = NOW()
-             WHERE id = $1 AND status = 'PENDING'`,
-            [row.payment_id]
-          );
-          throw error;
-        }
+        // createCheckoutSession serializes by booking and advances FAILED to a
+        // fresh session only after PayMongo returns a valid hosted URL. Changing
+        // the row to PENDING here made its stale failed URL look recent, so the
+        // old checkout was reused and emailed instead of being replaced.
+        const session = await createCheckoutSession(row.booking_id);
 
         const userInfo = await getUserInfoByBookingId(row.booking_id);
         if (userInfo) {

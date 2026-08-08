@@ -141,9 +141,9 @@ router.post("/worker/onboarding/submit", verifyAuth, requireProviderRole, provid
 router.post("/worker/onboarding/step", verifyAuth, requireProviderRole, provider.saveOnboardingStep);
 
 // Additional work — worker decisions (auth-scoped, ownership-checked)
-router.post("/worker/additional-work/:id/decision", verifyAuth, requireProviderRole, provider.workerAdditionalDecision);
-router.post("/worker/additional-work/:id/withdraw", verifyAuth, requireProviderRole, provider.withdrawAdditionalWork);
-router.post("/worker/additional-work/:id/confirm-proceed", verifyAuth, requireProviderRole, provider.confirmProceedAdditionalWork);
+router.post("/worker/additional-work/:id/decision", verifyAuth, requireProviderRole, requireActiveProvider, provider.workerAdditionalDecision);
+router.post("/worker/additional-work/:id/withdraw", verifyAuth, requireProviderRole, requireActiveProvider, provider.withdrawAdditionalWork);
+router.post("/worker/additional-work/:id/confirm-proceed", verifyAuth, requireProviderRole, requireActiveProvider, provider.confirmProceedAdditionalWork);
 
 // Service area (P0-06)
 router.get("/worker/service-area", verifyAuth, requireProviderRole, provider.getWorkerServiceArea);

@@ -22,10 +22,16 @@ describe('customer booking create boundary', () => {
     expect(result).not.toHaveProperty('totalAmount');
   });
 
+  test('carries an optional branch as a positive integer for capacity enforcement', () => {
+    const result = validateCustomerBookingCreatePayload({ ...valid(), branchId: '7' }, now);
+    expect(result.branchId).toBe(7);
+  });
+
   test.each([
     [null, 'Booking details'],
     [{ ...valid(), userAddressId: '' }, 'service address'],
     [{ ...valid(), serviceOptionId: 0 }, 'service option'],
+    [{ ...valid(), branchId: 0 }, 'valid branch'],
     [{ ...valid(), schedule: 'not-a-date' }, 'booking schedule'],
     [{ ...valid(), schedule: '2026-08-07T09:59:59.000Z' }, 'future'],
     [{ ...valid(), paymentMethod: 'CARD' }, 'payment method'],

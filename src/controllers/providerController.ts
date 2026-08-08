@@ -30,6 +30,7 @@ import { touchProviderActivity } from "../services/adminProviderService";
 import { getProviderPerformance } from "../services/providerPerformanceService";
 import { randomUUID } from 'crypto';
 import { submitProfilePhoto } from '../services/providerProfileMediaService';
+import { deriveEffectiveBookingStatus } from '../services/bookingStatusProjection';
 
 const dbSchema = db.schema;
 
@@ -41,19 +42,41 @@ const WEB_ALL_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const ENGINE_DOW_LABELS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
 function bridgeToEngineSlots(schedule: any[]): availEngine.WeeklyScheduleSlot[] {
+  const invalid = (message: string): never => {
+    const error: any = new Error(message);
+    error.statusCode = 422;
+    throw error;
+  };
+  if (schedule.length > WEB_ALL_DAYS.length) {
+    invalid('schedule must contain at most one entry for each day');
+  }
   const slots: availEngine.WeeklyScheduleSlot[] = [];
+  const seenDays = new Set<string>();
   for (const day of schedule) {
-    const dow = DAY_TO_DOW[day.day] ?? -1;
-    if (dow === -1) continue;
+    if (!day || typeof day !== 'object') invalid('each schedule day must be an object');
+    const dayKey = typeof day.day === 'string' ? day.day.toLowerCase() : '';
+    const dow = DAY_TO_DOW[dayKey] ?? -1;
+    if (dow === -1) invalid(`invalid schedule day: ${String(day.day ?? '')}`);
+    if (seenDays.has(dayKey)) invalid(`schedule contains duplicate day: ${dayKey}`);
+    seenDays.add(dayKey);
+    if (typeof day.enabled !== 'boolean') invalid(`${dayKey}.enabled must be boolean`);
+    if (!Array.isArray(day.slots)) invalid(`${dayKey}.slots must be an array`);
+    if (!day.enabled && day.slots.length > 0) {
+      invalid(`${dayKey} cannot contain slots while disabled`);
+    }
+    if (day.enabled && day.slots.length === 0) {
+      invalid(`${dayKey} must contain at least one slot while enabled`);
+    }
     const dayLabel = ENGINE_DOW_LABELS[dow] ?? '';
-    if (!day.enabled || !Array.isArray(day.slots) || day.slots.length === 0) {
+    if (!day.enabled) {
       // Represent disabled day as an unavailable placeholder so the day is tracked
       slots.push({ dayOfWeek: dow as 0|1|2|3|4|5|6, dayLabel, startTime: '09:00', endTime: '17:00', isAvailable: false, maxJobs: null });
     } else {
       for (const s of day.slots) {
-        if (s.startTime && s.endTime) {
-          slots.push({ dayOfWeek: dow as 0|1|2|3|4|5|6, dayLabel, startTime: s.startTime, endTime: s.endTime, isAvailable: true, maxJobs: null });
+        if (!s || typeof s !== 'object' || typeof s.startTime !== 'string' || typeof s.endTime !== 'string') {
+          invalid(`${dayKey} contains a malformed slot`);
         }
+        slots.push({ dayOfWeek: dow as 0|1|2|3|4|5|6, dayLabel, startTime: s.startTime, endTime: s.endTime, isAvailable: true, maxJobs: null });
       }
     }
   }
@@ -181,25 +204,41 @@ export const goOffline = async (req: Request, res: Response) => {
 
 const bookingCode = (id: any) => `SVN-${String(id).padStart(6, "0")}`;
 
-const toJobDto = (r: any) => ({
-  id: String(r.id),
-  bookingId: String(r.id),
-  bookingCode: bookingCode(r.id),
-  serviceName: r.service_name || "",
-  categoryName: r.category_name || "",
-  customerDisplayName: `${r.customer_first || ""} ${(r.customer_last || "").charAt(0)}.`.trim(),
-  customerInitials: `${(r.customer_first || " ").charAt(0)}${(r.customer_last || " ").charAt(0)}`.toUpperCase(),
-  addressLine: r.address_one || "",
-  city: r.post_town || "",
-  scheduledAt: r.schedule,
-  status: (r.status || "").toLowerCase(),
-  clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
-  paymentMethod: (r.payment_method || "cash").toLowerCase(),
-  bookingAmount: Number(r.final_price || 0),
-  currency: "PHP",
-  hasUnreadChat: false,
-  hasAdditionalWork: false,
-});
+const toJobDto = (r: any) => {
+  const workerStatus = String(r.worker_status ?? "").toUpperCase();
+  const effectiveStatus = workerStatus === "ASSIGNED"
+    ? "ASSIGNED"
+    : deriveEffectiveBookingStatus(r.status, workerStatus);
+  const fullDisclosure = new Set([
+    "ACCEPTED", "EN_ROUTE", "ARRIVED", "IN_PROGRESS", "COMPLETED",
+  ]).has(workerStatus);
+  const relinquished = new Set(["DECLINED", "CANCELED", "CANCELLED"]).has(workerStatus);
+  const first = relinquished ? "" : String(r.customer_first ?? "").trim();
+  const last = relinquished ? "" : String(r.customer_last ?? "").trim();
+
+  return {
+    id: String(r.id),
+    bookingId: String(r.id),
+    bookingCode: bookingCode(r.id),
+    serviceName: r.service_name || "",
+    categoryName: r.category_name || "",
+    customerDisplayName: last ? `${first} ${last.charAt(0).toUpperCase()}.`.trim() : first,
+    customerInitials: `${first.charAt(0)}${last.charAt(0)}`.toUpperCase(),
+    // Match mobile job-card disclosure: area before acceptance, street only
+    // after the provider accepts the relationship.
+    addressLine: fullDisclosure ? (r.address_one || "") : "",
+    city: relinquished ? "" : (r.post_town || ""),
+    scheduledAt: r.schedule,
+    status: effectiveStatus.toLowerCase(),
+    workerStatus: workerStatus.toLowerCase(),
+    clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
+    paymentMethod: (r.payment_method || "cash").toLowerCase(),
+    bookingAmount: Number(r.final_price || 0),
+    currency: "PHP",
+    hasUnreadChat: false,
+    hasAdditionalWork: false,
+  };
+};
 
 const JOB_SELECT = (statusFilter: string) => `
   SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
@@ -207,13 +246,27 @@ const JOB_SELECT = (statusFilter: string) => `
          COALESCE(ua.post_town,   b.service_address->>'city')        AS post_town,
          s.level_1 AS category_name, s.level_2 AS service_name,
          u.first_name AS customer_first, u.last_name AS customer_last,
-         p.status AS payment_status
+         p.status AS payment_status,
+         bw.worker_status
   FROM {SCHEMA}.bookings b
   LEFT JOIN {SCHEMA}.user_address ua ON ua.address_id = b.user_address_id
   LEFT JOIN {SCHEMA}.service_options so ON so.id = b.service_option_id
   LEFT JOIN {SCHEMA}.services s ON s.id = so.service_id
   LEFT JOIN {SCHEMA}.user_credentials u ON u.uid = b.user_id
-  LEFT JOIN {SCHEMA}.payments p ON p.booking_id = b.id
+  LEFT JOIN LATERAL (
+    SELECT p1.status
+    FROM {SCHEMA}.payments p1
+    WHERE p1.booking_id = b.id
+    ORDER BY p1.id DESC
+    LIMIT 1
+  ) p ON TRUE
+  JOIN LATERAL (
+    SELECT bw1.status AS worker_status
+    FROM {SCHEMA}.booking_workers bw1
+    WHERE bw1.booking_id = b.id AND bw1.worker_uid = $1
+    ORDER BY bw1.assigned_at DESC NULLS LAST, bw1.id DESC
+    LIMIT 1
+  ) bw ON TRUE
   WHERE b.worker_uid = $1 AND ${statusFilter}
   ORDER BY b.schedule ASC
 `;
@@ -253,7 +306,10 @@ export const getDashboard = async (req: Request, res: Response) => {
         ),
         [uid]
       ),
-      dbQuery.query(jobSql("b.status IN ('WORKER_ASSIGNED', 'CONFIRMED')", 10), [uid]),
+      dbQuery.query(
+        jobSql("bw.worker_status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED')", 10),
+        [uid],
+      ),
       dbQuery.query(
         // Earnings come from disbursements.worker_share — the authoritative
         // 80% figure computed at completion — NOT from bookings.final_price,
@@ -360,6 +416,7 @@ export const getEarnings = async (req: Request, res: Response) => {
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
        LEFT JOIN ${dbSchema}.payments p ON p.booking_id = b.id
+         AND p.additional_request_id IS NULL
        LEFT JOIN ${dbSchema}.disbursements d ON d.booking_id = b.id AND d.worker_uid = $1
        LEFT JOIN ${dbSchema}.booking_workers bw
               ON bw.booking_id = b.id AND bw.worker_uid = $1
@@ -659,7 +716,9 @@ export const getPayouts = async (req: Request, res: Response) => {
       failedAt:          null,
       failureMessage:    null,
       transactionCount:  1,
-      reference:         r.paymongo_payout_id ?? null,
+      // Processor identifiers are internal reconciliation data. Providers get
+      // a stable Servana reference that support can safely discuss instead.
+      reference:         `SVP-${String(r.id).padStart(6, "0")}`,
       events:            [],
       includedTransactionSummaries: [],
     }));
@@ -752,7 +811,7 @@ export const getWorkerAvailability = async (req: Request, res: Response) => {
     const schedule = bridgeToWebSchedule(profile.weeklySchedule);
     return res.status(200).json({
       status: "success",
-      data: { schedule, timezone: profile.timezone, updatedAt: profile.updatedAt },
+      data: { schedule, timezone: profile.timezone, updatedAt: profile.updatedAt, version: profile.version },
     });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
@@ -763,7 +822,7 @@ export const saveWorkerAvailability = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const { schedule, timezone } = req.body;
+    const { schedule, timezone, expectedVersion } = req.body;
     if (!Array.isArray(schedule)) {
       return res.status(400).json({ status: "failed", message: "schedule must be an array" });
     }
@@ -780,11 +839,14 @@ export const saveWorkerAvailability = async (req: Request, res: Response) => {
       });
     }
     const engineSlots = bridgeToEngineSlots(schedule);
-    const result = await availEngine.saveWeeklySchedule(uid, engineSlots, timezone ?? "Asia/Manila", uid);
-    return res.status(200).json({ status: "success", data: { success: true, updatedAt: result.updatedAt } });
+    const result = await availEngine.saveWeeklySchedule(uid, engineSlots, timezone ?? "Asia/Manila", uid, expectedVersion);
+    return res.status(200).json({ status: "success", data: { success: true, updatedAt: result.updatedAt, version: result.version } });
   } catch (error: any) {
     const code = error?.statusCode ?? 500;
-    return res.status(code).json({ status: "failed", message: "Server error" });
+    const message = [400, 409, 422].includes(code)
+      ? (error?.message ?? "Invalid request")
+      : "Server error";
+    return res.status(code).json({ status: "failed", message });
   }
 };
 
@@ -849,7 +911,7 @@ export const createWorkerTimeOff = async (req: Request, res: Response) => {
     // A 422 carries an actionable reason ("endTime must be later than
     // startTime"). Flattening every status to "Server error" would hide the
     // validation this endpoint just gained and leave the provider guessing.
-    const message = code === 422 || code === 400 || code === 404
+    const message = code === 422 || code === 400 || code === 404 || code === 409
       ? (error?.message ?? "Invalid request")
       : "Server error";
     return res.status(code).json({ status: "failed", message });
@@ -870,7 +932,8 @@ export const deleteWorkerTimeOff = async (req: Request, res: Response) => {
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (error: any) {
     const code = error?.statusCode ?? 500;
-    return res.status(code).json({ status: "failed", message: "Server error" });
+    const message = code === 404 ? (error?.message ?? "Time-off period not found") : "Server error";
+    return res.status(code).json({ status: "failed", message });
   }
 };
 
@@ -1005,8 +1068,11 @@ export const workerAdditionalDecision = async (req: Request, res: Response) => {
 
     const ownership = await dbQuery.query(
       `SELECT bar.id, bar.status FROM ${dbSchema}.booking_additional_requests bar
-       JOIN ${dbSchema}.bookings b ON b.id = bar.booking_id
-       WHERE bar.id = $1 AND b.worker_uid = $2`,
+       WHERE bar.id = $1 AND EXISTS (
+         SELECT 1 FROM ${dbSchema}.booking_workers bw
+         WHERE bw.booking_id = bar.booking_id AND bw.worker_uid = $2
+           AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED')
+       )`,
       [id, uid]
     );
     if (!ownership.rowCount) {
@@ -1017,9 +1083,9 @@ export const workerAdditionalDecision = async (req: Request, res: Response) => {
     }
 
     const { additionalService } = await import("../services/additional.service");
-    await additionalService.workerDecision(id, decision as "ACCEPT" | "REJECT");
+    const data = await additionalService.workerDecision(id, decision as "ACCEPT" | "REJECT");
 
-    return res.status(200).json({ status: "success", data: { success: true, decision } });
+    return res.status(200).json({ status: "success", success: true, data });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
   }
@@ -1036,18 +1102,20 @@ export const withdrawAdditionalWork = async (req: Request, res: Response) => {
       `UPDATE ${dbSchema}.booking_additional_requests bar
        SET status = 'CANCELLED', decided_at = NOW()
        WHERE bar.id = $1
-         AND bar.status = 'WAITING_WORKER_APPROVAL'
+         AND bar.status IN ('PENDING_ADMIN_APPROVAL','WAITING_WORKER_APPROVAL')
          AND bar.booking_id IN (
-           SELECT id FROM ${dbSchema}.bookings WHERE worker_uid = $2
+           SELECT booking_id FROM ${dbSchema}.booking_workers
+           WHERE worker_uid = $2
+             AND status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED')
          )
-       RETURNING bar.id, bar.status, bar.decided_at`,
+       RETURNING bar.*`,
       [id, uid]
     );
 
     if (!result.rowCount) {
       return res.status(404).json({ status: "failed", message: "Request not found, already decided, or not assigned to you" });
     }
-    return res.status(200).json({ status: "success", data: { success: true, status: result.rows[0].status } });
+    return res.status(200).json({ status: "success", success: true, data: result.rows[0] });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
   }
@@ -1063,8 +1131,11 @@ export const confirmProceedAdditionalWork = async (req: Request, res: Response) 
     // Ownership check: request must belong to a booking assigned to this worker
     const ownership = await dbQuery.query(
       `SELECT bar.id, bar.status FROM ${dbSchema}.booking_additional_requests bar
-       JOIN ${dbSchema}.bookings b ON b.id = bar.booking_id
-       WHERE bar.id = $1 AND b.worker_uid = $2`,
+       WHERE bar.id = $1 AND EXISTS (
+         SELECT 1 FROM ${dbSchema}.booking_workers bw
+         WHERE bw.booking_id = bar.booking_id AND bw.worker_uid = $2
+           AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED')
+       )`,
       [id, uid]
     );
     if (!ownership.rowCount) {
@@ -1074,16 +1145,21 @@ export const confirmProceedAdditionalWork = async (req: Request, res: Response) 
       return res.status(409).json({ status: "failed", message: "Request must be in ACCEPTED state before confirming proceed" });
     }
 
-    // Mark as proceeding — worker has acknowledged and will perform the additional work
+    // Mark as in progress — worker has acknowledged and will perform the work.
+    // IN_PROGRESS is the canonical value used by additional.service; reads stay
+    // tolerant of historical PROCEEDING rows in the provider adapter.
     const result = await dbQuery.query(
       `UPDATE ${dbSchema}.booking_additional_requests
-       SET status = 'PROCEEDING'
-       WHERE id = $1
-       RETURNING id, status`,
+       SET status = 'IN_PROGRESS', updated_at = NOW()
+       WHERE id = $1 AND status = 'ACCEPTED'
+       RETURNING *, total_amount AS approved_amount`,
       [id]
     );
 
-    return res.status(200).json({ status: "success", data: { success: true, status: result.rows[0].status } });
+    if (!result.rowCount) {
+      return res.status(409).json({ status: "failed", message: "Request state changed; refresh and try again" });
+    }
+    return res.status(200).json({ status: "success", success: true, data: result.rows[0] });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
   }
@@ -1224,10 +1300,14 @@ export const getProviderAlerts = async (req: Request, res: Response) => {
 export const markNotificationRead = async (req: Request, res: Response) => {
   try {
     const { key } = req.params;
-    if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
+    if (!notificationService.isSafeNotificationKey(key)) {
+      return res.status(400).json({ status: "failed", message: "Invalid notification key" });
+    }
     const uid: string = (req as any).user?.uid;
-    await notificationService.markNotificationReadByKey(uid, key as string);
-    return res.status(200).json({ status: "success", data: { success: true } });
+    const result = await notificationService.markNotificationReadByKey(uid, key);
+    if (!result.found) return res.status(404).json({ status: "failed", message: "Notification not found" });
+    if (!result.allowed) return res.status(409).json({ status: "failed", message: "Notification cannot be marked read" });
+    return res.status(200).json({ status: "success", data: { success: true, changed: result.changed } });
   } catch (e: any) {
     return res.status(500).json({ status: "failed", message: e.message });
   }
@@ -1246,9 +1326,13 @@ export const markAllNotificationsRead = async (req: Request, res: Response) => {
 export const dismissNotification = async (req: Request, res: Response) => {
   try {
     const { key } = req.params;
-    if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
+    if (!notificationService.isSafeNotificationKey(key)) {
+      return res.status(400).json({ status: "failed", message: "Invalid notification key" });
+    }
     const uid: string = (req as any).user?.uid;
-    await notificationService.deleteNotificationByKey(uid, key as string);
+    const result = await notificationService.deleteNotificationByKey(uid, key);
+    if (!result.found) return res.status(404).json({ status: "failed", message: "Notification not found" });
+    if (!result.allowed) return res.status(409).json({ status: "failed", message: "Notification cannot be dismissed" });
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (e: any) {
     return res.status(500).json({ status: "failed", message: e.message });
@@ -1258,9 +1342,13 @@ export const dismissNotification = async (req: Request, res: Response) => {
 export const dismissAlert = async (req: Request, res: Response) => {
   try {
     const { key } = req.params;
-    if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
+    if (!notificationService.isSafeNotificationKey(key)) {
+      return res.status(400).json({ status: "failed", message: "Invalid alert key" });
+    }
     const uid: string = (req as any).user?.uid;
-    await notificationService.deleteAlertByKey(uid, key as string);
+    const result = await notificationService.deleteAlertByKey(uid, key);
+    if (!result.found) return res.status(404).json({ status: "failed", message: "Alert not found" });
+    if (!result.allowed) return res.status(409).json({ status: "failed", message: "Alert cannot be dismissed" });
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (e: any) {
     return res.status(500).json({ status: "failed", message: e.message });
@@ -2277,22 +2365,7 @@ export const deleteProviderFcmToken = async (req: Request, res: Response) => {
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
 
     const { token } = req.body ?? {};
-    if (token && typeof token === "string" && token.trim().length >= 10) {
-      await dbQuery.query(
-        `UPDATE ${dbSchema}.user_credentials
-         SET fcm_token = NULL
-         WHERE uid = $1 AND fcm_token = $2`,
-        [uid, token.trim()]
-      );
-    } else {
-      // No token supplied — the client lost it, or never had one. Release
-      // whatever this provider currently holds rather than refusing: a
-      // sign-out that leaves a live registration behind is the worse outcome.
-      await dbQuery.query(
-        `UPDATE ${dbSchema}.user_credentials SET fcm_token = NULL WHERE uid = $1`,
-        [uid]
-      );
-    }
+    await notificationService.releaseProviderDeviceToken(uid, token);
     return res.status(200).json({ status: "success", data: { released: true } });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
@@ -2307,27 +2380,8 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
     if (!token || typeof token !== 'string' || token.trim().length < 10) {
       return res.status(400).json({ status: "failed", message: "token is required" });
     }
-    const value = token.trim();
-
-    // A push token identifies a DEVICE, not a person, and providers share
-    // devices. Binding it to the caller without releasing it from whoever held
-    // it before leaves the previous provider still addressable at a handset
-    // someone else is now carrying — so a booking notification meant for A
-    // arrives on the phone B is holding, with A's customer's name in it.
-    //
-    // One token, one owner. Released first, in the same statement chain, so
-    // there is no window where two rows claim the same device.
-    await dbQuery.query(
-      `UPDATE ${dbSchema}.user_credentials
-       SET fcm_token = NULL
-       WHERE fcm_token = $1 AND uid <> $2`,
-      [value, uid]
-    );
-
-    await dbQuery.query(
-      `UPDATE ${dbSchema}.user_credentials SET fcm_token = $1 WHERE uid = $2`,
-      [value, uid]
-    );
+    const saved = await notificationService.registerProviderDeviceToken(uid, token);
+    if (!saved) return res.status(400).json({ status: "failed", message: "Invalid token" });
     return res.status(200).json({ status: "success", data: { saved: true } });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
@@ -2767,8 +2821,7 @@ export const getWorkerJobCard = async (req: Request, res: Response) => {
     if (!bookingId || isNaN(bookingId)) {
       return res.status(400).json({ success: false, message: "Invalid bookingId" });
     }
-    const jobs = await technicianService.getJobCardsByWorker(uid);
-    const job = jobs.find((j: any) => j.booking_id === bookingId);
+    const job = await technicianService.getJobCardByWorker(uid, bookingId);
     if (!job) return res.status(404).json({ success: false, message: "Job not found" });
     return res.json(formatJobCard(job));
   } catch (error: any) {
@@ -2810,7 +2863,9 @@ export const acceptBooking = async (req: Request, res: Response) => {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
     const bookingId = Number(req.params.bookingId);
-    if (!bookingId) return res.status(400).json({ success: false, message: "bookingId is required" });
+    if (!Number.isSafeInteger(bookingId) || bookingId <= 0) {
+      return res.status(400).json({ success: false, message: "bookingId must be a positive integer" });
+    }
     const result = await technicianService.acceptJob(bookingId, uid);
     touchProviderActivity(uid).catch(() => {});
     return res.json({ success: true, message: "Job accepted", data: result });
@@ -3014,8 +3069,11 @@ export const getProviderBookingDetail = async (req: Request, res: Response) => {
       return res.status(400).json({ status: "failed", message: "Invalid booking ID" });
     }
     const result = await dbQuery.query(
-      `SELECT b.*, p.status AS payment_status, p.method AS payment_method_used,
-              p.reference_no, p.proof_url,
+      `SELECT b.id, b.user_id, b.user_address_id, b.service_option_id,
+              b.schedule, b.payment_method, b.status,
+              b.quoted_price, b.final_price, b.pricing_breakdown,
+              b.worker_uid, b.service_address, b.created_at,
+              p.status AS payment_status, p.method AS payment_method_used,
               COALESCE(ua.address_one, b.service_address->>'addressLine') AS address,
               COALESCE(ua.post_town, b.service_address->>'city') AS post_town,
               ua.country, ua.zip_code,
@@ -3023,10 +3081,12 @@ export const getProviderBookingDetail = async (req: Request, res: Response) => {
               bw.assigned_at, bw.started_at, bw.completed_at
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.payments p ON p.booking_id = b.id
+         AND p.additional_request_id IS NULL
        LEFT JOIN ${dbSchema}.user_address ua ON ua.address_id = b.user_address_id
-       LEFT JOIN ${dbSchema}.booking_workers bw ON bw.booking_id = b.id
-         AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
-       WHERE b.id = $1 AND b.worker_uid = $2`,
+       JOIN ${dbSchema}.booking_workers bw ON bw.booking_id = b.id
+         AND bw.worker_uid = $2
+         AND bw.status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED','IN_PROGRESS','COMPLETED')
+       WHERE b.id = $1`,
       [bookingId, uid]
     );
     if (!result.rows.length) {
@@ -3057,7 +3117,9 @@ export const getProviderBookingTracking = async (req: Request, res: Response) =>
       return res.status(400).json({ status: "failed", message: "Invalid booking ID" });
     }
     const ownerCheck = await dbQuery.query(
-      `SELECT id FROM ${dbSchema}.bookings WHERE id = $1 AND worker_uid = $2`,
+      `SELECT booking_id FROM ${dbSchema}.booking_workers
+       WHERE booking_id = $1 AND worker_uid = $2
+         AND status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED','IN_PROGRESS','COMPLETED')`,
       [bookingId, uid]
     );
     if (!ownerCheck.rowCount) {
@@ -3086,10 +3148,17 @@ export const getAdditionalRequests = async (req: Request, res: Response) => {
     const result = await dbQuery.query(
       `SELECT bar.id, bar.booking_id, bar.status,
               bar.total_amount AS amount,
+              CASE WHEN bar.status IN (
+                'WAITING_FOR_PAYMENT','WAITING_WORKER_APPROVAL','ACCEPTED',
+                'IN_PROGRESS','PROCEEDING','COMPLETED'
+              ) THEN bar.total_amount ELSE NULL END AS approved_amount,
               bar.created_at, bar.updated_at, bar.decided_at
        FROM ${dbSchema}.booking_additional_requests bar
-       JOIN ${dbSchema}.bookings b ON b.id = bar.booking_id
-       WHERE b.worker_uid = $1
+       WHERE EXISTS (
+         SELECT 1 FROM ${dbSchema}.booking_workers bw
+         WHERE bw.booking_id = bar.booking_id AND bw.worker_uid = $1
+           AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED')
+       )
        ORDER BY bar.created_at DESC
        LIMIT 50`,
       [uid]

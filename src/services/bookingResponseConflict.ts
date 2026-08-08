@@ -88,6 +88,48 @@ const MESSAGES: Record<BookingResponseConflictCode, string> = {
   BOOKING_CANCELLED: "This booking has been cancelled.",
 };
 
+export interface AcceptanceSnapshot {
+  bookingStatus: string | null;
+  bookingWorkerUid: string | null;
+  assignmentStatus: string | null;
+  workerUid: string;
+}
+
+/** Validates the booking and assignment rows while acceptJob holds both locks. */
+export function acceptanceConflictForSnapshot(
+  snapshot: AcceptanceSnapshot,
+): BookingResponseConflict | null {
+  const bookingStatus = String(snapshot.bookingStatus ?? "").toUpperCase();
+  const assignmentStatus = String(snapshot.assignmentStatus ?? "").toUpperCase();
+
+  if (["CANCELED", "CANCELLED"].includes(bookingStatus)) {
+    return new BookingResponseConflict("BOOKING_CANCELLED", snapshot.assignmentStatus, MESSAGES.BOOKING_CANCELLED);
+  }
+  if (["IN_PROGRESS", "COMPLETED"].includes(bookingStatus)) {
+    return new BookingResponseConflict("ALREADY_IN_PROGRESS", snapshot.assignmentStatus, MESSAGES.ALREADY_IN_PROGRESS);
+  }
+
+  // Both projections must agree. A stale ASSIGNED row alone is not authority
+  // after cancellation or an admin reassignment.
+  if (bookingStatus !== "WORKER_ASSIGNED" || snapshot.bookingWorkerUid !== snapshot.workerUid) {
+    return new BookingResponseConflict("NO_LONGER_ASSIGNED", snapshot.assignmentStatus, MESSAGES.NO_LONGER_ASSIGNED);
+  }
+  if (assignmentStatus === "ASSIGNED") return null;
+  if (assignmentStatus === "ACCEPTED") {
+    return new BookingResponseConflict("ALREADY_ACCEPTED_BY_YOU", snapshot.assignmentStatus, MESSAGES.ALREADY_ACCEPTED_BY_YOU);
+  }
+  if (assignmentStatus === "DECLINED") {
+    return new BookingResponseConflict("ALREADY_RESPONDED", snapshot.assignmentStatus, MESSAGES.ALREADY_RESPONDED);
+  }
+  if (["EN_ROUTE", "ARRIVED", "IN_PROGRESS", "COMPLETED"].includes(assignmentStatus)) {
+    return new BookingResponseConflict("ALREADY_IN_PROGRESS", snapshot.assignmentStatus, MESSAGES.ALREADY_IN_PROGRESS);
+  }
+  if (["CANCELED", "CANCELLED"].includes(assignmentStatus)) {
+    return new BookingResponseConflict("BOOKING_CANCELLED", snapshot.assignmentStatus, MESSAGES.BOOKING_CANCELLED);
+  }
+  return new BookingResponseConflict("NO_LONGER_ASSIGNED", snapshot.assignmentStatus, MESSAGES.NO_LONGER_ASSIGNED);
+}
+
 /**
  * Reads current state and explains why the compare-and-swap found no row.
  *

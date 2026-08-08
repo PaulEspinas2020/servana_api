@@ -99,9 +99,9 @@ silently does not work.
 `WAITING_FOR_PAYMENT`, `WAITING_WORKER_APPROVAL`, `ACCEPTED`, `REJECTED`,
 `CANCELLED`, `IN_PROGRESS`, `PROCEEDING`, `REFUNDED`.
 
-Note `IN_PROGRESS` and `PROCEEDING` are written by two different paths for the
-same action — `additional.service.ts:189` and `providerController.ts:881`. A
-client must treat them as synonyms.
+`IN_PROGRESS` is canonical for newly confirmed work. Historical `PROCEEDING`
+rows remain valid and clients must continue treating the two values as synonyms
+until deployed data is normalized.
 
 **Payment status is not agreement status.** A request can sit at `ACCEPTED`,
 `IN_PROGRESS` or `PROCEEDING` with the customer having paid nothing. Provider pay

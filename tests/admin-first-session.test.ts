@@ -29,7 +29,9 @@ const permSvc = flat(read('services/adminPermissionService.ts'));
 describe('first sign-in does not overwrite the role', () => {
   const upsertConflict = () => {
     const s = strip(userSvc);
-    const i = s.indexOf('ON CONFLICT (uid)');
+    const upsert = s.indexOf('export const upsertFirebaseUser');
+    expect(upsert).toBeGreaterThan(-1);
+    const i = s.indexOf('ON CONFLICT (uid)', upsert);
     expect(i).toBeGreaterThan(-1);
     return s.slice(i, s.indexOf('RETURNING', i));
   };

@@ -1,7 +1,8 @@
 import * as repo from "./chat.repository";
-import { emitToConversation } from "./chat.realtime";
+import { emitToConversation, evictUserFromConversation } from "./chat.realtime";
 import { toCamel } from "../helpers/idGenerator";
 import { notifyAdminsSafely } from '../services/adminNotificationService';
+import { firebaseConfig } from '../config';
 
 /**
  * Transport-agnostic chat logic. Both the REST controller and the Socket.IO
@@ -251,6 +252,7 @@ export const handleProviderReassignment = async (
     await repo.removeParticipant(conversation.id, fromProviderUid, {
       retainRead: opts.retainReadForPrevious === true,
     });
+    evictUserFromConversation(conversation.id, fromProviderUid);
   }
   if (toProviderUid) {
     const role = (await repo.getUserRole(toProviderUid)) ?? 2;
@@ -340,10 +342,13 @@ export const escalateToSupport = async (bookingId: number) => {
   return updated;
 };
 
-export const getConversationWithParticipants = async (conversationId: number) => {
+export const getConversationWithParticipants = async (conversationId: number, actor?: ChatActor) => {
   const conversation = await repo.findConversationById(conversationId);
   if (!conversation) return null;
-  const participants = await repo.listParticipants(conversationId);
+  const participants = await repo.listParticipants(
+    conversationId,
+    !!actor && ADMIN_ROLES.includes(actor.role),
+  );
   return { ...toCamel(conversation), participants: participants.map(toCamel) };
 };
 
@@ -366,6 +371,68 @@ export const closeConversation = async (conversationId: number) => {
 const hydrateMessage = async (row: any) => {
   const attachments = await repo.listAttachments(row.id);
   return { ...toCamel(row), attachments: attachments.map(toCamel) };
+};
+
+const MESSAGE_BODY_MAX = 4000;
+const ATTACHMENT_MAX = 5;
+const ATTACHMENT_BYTES_MAX = 10 * 1024 * 1024;
+const ALLOWED_ATTACHMENT_MIMES = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'application/pdf',
+]);
+const sendWindows = new Map<string, number[]>();
+
+const assertSendRate = (uid: string) => {
+  const now = Date.now();
+  const recent = (sendWindows.get(uid) ?? []).filter(t => now - t < 10_000);
+  if (recent.length >= 20) throw httpError(429, 'Too many messages. Please wait a moment and try again.');
+  recent.push(now);
+  sendWindows.set(uid, recent);
+  if (sendWindows.size > 10_000) {
+    for (const [key, timestamps] of sendWindows) {
+      if (!timestamps.some(t => now - t < 10_000)) sendWindows.delete(key);
+    }
+  }
+};
+
+const normaliseAttachment = (actorUid: string, raw: any) => {
+  if (!raw || typeof raw !== 'object') throw httpError(422, 'Attachment is malformed');
+  const url = typeof raw.url === 'string' ? raw.url.trim() : '';
+  if (!url || url.length > 2048) throw httpError(422, 'Attachment reference is invalid');
+
+  const ownerPrefix = `${actorUid}_`;
+  const legacyOwnedId = url.startsWith(ownerPrefix) && /^[A-Za-z0-9._:-]+$/.test(url);
+  let ownedFirebaseUrl = false;
+  if (!legacyOwnedId) {
+    try {
+      const parsed = new URL(url);
+      const decodedPath = decodeURIComponent(parsed.pathname);
+      const marker = '/o/chat-attachments/';
+      const objectName = decodedPath.includes(marker) ? decodedPath.split(marker)[1] : '';
+      const configuredBucket = firebaseConfig.storageBucket?.trim();
+      ownedFirebaseUrl = parsed.protocol === 'https:' &&
+        parsed.hostname === 'firebasestorage.googleapis.com' &&
+        !!configuredBucket &&
+        decodedPath.startsWith(`/v0/b/${configuredBucket}${marker}`) &&
+        objectName.startsWith(ownerPrefix) &&
+        /^[A-Za-z0-9._-]+$/.test(objectName);
+    } catch { /* rejected below */ }
+  }
+  if (!legacyOwnedId && !ownedFirebaseUrl) {
+    throw httpError(422, 'Attachment must come from your Servana chat upload');
+  }
+
+  const mimeType = typeof raw.mimeType === 'string' ? raw.mimeType.trim().toLowerCase() : null;
+  if (mimeType && !ALLOWED_ATTACHMENT_MIMES.has(mimeType)) {
+    throw httpError(422, 'Attachment type is not allowed');
+  }
+  const sizeBytes = raw.sizeBytes == null ? null : Number(raw.sizeBytes);
+  if (sizeBytes !== null && (!Number.isSafeInteger(sizeBytes) || sizeBytes < 1 || sizeBytes > ATTACHMENT_BYTES_MAX)) {
+    throw httpError(422, 'Attachment size is invalid');
+  }
+  const fileName = typeof raw.fileName === 'string'
+    ? raw.fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100)
+    : null;
+  return { url, fileName: fileName || undefined, mimeType: mimeType || undefined, sizeBytes: sizeBytes ?? undefined };
 };
 
 /**
@@ -407,7 +474,8 @@ export const sendMessage = async (
   if (!allowedTypes.has(type)) throw httpError(422, "Message type is not allowed");
 
   const body = typeof input.body === "string" ? input.body.trim() : "";
-  if (body.length > 4000) throw httpError(422, "Message is too long");
+  if (body.length > MESSAGE_BODY_MAX) throw httpError(422, "Message is too long");
+  if (/[^\t\n\r\x20-\uFFFF]/u.test(body)) throw httpError(422, 'Message contains unsupported control characters');
   const hasBody = body.length > 0;
   const hasAttachments = !!(input.attachments && input.attachments.length);
   if (type !== "system" && !hasBody && !hasAttachments) {
@@ -418,12 +486,21 @@ export const sendMessage = async (
   if (!clientMsgId || clientMsgId.length < 16 || clientMsgId.length > 128) {
     throw httpError(422, "A valid message idempotency key is required");
   }
+  if (!/^[A-Za-z0-9._:-]+$/.test(clientMsgId)) {
+    throw httpError(422, 'Message idempotency key contains unsupported characters');
+  }
 
   // Idempotency: a retried send returns the original message.
   if (clientMsgId) {
     const existing = await repo.findMessageByClientId(conversationId, actor.uid, clientMsgId);
     if (existing) return hydrateMessage(existing);
   }
+
+  assertSendRate(actor.uid);
+  if ((input.attachments?.length ?? 0) > ATTACHMENT_MAX) {
+    throw httpError(422, `A message can include at most ${ATTACHMENT_MAX} attachments`);
+  }
+  const attachments = (input.attachments ?? []).map(a => normaliseAttachment(actor.uid, a));
 
   // An admin who posts has joined the conversation in the operational sense —
   // record it so "who from Servana touched this booking" is answerable from
@@ -440,15 +517,15 @@ export const sendMessage = async (
     senderRole: actor.role,
     type,
     body: hasBody ? body : null,
-    metadata: input.metadata,
+    metadata: {},
     clientMsgId,
   });
 
   if (!inserted.inserted) return hydrateMessage(inserted.message);
   const message = inserted.message;
 
-  if (hasAttachments) {
-    for (const a of input.attachments!) {
+  if (attachments.length) {
+    for (const a of attachments) {
       await repo.insertAttachment(message.id, a);
     }
   }
@@ -513,9 +590,16 @@ export const getMessages = async (
   if (!conversation) throw httpError(404, "Conversation not found");
   if (!access.allowed) throw httpError(403, "Not a participant of this conversation");
 
-  const rows = await repo.listMessages(conversationId, Math.min(limit, 100), before);
+  if (!Number.isSafeInteger(limit) || limit < 1) throw httpError(422, 'limit must be a positive integer');
+  if (before !== undefined && (!Number.isSafeInteger(before) || before <= 0)) {
+    throw httpError(422, 'before must be a positive message id');
+  }
+  const participant = access.role === 'admin' ? null : await repo.findParticipant(conversationId, actor.uid);
+  const visibleAfter = participant?.joined_at ?? null;
+  const boundedLimit = Math.min(limit, 100);
+  const rows = await repo.listMessages(conversationId, boundedLimit, before, visibleAfter);
   const messages = await Promise.all(rows.map(hydrateMessage));
-  const nextCursor = rows.length === Math.min(limit, 100) ? rows[rows.length - 1].id : null;
+  const nextCursor = rows.length === boundedLimit ? rows[rows.length - 1].id : null;
   return { messages, nextCursor };
 };
 
@@ -528,14 +612,20 @@ export const editMessage = async (
   const { access, conversation } = await resolveAccessForConversation(actor, conversationId);
   if (!conversation) throw httpError(404, "Conversation not found");
   if (!access.allowed) throw httpError(403, "Not allowed");
+  if (!access.canSend) throw httpError(409, conversationClosedMessage(conversation));
 
   const original = await repo.getMessageById(messageId);
   if (!original || original.conversation_id !== conversation.id) throw httpError(404, "Message not found");
   if (original.sender_uid !== actor.uid && access.role !== "admin") {
     throw httpError(403, "Can only edit your own messages");
   }
+  if (original.type === 'system') throw httpError(409, 'System messages cannot be edited');
+  const cleanBody = typeof body === 'string' ? body.trim() : '';
+  if (!cleanBody) throw httpError(422, 'Message body is required');
+  if (cleanBody.length > MESSAGE_BODY_MAX) throw httpError(422, 'Message is too long');
+  if (/[^\t\n\r\x20-\uFFFF]/u.test(cleanBody)) throw httpError(422, 'Message contains unsupported control characters');
 
-  const updated = await repo.editMessage(messageId, body);
+  const updated = await repo.editMessage(messageId, cleanBody);
   if (!updated) throw httpError(409, "Message cannot be edited");
   const full = await hydrateMessage(updated);
   emitToConversation(conversationId, "message:updated", full);
@@ -572,12 +662,21 @@ export const markRead = async (
   if (!conversation) throw httpError(404, "Conversation not found");
   if (!access.allowed) throw httpError(403, "Not a participant of this conversation");
 
-  await repo.setLastRead(conversationId, actor.uid, lastReadMessageId);
-  emitToConversation(conversationId, "message:read", {
-    conversationId,
-    userUid: actor.uid,
-    lastReadMessageId,
-  });
+  if (!Number.isSafeInteger(lastReadMessageId) || lastReadMessageId <= 0) {
+    throw httpError(422, 'lastReadMessageId must be a positive message id');
+  }
+  const target = await repo.getMessageById(lastReadMessageId);
+  if (!target || Number(target.conversation_id) !== conversationId) {
+    throw httpError(422, 'Read pointer must reference a message in this conversation');
+  }
+  const updated = await repo.setLastRead(conversationId, actor.uid, lastReadMessageId);
+  if (updated) {
+    emitToConversation(conversationId, "message:read", {
+      conversationId,
+      userUid: actor.uid,
+      lastReadMessageId,
+    });
+  }
 };
 
 // ---- Small error helper (carries an HTTP status) ---------------------------
@@ -593,12 +692,22 @@ export const reportMessage = async (
 ): Promise<{ reportId: string }> => {
   const { access } = await resolveAccessForConversation(actor, conversationId);
   if (!access.allowed) throw httpError(403, "Not a participant of this conversation");
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) throw httpError(422, 'Invalid message id');
+  const message = await repo.getMessageById(messageId);
+  if (!message || Number(message.conversation_id) !== conversationId) {
+    throw httpError(404, 'Message not found in this conversation');
+  }
+  if (message.type === 'system') throw httpError(422, 'System messages cannot be reported');
+  const cleanCategory = typeof category === 'string' ? category.trim().toLowerCase() : '';
+  if (!/^[a-z][a-z0-9_]{1,39}$/.test(cleanCategory)) throw httpError(422, 'Invalid report category');
+  const cleanDescription = typeof description === 'string' ? description.trim() : '';
+  if (cleanDescription.length > 1000) throw httpError(422, 'Report description is too long');
   const report = await repo.insertMessageReport({
     reporterUid: actor.uid,
     messageId,
     conversationId,
-    category,
-    description,
+    category: cleanCategory,
+    description: cleanDescription,
   });
   return { reportId: String(report.id) };
 };

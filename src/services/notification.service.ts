@@ -22,33 +22,59 @@ async function sendFcmPushToWorker(
   workerUid: string,
   title: string,
   body: string,
-  route?: { page?: string; screen?: string; bookingId?: string; caseId?: string } | null,
+  route?: { page?: string; screen?: string; bookingId?: string; caseId?: string; applicationId?: string; contextType?: string } | null,
   meta?: { type?: string; notificationKey?: string },
 ): Promise<void> {
+  const type = normalizeNotificationType(meta?.type);
+  const preferences = await getNotificationPrefs(workerUid);
+  const preferenceKey = providerPushPreferenceForType(type);
+  if (!preferences[preferenceKey]) return;
+
   const { rows } = await dbQuery.query(
-    `SELECT fcm_token FROM ${dbSchema}.user_credentials WHERE uid = $1 LIMIT 1`,
+    `SELECT token FROM ${dbSchema}.provider_notification_device_tokens WHERE worker_uid = $1
+     UNION
+     SELECT fcm_token AS token FROM ${dbSchema}.user_credentials
+     WHERE uid = $1 AND fcm_token IS NOT NULL`,
     [workerUid],
   );
-  const token: string | undefined = rows[0]?.fcm_token;
-  if (!token) return;
+  const tokens = rows.map((row: any) => String(row.token ?? '')).filter(Boolean).slice(0, 500);
+  if (!tokens.length) return;
 
   const data: Record<string, string> = {};
   if (route?.page) data.page = String(route.page);
   if (route?.screen) data.screen = String(route.screen);
   if (route?.bookingId) data.bookingId = String(route.bookingId);
   if (route?.caseId) data.caseId = String(route.caseId);
+  if (route?.applicationId) data.applicationId = String(route.applicationId);
+  if (route?.contextType) data.contextType = String(route.contextType);
   if (meta?.type) data.type = String(meta.type);
   if (meta?.notificationKey) data.notificationKey = String(meta.notificationKey);
 
   const { getMessaging } = await import('firebase-admin/messaging');
   const { firebaseAdmin } = await import('../middleware/firebaseApp');
-  await getMessaging(firebaseAdmin).send({
-    token,
-    notification: { title, body },
-    data,
-    android: { priority: 'high' },
-    apns: { payload: { aps: { contentAvailable: true } } },
-  });
+  await Promise.allSettled(tokens.map((token: string) =>
+    getMessaging(firebaseAdmin).send({
+      token,
+      notification: { title, body },
+      data,
+      android: { priority: 'high' },
+      apns: { payload: { aps: { contentAvailable: true } } },
+    }),
+  ));
+}
+
+type ProviderPushPreferenceKey = keyof typeof DEFAULT_PREFS;
+
+function providerPushPreferenceForType(type: string): ProviderPushPreferenceKey {
+  if (type.includes('reminder')) return 'jobReminder';
+  if (type.includes('booking') || type.includes('job') || type === 'assigned_job') return 'jobAssigned';
+  if (type.includes('payment') || type.includes('payout') || type.includes('earning')) return 'paymentReceived';
+  if (type.includes('message') || type.includes('chat')) return 'newMessage';
+  if (type.includes('promotion')) return 'promotions';
+  if (type.includes('requirement') || type.includes('verification') || type.includes('review') || type.includes('moderated')) return 'requirementReview';
+  if (type.includes('support') || type.includes('safety')) return 'support';
+  if (type.includes('account') || type.includes('security') || type.includes('profile')) return 'accountSecurity';
+  return 'system';
 }
 
 // ─── Lazy table init ──────────────────────────────────────────────────────────
@@ -60,7 +86,7 @@ async function initTables(): Promise<void> {
   await dbQuery.query(`
     CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_notifications (
       id             BIGSERIAL PRIMARY KEY,
-      notification_key VARCHAR(64) UNIQUE NOT NULL DEFAULT gen_random_uuid()::varchar,
+      notification_key VARCHAR(64) NOT NULL DEFAULT gen_random_uuid()::varchar,
       worker_uid     VARCHAR(128) NOT NULL,
       type           VARCHAR(64)  NOT NULL DEFAULT 'system',
       status         VARCHAR(32)  NOT NULL DEFAULT 'unread',
@@ -78,6 +104,14 @@ async function initTables(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_pn_worker_uid
       ON ${dbSchema}.provider_notifications (worker_uid, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_notification_device_tokens (
+      token       TEXT PRIMARY KEY,
+      worker_uid  VARCHAR(128) NOT NULL,
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_pndt_worker_uid
+      ON ${dbSchema}.provider_notification_device_tokens (worker_uid);
 
     CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_alerts (
       id         BIGSERIAL PRIMARY KEY,
@@ -127,11 +161,13 @@ async function initTables(): Promise<void> {
     ALTER TABLE ${dbSchema}.provider_notification_preferences ADD COLUMN IF NOT EXISTS account_security   BOOLEAN NOT NULL DEFAULT true;
     ALTER TABLE ${dbSchema}.provider_notification_preferences ADD COLUMN IF NOT EXISTS system             BOOLEAN NOT NULL DEFAULT true;
 
-    -- Defensive: ensure UNIQUE constraint exists even if table was created before it was added
-    DO $safe_unique$ BEGIN
-      ALTER TABLE ${dbSchema}.provider_notifications ADD UNIQUE (notification_key);
-    EXCEPTION WHEN duplicate_object THEN NULL;
-    END $safe_unique$;
+    -- Idempotency is owner-scoped. A global notification_key constraint caused
+    -- fan-out jobs (for example the daily reminder) to insert for the first
+    -- provider only and silently suppress every subsequent provider.
+    ALTER TABLE ${dbSchema}.provider_notifications
+      DROP CONSTRAINT IF EXISTS provider_notifications_notification_key_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_notifications_owner_key
+      ON ${dbSchema}.provider_notifications (worker_uid, notification_key);
 
     CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_support_ticket_replies (
       id          BIGSERIAL PRIMARY KEY,
@@ -153,15 +189,91 @@ function ensureTables(): Promise<void> {
 
 // ─── Notification filter → SQL WHERE fragment ─────────────────────────────────
 
-const FILTER_TYPE_MAP: Record<string, string[]> = {
-  jobs:         ['assigned_job', 'active_job', 'job_status', 'booking_code', 'additional_work'],
-  messages:     ['message'],
-  requirements: ['requirement_review', 'verification'],
-  earnings:     ['earnings_payout'],
-  support:      ['support'],
-  account:      ['account_security', 'profile_settings'],
-  system:       ['system', 'maintenance'],
+const FILTER_SQL_MAP: Record<string, string> = {
+  jobs: `(LOWER(type) IN ('assigned_job','active_job','job_status','booking_code','additional_work')
+          OR LOWER(type) LIKE 'booking_%' OR LOWER(type) LIKE 'job_%')`,
+  messages: `(LOWER(type) LIKE '%message%' OR LOWER(type) LIKE '%chat%')`,
+  requirements: `(LOWER(type) LIKE '%requirement%' OR LOWER(type) LIKE '%verification%'
+                  OR LOWER(type) LIKE '%review%' OR LOWER(type) LIKE '%moderated%')`,
+  earnings: `(LOWER(type) LIKE '%earning%' OR LOWER(type) LIKE '%payment%' OR LOWER(type) LIKE '%payout%')`,
+  support: `(LOWER(type) LIKE '%support%' OR LOWER(type) LIKE '%safety%')`,
+  account: `(LOWER(type) LIKE '%account%' OR LOWER(type) LIKE '%profile%')`,
+  system: `(LOWER(type) IN ('system','maintenance'))`,
 };
+
+const SAFE_KEY = /^[A-Za-z0-9._:-]{1,64}$/;
+const SAFE_ROUTE_VALUE = /^[A-Za-z0-9._:/-]{1,160}$/;
+const SAFE_ROUTE_KEYS = new Set([
+  'page', 'screen', 'bookingId', 'caseId', 'applicationId', 'routeKey',
+  'resourceId', 'routeLabel', 'commandsRoute', 'queryParams',
+  'requiresAccessCheck', 'contextType',
+]);
+
+/** Route metadata is navigation intent, never arbitrary producer data. */
+export function sanitizeNotificationRoute(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  const route: Record<string, unknown> = {};
+  for (const key of SAFE_ROUTE_KEYS) {
+    const raw = input[key];
+    if (raw === undefined || raw === null) continue;
+    if (key === 'requiresAccessCheck' && typeof raw === 'boolean') {
+      route[key] = raw;
+    } else if (key === 'commandsRoute' && Array.isArray(raw)) {
+      const commands = raw.filter((part): part is string => typeof part === 'string').slice(0, 4);
+      const providerRoot = commands[0];
+      const safeTail = commands.slice(1).every((part) =>
+        /^[A-Za-z0-9._:-]{1,128}$/.test(part) && !part.includes('..'),
+      );
+      if (
+        typeof providerRoot === 'string' &&
+        /^\/provider\/[A-Za-z0-9/_-]{1,140}$/.test(providerRoot) &&
+        !providerRoot.includes('..') &&
+        safeTail
+      ) route[key] = commands;
+    } else if (key === 'queryParams' && typeof raw === 'object' && !Array.isArray(raw)) {
+      const params: Record<string, string> = {};
+      for (const [paramKey, paramValue] of Object.entries(raw as Record<string, unknown>).slice(0, 8)) {
+        if (SAFE_ROUTE_VALUE.test(paramKey) && typeof paramValue === 'string' && SAFE_ROUTE_VALUE.test(paramValue)) {
+          params[paramKey] = paramValue;
+        }
+      }
+      if (Object.keys(params).length) route[key] = params;
+    } else if (typeof raw === 'string' && SAFE_ROUTE_VALUE.test(raw)) {
+      route[key] = raw;
+    }
+  }
+  return Object.keys(route).length ? route : null;
+}
+
+export function isSafeNotificationKey(value: unknown): value is string {
+  return typeof value === 'string' && SAFE_KEY.test(value);
+}
+
+function cleanNotificationText(value: unknown, maxLength: number): string {
+  return String(value ?? '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted email]')
+    .replace(/(?<!\d)(?:\+?63|0)9\d{9}(?!\d)/g, '[redacted phone]')
+    .replace(/\b(?:pay|src|pi|link|pm)_[A-Za-z0-9_-]{8,}\b/g, '[redacted payment reference]')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, '[redacted id]')
+    .replace(/\b\d{13,19}\b/g, '[redacted number]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLength);
+}
+
+function normalizeNotificationType(value: unknown): string {
+  const normalized = String(value ?? 'system').trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+  return normalized.slice(0, 64) || 'system';
+}
+
+function normalizeSeverity(value: unknown): string {
+  const normalized = String(value ?? 'info').trim().toLowerCase();
+  return ['critical', 'high', 'medium', 'low', 'info', 'success', 'warning', 'danger', 'neutral'].includes(normalized)
+    ? normalized
+    : 'info';
+}
 
 function buildNotificationFilter(
   filter: string | undefined,
@@ -176,14 +288,13 @@ function buildNotificationFilter(
   if (filter === 'unread') {
     return { sql: `WHERE ${base} AND status = 'unread'`, params };
   }
-  const types = FILTER_TYPE_MAP[filter];
-  if (!types) {
+  const filterSql = FILTER_SQL_MAP[filter];
+  if (!filterSql) {
     return { sql: `WHERE ${base}`, params };
   }
-  const placeholders = types.map((_, i) => `$${i + 2}`).join(', ');
   return {
-    sql: `WHERE ${base} AND type IN (${placeholders})`,
-    params: [...params, ...types],
+    sql: `WHERE ${base} AND ${filterSql}`,
+    params,
   };
 }
 
@@ -264,33 +375,54 @@ export async function countUnreadNotifications(workerUid: string): Promise<numbe
 
 export async function markNotificationReadByKey(workerUid: string, key: string) {
   await ensureTables();
+  const current = await dbQuery.query(
+    `SELECT status, can_mark_read FROM ${dbSchema}.provider_notifications
+     WHERE notification_key = $1 AND worker_uid = $2 LIMIT 1`,
+    [key, workerUid],
+  );
+  if (!current.rowCount) return { found: false, allowed: false, changed: false };
+  if (!current.rows[0].can_mark_read) return { found: true, allowed: false, changed: false };
+  if (current.rows[0].status !== 'unread') return { found: true, allowed: true, changed: false };
   const { rowCount } = await dbQuery.query(
     `UPDATE ${dbSchema}.provider_notifications
      SET status = 'read', read_at = NOW()
-     WHERE notification_key = $1 AND worker_uid = $2 AND status = 'unread'`,
+     WHERE notification_key = $1 AND worker_uid = $2 AND status = 'unread' AND can_mark_read = true`,
     [key, workerUid],
   );
-  return { found: (rowCount ?? 0) > 0 };
+  const changed = (rowCount ?? 0) > 0;
+  if (changed) emitToProvider(workerUid, 'notification:read', { notificationKey: key });
+  return { found: true, allowed: true, changed };
 }
 
 export async function markAllNotificationsReadForWorker(workerUid: string) {
   await ensureTables();
-  await dbQuery.query(
+  const { rowCount } = await dbQuery.query(
     `UPDATE ${dbSchema}.provider_notifications
      SET status = 'read', read_at = NOW()
-     WHERE worker_uid = $1 AND status = 'unread'`,
+     WHERE worker_uid = $1 AND status = 'unread' AND can_mark_read = true`,
     [workerUid],
   );
+  emitToProvider(workerUid, 'notification:all-read', {});
+  return { changed: rowCount ?? 0 };
 }
 
 export async function deleteNotificationByKey(workerUid: string, key: string) {
   await ensureTables();
-  const { rowCount } = await dbQuery.query(
-    `DELETE FROM ${dbSchema}.provider_notifications
-     WHERE notification_key = $1 AND worker_uid = $2`,
+  const current = await dbQuery.query(
+    `SELECT can_dismiss FROM ${dbSchema}.provider_notifications
+     WHERE notification_key = $1 AND worker_uid = $2 LIMIT 1`,
     [key, workerUid],
   );
-  return { found: (rowCount ?? 0) > 0 };
+  if (!current.rowCount) return { found: false, allowed: false };
+  if (!current.rows[0].can_dismiss) return { found: true, allowed: false };
+  const { rowCount } = await dbQuery.query(
+    `DELETE FROM ${dbSchema}.provider_notifications
+     WHERE notification_key = $1 AND worker_uid = $2 AND can_dismiss = true`,
+    [key, workerUid],
+  );
+  const found = (rowCount ?? 0) > 0;
+  if (found) emitToProvider(workerUid, 'notification:dismissed', { notificationKey: key });
+  return { found, allowed: true };
 }
 
 // ─── Create notification + real-time push ────────────────────────────────────
@@ -321,14 +453,27 @@ export async function createNotification(
 ): Promise<ReturnType<typeof mapNotificationRow> | null> {
   await ensureTables();
 
+  const type = normalizeNotificationType(data.type);
+  const severity = normalizeSeverity(data.severity);
+  const title = cleanNotificationText(data.title, 255);
+  const safeBody = cleanNotificationText(data.safeBody, 1000);
+  const safeContextLabel = data.safeContextLabel == null
+    ? null
+    : cleanNotificationText(data.safeContextLabel, 255);
+  const route = sanitizeNotificationRoute(data.route);
+  if (!title || !safeBody) throw new Error('Notification title and safe body are required.');
+  if (data.notificationKey && !isSafeNotificationKey(data.notificationKey)) {
+    throw new Error('Invalid notification key.');
+  }
+
   const params: any[] = [
     workerUid,
-    data.type || "system",
-    data.severity || "info",
-    data.title,
-    data.safeBody,
-    data.safeContextLabel || null,
-    data.route ? JSON.stringify(data.route) : null,
+    type,
+    severity,
+    title,
+    safeBody,
+    safeContextLabel,
+    route ? JSON.stringify(route) : null,
     data.canMarkRead !== false,
     data.canDismiss !== false,
     !!data.canOpenDetail,
@@ -343,9 +488,9 @@ export async function createNotification(
          (notification_key, worker_uid, type, severity, title, safe_body, safe_context_label,
           route, can_mark_read, can_dismiss, can_open_detail, expires_at)
        VALUES ($12, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       ON CONFLICT (notification_key) DO NOTHING
+       ON CONFLICT (worker_uid, notification_key) DO NOTHING
        RETURNING *`,
-      [...params, data.notificationKey.substring(0, 64)],
+      [...params, data.notificationKey],
     );
     if ((result.rowCount ?? 0) === 0) return null;  // idempotent: already sent
     rows = result.rows;
@@ -365,22 +510,22 @@ export async function createNotification(
   // Push real-time — no-op when socket server is not initialised (e.g. during tests)
   emitToProvider(workerUid, "notification", notification);
   // FCM push for background/offline devices
-  sendFcmPushToWorker(workerUid, data.title, data.safeBody, data.route as any, {
-    type: data.type,
+  sendFcmPushToWorker(workerUid, title, safeBody, route as any, {
+    type,
     notificationKey: notification.notificationKey,
   }).catch(() => {});
   // Fire-and-forget admin log
   logCommunicationEvent({
     channel: 'socket',
     status: 'sent',
-    severity: (data.severity as any) || 'info',
+    severity: severity as any,
     category: 'notification',
     recipientUid: workerUid,
     recipientRole: 'provider',
     senderRole: 'system',
-    subject: data.title,
-    safeBody: data.safeBody ? data.safeBody.substring(0, 300) : null,
-    templateName: data.type || 'system',
+    subject: title,
+    safeBody: safeBody.substring(0, 300),
+    templateName: type,
     metadata: { notificationKey: notification.notificationKey, type: notification.type },
   }).catch(() => {});
   return notification;
@@ -400,11 +545,19 @@ export async function listAlerts(workerUid: string) {
 
 export async function deleteAlertByKey(workerUid: string, key: string) {
   await ensureTables();
-  const { rowCount } = await dbQuery.query(
-    `DELETE FROM ${dbSchema}.provider_alerts WHERE alert_key = $1 AND worker_uid = $2`,
+  const current = await dbQuery.query(
+    `SELECT is_dismissable FROM ${dbSchema}.provider_alerts
+     WHERE alert_key = $1 AND worker_uid = $2 LIMIT 1`,
     [key, workerUid],
   );
-  return { found: (rowCount ?? 0) > 0 };
+  if (!current.rowCount) return { found: false, allowed: false };
+  if (!current.rows[0].is_dismissable) return { found: true, allowed: false };
+  const { rowCount } = await dbQuery.query(
+    `DELETE FROM ${dbSchema}.provider_alerts
+     WHERE alert_key = $1 AND worker_uid = $2 AND is_dismissable = true`,
+    [key, workerUid],
+  );
+  return { found: (rowCount ?? 0) > 0, allowed: true };
 }
 
 // ─── Support ticket operations ────────────────────────────────────────────────
@@ -473,7 +626,13 @@ export async function getNotificationPrefs(workerUid: string) {
 
 export async function saveNotificationPrefs(workerUid: string, prefs: Partial<typeof DEFAULT_PREFS>) {
   await ensureTables();
-  const merged = { ...DEFAULT_PREFS, ...prefs };
+  const current = await getNotificationPrefs(workerUid);
+  const merged = { ...current };
+  for (const key of Object.keys(DEFAULT_PREFS) as Array<keyof typeof DEFAULT_PREFS>) {
+    if (prefs[key] === undefined) continue;
+    if (typeof prefs[key] !== 'boolean') throw new Error(`Invalid notification preference: ${key}`);
+    merged[key] = prefs[key] as boolean;
+  }
   await dbQuery.query(
     `INSERT INTO ${dbSchema}.provider_notification_preferences
        (worker_uid, job_assigned, job_reminder, payment_received, new_message, promotions,
@@ -504,6 +663,60 @@ export async function saveNotificationPrefs(workerUid: string, prefs: Partial<ty
     ],
   );
   return merged;
+}
+
+function validDeviceToken(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const token = value.trim();
+  return token.length >= 10 && token.length <= 4096 && !/[\s\u0000-\u001F\u007F]/.test(token)
+    ? token
+    : null;
+}
+
+/** Additive multi-device provider push registration; legacy column is dual-written. */
+export async function registerProviderDeviceToken(workerUid: string, rawToken: unknown): Promise<boolean> {
+  const token = validDeviceToken(rawToken);
+  if (!token) return false;
+  await ensureTables();
+  await dbQuery.query(
+    `INSERT INTO ${dbSchema}.provider_notification_device_tokens (token, worker_uid, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (token) DO UPDATE SET worker_uid = EXCLUDED.worker_uid, updated_at = NOW()`,
+    [token, workerUid],
+  );
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.user_credentials SET fcm_token = NULL WHERE fcm_token = $1 AND uid <> $2`,
+    [token, workerUid],
+  );
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.user_credentials SET fcm_token = $1 WHERE uid = $2`,
+    [token, workerUid],
+  );
+  return true;
+}
+
+export async function releaseProviderDeviceToken(workerUid: string, rawToken?: unknown): Promise<void> {
+  await ensureTables();
+  const token = validDeviceToken(rawToken);
+  if (token) {
+    await dbQuery.query(
+      `DELETE FROM ${dbSchema}.provider_notification_device_tokens WHERE worker_uid = $1 AND token = $2`,
+      [workerUid, token],
+    );
+    await dbQuery.query(
+      `UPDATE ${dbSchema}.user_credentials SET fcm_token = NULL WHERE uid = $1 AND fcm_token = $2`,
+      [workerUid, token],
+    );
+    return;
+  }
+  await dbQuery.query(
+    `DELETE FROM ${dbSchema}.provider_notification_device_tokens WHERE worker_uid = $1`,
+    [workerUid],
+  );
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.user_credentials SET fcm_token = NULL WHERE uid = $1`,
+    [workerUid],
+  );
 }
 
 // ─── Support ticket follow-ons ────────────────────────────────────────────────
@@ -639,7 +852,7 @@ async function initCustomerTables(): Promise<void> {
   await dbQuery.query(`
     CREATE TABLE IF NOT EXISTS ${dbSchema}.customer_notifications (
       id               BIGSERIAL PRIMARY KEY,
-      notification_key VARCHAR(64)  UNIQUE NOT NULL DEFAULT gen_random_uuid()::varchar,
+      notification_key VARCHAR(64)  NOT NULL DEFAULT gen_random_uuid()::varchar,
       user_uid         VARCHAR(128) NOT NULL,
       type             VARCHAR(64)  NOT NULL DEFAULT 'system',
       status           VARCHAR(32)  NOT NULL DEFAULT 'unread',
@@ -657,10 +870,10 @@ async function initCustomerTables(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_cn_user_uid
       ON ${dbSchema}.customer_notifications (user_uid, created_at DESC);
-    DO $safe_unique_cn$ BEGIN
-      ALTER TABLE ${dbSchema}.customer_notifications ADD UNIQUE (notification_key);
-    EXCEPTION WHEN duplicate_object THEN NULL;
-    END $safe_unique_cn$;
+    ALTER TABLE ${dbSchema}.customer_notifications
+      DROP CONSTRAINT IF EXISTS customer_notifications_notification_key_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_notifications_owner_key
+      ON ${dbSchema}.customer_notifications (user_uid, notification_key);
   `);
 }
 
@@ -728,13 +941,21 @@ export async function countCustomerUnreadNotifications(userUid: string): Promise
 
 export async function markCustomerNotificationReadByKey(userUid: string, key: string) {
   await ensureCustomerTables();
+  const current = await dbQuery.query(
+    `SELECT status, can_mark_read FROM ${dbSchema}.customer_notifications
+     WHERE notification_key = $1 AND user_uid = $2 LIMIT 1`,
+    [key, userUid],
+  );
+  if (!current.rowCount) return { found: false, allowed: false, changed: false };
+  if (!current.rows[0].can_mark_read) return { found: true, allowed: false, changed: false };
+  if (current.rows[0].status !== 'unread') return { found: true, allowed: true, changed: false };
   const { rowCount } = await dbQuery.query(
     `UPDATE ${dbSchema}.customer_notifications
      SET status = 'read', read_at = NOW()
-     WHERE notification_key = $1 AND user_uid = $2 AND status = 'unread'`,
+     WHERE notification_key = $1 AND user_uid = $2 AND status = 'unread' AND can_mark_read = true`,
     [key, userUid],
   );
-  return { found: (rowCount ?? 0) > 0 };
+  return { found: true, allowed: true, changed: (rowCount ?? 0) > 0 };
 }
 
 export async function markAllCustomerNotificationsRead(userUid: string) {
@@ -742,19 +963,26 @@ export async function markAllCustomerNotificationsRead(userUid: string) {
   await dbQuery.query(
     `UPDATE ${dbSchema}.customer_notifications
      SET status = 'read', read_at = NOW()
-     WHERE user_uid = $1 AND status = 'unread'`,
+     WHERE user_uid = $1 AND status = 'unread' AND can_mark_read = true`,
     [userUid],
   );
 }
 
 export async function deleteCustomerNotificationByKey(userUid: string, key: string) {
   await ensureCustomerTables();
-  const { rowCount } = await dbQuery.query(
-    `DELETE FROM ${dbSchema}.customer_notifications
-     WHERE notification_key = $1 AND user_uid = $2`,
+  const current = await dbQuery.query(
+    `SELECT can_dismiss FROM ${dbSchema}.customer_notifications
+     WHERE notification_key = $1 AND user_uid = $2 LIMIT 1`,
     [key, userUid],
   );
-  return { found: (rowCount ?? 0) > 0 };
+  if (!current.rowCount) return { found: false, allowed: false };
+  if (!current.rows[0].can_dismiss) return { found: true, allowed: false };
+  const { rowCount } = await dbQuery.query(
+    `DELETE FROM ${dbSchema}.customer_notifications
+     WHERE notification_key = $1 AND user_uid = $2 AND can_dismiss = true`,
+    [key, userUid],
+  );
+  return { found: (rowCount ?? 0) > 0, allowed: true };
 }
 
 // ─── Customer notification creation (with FCM push) ──────────────────────────
@@ -779,14 +1007,23 @@ export async function createCustomerNotification(
 ): Promise<ReturnType<typeof mapCustomerNotificationRow> | null> {
   await ensureCustomerTables();
 
+  const type = normalizeNotificationType(data.type);
+  const severity = normalizeSeverity(data.severity);
+  const title = cleanNotificationText(data.title, 255);
+  const safeBody = cleanNotificationText(data.safeBody, 1000);
+  const safeContextLabel = data.safeContextLabel == null ? null : cleanNotificationText(data.safeContextLabel, 255);
+  const route = sanitizeNotificationRoute(data.route);
+  if (!title || !safeBody) throw new Error('Notification title and safe body are required.');
+  if (data.notificationKey && !isSafeNotificationKey(data.notificationKey)) throw new Error('Invalid notification key.');
+
   const params: any[] = [
     userUid,
-    data.type || 'system',
-    data.severity || 'info',
-    data.title,
-    data.safeBody,
-    data.safeContextLabel || null,
-    data.route ? JSON.stringify(data.route) : null,
+    type,
+    severity,
+    title,
+    safeBody,
+    safeContextLabel,
+    route ? JSON.stringify(route) : null,
     data.canMarkRead !== false,
     data.canDismiss !== false,
     !!data.canOpenDetail,
@@ -801,9 +1038,9 @@ export async function createCustomerNotification(
          (notification_key, user_uid, type, severity, title, safe_body, safe_context_label,
           route, can_mark_read, can_dismiss, can_open_detail, expires_at)
        VALUES ($12, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       ON CONFLICT (notification_key) DO NOTHING
+       ON CONFLICT (user_uid, notification_key) DO NOTHING
        RETURNING *`,
-      [...params, data.notificationKey.substring(0, 64)],
+      [...params, data.notificationKey],
     );
     if ((result.rowCount ?? 0) === 0) return null;
     rows = result.rows;
@@ -832,7 +1069,7 @@ export async function createCustomerNotification(
     if (route.routeKey) fcmData.routeKey = String(route.routeKey);
     if (route.resourceId) fcmData.resourceId = String(route.resourceId);
   }
-  sendFcmPushToCustomer(userUid, data.title, data.safeBody, fcmData).catch(() => {});
+  sendFcmPushToCustomer(userUid, title, safeBody, fcmData).catch(() => {});
 
   return notification;
 }

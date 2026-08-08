@@ -387,6 +387,9 @@ export async function resolveReport(req: Request, res: Response) {
     if (!action || !['dismiss', 'redact', 'warn'].includes(action)) {
       return adminBadRequest(res, 'action must be dismiss, redact, or warn');
     }
+    if (note !== undefined && String(note).trim().length > 1000) {
+      return adminBadRequest(res, 'note must be at most 1000 characters');
+    }
     const result = await svc.resolveMessageReport(reportId, actor, action as 'dismiss' | 'redact' | 'warn', note);
     if (!result) return adminNotFound(res, 'Report');
     auditFire({

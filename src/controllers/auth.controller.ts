@@ -10,9 +10,11 @@ import { refreshIdToken, TokenRefreshError } from '../services/tokenRefreshServi
 import { sendAuthError } from "../errors/authErrors";
 import { continueUrlFor } from "../constants/platformContinueUrls";
 import {
-  isValidProviderProfileName,
-  providerRegistrationNames,
-} from "../contracts/providerProfileCreation";
+  normalizeProviderRegistrationInput,
+  normalizeProviderSourceClient,
+  ProfileCreationValidationError,
+  projectProviderRegistrationResponse,
+} from "../services/profileCreationContract";
 
 const signin = async (req: Request, res: Response) => {
     const { email, password, fcmToken } = req.body;
@@ -76,14 +78,34 @@ const adminSignin = async (req: Request, res: Response) => {
 const signup = async (req: Request, res: Response) => {
     try {
         const dbResponse = await authService.registerUser(req.body);
+        const userId =
+            (dbResponse as any).dbRegister?.uid ||
+            (dbResponse as any).dbRegister?.id || null;
+
+        // Keep classic provider-mobile signup aligned with the Firebase-first
+        // provider web path. These hooks are deliberately non-blocking: the
+        // account/profile write above is authoritative and must not be reported
+        // as failed because attribution or an eligibility refresh is delayed.
+        if (Number(req.body?.role) === 2 && userId) {
+            const inferredSource = req.body?.sourceClient ??
+                (req.body?.platform === 'mobile' ? 'provider_mobile' : 'provider_web');
+            const sourceClient = normalizeProviderSourceClient(inferredSource);
+            upsertSourceAttribution(userId, sourceClient, true, 'registration').catch(() => {});
+            autoOnlineEngine.evaluateProvider(userId, 'system', null).catch(() => {});
+        }
         // Inline response — avoid singleton successMessage race condition under concurrent requests.
         // Only forward known safe string error messages; never expose Error objects (may contain Firebase internals).
         return res.status(200).json({
             status: 'success',
             data: {
                 success: true,
-                userId: (dbResponse as any).dbRegister?.uid || null,
+                userId,
                 message: (dbResponse as any).message,
+                verificationType: (dbResponse as any).verificationType,
+                verificationDeliveryPending:
+                    (dbResponse as any).verificationDeliveryPending ??
+                    (dbResponse as any).otpDeliveryPending ?? false,
+                onboardingPending: (dbResponse as any).onboardingPending ?? false,
             },
         });
     } catch (error: any) {
@@ -273,21 +295,13 @@ export const customerFirebaseLoginController = async (req: Request, res: Respons
 
 export const providerRegisterController = async (req: Request, res: Response) => {
   try {
-    const { idToken, firstName, lastName } = req.body;
-
-    if (typeof idToken !== "string" || !idToken.trim()) {
-      return res.status(400).json({ status: "failed", message: "idToken is required" });
-    }
-    if (!isValidProviderProfileName(firstName) || !isValidProviderProfileName(lastName)) {
-      return res.status(400).json({ status: "failed", message: "Enter a valid first and last name (80 characters maximum)." });
-    }
-
-    const names = providerRegistrationNames(firstName, lastName);
+    const { idToken, firstName, lastName, sourceClient } =
+      normalizeProviderRegistrationInput(req.body);
 
     const result = await firebaseFunction.firebaseProviderRegister(
-      idToken.trim(),
-      names.firstName,
-      names.lastName,
+      idToken,
+      firstName,
+      lastName,
     );
 
     const registeredRole = Number(result?.data?.role);
@@ -300,15 +314,21 @@ export const providerRegisterController = async (req: Request, res: Response) =>
 
     // Non-blocking attribution: record registration source for the newly created provider
     if (result?.data?.uid) {
-      // This route belongs to the provider web portal. Do not trust a caller-
-      // supplied attribution value at this boundary.
-      upsertSourceAttribution(result.data.uid, 'provider_web', true, 'registration').catch(() => {});
+      upsertSourceAttribution(result.data.uid, sourceClient, true, 'registration').catch(() => {});
       // Non-blocking auto-online eligibility check on new provider registration
       autoOnlineEngine.evaluateProvider(result.data.uid, 'system', null).catch(() => {});
     }
 
-    return res.status(200).json(result);
+    return res.status(200).json(projectProviderRegistrationResponse(result));
   } catch (error: any) {
+    if (error instanceof ProfileCreationValidationError) {
+      return res.status(error.statusCode).json({
+        status: 'failed',
+        code: error.code,
+        field: error.field,
+        message: error.message,
+      });
+    }
     const isDisabled = error?.message?.includes("disabled");
     const isInvalidToken = typeof error?.code === "string" && error.code.startsWith("auth/");
     const responseStatus = isDisabled ? 403 : isInvalidToken ? 401 : 500;
@@ -338,10 +358,11 @@ export const addEmployeesController = async (req: Request, res: Response) => {
             autoOnlineEngine.evaluateProvider((r as any).uid, 'system', null).catch(() => {});
         });
 
-        return res.status(200).json({
-            status: "success",
+        const created = results.length - failed.length;
+        return res.status(created === 0 ? 422 : 200).json({
+            status: created === 0 ? "failed" : failed.length > 0 ? "partial" : "success",
             total: results.length,
-            created: results.length - failed.length,
+            created,
             failed: failed.length,
             results,
         });

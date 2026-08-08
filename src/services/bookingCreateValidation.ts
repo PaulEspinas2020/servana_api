@@ -1,6 +1,7 @@
 export type CustomerBookingCreatePayload = {
   userAddressId: string;
   serviceOptionId: number;
+  branchId?: number;
   schedule: string;
   paymentMethod: 'CASH' | 'GCASH' | 'PAYMONGO';
   pricing: Record<string, unknown>;
@@ -22,6 +23,14 @@ export function validateCustomerBookingCreatePayload(
     throw new Error('A valid service option is required.');
   }
 
+  const branchIdRaw = body.branchId;
+  const branchId = branchIdRaw === undefined || branchIdRaw === null || branchIdRaw === ''
+    ? undefined
+    : Number(branchIdRaw);
+  if (branchId !== undefined && (!Number.isSafeInteger(branchId) || branchId <= 0)) {
+    throw new Error('A valid branch is required.');
+  }
+
   const schedule = String(body.schedule ?? '').trim();
   const scheduleMs = Date.parse(schedule);
   if (!schedule || !Number.isFinite(scheduleMs)) {
@@ -40,6 +49,7 @@ export function validateCustomerBookingCreatePayload(
   return {
     userAddressId,
     serviceOptionId,
+    ...(branchId === undefined ? {} : { branchId }),
     schedule: new Date(scheduleMs).toISOString(),
     paymentMethod: paymentMethod as CustomerBookingCreatePayload['paymentMethod'],
     pricing:

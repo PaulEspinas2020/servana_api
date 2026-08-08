@@ -68,17 +68,23 @@ export const initChatSocket = (httpServer: HttpServer) => {
 
   chat.on("connection", (socket: Socket) => {
     const actor: chatService.ChatActor = (socket as any).actor;
+    const conversationIdOf = (raw: unknown): number => {
+      const value = Number(raw);
+      if (!Number.isSafeInteger(value) || value <= 0) throw new Error('Invalid conversation id');
+      return value;
+    };
 
     // Join a conversation room (authorized).
     socket.on("conversation:join", async ({ conversationId }, ack) => {
       try {
-        const { access } = await chatService.resolveAccessForConversation(actor, Number(conversationId));
+        const id = conversationIdOf(conversationId);
+        const { access } = await chatService.resolveAccessForConversation(actor, id);
         if (!access.allowed) return ack?.({ ok: false, error: "Forbidden" });
-        socket.join(roomName(Number(conversationId)));
-        const conversation = await chatService.getConversationWithParticipants(Number(conversationId));
+        socket.join(roomName(id));
+        const conversation = await chatService.getConversationWithParticipants(id, actor);
         ack?.({ ok: true, conversation });
-        socket.to(roomName(Number(conversationId))).emit("participant:joined", {
-          conversationId: Number(conversationId),
+        socket.to(roomName(id)).emit("participant:joined", {
+          conversationId: id,
           userUid: actor.uid,
           role: access.role,
         });
@@ -88,13 +94,13 @@ export const initChatSocket = (httpServer: HttpServer) => {
     });
 
     socket.on("conversation:leave", ({ conversationId }) => {
-      socket.leave(roomName(Number(conversationId)));
+      try { socket.leave(roomName(conversationIdOf(conversationId))); } catch { /* no-op */ }
     });
 
     // Send a message (same service path as the REST endpoint).
     socket.on("message:send", async (payload, ack) => {
       try {
-        const message = await chatService.sendMessage(actor, Number(payload.conversationId), {
+        const message = await chatService.sendMessage(actor, conversationIdOf(payload?.conversationId), {
           type: payload.type,
           body: payload.body,
           metadata: payload.metadata,
@@ -110,7 +116,7 @@ export const initChatSocket = (httpServer: HttpServer) => {
     // Read pointer.
     socket.on("message:read", async ({ conversationId, lastReadMessageId }, ack) => {
       try {
-        await chatService.markRead(actor, Number(conversationId), Number(lastReadMessageId));
+        await chatService.markRead(actor, conversationIdOf(conversationId), Number(lastReadMessageId));
         ack?.({ ok: true });
       } catch (e: any) {
         ack?.({ ok: false, error: e?.message || "error" });
@@ -121,10 +127,11 @@ export const initChatSocket = (httpServer: HttpServer) => {
     // before relaying so unauthenticated actors cannot spam rooms they don't belong to.
     socket.on("message:typing", async ({ conversationId, isTyping }) => {
       try {
-        const { access } = await chatService.resolveAccessForConversation(actor, Number(conversationId));
+        const id = conversationIdOf(conversationId);
+        const { access } = await chatService.resolveAccessForConversation(actor, id);
         if (!access.allowed) return;
-        socket.to(roomName(Number(conversationId))).emit("typing", {
-          conversationId: Number(conversationId),
+        socket.to(roomName(id)).emit("typing", {
+          conversationId: id,
           userUid: actor.uid,
           isTyping: !!isTyping,
         });

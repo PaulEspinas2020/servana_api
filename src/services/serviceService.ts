@@ -121,9 +121,10 @@ export const getAvailableSlots = async (
       bs.slot_time,
       bs.max_capacity,
       COUNT(b.id) FILTER (
-        WHERE DATE(b.schedule)=DATE($2)
-          AND TO_CHAR(b.schedule, 'HH24:MI')=TO_CHAR(bs.slot_time, 'HH24:MI')
-          AND b.status IN ('PENDING_OTP','CONFIRMED','WORKER_ASSIGNED','EN_ROUTE','ARRIVED','IN_PROGRESS')
+        WHERE (b.schedule AT TIME ZONE 'Asia/Manila')::date = $2::date
+          AND (b.schedule AT TIME ZONE 'Asia/Manila')::time = bs.slot_time::time
+          AND UPPER(COALESCE(b.status, '')) NOT IN
+              ('CANCELLED','CANCELED','COMPLETED','REVIEWED','EXPIRED','FAILED','REFUNDED')
       ) AS booked_count
     FROM ${dbSchema}.branch_slots bs
     LEFT JOIN ${dbSchema}.bookings b
@@ -135,11 +136,16 @@ export const getAvailableSlots = async (
         [branchId, date]
     );
 
-    return res.rows.map((row: any) => ({
-        slot_time: row.slot_time,
-        available: row.booked_count < row.max_capacity,
-        remaining_capacity: row.max_capacity - row.booked_count
-    }));
+    return res.rows.map((row: any) => {
+        const booked = Number(row.booked_count ?? 0);
+        const capacity = Number(row.max_capacity ?? 0);
+        return {
+            branch_id: branchId,
+            slot_time: row.slot_time,
+            available: booked < capacity,
+            remaining_capacity: Math.max(0, capacity - booked)
+        };
+    });
 };
 
 export const createSlot = async (
@@ -147,6 +153,13 @@ export const createSlot = async (
     slotTime: string,
     maxCapacity: number
 ) => {
+    if (!Number.isSafeInteger(branchId) || branchId <= 0) throw new Error('A valid branch is required');
+    if (typeof slotTime !== 'string' || !/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(slotTime)) {
+        throw new Error('slotTime must be a real HH:mm time');
+    }
+    if (!Number.isSafeInteger(maxCapacity) || maxCapacity < 1 || maxCapacity > 1000) {
+        throw new Error('maxCapacity must be an integer from 1 to 1000');
+    }
     const res = await dbQuery.query(
         `
     INSERT INTO ${dbSchema}.branch_slots (branch_id, slot_time, max_capacity)

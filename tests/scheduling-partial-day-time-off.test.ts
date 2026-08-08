@@ -16,9 +16,19 @@
  * and the query that decides bookability actually honours them. Storing them
  * without the second half would be the "foundations without callers" defect.
  */
+const mockDbQuery = jest.fn();
+const mockTxQuery = jest.fn((sql: string, params?: any[]) => {
+  const text = String(sql);
+  if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(text) || text.includes('pg_advisory_xact_lock'))
+    return Promise.resolve({ rows: [], rowCount: 0 });
+  if (text.includes('SELECT id FROM test.worker_time_off'))
+    return Promise.resolve({ rows: [], rowCount: 0 });
+  return mockDbQuery(sql, params);
+});
 jest.mock("../src/db/dbQuery", () => ({
   __esModule: true,
-  default: { query: jest.fn() },
+  default: { query: mockDbQuery },
+  pool: { connect: jest.fn(async () => ({ query: mockTxQuery, release: jest.fn() })) },
 }));
 jest.mock("../src/config", () => ({ __esModule: true, db: { schema: "test" } }));
 
@@ -195,6 +205,17 @@ describe("validation refuses rather than guessing", () => {
         "worker-A"
       )
     ).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it("rejects impossible calendar dates and oversized private notes", async () => {
+    await rejects(
+      { startDate: "2026-02-30", endDate: "2026-02-30" },
+      /real dates/i,
+    );
+    await rejects(
+      { startDate: "2026-08-10", endDate: "2026-08-10", note: "x".repeat(501) },
+      /at most 500/i,
+    );
   });
 });
 

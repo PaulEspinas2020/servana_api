@@ -1,5 +1,5 @@
 import { db } from "../config";
-import dbQuery from "../db/dbQuery";
+import dbQuery, { pool } from "../db/dbQuery";
 import mongoDb from "../db/mongodbQuery";
 import { generateOTP } from "../helpers/otp";
 import { send } from "../helpers/mailer";
@@ -7,14 +7,245 @@ import { getAutoBookableProviderUids } from "./providerAutoOnlineEngine";
 import { filterUidsAvailableAt } from "./providerAvailabilityEngine";
 import { getUserInfoByBookingId } from "./user.service";
 import { computeTranspoFee } from "./pricingService";
-import { createNotification } from "./notification.service";
+import { createCustomerNotification, createNotification } from "./notification.service";
 import { notifyAdminsSafely } from './adminNotificationService';
-import { classifyResponseMiss } from "./bookingResponseConflict";
+import { acceptanceConflictForSnapshot, classifyResponseMiss } from "./bookingResponseConflict";
 import { createDisbursement } from "./disbursement.service";
 import { getOrCreateConversation, postSystemMessageOnce } from "../chat/chat.service";
 import { findExistingConversationByBookingId } from "../chat/chat.repository";
+import { emitToProvider } from "../provider.realtime";
 
 const dbSchema = db.schema;
+
+const ASSIGNABLE_BOOKING_STATUSES = new Set(["CONFIRMED", "PAID"]);
+const TERMINAL_BOOKING_STATUSES = new Set([
+  "COMPLETED",
+  "CANCELED",
+  "CANCELLED",
+  "REFUNDED",
+  "FAILED",
+  "EXPIRED",
+]);
+
+export class BookingAssignmentError extends Error {
+  constructor(
+    readonly code:
+      | "BOOKING_NOT_FOUND"
+      | "BOOKING_NOT_ASSIGNABLE"
+      | "BOOKING_ALREADY_ASSIGNED",
+    message: string,
+  ) {
+    super(message);
+    this.name = "BookingAssignmentError";
+  }
+}
+
+type AssignmentTravel = {
+  etaMinutes: number;
+  otpCode: string;
+  transpoFee: number;
+  distanceKm: number;
+};
+
+type AssignmentWriteResult = {
+  kind: "created" | "existing" | "busy";
+  workerUid: string;
+  bookingStatus?: string;
+  customerUid?: string | null;
+  schedule?: Date;
+  etaAt?: Date | null;
+  assignment?: any;
+};
+
+/**
+ * The one write boundary for automatic and legacy/manual provider assignment.
+ *
+ * The booking row lock prevents two providers being attached to one booking;
+ * the provider advisory lock prevents two concurrent bookings selecting the
+ * same provider before either transaction becomes visible to the other.
+ * Booking, assignment and tracking are committed or rolled back together.
+ */
+const persistWorkerAssignment = async (input: {
+  bookingId: number;
+  workerUid: string;
+  note: string;
+  travel?: AssignmentTravel;
+  returnExistingAssignment?: boolean;
+}): Promise<AssignmentWriteResult> => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtext($1))",
+      [`servana-provider-assignment:${input.workerUid}`],
+    );
+
+    const bookingRes = await client.query(
+      `SELECT id, status, worker_uid, user_id, schedule
+       FROM ${dbSchema}.bookings
+       WHERE id = $1
+       FOR UPDATE`,
+      [input.bookingId],
+    );
+    if (!bookingRes.rowCount) {
+      throw new BookingAssignmentError("BOOKING_NOT_FOUND", "Booking not found");
+    }
+
+    const booking = bookingRes.rows[0];
+    const status = String(booking.status ?? "").toUpperCase();
+    const currentWorkerUid = booking.worker_uid ? String(booking.worker_uid) : null;
+
+    if (currentWorkerUid) {
+      if (currentWorkerUid !== input.workerUid && !input.returnExistingAssignment) {
+        throw new BookingAssignmentError(
+          "BOOKING_ALREADY_ASSIGNED",
+          "Booking is already assigned to another provider",
+        );
+      }
+      await client.query("COMMIT");
+      return {
+        kind: "existing",
+        workerUid: currentWorkerUid,
+        bookingStatus: status,
+        customerUid: booking.user_id ?? null,
+        schedule: new Date(booking.schedule),
+      };
+    }
+
+    if (TERMINAL_BOOKING_STATUSES.has(status) || !ASSIGNABLE_BOOKING_STATUSES.has(status)) {
+      throw new BookingAssignmentError(
+        "BOOKING_NOT_ASSIGNABLE",
+        `Booking cannot be assigned from status ${status || "UNKNOWN"}`,
+      );
+    }
+
+    const schedule = new Date(booking.schedule);
+    const windowStart = new Date(schedule.getTime() - 2 * 60 * 60 * 1000);
+    const windowEnd = new Date(schedule.getTime() + 2 * 60 * 60 * 1000);
+    const busyRes = await client.query(
+      `SELECT id
+       FROM ${dbSchema}.bookings
+       WHERE worker_uid = $1
+         AND id <> $2
+         AND schedule BETWEEN $3 AND $4
+         AND status NOT IN ('COMPLETED','CANCELED','CANCELLED','REFUNDED','FAILED','EXPIRED')
+       LIMIT 1`,
+      [input.workerUid, input.bookingId, windowStart, windowEnd],
+    );
+    if (busyRes.rowCount) {
+      await client.query("ROLLBACK");
+      return { kind: "busy", workerUid: input.workerUid };
+    }
+
+    const travel = input.travel ?? null;
+    const updateRes = await client.query(
+      `UPDATE ${dbSchema}.bookings
+       SET worker_uid = $2,
+           status = 'WORKER_ASSIGNED',
+           eta_minutes = CASE WHEN $3::int IS NULL THEN eta_minutes ELSE $3::int END,
+           eta_at = CASE
+             WHEN $3::int IS NULL THEN eta_at
+             ELSE NOW() + ($3::int * interval '1 minute')
+           END,
+           worker_code = COALESCE($4, worker_code),
+           transpo_fee = CASE WHEN $5::numeric IS NULL THEN transpo_fee ELSE $5::numeric END,
+           final_price = CASE WHEN $5::numeric IS NULL THEN final_price ELSE quoted_price + $5::numeric END,
+           pricing_breakdown = CASE
+             WHEN $5::numeric IS NULL THEN pricing_breakdown
+             ELSE COALESCE(pricing_breakdown, '{}'::jsonb) || jsonb_build_object(
+               'transpo_fee', $5::numeric,
+               'worker_distance', $6::numeric
+             )
+           END
+       WHERE id = $1
+         AND worker_uid IS NULL
+         AND status IN ('CONFIRMED','PAID')
+       RETURNING user_id, schedule, eta_at`,
+      [
+        input.bookingId,
+        input.workerUid,
+        travel?.etaMinutes ?? null,
+        travel?.otpCode ?? null,
+        travel?.transpoFee ?? null,
+        travel ? Math.round(travel.distanceKm * 100) / 100 : null,
+      ],
+    );
+    if (!updateRes.rowCount) {
+      throw new BookingAssignmentError(
+        "BOOKING_ALREADY_ASSIGNED",
+        "Booking assignment changed concurrently",
+      );
+    }
+
+    const assignmentRes = await client.query(
+      `INSERT INTO ${dbSchema}.booking_workers
+         (booking_id, worker_uid, status, assigned_at)
+       VALUES ($1,$2,'ASSIGNED',NOW())
+       RETURNING *`,
+      [input.bookingId, input.workerUid],
+    );
+    await client.query(
+      `INSERT INTO ${dbSchema}.booking_tracking (booking_id,status,note)
+       VALUES ($1,'WORKER_ASSIGNED',$2)`,
+      [input.bookingId, input.note],
+    );
+
+    await client.query("COMMIT");
+    return {
+      kind: "created",
+      workerUid: input.workerUid,
+      bookingStatus: "WORKER_ASSIGNED",
+      customerUid: updateRes.rows[0]?.user_id ?? null,
+      schedule: new Date(updateRes.rows[0]?.schedule ?? booking.schedule),
+      etaAt: updateRes.rows[0]?.eta_at ? new Date(updateRes.rows[0].eta_at) : null,
+      assignment: assignmentRes.rows[0],
+    };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const publishWorkerAssignment = (input: {
+  bookingId: number;
+  workerUid: string;
+  customerUid?: string | null;
+  source: "automatic" | "manual";
+}) => {
+  const code = `SVN-${String(input.bookingId).padStart(6, "0")}`;
+  createNotification(input.workerUid, {
+    notificationKey: `assigned_job_${input.bookingId}_${input.workerUid}`,
+    type: "assigned_job",
+    severity: "info",
+    title: "New Job Assigned",
+    safeBody: `You have been assigned to booking ${code}. Please review and respond.`,
+    safeContextLabel: code,
+    route: { page: "jobs", bookingId: String(input.bookingId) },
+    canOpenDetail: true,
+  }).catch((e) => console.error("createNotification (assignment):", e));
+
+  if (input.customerUid) {
+    createCustomerNotification(input.customerUid, {
+      notificationKey: `provider_assigned_${input.bookingId}`,
+      type: "provider_assigned",
+      severity: "success",
+      title: "Provider assigned",
+      safeBody: "A provider has been assigned and is reviewing your booking.",
+      safeContextLabel: code,
+      route: { routeKey: "BOOKING_DETAILS", resourceId: String(input.bookingId) },
+      canOpenDetail: true,
+    }).catch((e) => console.error("createCustomerNotification (assignment):", e));
+  }
+
+  emitToProvider(input.workerUid, "booking:updated", {
+    bookingId: String(input.bookingId),
+    status: "ASSIGNED",
+    assignmentSource: input.source,
+    occurredAt: new Date().toISOString(),
+  });
+};
 
 export const listWorkersByRole = async (role: number) => {
   const r = await dbQuery.query(
@@ -556,9 +787,12 @@ export const assignNearestWorker = async (
   serviceId?: number | null
 ) => {
 
-  // 1. Get the booking's schedule for availability check
+  // 1. Resolve the booking once for candidate filtering. The transactional
+  // write below re-locks and revalidates it before changing any state.
   const bookingRes = await dbQuery.query(
-    `SELECT schedule FROM ${dbSchema}.bookings WHERE id = $1`,
+    `SELECT schedule, status, worker_uid, user_id
+     FROM ${dbSchema}.bookings
+     WHERE id = $1`,
     [bookingId]
   );
 
@@ -566,7 +800,21 @@ export const assignNearestWorker = async (
     throw new Error("Booking not found");
   }
 
-  const schedule = new Date(bookingRes.rows[0].schedule);
+  const booking = bookingRes.rows[0];
+  const bookingStatus = String(booking.status ?? "").toUpperCase();
+  if (booking.worker_uid) {
+    return {
+      assigned: true,
+      worker_uid: String(booking.worker_uid),
+      idempotent: true,
+    };
+  }
+  if (TERMINAL_BOOKING_STATUSES.has(bookingStatus) ||
+      !ASSIGNABLE_BOOKING_STATUSES.has(bookingStatus)) {
+    return { assigned: false, reason: "BOOKING_NOT_ASSIGNABLE", status: bookingStatus };
+  }
+
+  const schedule = new Date(booking.schedule);
   const windowStart = new Date(schedule.getTime() - 2 * 60 * 60 * 1000);
   const windowEnd   = new Date(schedule.getTime() + 2 * 60 * 60 * 1000);
 
@@ -577,7 +825,7 @@ export const assignNearestWorker = async (
     FROM ${dbSchema}.bookings
     WHERE worker_uid IS NOT NULL
       AND schedule BETWEEN $1 AND $2
-      AND status NOT IN ('COMPLETED', 'CANCELED')
+      AND status NOT IN ('COMPLETED','CANCELED','CANCELLED','REFUNDED','FAILED','EXPIRED')
       AND id != $3
     `,
     [windowStart, windowEnd, bookingId]
@@ -641,7 +889,9 @@ export const assignNearestWorker = async (
     return { assigned: false, reason: "NO_WORKER_AVAILABLE_IN_SCHEDULE" };
   }
 
-  // 4. Rank available workers by distance and pick the nearest
+  // 4. Rank available workers by distance. Candidate availability is checked
+  // again inside the transaction, so a concurrent assignment falls through to
+  // the next candidate instead of double-booking the nearest provider.
   const ranked = availableWorkers
     .map((w: any) => {
       const [lon, lat] = w.loc.coordinates;
@@ -652,48 +902,50 @@ export const assignNearestWorker = async (
     })
     .sort((a, b) => a.distanceKm - b.distanceKm);
 
-  const best = ranked[0];
-  const avgSpeedKph = 30;
-  const etaMinutes = Math.floor(
-    Math.max(5, Math.ceil((best.distanceKm / avgSpeedKph) * 60))
-  );
-  const otpCode = generateOTP();
-  const transpoFee = computeTranspoFee(best.distanceKm);
-  // Apply transpo fee: add to final_price and persist into pricing_breakdown
-  await dbQuery.query(
-    `
-    UPDATE ${dbSchema}.bookings
-    SET worker_uid    = $1,
-        status        = 'WORKER_ASSIGNED',
-        eta_minutes   = $2::int,
-        eta_at        = NOW() + ($2::int * interval '1 minute'),
-        worker_code   = $4,
-        transpo_fee   = $5,
-        final_price   = quoted_price + $5,
-        pricing_breakdown = pricing_breakdown || jsonb_build_object(
-          'transpo_fee',     $5::numeric,
-          'worker_distance', $6::numeric
-        )
-    WHERE id = $3
-    `,
-    [best.uid, etaMinutes, bookingId, otpCode, transpoFee, Math.round(best.distanceKm * 100) / 100]
-  );
+  let selected: typeof ranked[number] | null = null;
+  let persisted: AssignmentWriteResult | null = null;
+  let etaMinutes = 0;
+  let transpoFee = 0;
 
-  await dbQuery.query(
-    `
-    INSERT INTO ${dbSchema}.booking_workers (booking_id, worker_uid, status)
-    VALUES ($1,$2,'ASSIGNED')
-    `,
-    [bookingId, best.uid]
-  );
+  for (const candidate of ranked) {
+    const avgSpeedKph = 30;
+    const candidateEta = Math.floor(
+      Math.max(5, Math.ceil((candidate.distanceKm / avgSpeedKph) * 60))
+    );
+    const candidateFee = computeTranspoFee(candidate.distanceKm);
+    const result = await persistWorkerAssignment({
+      bookingId,
+      workerUid: candidate.uid,
+      note: "Nearest worker assigned",
+      returnExistingAssignment: true,
+      travel: {
+        etaMinutes: candidateEta,
+        otpCode: generateOTP(),
+        transpoFee: candidateFee,
+        distanceKm: candidate.distanceKm,
+      },
+    });
+    if (result.kind === "busy") continue;
+    if (result.kind === "existing") {
+      return {
+        assigned: true,
+        worker_uid: result.workerUid,
+        idempotent: true,
+      };
+    }
+    selected = candidate;
+    persisted = result;
+    etaMinutes = candidateEta;
+    transpoFee = candidateFee;
+    break;
+  }
 
-  await dbQuery.query(
-    `
-    INSERT INTO ${dbSchema}.booking_tracking (booking_id,status,note)
-    VALUES ($1,'WORKER_ASSIGNED','Nearest worker assigned')
-    `,
-    [bookingId]
-  );
+  if (!selected || !persisted) {
+    await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);
+    return { assigned: false, reason: "NO_WORKER_AVAILABLE_AFTER_RECHECK" };
+  }
+
+  const best = selected;
 
   notifyAdminsSafely({
     type: 'booking_auto_assigned', severity: 'success', title: 'Booking auto-assigned',
@@ -701,24 +953,27 @@ export const assignNearestWorker = async (
     bookingId, notificationKey: `booking_auto_assigned_${bookingId}_${best.uid}`,
   });
 
+  publishWorkerAssignment({
+    bookingId,
+    workerUid: best.uid,
+    customerUid: persisted.customerUid,
+    source: "automatic",
+  });
+
   // Notify customer that a technician has been assigned
   try {
     const userInfo = await getUserInfoByBookingId(bookingId);
     if (userInfo) {
-      const bookingRes = await dbQuery.query(
-        `SELECT schedule FROM ${dbSchema}.bookings WHERE id = $1`,
-        [bookingId]
-      );
       const workerRes = await dbQuery.query(
         `SELECT first_name, last_name FROM ${dbSchema}.user_credentials WHERE uid = $1`,
         [best.uid]
       );
-      const schedule = bookingRes.rows[0]?.schedule;
+      const assignedSchedule = persisted.schedule ?? schedule;
       const workerName = workerRes.rows[0]
         ? `${workerRes.rows[0].first_name} ${workerRes.rows[0].last_name}`
         : "Your technician";
-      const etaAt = schedule
-        ? new Date(new Date(schedule).getTime() - etaMinutes * 60000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
+      const etaAt = persisted.etaAt
+        ? new Date(persisted.etaAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
         : "";
       send(userInfo.email, "booking_worker_assigned", {
         first_name:   userInfo.firstName,
@@ -726,8 +981,8 @@ export const assignNearestWorker = async (
         worker_name:  workerName,
         eta_minutes:  etaMinutes,
         eta_at:       etaAt,
-        booking_date: schedule ? new Date(schedule).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "",
-        booking_time: schedule ? new Date(schedule).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : "",
+        booking_date: assignedSchedule ? new Date(assignedSchedule).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "",
+        booking_time: assignedSchedule ? new Date(assignedSchedule).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : "",
       });
     }
   } catch (emailErr) {
@@ -739,8 +994,7 @@ export const assignNearestWorker = async (
     worker_uid: best.uid,
     etaMinutes,
     transpoFee,
-    workerDistanceKm: Math.round(best.distanceKm * 100) / 100,
-    otpCode
+    workerDistanceKm: Math.round(best.distanceKm * 100) / 100
   };
 };
 
@@ -764,12 +1018,22 @@ export const getWorkerSchedule = async (workerId: string) => {
       bw.started_at,
       bw.completed_at
     FROM ${dbSchema}.bookings b
-    LEFT JOIN ${dbSchema}.payments p
-      ON p.booking_id = b.id
+    LEFT JOIN LATERAL (
+      SELECT p1.status
+      FROM ${dbSchema}.payments p1
+      WHERE p1.booking_id = b.id
+      ORDER BY p1.id DESC
+      LIMIT 1
+    ) p ON TRUE
     LEFT JOIN ${dbSchema}.user_address ua
       ON ua.address_id = b.user_address_id
-    LEFT JOIN ${dbSchema}.booking_workers bw
-      ON bw.booking_id = b.id AND bw.worker_uid = $1
+    JOIN LATERAL (
+      SELECT bw1.status, bw1.assigned_at, bw1.started_at, bw1.completed_at
+      FROM ${dbSchema}.booking_workers bw1
+      WHERE bw1.booking_id = b.id AND bw1.worker_uid = $1
+      ORDER BY bw1.assigned_at DESC NULLS LAST, bw1.id DESC
+      LIMIT 1
+    ) bw ON TRUE
     WHERE b.worker_uid = $1
     ORDER BY b.schedule ASC
     `,
@@ -779,11 +1043,12 @@ export const getWorkerSchedule = async (workerId: string) => {
   return res.rows;
 };
 
-export const getJobCardsByWorker = async (workerId: string) => {
+export const getJobCardsByWorker = async (workerId: string, bookingId?: number | null) => {
   const res = await dbQuery.query(
     `
     SELECT
       b.id AS booking_id,
+      b.worker_uid,
       b.status,
       b.schedule,
       p.method AS payment_method,
@@ -827,17 +1092,28 @@ export const getJobCardsByWorker = async (workerId: string) => {
     LEFT JOIN ${dbSchema}.service_options s
       ON s.id = b.service_option_id
 
-    LEFT JOIN ${dbSchema}.payments p
-      ON p.booking_id = b.id
+    LEFT JOIN LATERAL (
+      SELECT p1.method, p1.status
+      FROM ${dbSchema}.payments p1
+      WHERE p1.booking_id = b.id
+      ORDER BY p1.id DESC
+      LIMIT 1
+    ) p ON TRUE
 
-    LEFT JOIN ${dbSchema}.booking_workers bw
-      ON bw.booking_id = b.id AND bw.worker_uid = $1
+    JOIN LATERAL (
+      SELECT bw1.status, bw1.assigned_at, bw1.started_at, bw1.completed_at
+      FROM ${dbSchema}.booking_workers bw1
+      WHERE bw1.booking_id = b.id AND bw1.worker_uid = $1
+      ORDER BY bw1.assigned_at DESC NULLS LAST, bw1.id DESC
+      LIMIT 1
+    ) bw ON TRUE
 
     WHERE b.worker_uid = $1
+    AND ($2::int IS NULL OR b.id = $2)
     AND bw.status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
     ORDER BY b.schedule ASC
     `,
-    [workerId]
+    [workerId, bookingId ?? null]
   );
 
   return res.rows;
@@ -882,7 +1158,7 @@ export const getAvailableWorkers = async (schedule: string, serviceId?: number) 
     FROM ${dbSchema}.bookings b
     WHERE b.worker_uid IS NOT NULL
       AND b.schedule BETWEEN $1 AND $2
-      AND b.status NOT IN ('COMPLETED', 'CANCELED')
+      AND b.status NOT IN ('COMPLETED','CANCELED','CANCELLED','REFUNDED','FAILED','EXPIRED')
   `;
   const { rows: busyRows } = await dbQuery.query(busyQuery, [windowStart, windowEnd]);
   const busyUids = new Set(busyRows.map((r: any) => r.worker_uid));
@@ -930,7 +1206,10 @@ export const assignWorker = async (bookingId: number, workerUid: string) => {
     [workerUid, serviceId]
   );
 
-  if (!eligibilityRes.rowCount) {
+  const approvedApplicationUids = eligibilityRes.rowCount
+    ? []
+    : await getAutoBookableProviderUids(serviceId);
+  if (!eligibilityRes.rowCount && !approvedApplicationUids.includes(workerUid)) {
     // Fetch service name for a helpful error message
     const svcRes = await dbQuery.query(
       `SELECT name FROM ${dbSchema}.services WHERE id = $1`,
@@ -944,95 +1223,141 @@ export const assignWorker = async (bookingId: number, workerUid: string) => {
   }
 
   // 3. Check if the worker already has a conflicting booking within ±2h
-  const windowStart = new Date(schedule.getTime() - 2 * 60 * 60 * 1000);
-  const windowEnd   = new Date(schedule.getTime() + 2 * 60 * 60 * 1000);
-
-  const conflictRes = await dbQuery.query(
-    `
-    SELECT id FROM ${dbSchema}.bookings
-    WHERE worker_uid = $1
-      AND schedule BETWEEN $2 AND $3
-      AND status NOT IN ('COMPLETED', 'CANCELED')
-      AND id != $4
-    LIMIT 1
-    `,
-    [workerUid, windowStart, windowEnd, bookingId]
+  const availability = await filterUidsAvailableAt(
+    [workerUid],
+    schedule.toISOString(),
+    new Date(schedule.getTime() + 60 * 60 * 1000).toISOString(),
+    { missingScheduleIsAvailable: true },
   );
+  if (!availability.eligible.includes(workerUid)) {
+    throw new Error(
+      `Worker is not available at ${schedule.toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })}. ` +
+      `Their saved schedule or time off excludes this booking.`
+    );
+  }
 
-  if (conflictRes.rowCount) {
+  const persisted = await persistWorkerAssignment({
+    bookingId,
+    workerUid,
+    note: "Worker manually assigned",
+  });
+  if (persisted.kind === "busy") {
     throw new Error(
       `Worker is not available at ${schedule.toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })}. ` +
       `They have an existing booking within a 2-hour window.`
     );
   }
 
-  // 3. Assign the worker
-  const res = await dbQuery.query(
-    `
-    INSERT INTO ${dbSchema}.booking_workers (worker_uid, booking_id, status, assigned_at)
-    VALUES ($1, $2, 'ASSIGNED', NOW())
-    RETURNING *
-    `,
-    [workerUid, bookingId]
-  );
-
-  if (!res.rowCount) {
-    throw new Error("Failed to assign worker");
+  if (persisted.kind === "created") {
+    publishWorkerAssignment({
+      bookingId,
+      workerUid,
+      customerUid: persisted.customerUid,
+      source: "manual",
+    });
   }
 
-  // 4. Update the booking with the assigned worker
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET worker_uid = $1, status = 'WORKER_ASSIGNED' WHERE id = $2`,
-    [workerUid, bookingId]
-  );
+  return persisted.kind === "existing"
+    ? { booking_id: bookingId, worker_uid: workerUid, status: "ASSIGNED", idempotent: true }
+    : persisted.assignment;
+};
 
-  await dbQuery.query(
-    `INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note) VALUES ($1, 'WORKER_ASSIGNED', 'Worker manually assigned')`,
-    [bookingId]
-  );
-
-  const code = `SVN-${String(bookingId).padStart(6, "0")}`;
-  createNotification(workerUid, {
-    type: "assigned_job",
-    severity: "info",
-    title: "New Job Assigned",
-    safeBody: `You have been assigned to booking ${code}. Please check your upcoming jobs.`,
-    safeContextLabel: code,
-    route: { page: "jobs", bookingId: String(bookingId) },
-    canOpenDetail: true,
-  }).catch((e) => console.error("createNotification (assignWorker):", e));
-
-  return res.rows[0];
+export const getJobCardByWorker = async (workerId: string, bookingId: number) => {
+  const rows = await getJobCardsByWorker(workerId, bookingId);
+  return rows[0] ?? null;
 };
 
 export const acceptJob = async (bookingId: number, workerUid: string) => {
   // accepted_at is added by this lazy DDL; the UPDATE below writes it.
   await ensureArrivalColumns();
 
-  const res = await dbQuery.query(
-    `
-    UPDATE ${dbSchema}.booking_workers
-    SET status = 'ACCEPTED',
-        accepted_at = NOW()
-    WHERE booking_id = $1
-    AND worker_uid = $2
-    AND status = 'ASSIGNED'
-    RETURNING *
-    `,
-    [bookingId, workerUid]
-  );
+  const client = await pool.connect();
+  let accepted: any;
+  let customerUid: string | null = null;
+  try {
+    await client.query("BEGIN");
 
-  if (!res.rowCount) {
-    // The CAS found no ASSIGNED row. Explain why rather than throwing a bare
-    // Error that every controller flattened into "500 Server error" — a
-    // double-tap and a reassignment are different things (C18 §12).
-    throw await classifyResponseMiss(bookingId, workerUid, "ACCEPT");
+    // Lock the booking first so cancellation/reassignment cannot cross the
+    // acceptance boundary between validation and the assignment CAS.
+    const bookingRes = await client.query(
+      `SELECT id, status, worker_uid, user_id
+       FROM ${dbSchema}.bookings
+       WHERE id = $1
+       FOR UPDATE`,
+      [bookingId],
+    );
+    const booking = bookingRes.rows[0] ?? null;
+
+    const assignmentRes = await client.query(
+      `SELECT id, status
+       FROM ${dbSchema}.booking_workers
+       WHERE booking_id = $1 AND worker_uid = $2
+       ORDER BY assigned_at DESC NULLS LAST, id DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [bookingId, workerUid],
+    );
+    const assignment = assignmentRes.rows[0] ?? null;
+
+    const conflict = acceptanceConflictForSnapshot({
+      bookingStatus: booking?.status ?? null,
+      bookingWorkerUid: booking?.worker_uid ?? null,
+      assignmentStatus: assignment?.status ?? null,
+      workerUid,
+    });
+    if (conflict) throw conflict;
+
+    const updateRes = await client.query(
+      `UPDATE ${dbSchema}.booking_workers
+       SET status = 'ACCEPTED', accepted_at = NOW()
+       WHERE id = $1 AND status = 'ASSIGNED'
+       RETURNING *`,
+      [assignment.id],
+    );
+    if (!updateRes.rowCount) {
+      throw new Error("Booking acceptance changed concurrently");
+    }
+
+    await client.query(
+      `INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note)
+       VALUES ($1, 'ACCEPTED', 'Provider accepted the booking')`,
+      [bookingId],
+    );
+
+    accepted = updateRes.rows[0];
+    customerUid = booking.user_id ?? null;
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
 
   notifyAdminsSafely({
     type: 'provider_accepted', severity: 'success', title: 'Provider accepted booking',
     body: `The auto-assigned provider accepted booking SVN-${String(bookingId).padStart(6, '0')}.`,
     bookingId, notificationKey: `provider_accepted_${bookingId}_${workerUid}`,
+  });
+
+  if (customerUid) {
+    createCustomerNotification(customerUid, {
+      notificationKey: `booking_accepted_${bookingId}`,
+      type: "booking_accepted",
+      severity: "success",
+      title: "Provider confirmed",
+      safeBody: "Your provider accepted the booking and will arrive as scheduled.",
+      safeContextLabel: `SVN-${String(bookingId).padStart(6, "0")}`,
+      route: { routeKey: "BOOKING_DETAILS", resourceId: String(bookingId) },
+      canOpenDetail: true,
+    }).catch((e) => console.error("createCustomerNotification (acceptJob):", e));
+  }
+
+  emitToProvider(workerUid, "booking:updated", {
+    bookingId: String(bookingId),
+    status: "ACCEPTED",
+    acceptedAt: accepted.accepted_at ?? null,
+    occurredAt: new Date().toISOString(),
   });
 
   // Notify customer that the technician has accepted and is on the way
@@ -1080,7 +1405,7 @@ export const acceptJob = async (bookingId: number, workerUid: string) => {
     }
   })();
 
-  return res.rows[0];
+  return { ...accepted, effectiveStatus: "ACCEPTED", idempotent: false };
 };
 
 /**

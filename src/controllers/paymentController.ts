@@ -80,7 +80,18 @@ export const createPaymongoPayment = async (req: Request, res: Response) => {
     if (!Number.isSafeInteger(bookingId) || bookingId <= 0) {
       return res.status(400).json({ success: false, message: "Invalid bookingId" });
     }
-    await assertBookingAccess(bookingId, (req as any).user?.uid);
+    const role = await assertBookingAccess(bookingId, (req as any).user?.uid);
+    // Checkout URLs are customer credentials for completing a charge. The
+    // assigned provider may see settlement status, but must never receive or
+    // create the customer's hosted-checkout session. Admin access remains for
+    // support-assisted recovery.
+    if (role === "provider") {
+      throw new BookingAccessError(
+        "Only the customer or Servana support can start this payment",
+        403,
+        "BOOKING_ACCESS_DENIED",
+      );
+    }
 
     const result = await paymentService.createCheckoutSession(bookingId);
 
@@ -92,9 +103,11 @@ export const createPaymongoPayment = async (req: Request, res: Response) => {
   } catch (error: any) {
     if (sendBookingAccessError(res, error)) return;
 
-    return res.status(400).json({
+    const statusCode = Number.isSafeInteger(error?.statusCode) ? error.statusCode : 502;
+    return res.status(statusCode).json({
       success: false,
-      message: error.message
+      code: error?.code ?? "PAYMONGO_CHECKOUT_FAILED",
+      message: error?.statusCode ? error.message : "Online payment is temporarily unavailable",
     });
 
   }
@@ -114,7 +127,9 @@ export const paymongoWebhook = async (req: Request, res: Response) => {
       return res.status(200).json({ received: true, duplicate: true });
     }
 
-    const isSignatureError = error?.message === "Invalid signature" || error?.message === "Missing signature header";
+    const isSignatureError = error?.message === "Invalid signature" ||
+      error?.message === "Missing signature header" ||
+      error?.message === "PayMongo webhook environment mismatch";
 
     // 401 for a bad signature, 400 for a malformed payload — both are
     // permanent, and PayMongo should stop retrying them. Anything else is

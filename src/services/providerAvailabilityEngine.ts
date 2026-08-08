@@ -17,6 +17,7 @@
  */
 
 import dbQuery from '../db/dbQuery';
+import { pool } from '../db/dbQuery';
 import { db } from '../config';
 
 const s = db.schema;
@@ -85,7 +86,7 @@ const bootstrap = async () => {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-import { zonedParts, operationalDate, OPERATIONAL_TIMEZONE } from './operationalTimezone';
+import { zonedParts, zonedDateTimeToUtc, operationalDate, OPERATIONAL_TIMEZONE } from './operationalTimezone';
 
 export interface WeeklyScheduleSlot {
   dayOfWeek: 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -140,15 +141,30 @@ const DOW_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Fri
 export const validateWeeklySchedule = (slots: WeeklyScheduleSlot[]): string[] => {
   const errors: string[] = [];
   if (!Array.isArray(slots)) { errors.push('schedule must be an array'); return errors; }
+  if (slots.length > 100) { errors.push('schedule cannot contain more than 100 slots'); return errors; }
+
+  const validTime = (value: unknown): value is string => {
+    if (typeof value !== 'string' || !TIME_RE.test(value)) return false;
+    const [hour, minute] = value.split(':').map(Number);
+    return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
+  };
 
   for (let i = 0; i < slots.length; i++) {
     const slot = slots[i];
-    if (!VALID_DOW.includes(slot.dayOfWeek)) errors.push(`slot[${i}]: invalid dayOfWeek ${slot.dayOfWeek}`);
-    if (!TIME_RE.test(slot.startTime))       errors.push(`slot[${i}]: startTime must be HH:mm`);
-    if (!TIME_RE.test(slot.endTime))         errors.push(`slot[${i}]: endTime must be HH:mm`);
-    if (slot.startTime >= slot.endTime)      errors.push(`slot[${i}]: startTime must be before endTime`);
-    if (slot.maxJobs !== undefined && slot.maxJobs !== null && slot.maxJobs < 1)
-                                             errors.push(`slot[${i}]: maxJobs must be >= 1`);
+    if (!slot || typeof slot !== 'object') { errors.push(`slot[${i}]: must be an object`); continue; }
+    if (!Number.isInteger(slot.dayOfWeek) || !VALID_DOW.includes(slot.dayOfWeek))
+      errors.push(`slot[${i}]: invalid dayOfWeek ${slot.dayOfWeek}`);
+    const startValid = validTime(slot.startTime);
+    const endValid = validTime(slot.endTime);
+    if (!startValid) errors.push(`slot[${i}]: startTime must be a real HH:mm time`);
+    if (!endValid)   errors.push(`slot[${i}]: endTime must be a real HH:mm time`);
+    if (startValid && endValid && slot.startTime >= slot.endTime)
+      errors.push(`slot[${i}]: startTime must be before endTime`);
+    if (typeof slot.isAvailable !== 'boolean')
+      errors.push(`slot[${i}]: isAvailable must be boolean`);
+    if (slot.maxJobs !== undefined && slot.maxJobs !== null &&
+        (!Number.isInteger(slot.maxJobs) || slot.maxJobs < 1 || slot.maxJobs > 100))
+      errors.push(`slot[${i}]: maxJobs must be an integer from 1 to 100`);
   }
 
   // Overlap check per day
@@ -240,7 +256,10 @@ export const getAvailabilityProfile = async (providerUid: string): Promise<Provi
     nextAvailableAt,
     updatedAt:    row?.updated_at  ?? null,
     updatedBy:    row?.updated_by  ?? null,
-    version:      Number(row?.version ?? 1),
+    // Version zero is the compare-and-set token for a record that does not
+    // exist yet. Returning one here made a provider's very first save look
+    // stale as soon as clients began sending expectedVersion.
+    version:      row ? Number(row.version ?? 1) : 0,
     compatibility: {
       legacyWorkerAvailabilitySynced: true,
       source: row ? 'canonical' : 'missing',
@@ -275,19 +294,11 @@ export const saveWeeklySchedule = async (
   }
 
   // Optimistic locking — if expectedVersion provided, enforce it
-  if (expectedVersion !== undefined) {
-    const currentRes = await dbQuery.query(
-      `SELECT version FROM ${s}.worker_availability WHERE worker_uid = $1`,
-      [providerUid]
-    );
-    const currentVersion = Number(currentRes.rows[0]?.version ?? 0);
-    if (currentRes.rowCount && currentVersion !== expectedVersion) {
-      const err: any = new Error(
-        `Version conflict: expected ${expectedVersion} but backend has ${currentVersion}. Reload and try again.`
-      );
-      err.statusCode = 409;
-      throw err;
-    }
+  if (expectedVersion !== undefined &&
+      (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0)) {
+    const err: any = new Error('expectedVersion must be a non-negative integer');
+    err.statusCode = 422;
+    throw err;
   }
 
   // Normalize slot shape to canonical before storing
@@ -302,16 +313,31 @@ export const saveWeeklySchedule = async (
 
   const res = await dbQuery.query(
     `INSERT INTO ${s}.worker_availability (worker_uid, schedule, timezone, updated_at, updated_by, version)
-     VALUES ($1, $2, $3, NOW(), $4, 1)
+     SELECT $1, $2::jsonb, $3, NOW(), $4, 1
+      WHERE $5::integer IS NULL
+         OR $5::integer = 0
+         OR EXISTS (
+              SELECT 1 FROM ${s}.worker_availability current
+               WHERE current.worker_uid = $1
+                 AND current.version = $5::integer
+            )
      ON CONFLICT (worker_uid) DO UPDATE
        SET schedule   = EXCLUDED.schedule,
            timezone   = EXCLUDED.timezone,
            updated_at = NOW(),
            updated_by = $4,
            version    = ${s}.worker_availability.version + 1
+       WHERE $5::integer IS NULL
+          OR ${s}.worker_availability.version = $5::integer
      RETURNING updated_at, version`,
-    [providerUid, JSON.stringify(normalized), timezone, actorUid]
+    [providerUid, JSON.stringify(normalized), timezone, actorUid, expectedVersion ?? null]
   );
+
+  if (!res.rowCount) {
+    const err: any = new Error('This schedule changed on another device. Reload it and try again.');
+    err.statusCode = 409;
+    throw err;
+  }
 
   return {
     version:   Number(res.rows[0].version),
@@ -372,7 +398,16 @@ const NOTE_MAX = 500;
 const normaliseNote = (raw: unknown): string | null => {
   if (typeof raw !== 'string') return null;
   const t = raw.trim();
-  return t === '' ? null : t.slice(0, NOTE_MAX);
+  return t === '' ? null : t;
+};
+
+const isCalendarDate = (raw: unknown): raw is string => {
+  if (typeof raw !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return false;
+  const [year, month, day] = raw.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day;
 };
 
 
@@ -484,8 +519,21 @@ export const createTimeOff = async (
 ): Promise<ProviderTimeOff & { bookingConflicts: TimeOffBookingConflict[] }> => {
   await bootstrap();
 
-  if (!payload.startDate || !payload.endDate) {
-    const err: any = new Error('startDate and endDate are required');
+  if (!isCalendarDate(payload.startDate) || !isCalendarDate(payload.endDate)) {
+    const err: any = new Error('startDate and endDate must be real dates in YYYY-MM-DD format');
+    err.statusCode = 422;
+    throw err;
+  }
+
+  const reason = typeof payload.reason === 'string' ? payload.reason.trim() : '';
+  if (reason.length > 80 || /[\u0000-\u001F\u007F]/.test(reason)) {
+    const err: any = new Error('reason must be at most 80 characters and contain no control characters');
+    err.statusCode = 422;
+    throw err;
+  }
+  const note = normaliseNote(payload.note);
+  if (note !== null && note.length > NOTE_MAX) {
+    const err: any = new Error(`note must be at most ${NOTE_MAX} characters`);
     err.statusCode = 422;
     throw err;
   }
@@ -541,20 +589,52 @@ export const createTimeOff = async (
     endTime,
   });
 
-  const res = await dbQuery.query(
-    `INSERT INTO ${s}.worker_time_off
-       (worker_uid, start_date, end_date, reason, created_by, status,
-        all_day, start_time, end_time, note)
-     VALUES ($1, $2, $3, $4, $5, 'active', $6, $7::time, $8::time, $9)
-     RETURNING id, start_date, end_date, reason, created_at, created_by,
-               COALESCE(status, 'active') AS status, cancelled_at, cancelled_by,
-               COALESCE(all_day, TRUE) AS all_day,
-               to_char(start_time, 'HH24:MI') AS start_time,
-               to_char(end_time,   'HH24:MI') AS end_time,
-               note`,
-    [providerUid, payload.startDate, payload.endDate, payload.reason ?? null, actorUid,
-     allDay, startTime, endTime, normaliseNote(payload.note)]
-  );
+  const client = await pool.connect();
+  let res: any;
+  try {
+    await client.query('BEGIN');
+    // Serialise time-off writes per provider. Without this, two simultaneous
+    // tabs can both pass an overlap check and create duplicate/contradictory
+    // periods.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`worker-time-off:${providerUid}`]);
+    const overlap = await client.query(
+      `SELECT id FROM ${s}.worker_time_off
+        WHERE worker_uid = $1
+          AND COALESCE(status, 'active') = 'active'
+          AND start_date <= $3::date AND end_date >= $2::date
+          AND (
+            COALESCE(all_day, TRUE) = TRUE OR $4::boolean = TRUE
+            OR (start_time < $6::time AND end_time > $5::time)
+          )
+        LIMIT 1`,
+      [providerUid, payload.startDate, payload.endDate, allDay, startTime, endTime],
+    );
+    if (overlap.rowCount) {
+      const err: any = new Error('Time off overlaps an existing active period.');
+      err.statusCode = 409;
+      throw err;
+    }
+    res = await client.query(
+      `INSERT INTO ${s}.worker_time_off
+         (worker_uid, start_date, end_date, reason, created_by, status,
+          all_day, start_time, end_time, note)
+       VALUES ($1, $2, $3, $4, $5, 'active', $6, $7::time, $8::time, $9)
+       RETURNING id, start_date, end_date, reason, created_at, created_by,
+                 COALESCE(status, 'active') AS status, cancelled_at, cancelled_by,
+                 COALESCE(all_day, TRUE) AS all_day,
+                 to_char(start_time, 'HH24:MI') AS start_time,
+                 to_char(end_time,   'HH24:MI') AS end_time,
+                 note`,
+      [providerUid, payload.startDate, payload.endDate, reason || null, actorUid,
+       allDay, startTime, endTime, note],
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 
   const r = res.rows[0];
   return {
@@ -889,27 +969,29 @@ const computeNextAvailable = (
 
   const now = new Date();
   const activeTimeOff = timeOff.filter(t => t.status === 'active');
+  const operationalToday = zonedParts(now).ymd;
+  const dayZero = Date.parse(`${operationalToday}T00:00:00.000Z`);
 
   for (let i = 0; i < 14; i++) {
     // C22 §5. Walking days with the host clock put the boundary at UTC
     // midnight — 08:00 Manila — so for eight hours every morning this
     // reported the previous day's availability as "next".
-    const candidate = new Date(now.getTime() + i * 24 * 60 * 60 * 1000);
-    const parts = zonedParts(candidate);
-    const dow = parts.dayOfWeek;
-    const dateStr = parts.ymd;
+    const dateStr = new Date(dayZero + i * 86_400_000).toISOString().slice(0, 10);
+    const dow = new Date(`${dateStr}T00:00:00.000Z`).getUTCDay();
 
     // Check time-off
-    const blocked = activeTimeOff.some(t => t.startDate <= dateStr && t.endDate >= dateStr);
-    if (blocked) continue;
+    const daySlots = schedule
+      .filter(sl => sl.dayOfWeek === dow && sl.isAvailable)
+      .sort((a, b) => a.startTime.localeCompare(b.startTime));
+    for (const slot of daySlots) {
+      const blocked = activeTimeOff.some((entry) => {
+        if (entry.startDate > dateStr || entry.endDate < dateStr) return false;
+        if (entry.allDay || !entry.startTime || !entry.endTime) return true;
+        return entry.startTime < slot.endTime && entry.endTime > slot.startTime;
+      });
+      if (blocked) continue;
 
-    // Check schedule
-    const daySlots = schedule.filter(sl => sl.dayOfWeek === dow && sl.isAvailable);
-    if (daySlots.length > 0) {
-      const first = daySlots.sort((a, b) => a.startTime.localeCompare(b.startTime))[0];
-      const [h, m] = first.startTime.split(':').map(Number);
-      const result = new Date(candidate);
-      result.setHours(h, m, 0, 0);
+      const result = zonedDateTimeToUtc(dateStr, slot.startTime);
       if (result > now) return result.toISOString();
     }
   }

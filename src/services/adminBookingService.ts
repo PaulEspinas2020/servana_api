@@ -1,5 +1,5 @@
 import { db } from "../config";
-import dbQuery from "../db/dbQuery";
+import dbQuery, { pool } from "../db/dbQuery";
 import { send } from "../helpers/mailer";
 import { getUserInfoByBookingId } from "./user.service";
 import {
@@ -8,6 +8,8 @@ import {
   openConversationForConfirmedBooking,
   escalateToSupport,
 } from "../chat/chat.service";
+import { createCustomerNotification, createNotification } from "./notification.service";
+import { emitToProvider } from "../provider.realtime";
 const dbSchema = db.schema;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -146,8 +148,11 @@ export const ensureBookingOpsSchema = async (): Promise<void> => {
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-const logBookingAudit = (event: AuditEvent): void => {
-  dbQuery.query(
+const logBookingAudit = (
+  event: AuditEvent,
+  runner: { query: (sql: string, params?: any[]) => Promise<any> } = dbQuery,
+): Promise<void> | void => {
+  const write = runner.query(
     `INSERT INTO ${dbSchema}.booking_audit_events
        (booking_id, actor_uid, actor_role, action, before_json, after_json, reason, request_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
@@ -161,7 +166,12 @@ const logBookingAudit = (event: AuditEvent): void => {
       event.reason ?? null,
       event.requestId ?? null,
     ]
-  ).catch((e) => { console.error('[booking-audit] write failed:', e?.message); });
+  );
+  if (runner === dbQuery) {
+    write.catch((e) => { console.error('[booking-audit] write failed:', e?.message); });
+    return;
+  }
+  return write.then(() => undefined);
 };
 
 const addTimelineEvent = async (
@@ -171,15 +181,57 @@ const addTimelineEvent = async (
   description: string | null = null,
   actorType: string = 'admin',
   actorUid: string | null = null,
-  metadata: any = null
+  metadata: any = null,
+  runner: { query: (sql: string, params?: any[]) => Promise<any> } = dbQuery,
 ): Promise<void> => {
-  await dbQuery.query(
+  await runner.query(
     `INSERT INTO ${dbSchema}.booking_timeline_events
        (booking_id, event_type, title, description, actor_type, actor_uid, metadata)
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
     [bookingId, eventType, title, description, actorType, actorUid,
      metadata ? JSON.stringify(metadata) : null]
   );
+};
+
+const publishAdminAssignment = (input: {
+  bookingId: number;
+  providerUid: string;
+  customerUid?: string | null;
+  reassigned?: boolean;
+}) => {
+  const code = `SVN-${String(input.bookingId).padStart(6, '0')}`;
+  createNotification(input.providerUid, {
+    notificationKey: `assigned_job_${input.bookingId}_${input.providerUid}`,
+    type: 'assigned_job',
+    severity: 'info',
+    title: input.reassigned ? 'Booking reassigned to you' : 'New Job Assigned',
+    safeBody: `You have been assigned to booking ${code}. Please review and respond.`,
+    safeContextLabel: code,
+    route: { page: 'jobs', bookingId: String(input.bookingId) },
+    canOpenDetail: true,
+  }).catch((e) => console.error('[admin-assignment] provider notification failed', e));
+
+  if (input.customerUid) {
+    createCustomerNotification(input.customerUid, {
+      notificationKey: `provider_assigned_${input.bookingId}`,
+      type: input.reassigned ? 'provider_reassigned' : 'provider_assigned',
+      severity: 'success',
+      title: input.reassigned ? 'Provider updated' : 'Provider assigned',
+      safeBody: input.reassigned
+        ? 'A new provider has been assigned and is reviewing your booking.'
+        : 'A provider has been assigned and is reviewing your booking.',
+      safeContextLabel: code,
+      route: { routeKey: 'BOOKING_DETAILS', resourceId: String(input.bookingId) },
+      canOpenDetail: true,
+    }).catch((e) => console.error('[admin-assignment] customer notification failed', e));
+  }
+
+  emitToProvider(input.providerUid, 'booking:updated', {
+    bookingId: String(input.bookingId),
+    status: 'ASSIGNED',
+    assignmentSource: input.reassigned ? 'admin_reassignment' : 'admin',
+    occurredAt: new Date().toISOString(),
+  });
 };
 
 // ─── Operations Status Mapping ────────────────────────────────────────────────
@@ -742,65 +794,109 @@ export const adminAssignProvider = async (
   adminUid: string | null,
   reason?: string
 ): Promise<any> => {
-  const bkRes = await dbQuery.query(
-    `SELECT id, status, worker_uid FROM ${dbSchema}.bookings WHERE id = $1`,
-    [bookingId]
-  );
-  if (!bkRes.rowCount) throw new Error('Booking not found');
-  const before = bkRes.rows[0];
+  const client = await pool.connect();
+  let customerUid: string | null = null;
+  let providerName = '';
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      `servana-provider-assignment:${providerUid}`,
+    ]);
+    const bkRes = await client.query(
+      `SELECT b.id, b.status, b.worker_uid, b.user_id, b.schedule, so.service_id
+       FROM ${dbSchema}.bookings b
+       JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+       WHERE b.id = $1
+       FOR UPDATE OF b`,
+      [bookingId],
+    );
+    if (!bkRes.rowCount) throw new Error('Booking not found');
+    const before = bkRes.rows[0];
+    customerUid = before.user_id ?? null;
 
-  const provRes = await dbQuery.query(
-    `SELECT uid, first_name, last_name, is_archive FROM ${dbSchema}.user_credentials
-     WHERE uid = $1 AND role::int = 2`,
-    [providerUid]
-  );
-  if (!provRes.rowCount) throw new Error('Provider not found');
-  if (provRes.rows[0].is_archive) throw new Error('Provider is archived and cannot be assigned');
+    const provRes = await client.query(
+      `SELECT uid, first_name, last_name, is_archive FROM ${dbSchema}.user_credentials
+       WHERE uid = $1 AND role::int = 2`,
+      [providerUid],
+    );
+    if (!provRes.rowCount) throw new Error('Provider not found');
+    if (provRes.rows[0].is_archive) throw new Error('Provider is archived and cannot be assigned');
+    providerName = (`${provRes.rows[0].first_name ?? ''} ${provRes.rows[0].last_name ?? ''}`).trim();
 
-  const soRes = await dbQuery.query(
-    `SELECT so.service_id FROM ${dbSchema}.bookings b
-     JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-     WHERE b.id = $1`,
-    [bookingId]
-  );
-  const serviceId = soRes.rows[0]?.service_id;
-  if (serviceId) {
-    const eligRes = await dbQuery.query(
+    if (before.worker_uid) {
+      if (String(before.worker_uid) !== providerUid) {
+        throw new Error('Booking is already assigned; use the reassignment action');
+      }
+      await client.query('COMMIT');
+      return { bookingId, providerUid, providerName, status: 'WORKER_ASSIGNED', idempotent: true };
+    }
+    if (!['CONFIRMED', 'PAID'].includes(String(before.status ?? '').toUpperCase())) {
+      throw new Error(`Booking cannot be assigned from status ${before.status}`);
+    }
+
+    const eligRes = await client.query(
       `SELECT 1 FROM ${dbSchema}.employee_services
-       WHERE employee_uid = $1 AND service_id = $2 LIMIT 1`,
-      [providerUid, serviceId]
+       WHERE employee_uid = $1 AND service_id = $2
+       UNION ALL
+       SELECT 1 FROM ${dbSchema}.worker_service_applications
+       WHERE worker_uid = $1 AND service_id = $2 AND status = 'approved'
+       LIMIT 1`,
+      [providerUid, before.service_id],
     );
     if (!eligRes.rowCount) throw new Error('Provider is not qualified for this booking service');
+
+    const schedule = new Date(before.schedule);
+    const busyRes = await client.query(
+      `SELECT id FROM ${dbSchema}.bookings
+       WHERE worker_uid = $1 AND id <> $2
+         AND schedule BETWEEN $3 AND $4
+         AND status NOT IN ('COMPLETED','CANCELLED','CANCELED','REFUNDED','FAILED','EXPIRED')
+       LIMIT 1`,
+      [
+        providerUid,
+        bookingId,
+        new Date(schedule.getTime() - 2 * 60 * 60 * 1000),
+        new Date(schedule.getTime() + 2 * 60 * 60 * 1000),
+      ],
+    );
+    if (busyRes.rowCount) throw new Error('Provider has a conflicting booking within 2 hours');
+
+    await client.query(
+      `INSERT INTO ${dbSchema}.booking_workers (worker_uid, booking_id, status, assigned_at)
+       VALUES ($1, $2, 'ASSIGNED', NOW())`,
+      [providerUid, bookingId],
+    );
+    const updated = await client.query(
+      `UPDATE ${dbSchema}.bookings
+       SET worker_uid = $1, status = 'WORKER_ASSIGNED'
+       WHERE id = $2 AND worker_uid IS NULL AND status IN ('CONFIRMED','PAID')
+       RETURNING id`,
+      [providerUid, bookingId],
+    );
+    if (!updated.rowCount) throw new Error('Booking assignment changed concurrently');
+    await client.query(
+      `INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note)
+       VALUES ($1, 'WORKER_ASSIGNED', 'Provider assigned by admin')`,
+      [bookingId],
+    );
+    await addTimelineEvent(
+      bookingId, 'booking_assigned', `Provider assigned: ${providerName}`,
+      reason ?? null, 'admin', adminUid, { providerUid, providerName }, client,
+    );
+    await logBookingAudit({
+      bookingId, actorUid: adminUid, actorRole: 'admin', action: 'booking_assigned',
+      before: { workerUid: before.worker_uid, status: before.status },
+      after: { workerUid: providerUid, status: 'WORKER_ASSIGNED' }, reason,
+    }, client);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
 
-  await dbQuery.query(
-    `INSERT INTO ${dbSchema}.booking_workers (worker_uid, booking_id, status, assigned_at)
-     VALUES ($1, $2, 'ASSIGNED', NOW())`,
-    [providerUid, bookingId]
-  );
-
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET worker_uid = $1, status = 'WORKER_ASSIGNED' WHERE id = $2`,
-    [providerUid, bookingId]
-  );
-
-  const providerName = (`${provRes.rows[0].first_name ?? ''} ${provRes.rows[0].last_name ?? ''}`).trim();
-
-  await addTimelineEvent(
-    bookingId, 'booking_assigned',
-    `Provider assigned: ${providerName}`,
-    reason ?? null, 'admin', adminUid,
-    { providerUid, providerName }
-  );
-
-  logBookingAudit({
-    bookingId, actorUid: adminUid, actorRole: 'admin',
-    action: 'booking_assigned',
-    before: { workerUid: before.worker_uid, status: before.status },
-    after:  { workerUid: providerUid, status: 'WORKER_ASSIGNED' },
-    reason,
-  });
-
+  publishAdminAssignment({ bookingId, providerUid, customerUid });
   return { bookingId, providerUid, providerName, status: 'WORKER_ASSIGNED' };
 };
 
@@ -813,58 +909,141 @@ export const adminReassignProvider = async (
   reason: string
 ): Promise<any> => {
   if (!reason?.trim()) throw new Error('Reason is required for reassignment');
-
-  const bkRes = await dbQuery.query(
-    `SELECT worker_uid, status FROM ${dbSchema}.bookings WHERE id = $1`,
-    [bookingId]
-  );
-  if (!bkRes.rowCount) throw new Error('Booking not found');
-
-  const fromProviderUid = bkRes.rows[0].worker_uid;
-
-  const provRes = await dbQuery.query(
-    `SELECT uid, first_name, last_name, is_archive FROM ${dbSchema}.user_credentials
-     WHERE uid = $1 AND role::int = 2`,
-    [toProviderUid]
-  );
-  if (!provRes.rowCount) throw new Error('New provider not found');
-  if (provRes.rows[0].is_archive) throw new Error('New provider is archived');
-
-  if (fromProviderUid) {
-    await dbQuery.query(
-      `UPDATE ${dbSchema}.booking_workers SET status = 'DECLINED'
-       WHERE booking_id = $1 AND worker_uid = $2 AND status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED')`,
-      [bookingId, fromProviderUid]
+  const client = await pool.connect();
+  let fromProviderUid: string | null = null;
+  let customerUid: string | null = null;
+  let providerName = '';
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      `servana-provider-assignment:${toProviderUid}`,
+    ]);
+    const bkRes = await client.query(
+      `SELECT b.worker_uid, b.status, b.user_id, b.schedule, so.service_id
+       FROM ${dbSchema}.bookings b
+       JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+       WHERE b.id = $1
+       FOR UPDATE OF b`,
+      [bookingId],
     );
+    if (!bkRes.rowCount) throw new Error('Booking not found');
+    const booking = bkRes.rows[0];
+    fromProviderUid = booking.worker_uid ? String(booking.worker_uid) : null;
+    customerUid = booking.user_id ?? null;
+    if (!fromProviderUid) throw new Error('Booking has no provider to reassign');
+    if (fromProviderUid === toProviderUid) {
+      await client.query('COMMIT');
+      return { bookingId, fromProviderUid, toProviderUid, idempotent: true };
+    }
+    if (['COMPLETED','CANCELLED','CANCELED','REFUNDED','FAILED','EXPIRED'].includes(
+      String(booking.status ?? '').toUpperCase(),
+    )) {
+      throw new Error(`Booking cannot be reassigned from status ${booking.status}`);
+    }
+
+    const currentAssignment = await client.query(
+      `SELECT status FROM ${dbSchema}.booking_workers
+       WHERE booking_id = $1 AND worker_uid = $2
+       ORDER BY assigned_at DESC NULLS LAST, id DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [bookingId, fromProviderUid],
+    );
+    const currentWorkerStatus = String(currentAssignment.rows[0]?.status ?? '').toUpperCase();
+    if (['IN_PROGRESS','COMPLETED'].includes(currentWorkerStatus)) {
+      throw new Error(`Booking cannot be reassigned while provider status is ${currentWorkerStatus}`);
+    }
+
+    const provRes = await client.query(
+      `SELECT uid, first_name, last_name, is_archive FROM ${dbSchema}.user_credentials
+       WHERE uid = $1 AND role::int = 2`,
+      [toProviderUid],
+    );
+    if (!provRes.rowCount) throw new Error('New provider not found');
+    if (provRes.rows[0].is_archive) throw new Error('New provider is archived');
+    providerName = (`${provRes.rows[0].first_name ?? ''} ${provRes.rows[0].last_name ?? ''}`).trim();
+
+    const eligible = await client.query(
+      `SELECT 1 FROM ${dbSchema}.employee_services
+       WHERE employee_uid = $1 AND service_id = $2
+       UNION ALL
+       SELECT 1 FROM ${dbSchema}.worker_service_applications
+       WHERE worker_uid = $1 AND service_id = $2 AND status = 'approved'
+       LIMIT 1`,
+      [toProviderUid, booking.service_id],
+    );
+    if (!eligible.rowCount) throw new Error('New provider is not qualified for this booking service');
+
+    const schedule = new Date(booking.schedule);
+    const busy = await client.query(
+      `SELECT id FROM ${dbSchema}.bookings
+       WHERE worker_uid = $1 AND id <> $2
+         AND schedule BETWEEN $3 AND $4
+         AND status NOT IN ('COMPLETED','CANCELLED','CANCELED','REFUNDED','FAILED','EXPIRED')
+       LIMIT 1`,
+      [
+        toProviderUid,
+        bookingId,
+        new Date(schedule.getTime() - 2 * 60 * 60 * 1000),
+        new Date(schedule.getTime() + 2 * 60 * 60 * 1000),
+      ],
+    );
+    if (busy.rowCount) throw new Error('New provider has a conflicting booking within 2 hours');
+
+    await client.query(
+      `UPDATE ${dbSchema}.booking_workers SET status = 'DECLINED'
+       WHERE booking_id = $1 AND worker_uid = $2
+         AND status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED')`,
+      [bookingId, fromProviderUid],
+    );
+    await client.query(
+      `INSERT INTO ${dbSchema}.booking_workers (worker_uid, booking_id, status, assigned_at)
+       VALUES ($1, $2, 'ASSIGNED', NOW())`,
+      [toProviderUid, bookingId],
+    );
+    const updated = await client.query(
+      `UPDATE ${dbSchema}.bookings
+       SET worker_uid = $1, status = 'WORKER_ASSIGNED'
+       WHERE id = $2 AND worker_uid = $3
+       RETURNING id`,
+      [toProviderUid, bookingId, fromProviderUid],
+    );
+    if (!updated.rowCount) throw new Error('Booking reassignment changed concurrently');
+    await client.query(
+      `INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note)
+       VALUES ($1, 'WORKER_ASSIGNED', 'Provider reassigned by admin')`,
+      [bookingId],
+    );
+    await addTimelineEvent(
+      bookingId, 'provider_reassigned', `Provider reassigned to ${providerName}`,
+      reason, 'admin', adminUid, { fromProviderUid, toProviderUid, providerName }, client,
+    );
+    await logBookingAudit({
+      bookingId, actorUid: adminUid, actorRole: 'admin', action: 'booking_reassigned',
+      before: { workerUid: fromProviderUid }, after: { workerUid: toProviderUid }, reason,
+    }, client);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
 
-  await dbQuery.query(
-    `INSERT INTO ${dbSchema}.booking_workers (worker_uid, booking_id, status, assigned_at)
-     VALUES ($1, $2, 'ASSIGNED', NOW())`,
-    [toProviderUid, bookingId]
-  );
-
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET worker_uid = $1, status = 'WORKER_ASSIGNED' WHERE id = $2`,
-    [toProviderUid, bookingId]
-  );
-
-  const providerName = (`${provRes.rows[0].first_name ?? ''} ${provRes.rows[0].last_name ?? ''}`).trim();
-
-  await addTimelineEvent(
-    bookingId, 'provider_reassigned',
-    `Provider reassigned to ${providerName}`,
-    reason, 'admin', adminUid,
-    { fromProviderUid, toProviderUid, providerName }
-  );
-
-  logBookingAudit({
-    bookingId, actorUid: adminUid, actorRole: 'admin',
-    action: 'booking_reassigned',
-    before: { workerUid: fromProviderUid },
-    after:  { workerUid: toProviderUid },
-    reason,
+  publishAdminAssignment({
+    bookingId,
+    providerUid: toProviderUid,
+    customerUid,
+    reassigned: true,
   });
+  if (fromProviderUid) {
+    createNotification(fromProviderUid, {
+      notificationKey: `assignment_removed_${bookingId}_${fromProviderUid}`,
+      type: 'assignment_removed', severity: 'warning', title: 'Booking reassigned',
+      safeBody: `Booking SVN-${String(bookingId).padStart(6, '0')} is no longer assigned to you.`,
+      route: null, canOpenDetail: false,
+    }).catch((e) => console.error('[reassign] previous provider notification failed', e));
+  }
 
   // Move the booking conversation across with the assignment. The old provider
   // is marked left (can_send false), the new one admitted, and a system event
