@@ -72,15 +72,26 @@ export type ContinuePlatform = 'provider' | 'customer';
 export const PLATFORM_RESET_URLS: Record<ContinuePlatform, string> = {
     provider:
         process.env.PROVIDER_RESET_URL || 'https://provider.servana.com.ph/provider/reset-password',
-    // The customer default was on `servana.com.ph`, which is the same mistake
-    // the provider default had: that host serves the provider *recruitment*
-    // marketing site, whose router 404s an unknown path. A customer resetting
-    // their password landed on a page that could not help them.
+    // ── Do not "correct" this to `client.servana.com.ph` ──────────────────
     //
-    // The customer web portal is served from `client.servana.com.ph`
-    // (`PUBLIC_SITE_URL` in its `.env.production`), and `/reset-password` is a
-    // real route there. Corrected 2026-08-09.
-    customer: process.env.CUSTOMER_RESET_URL || 'https://client.servana.com.ph/reset-password',
+    // It was changed to that host on 2026-08-09, sourced from `PUBLIC_SITE_URL`
+    // in the customer portal's `.env.production`. Reverted the same day, because
+    // an env file records what an app *believes*, not what is served:
+    //
+    //   dig client.servana.com.ph          -> NXDOMAIN (does not resolve)
+    //   GET https://servana.com.ph/reset-password
+    //                                      -> 301 -> www.servana.com.ph -> 404
+    //
+    // Production sets PROVIDER_RESET_URL but NOT CUSTOMER_RESET_URL, so this
+    // default is what is emailed to real customers. `servana.com.ph` at least
+    // resolves and serves a page; `client.servana.com.ph` gives the browser a
+    // DNS error, which is strictly worse for the customer mobile app that is
+    // live on Play and relies on this link.
+    //
+    // Both destinations are a dead end today: the customer web portal has never
+    // been deployed (see the hosts note). The real fix is to deploy it and set
+    // CUSTOMER_RESET_URL — not to point the default at a host that is missing.
+    customer: process.env.CUSTOMER_RESET_URL || 'https://servana.com.ph/reset-password',
 };
 
 /**
@@ -107,10 +118,10 @@ export const PLATFORM_RESET_URLS: Record<ContinuePlatform, string> = {
  */
 export const PLATFORM_VERIFY_URLS: Partial<Record<ContinuePlatform, string>> = {
     ...(process.env.PROVIDER_VERIFY_URL ? { provider: process.env.PROVIDER_VERIFY_URL } : {}),
-    // Same host correction as the reset map above. `/verify-email` is a real
-    // route in the customer web portal; on `servana.com.ph` it was a 404 at the
-    // end of a verification the customer had just completed successfully.
-    customer: process.env.CUSTOMER_VERIFY_URL || 'https://client.servana.com.ph/verify-email',
+    // Reverted alongside the reset map above — same reason, same evidence:
+    // `client.servana.com.ph` does not resolve, and CUSTOMER_VERIFY_URL is not
+    // set in production, so this default is what customers actually receive.
+    customer: process.env.CUSTOMER_VERIFY_URL || 'https://servana.com.ph/verify-email',
 };
 
 /**
