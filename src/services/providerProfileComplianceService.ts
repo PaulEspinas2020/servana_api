@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import dbQuery, { pool } from '../db/dbQuery';
 import { db } from '../config';
 import { validateDataUri, AllowedUploadMime } from '../helpers/fileSignature';
+import { stripImageMetadata } from '../helpers/stripImageMetadata';
 import { assertCleanScan, scanProviderFile } from './providerManagedFileScanner';
 import { getPublicRatingSummary } from './ratingAggregationService';
 
@@ -264,7 +265,17 @@ export const uploadDocument = async (providerUid: string, input: UploadDocumentI
   const safeName = input.fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100) || `${definition.id}.${validation.mime.split('/').pop()}`;
   const scan = await scanProviderFile({ buffer: validation.buffer, mimeType: validation.mime, fileName: safeName });
   assertCleanScan(scan);
-  const persistenceBuffer = scan.sanitizedBuffer ?? validation.buffer;
+  // §58. A phone embeds EXIF GPS in a photo by default, and a provider
+  // photographs their ID or NBI clearance at home — so the file carries their
+  // home coordinates into storage and into every admin preview. The
+  // booking-evidence path has stripped this since Command 19 for exactly this
+  // reason; identity documents are strictly more sensitive and were missed.
+  //
+  // Stripped AFTER the malware scan so the scanner still sees the original
+  // bytes, and BEFORE the hash so the digest describes what is actually
+  // stored. `stripImageMetadata` is total — unknown types and malformed input
+  // return the buffer unchanged, so this cannot fail an upload.
+  const persistenceBuffer = stripImageMetadata(scan.sanitizedBuffer ?? validation.buffer, validation.mime);
   const persistenceDataUri = `data:${validation.mime};base64,${persistenceBuffer.toString('base64')}`;
   const contentSha256 = createHash('sha256').update(persistenceBuffer).digest('hex');
   const identifierMask = input.identifierLast4 ? `****${input.identifierLast4}` : null;

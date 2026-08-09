@@ -15,6 +15,7 @@ import * as serviceApplicationService from './serviceApplicationService';
 import * as technicianService from './technicianService';
 import * as onboardingService from './adminOnboardingService';
 import { validateDataUri } from '../helpers/fileSignature';
+import { stripImageMetadata } from '../helpers/stripImageMetadata';
 import { assertCleanScan, scanProviderFile } from './providerManagedFileScanner';
 
 const dbSchema = db.schema;
@@ -587,7 +588,10 @@ export const uploadProviderRequirement = async (
   const sanitizedType = String(requirementType ?? 'admin_supplied').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100);
   const scan = await scanProviderFile({ buffer: validation.buffer, mimeType: validation.mime, fileName: sanitizedName });
   assertCleanScan(scan);
-  const persistenceBuffer = scan.sanitizedBuffer ?? validation.buffer;
+  // §58, same as the provider self-upload path: strip EXIF/GPS before the file
+  // is persisted. An admin uploading on behalf of a provider is handling a
+  // photograph the provider took, so it carries the same location metadata.
+  const persistenceBuffer = stripImageMetadata(scan.sanitizedBuffer ?? validation.buffer, validation.mime);
   const persistenceDataUri = `data:${validation.mime};base64,${persistenceBuffer.toString('base64')}`;
   const requestId = `admin-document-${randomUUID()}`;
   const storage = await import('../helpers/firebaseStorageUploader');
