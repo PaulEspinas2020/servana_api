@@ -13,17 +13,17 @@
     "verify": "npm run typecheck && npm run test:ci",
     "verify:quick": "npm run typecheck",
     "guard:protected-contracts": "node scripts/guard-protected-contracts.mjs",
-    "_comment:ops": "Operational scripts. -r dotenv/config is REQUIRED, not decoration: src/config.ts loads '../.env', which resolves correctly for dist/app.js but points one directory above the app for anything run from the repo root — so DB_PASSWORD is undefined and pg fails with 'SASL: client password must be a string'. Preloading dotenv reads ./.env from the CWD instead.",
+    "_comment:ops": "Operational scripts. -r dotenv/config is REQUIRED, not decoration: src/config.ts loads '../.env', which resolves correctly for dist/app.js but points one directory above the app for anything run from the repo root \u2014 so DB_PASSWORD is undefined and pg fails with 'SASL: client password must be a string'. Preloading dotenv reads ./.env from the CWD instead.",
     "audit:identifiers": "ts-node -r dotenv/config scripts/audit-identifier-conflicts.ts",
     "backfill:identifiers": "ts-node -r dotenv/config scripts/backfill-normalized-identifiers.ts",
     "admin:bootstrap": "ts-node -r dotenv/config scripts/create-admin-with-password.ts",
     "report:provider-readiness": "ts-node -r dotenv/config scripts/report-provider-readiness.ts",
-    "backfill:verified-identifiers": "ts-node -r dotenv/config scripts/backfill-verified-identifiers.ts"
-    ,"migrations:plan": "ts-node -r dotenv/config scripts/run-migrations.ts"
-    ,"migrations:apply": "ts-node -r dotenv/config scripts/run-migrations.ts --apply"
-    ,"migrate:legacy-provider-documents:plan": "ts-node -r dotenv/config scripts/migrate-legacy-provider-documents.ts"
-    ,"migrate:legacy-provider-documents:apply": "ts-node -r dotenv/config scripts/migrate-legacy-provider-documents.ts --apply"
-    ,"measure:reviews": "node scripts/measure-review-api.mjs"
+    "backfill:verified-identifiers": "ts-node -r dotenv/config scripts/backfill-verified-identifiers.ts",
+    "migrations:plan": "ts-node -r dotenv/config scripts/run-migrations.ts",
+    "migrations:apply": "ts-node -r dotenv/config scripts/run-migrations.ts --apply",
+    "migrate:legacy-provider-documents:plan": "ts-node -r dotenv/config scripts/migrate-legacy-provider-documents.ts",
+    "migrate:legacy-provider-documents:apply": "ts-node -r dotenv/config scripts/migrate-legacy-provider-documents.ts --apply",
+    "measure:reviews": "node scripts/measure-review-api.mjs"
   },
   "keywords": [],
   "author": "Cla H.",
@@ -62,5 +62,8 @@
     "ts-jest": "^29.4.11",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "socket.io-parser": ">=4.2.7"
   }
 }
