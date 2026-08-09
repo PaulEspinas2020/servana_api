@@ -9,6 +9,7 @@ import * as provider from "../controllers/providerController";
 import * as locationAccess from "../controllers/providerLocationAccessController";
 import * as accountState from "../controllers/providerAccountStateController";
 import * as profileCompliance from "../controllers/providerProfileComplianceController";
+import * as providerCalendar from "../controllers/providerCalendarController";
 import * as reputation from "../controllers/providerReputationController";
 import * as supportCases from "../controllers/providerSupportCaseController";
 
@@ -55,6 +56,10 @@ router.get("/provider/documents/:documentId/preview", verifyAuth, requireProvide
 router.get("/provider/certifications", verifyAuth, requireProviderRole, profileCompliance.getCertifications);
 router.post("/provider/certifications", verifyAuth, requireProviderRole, profileCompliance.submitCertification);
 router.get("/provider/compliance", verifyAuth, requireProviderRole, profileCompliance.getCompliance);
+// Calendar aggregation. ServanaWorker's Calendar tab has called this since it
+// shipped; the route was never added, so the screen 404'd on every load.
+// Read-only, provider identity from the token only.
+router.get("/provider/calendar", verifyAuth, requireProviderRole, providerCalendar.getCalendar);
 router.get("/provider/verification-timeline", verifyAuth, requireProviderRole, profileCompliance.getVerificationTimeline);
 router.post("/provider/contact-changes", verifyAuth, requireProviderRole, profileCompliance.requestContactChange);
 router.post("/provider/contact-changes/confirm", verifyAuth, requireProviderRole, profileCompliance.confirmContactChange);
