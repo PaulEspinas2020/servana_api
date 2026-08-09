@@ -71,6 +71,27 @@ export interface CalendarEvent {
   availableActions: CalendarAction[];
   version: number;
   updatedAt: string;
+  /**
+   * City only — never a street address (§58).
+   *
+   * Added for Provider Web's Schedule. A calendar without a location cannot
+   * answer the question a provider actually asks it ("can I get from the 10am
+   * to the 2pm?"), and the alternative was for the client to fetch the job list
+   * as well and join the two by booking id — a second source of truth for a
+   * screen that is supposed to have exactly one (§9).
+   *
+   * The disclosure level matches `jobCardView.formatJobCard`, which already
+   * returns `city` at every status this endpoint includes: it is the AREA a
+   * travel decision needs, and the street is withheld until the provider has
+   * accepted. Declined and cancelled work is excluded from the calendar
+   * entirely, so the "relinquished" case cannot arise here.
+   *
+   * OPTIONAL and additive (§4): ServanaWorker's parser reads named keys and
+   * ignores the rest, so this field is invisible to it. Null when the booking
+   * has no resolved address, which the client must render as absent rather
+   * than as an empty city.
+   */
+  locationLabel: string | null;
 }
 
 export interface CalendarResult {
@@ -221,10 +242,14 @@ async function loadBookingEvents(providerUid: string, q: CalendarQuery): Promise
             -- service_options has no name column; the human label is the
             -- deepest populated level of the catalog hierarchy.
             COALESCE(NULLIF(TRIM(so.level_3), ''), NULLIF(TRIM(so.level_2), '')) AS service_name,
-            so.duration_mins
+            so.duration_mins,
+            -- Same source and precedence as JOB_SELECT in providerController, so
+            -- the Schedule and the job list cannot disagree about where a job is.
+            COALESCE(ua.post_town, b.service_address->>'city') AS post_town
        FROM ${s}.booking_workers bw
        JOIN ${s}.bookings b ON b.id = bw.booking_id
        LEFT JOIN ${s}.service_options so ON so.id = b.service_option_id
+       LEFT JOIN ${s}.user_address ua ON ua.address_id = b.user_address_id
       WHERE bw.worker_uid = $1
         AND b.schedule IS NOT NULL
         AND b.schedule >= $2
@@ -284,6 +309,7 @@ async function loadBookingEvents(providerUid: string, q: CalendarQuery): Promise
           ],
       version: 1,
       updatedAt: updatedAt.toISOString(),
+      locationLabel: String(r.post_town ?? '').trim() || null,
     });
   }
   return events;
@@ -350,6 +376,9 @@ async function loadTimeOffEvents(providerUid: string, q: CalendarQuery): Promise
       availableActions: [{ code: 'VIEW_TIME_OFF', label: 'View' }],
       version: 1,
       updatedAt: (toDate(r.created_at) ?? start).toISOString(),
+      // Time off is not at a place. Null rather than an empty string, so a
+      // client renders it as absent instead of as a blank location line.
+      locationLabel: null,
     });
   }
   return events;

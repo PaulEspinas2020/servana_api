@@ -247,3 +247,117 @@ describe('the rule that silently drops events: end must be after start', () => {
     expect((end.getTime() - day.getTime()) / 3_600_000).toBe(24);
   });
 });
+
+/**
+ * The emitted event object, exercised through a mocked dbQuery.
+ *
+ * Everything above this point mirrors the service's logic in the test file
+ * rather than running it, which pins the RULES but never the actual payload —
+ * the header's claim that "the query builders are exercised through a stubbed
+ * dbQuery" was aspirational. These cases run `getProviderCalendar` for real and
+ * assert on what a client would receive.
+ */
+describe('getProviderCalendar — the payload a client actually receives', () => {
+  const bookingRow = {
+    id: 106,
+    schedule: '2026-08-12T02:00:00.000Z',
+    eta_minutes: 10,
+    booking_status: 'CONFIRMED',
+    created_at: '2026-08-01T00:00:00.000Z',
+    worker_status: 'ACCEPTED',
+    assigned_at: '2026-08-01T00:00:00.000Z',
+    confirmed_at: '2026-08-02T00:00:00.000Z',
+    accepted_at: null,
+    service_name: 'Aircon Cleaning',
+    duration_mins: 120,
+    post_town: 'Makati City',
+  };
+
+  const loadWith = async (bookings: any[], timeOff: any[]) => {
+    jest.resetModules();
+    const query = jest.fn()
+      .mockResolvedValueOnce({ rows: bookings })
+      .mockResolvedValueOnce({ rows: timeOff });
+    jest.doMock('../src/db/dbQuery', () => ({ __esModule: true, default: { query } }));
+    const svc = require('../src/services/providerCalendarService');
+    const result = await svc.getProviderCalendar('provider-uid-1', svc.parseCalendarQuery({
+      start: new Date('2026-08-10').toISOString(),
+      end: new Date('2026-08-17').toISOString(),
+    }));
+    return { result, query };
+  };
+
+  afterEach(() => { jest.dontMock('../src/db/dbQuery'); jest.resetModules(); });
+
+  it('returns the city as locationLabel', async () => {
+    const { result } = await loadWith([bookingRow], []);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0].locationLabel).toBe('Makati City');
+  });
+
+  it('uses duration_mins for the block width, not eta_minutes', async () => {
+    // eta_minutes is travel time. Using it would draw a 10-minute job for a
+    // 10-minute drive.
+    const { result } = await loadWith([bookingRow], []);
+    const e = result.events[0];
+    expect((new Date(e.end).getTime() - new Date(e.start).getTime()) / 60_000).toBe(120);
+  });
+
+  it('gives locationLabel null — not "" — when there is no resolved address', async () => {
+    // An empty string renders as a blank location line; null renders as absent.
+    const { result } = await loadWith([{ ...bookingRow, post_town: null }], []);
+    expect(result.events[0].locationLabel).toBeNull();
+
+    const blank = await loadWith([{ ...bookingRow, post_town: '   ' }], []);
+    expect(blank.result.events[0].locationLabel).toBeNull();
+  });
+
+  it('never attaches a location to time off — it is not at a place', async () => {
+    const { result } = await loadWith([], [{
+      id: 9, start_date: '2026-08-12', end_date: '2026-08-12', all_day: true,
+      start_time: null, end_time: null, reason: 'Leave', note: null,
+      status: 'ACTIVE', created_at: '2026-08-01T00:00:00.000Z', cancelled_at: null,
+    }]);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0].eventType).toBe('TIME_OFF');
+    expect(result.events[0].locationLabel).toBeNull();
+  });
+
+  it('flags the booking, not the time off, when the two overlap', async () => {
+    const { result } = await loadWith([bookingRow], [{
+      id: 9, start_date: '2026-08-12', end_date: '2026-08-12', all_day: true,
+      start_time: null, end_time: null, reason: 'Leave', note: null,
+      status: 'ACTIVE', created_at: '2026-08-01T00:00:00.000Z', cancelled_at: null,
+    }]);
+    const booking = result.events.find((e: any) => e.eventType === 'CONFIRMED_BOOKING');
+    const timeOff = result.events.find((e: any) => e.eventType === 'TIME_OFF');
+    expect(booking.hasConflict).toBe(true);
+    expect(timeOff.hasConflict).toBe(false);
+  });
+
+  it('scopes both queries to the authenticated provider uid', async () => {
+    // §11 — the uid is the first bind parameter on every query, never a filter
+    // applied after the fact.
+    const { query } = await loadWith([bookingRow], []);
+    for (const call of query.mock.calls) {
+      expect(call[1][0]).toBe('provider-uid-1');
+    }
+  });
+
+  it('emits every field the mobile parser requires, on every event', async () => {
+    const { result } = await loadWith([bookingRow], [{
+      id: 9, start_date: '2026-08-14', end_date: '2026-08-14', all_day: true,
+      start_time: null, end_time: null, reason: 'Leave', note: null,
+      status: 'ACTIVE', created_at: '2026-08-01T00:00:00.000Z', cancelled_at: null,
+    }]);
+    expect(result.generatedAt).toBeTruthy();
+    expect(result.timezone).toBe(SERVANA_TIMEZONE);
+    for (const e of result.events) {
+      for (const key of ['eventId', 'title', 'start', 'end', 'updatedAt', 'timezone']) {
+        expect(String((e as any)[key] ?? '')).not.toBe('');
+      }
+      // The silent-drop rule: end strictly after start.
+      expect(new Date(e.end).getTime()).toBeGreaterThan(new Date(e.start).getTime());
+    }
+  });
+});
