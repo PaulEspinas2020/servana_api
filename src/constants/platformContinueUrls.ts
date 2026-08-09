@@ -72,7 +72,15 @@ export type ContinuePlatform = 'provider' | 'customer';
 export const PLATFORM_RESET_URLS: Record<ContinuePlatform, string> = {
     provider:
         process.env.PROVIDER_RESET_URL || 'https://provider.servana.com.ph/provider/reset-password',
-    customer: process.env.CUSTOMER_RESET_URL || 'https://servana.com.ph/reset-password',
+    // The customer default was on `servana.com.ph`, which is the same mistake
+    // the provider default had: that host serves the provider *recruitment*
+    // marketing site, whose router 404s an unknown path. A customer resetting
+    // their password landed on a page that could not help them.
+    //
+    // The customer web portal is served from `client.servana.com.ph`
+    // (`PUBLIC_SITE_URL` in its `.env.production`), and `/reset-password` is a
+    // real route there. Corrected 2026-08-09.
+    customer: process.env.CUSTOMER_RESET_URL || 'https://client.servana.com.ph/reset-password',
 };
 
 /**
@@ -99,7 +107,10 @@ export const PLATFORM_RESET_URLS: Record<ContinuePlatform, string> = {
  */
 export const PLATFORM_VERIFY_URLS: Partial<Record<ContinuePlatform, string>> = {
     ...(process.env.PROVIDER_VERIFY_URL ? { provider: process.env.PROVIDER_VERIFY_URL } : {}),
-    customer: process.env.CUSTOMER_VERIFY_URL || 'https://servana.com.ph/verify-email',
+    // Same host correction as the reset map above. `/verify-email` is a real
+    // route in the customer web portal; on `servana.com.ph` it was a 404 at the
+    // end of a verification the customer had just completed successfully.
+    customer: process.env.CUSTOMER_VERIFY_URL || 'https://client.servana.com.ph/verify-email',
 };
 
 /**

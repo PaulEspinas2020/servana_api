@@ -14,6 +14,7 @@ const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
  * Initialize Socket.IO on the /chat namespace.
  * Call once from app.ts with the http.Server instance.
  */
+// KEEP IN SYNC with `whitelist` in src/app.ts. See the note there.
 const ALLOWED_ORIGINS = [
   "http://localhost:4200",
   "http://localhost:4201",
@@ -21,6 +22,8 @@ const ALLOWED_ORIGINS = [
   "https://admin.servana.com.ph",
   "https://www.servana.com.ph",
   "https://servana.com.ph",
+  // Customer web portal. Added 2026-08-09. Purely additive.
+  "https://client.servana.com.ph",
 ];
 
 export const initChatSocket = (httpServer: HttpServer) => {

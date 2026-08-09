@@ -13,6 +13,9 @@ dotenv.config();
 
 const app = express();
 const router = express.Router();
+// KEEP IN SYNC with ALLOWED_ORIGINS in src/chat/chat.gateway.ts. They are two
+// lists of the same thing: an origin added here but not there gets working REST
+// calls and a chat socket that silently refuses to connect.
 const whitelist = [
   "http://localhost:4200",
   "http://localhost:4201",
@@ -20,6 +23,11 @@ const whitelist = [
   "https://admin.servana.com.ph",
   "https://www.servana.com.ph",
   "https://servana.com.ph",
+  // Customer web portal. Added 2026-08-09 — without it every request from the
+  // customer web origin is refused by CORS, which the browser reports as a
+  // network failure rather than as a rejection, so it reads like the API is
+  // down. Purely additive: no existing origin is affected.
+  "https://client.servana.com.ph",
 ];
 const corsOptionsDelegate = function (req: any, callback: any) {
     var corsOptions;
