@@ -883,10 +883,64 @@ export const assignNearestWorker = async (
     console.error(`[assignNearestWorker] availability filter failed, proceeding unfiltered:`, e?.message ?? e);
   }
 
-  const availableWorkers = scheduleEligible;
-  if (!availableWorkers.length) {
+  if (!scheduleEligible.length) {
     await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);
     return { assigned: false, reason: "NO_WORKER_AVAILABLE_IN_SCHEDULE" };
+  }
+
+  // 3b. Exclude providers who have ALREADY DECLINED THIS BOOKING.
+  //
+  // Ranking is by distance alone, and `releaseBookingAndReassign` calls back
+  // into this function on decline — so without this filter the nearest provider
+  // who just refused the job is deterministically the next one offered it.
+  // Production booking 94 shows the outcome: the same provider declined three
+  // times and was re-selected each time, with the customer waiting through all
+  // of it.
+  //
+  // Scoped to THIS booking only. A decline is a statement about one job, not
+  // about the provider, and it must not affect their candidacy for anything
+  // else.
+  let candidates = scheduleEligible;
+  try {
+    const declinedRes = await dbQuery.query(
+      `SELECT DISTINCT worker_uid
+         FROM ${dbSchema}.booking_workers
+        WHERE booking_id = $1 AND status = 'DECLINED'`,
+      [bookingId]
+    );
+
+    const declined = new Set<string>(
+      declinedRes.rows.map((r: any) => r.worker_uid).filter(Boolean)
+    );
+
+    if (declined.size) {
+      candidates = scheduleEligible.filter((w: any) => !declined.has(w.uid));
+      console.info(
+        `[assignNearestWorker] booking ${bookingId}: ${declined.size} provider(s) excluded — already declined this booking`
+      );
+    }
+  } catch (e: any) {
+    // Fail OPEN, and deliberately unlike the availability filter above.
+    //
+    // A failed availability check that proceeds unfiltered can hand a provider
+    // a job on their day off — a correctness problem. A failed decline check
+    // that proceeds unfiltered merely restores the behaviour that existed
+    // before this block: an inefficient re-offer. Stranding a live booking to
+    // avoid that trade would be the worse outcome.
+    console.error(
+      `[assignNearestWorker] decline filter failed, proceeding unfiltered:`,
+      e?.message ?? e
+    );
+  }
+
+  const availableWorkers = candidates;
+
+  // Everyone eligible has already refused this specific booking. Retrying is
+  // what §44 calls endless retry — the loop has no new information and will
+  // produce the same declines. Hand it to operations instead.
+  if (!availableWorkers.length) {
+    await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);
+    return { assigned: false, reason: "ALL_ELIGIBLE_WORKERS_DECLINED" };
   }
 
   // 4. Rank available workers by distance. Candidate availability is checked
