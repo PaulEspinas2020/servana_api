@@ -16,6 +16,7 @@ import {
   MAX_RANGE_DAYS,
   SERVANA_TIMEZONE,
   CALENDAR_RESULT_VERSION,
+  calendarDayOf,
 } from '../src/services/providerCalendarService';
 
 describe('parseCalendarQuery', () => {
@@ -101,6 +102,67 @@ describe('response contract required by the mobile parser', () => {
 
   it('declares a numeric result version', () => {
     expect(Number.isInteger(CALENDAR_RESULT_VERSION)).toBe(true);
+  });
+});
+
+describe('calendarDayOf — the defect a tidy fixture would never have caught', () => {
+  // Found by inserting ONE real row into production, not by any test here.
+  // A single-day all-day leave came back as a FIFTEEN MINUTE event: the code
+  // sliced a parsed Date instead of the raw column, produced 'Wed Mar 0',
+  // failed to parse, and fell through to the minimum-span fallback. Nothing
+  // threw. The event still rendered. It was just the wrong length.
+
+  it('reads the day straight off a pg date string', () => {
+    expect(calendarDayOf('2027-03-01')).toBe('2027-03-01');
+  });
+
+  it('reads the day off a pg timestamp string', () => {
+    expect(calendarDayOf('2027-03-01T00:00:00.000Z')).toBe('2027-03-01');
+  });
+
+  it('produces a value that actually parses back to that day', () => {
+    // The real assertion: the output must be usable as a date, which is
+    // precisely what the buggy version failed at.
+    const day = calendarDayOf('2027-03-01');
+    const parsed = new Date(`${day}T00:00:00.000Z`);
+    expect(Number.isNaN(parsed.getTime())).toBe(false);
+    expect(parsed.toISOString()).toBe('2027-03-01T00:00:00.000Z');
+  });
+
+  it('a stringified Date does NOT survive the same slice — the actual bug', () => {
+    // Pinned so nobody "simplifies" the raw-value rule back out again.
+    const asDate = new Date('2027-03-01T00:00:00.000Z');
+    const wrong = String(asDate).slice(0, 10);
+    expect(wrong).not.toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(Number.isNaN(new Date(`${wrong}T00:00:00.000Z`).getTime())).toBe(true);
+  });
+
+  it('is safe on null and undefined', () => {
+    expect(calendarDayOf(null)).toBe('');
+    expect(calendarDayOf(undefined)).toBe('');
+  });
+
+  describe('the span it produces for an all-day leave', () => {
+    const allDaySpan = (startRaw: unknown, endRaw: unknown) => {
+      const start = new Date(`${calendarDayOf(startRaw)}T00:00:00.000Z`);
+      const end = new Date(
+        new Date(`${calendarDayOf(endRaw ?? startRaw)}T00:00:00.000Z`).getTime() + 86_400_000,
+      );
+      return (end.getTime() - start.getTime()) / 3_600_000;
+    };
+
+    it('gives a SINGLE-day leave a full 24 hours, not 15 minutes', () => {
+      // The exact production row: start_date === end_date === 2027-03-01.
+      expect(allDaySpan('2027-03-01', '2027-03-01')).toBe(24);
+    });
+
+    it('gives a three-day leave 72 hours, end_date being inclusive', () => {
+      expect(allDaySpan('2027-03-01', '2027-03-03')).toBe(72);
+    });
+
+    it('falls back to the start day when end_date is null', () => {
+      expect(allDaySpan('2027-03-01', null)).toBe(24);
+    });
   });
 });
 

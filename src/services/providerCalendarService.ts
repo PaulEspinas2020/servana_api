@@ -112,6 +112,25 @@ const toDate = (value: unknown): Date | null => {
   return Number.isNaN(d.getTime()) ? null : d;
 };
 
+/**
+ * The calendar day of a `date` column, as 'YYYY-MM-DD'.
+ *
+ * Takes the RAW column value, never a parsed Date, and that distinction is the
+ * whole reason this is a named function instead of an inline slice.
+ *
+ * pg returns `date` columns as 'YYYY-MM-DD' strings, so slicing the raw value
+ * gives the day directly. Slicing a Date does NOT: `String(new Date(...))` is
+ * 'Wed Mar 01 2027 08:00:00 GMT+0800 …', whose first ten characters are
+ * 'Wed Mar 0' — unparseable.
+ *
+ * This was a live bug, found by inserting one real row rather than by any test:
+ * a single-day all-day leave came back as a FIFTEEN MINUTE event, because the
+ * malformed end fell through to the minimum-span fallback. Nothing errored and
+ * the event still rendered — it was simply the wrong length, which is the kind
+ * of defect a unit test with tidy fixtures never notices.
+ */
+export const calendarDayOf = (raw: unknown): string => String(raw ?? '').slice(0, 10);
+
 /** Guarantees rule 1: the returned end is always strictly after start. */
 const endAfter = (start: Date, candidate: Date | null, fallbackMinutes = MIN_EVENT_MINUTES): Date => {
   if (candidate && candidate.getTime() > start.getTime()) return candidate;
@@ -296,17 +315,18 @@ async function loadTimeOffEvents(providerUid: string, q: CalendarQuery): Promise
     let end: Date;
 
     if (allDay) {
-      start = new Date(`${String(r.start_date).slice(0, 10)}T00:00:00.000Z`);
+      start = new Date(`${calendarDayOf(r.start_date)}T00:00:00.000Z`);
       // end_date is inclusive, so the block runs to the END of that day.
       // Without the +1 a single-day leave would have start === end and be
       // dropped by the client (rule 1).
-      const last = endDay ?? startDay;
-      end = new Date(`${String(last).slice(0, 10)}T00:00:00.000Z`);
+      end = new Date(`${calendarDayOf(r.end_date ?? r.start_date)}T00:00:00.000Z`);
       end = new Date(end.getTime() + 86_400_000);
     } else {
-      start = new Date(`${String(r.start_date).slice(0, 10)}T${String(r.start_time).slice(0, 5)}:00.000Z`);
-      const last = String((endDay ?? startDay)).slice(0, 10);
-      end = endAfter(start, new Date(`${last}T${String(r.end_time).slice(0, 5)}:00.000Z`));
+      // Same rule as the all-day branch: raw column, not a parsed Date. This
+      // half had the identical defect and would have silently produced a
+      // 15-minute block for every timed leave.
+      start = new Date(`${calendarDayOf(r.start_date)}T${String(r.start_time).slice(0, 5)}:00.000Z`);
+      end = endAfter(start, new Date(`${calendarDayOf(r.end_date ?? r.start_date)}T${String(r.end_time).slice(0, 5)}:00.000Z`));
     }
     if (Number.isNaN(start.getTime())) continue;
     end = endAfter(start, Number.isNaN(end.getTime()) ? null : end);
