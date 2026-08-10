@@ -1141,31 +1141,34 @@ export const listSpecificServiceFilterOptions = async (): Promise<{
 // ─── Admin — Specific Services CRUD ──────────────────────────────────────────
 
 export const listSpecificServicesForOffering = async (offeringId: number): Promise<any[]> => {
-  // Resolve which service_id + level_2 values this offering maps to
-  const mappingsRes = await dbQuery.query(
-    `SELECT service_id, level_2
-     FROM ${dbSchema}.provider_catalog_offering_mappings
-     WHERE offering_id = $1 AND is_active = true`,
-    [offeringId]
-  );
-  if (mappingsRes.rows.length === 0) return [];
-
-  const sids = mappingsRes.rows.map((m: any) => Number(m.service_id));
-  const l2s  = mappingsRes.rows.map((m: any) => m.level_2 as string);
-
+  // Match the (service_id, level_2) PAIRS this offering maps to.
+  //
+  // This used to collect the two columns into separate arrays and filter
+  // `service_id = ANY(sids) AND level_2 = ANY(l2s)`, which is the cross product of
+  // the two sets rather than the set of pairs. With mappings (1,'Deep Clean') and
+  // (2,'Standard') it also returned (1,'Standard') and (2,'Deep Clean') — specific
+  // services belonging to OTHER offerings, listed and editable under this one. An
+  // over-include is worse than a drop: nothing looks missing, so nobody checks.
+  //
+  // EXISTS against the mapping row keeps the pairing intact.
   const res = await dbQuery.query(
     `SELECT so.id, so.service_id, so.level_2, so.level_3, so.unit, so.base_price,
-            so.is_active,
+            so.is_active, so.banner_url,
             COALESCE(m.description, '') AS description,
             COALESCE(m.inclusions, '[]'::jsonb) AS inclusions,
             COALESCE(m.exclusions, '[]'::jsonb) AS exclusions
      FROM ${dbSchema}.service_options so
      LEFT JOIN ${dbSchema}.service_option_meta m ON m.service_option_id = so.id
-     WHERE so.service_id = ANY($1)
-       AND so.level_2 = ANY($2)
-       AND so.option_type = 'MAIN'
+     WHERE so.option_type = 'MAIN'
+       AND EXISTS (
+         SELECT 1 FROM ${dbSchema}.provider_catalog_offering_mappings pcom
+         WHERE pcom.offering_id = $1
+           AND pcom.is_active   = true
+           AND pcom.service_id  = so.service_id
+           AND pcom.level_2     = so.level_2
+       )
      ORDER BY so.level_2, so.level_3`,
-    [sids, l2s]
+    [offeringId]
   );
   if (res.rows.length === 0) return [];
 
@@ -1200,6 +1203,7 @@ export const listSpecificServicesForOffering = async (offeringId: number): Promi
     level3: r.level_3,
     unit: r.unit,
     basePrice: Number(r.base_price),
+    bannerUrl: r.banner_url || null,
     isActive: r.is_active == null ? true : Boolean(r.is_active),
     description: r.description || null,
     inclusions: Array.isArray(r.inclusions) ? r.inclusions : (r.inclusions ? JSON.parse(r.inclusions) : []),
