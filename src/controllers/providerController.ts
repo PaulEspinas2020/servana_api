@@ -3099,9 +3099,53 @@ export const getProviderBookingDetail = async (req: Request, res: Response) => {
        WHERE ba.booking_id = $1 ORDER BY ba.id ASC`,
       [bookingId]
     );
-    return res.status(200).json({ success: true, data: { ...result.rows[0], addons: addons.rows } });
-  } catch (err: any) {
-    return res.status(500).json({ status: "failed", message: err?.message || "Failed to fetch booking" });
+    const row = result.rows[0];
+    const workerStatus = String(row.worker_status ?? "").toUpperCase();
+
+    // Same staged disclosure as `jobCardView.formatJobCard`, for the same
+    // reason (Command 17 §11): before a provider accepts, they need enough to
+    // decide — service, schedule, AREA — and not the customer's street address.
+    // This route was spreading the raw row, so an ASSIGNED provider who had not
+    // accepted anything could read `address`, the whole `service_address` JSON
+    // and the zip code by calling it directly. Hiding a screen is not
+    // authorization (§12), and this route has no UI at all.
+    //
+    // Keys are emptied, never removed, so no consumer's shape changes.
+    const operational = ["ACCEPTED", "EN_ROUTE", "ARRIVED", "IN_PROGRESS", "COMPLETED"].includes(workerStatus);
+
+    const serviceAddress = row.service_address && typeof row.service_address === "object"
+      ? { ...row.service_address }
+      : row.service_address;
+    if (!operational && serviceAddress && typeof serviceAddress === "object") {
+      // The JSON blob carries the street under its own key, so emptying the
+      // flattened `address` column alone would have leaked it right back.
+      delete (serviceAddress as Record<string, unknown>).addressLine;
+      delete (serviceAddress as Record<string, unknown>).addressTwo;
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...row,
+        address: operational ? row.address : null,
+        zip_code: operational ? row.zip_code : null,
+        service_address: serviceAddress,
+        // post_town (the area) stays at every status — it is what a travel
+        // decision needs and matches the job-card contract.
+        //
+        // Additive: the three job-list endpoints emit `clientPaymentStatus`
+        // lower-cased, and Provider Web's `mapClientPaymentStatus` is
+        // case-sensitive. This route emitted only raw UPPERCASE
+        // `payment_status`, which that mapper renders as "unknown". Raw key
+        // kept for compatibility.
+        clientPaymentStatus: row.payment_status ? String(row.payment_status).toLowerCase() : "pending",
+        addons: addons.rows,
+      },
+    });
+  } catch {
+    // §21 — no driver text, no constraint names. Both Flutter apps render this
+    // field straight to the user.
+    return res.status(500).json({ status: "failed", message: "Failed to fetch booking" });
   }
 };
 
@@ -3133,8 +3177,9 @@ export const getProviderBookingTracking = async (req: Request, res: Response) =>
       [bookingId]
     );
     return res.status(200).json({ success: true, data: tracking.rows });
-  } catch (err: any) {
-    return res.status(500).json({ status: "failed", message: err?.message || "Failed to fetch tracking" });
+  } catch {
+    // §21 — see getProviderBookingDetail.
+    return res.status(500).json({ status: "failed", message: "Failed to fetch tracking" });
   }
 };
 
