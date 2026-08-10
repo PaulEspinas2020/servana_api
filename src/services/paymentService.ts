@@ -332,7 +332,18 @@ export const createCheckoutSession = async (
       `UPDATE ${dbSchema}.payments
           SET provider = 'PAYMONGO', provider_payment_id = $2,
               checkout_url = $3, raw_response = $4, status = 'PENDING',
-              checkout_attempt = $5, return_origin = $6, updated_at = NOW()
+              checkout_attempt = $5, return_origin = $6, updated_at = NOW(),
+              -- The session being replaced stays payable at PayMongo. Keep its
+              -- id so the webhook can still find this row if the customer pays
+              -- the old one; without it that payment is received and never
+              -- recorded. Guarded on cs_ so a pay_ id can never be appended.
+              superseded_session_ids = CASE
+                WHEN provider_payment_id IS NOT NULL
+                 AND provider_payment_id <> $2
+                 AND provider_payment_id LIKE 'cs_%'
+                THEN array_append(COALESCE(superseded_session_ids, '{}'), provider_payment_id)
+                ELSE superseded_session_ids
+              END
         WHERE id = $1 AND status IN ('PENDING', 'FAILED')
         RETURNING id`,
       [booking.payment_id, providerPaymentId, checkoutUrl, result, attempt, options?.returnOrigin ?? null],
@@ -504,7 +515,14 @@ export const createPayment = async (request: any, options?: { returnOrigin?: str
         `UPDATE ${dbSchema}.payments
             SET amount = $2, status = 'PENDING', provider_payment_id = $3,
                 checkout_url = $4, raw_response = $5, checkout_attempt = $6,
-                return_origin = $7, updated_at = NOW()
+                return_origin = $7, updated_at = NOW(),
+                superseded_session_ids = CASE
+                  WHEN provider_payment_id IS NOT NULL
+                   AND provider_payment_id <> $3
+                   AND provider_payment_id LIKE 'cs_%'
+                  THEN array_append(COALESCE(superseded_session_ids, '{}'), provider_payment_id)
+                  ELSE superseded_session_ids
+                END
           WHERE id = $1 AND status IN ('PENDING', 'FAILED')`,
         [existing.id, currentRequest.total_amount, providerPaymentId, checkoutUrl, result, attempt,
           options?.returnOrigin ?? null],
@@ -629,7 +647,8 @@ export const processWebhook = async (req: Request, _res: Response) => {
         `UPDATE ${dbSchema}.payments
             SET status = 'PAID', paid_at = NOW(), webhook_event_id = $2,
                 raw_response = $3, provider_payment_id = $4
-          WHERE provider_payment_id = $1
+          WHERE (provider_payment_id = $1
+                 OR superseded_session_ids @> ARRAY[$1])
             AND provider = 'PAYMONGO'
             AND status IN ('PENDING', 'FAILED')
             AND ROUND(amount * 100) = $5
@@ -646,6 +665,7 @@ export const processWebhook = async (req: Request, _res: Response) => {
              FROM ${dbSchema}.payments
             WHERE provider = 'PAYMONGO'
               AND (provider_payment_id = $1
+                OR superseded_session_ids @> ARRAY[$1]
                 OR raw_response #>> '{data,id}' = $1
                 OR raw_response #>> '{data,attributes,data,id}' = $1)
             LIMIT 1`,
@@ -731,7 +751,8 @@ export const processWebhook = async (req: Request, _res: Response) => {
       const failedUpdate = await client.query(
         `UPDATE ${dbSchema}.payments
             SET status = 'FAILED', webhook_event_id = $2, raw_response = $3
-          WHERE provider_payment_id = $1
+          WHERE (provider_payment_id = $1
+                 OR superseded_session_ids @> ARRAY[$1])
             AND provider = 'PAYMONGO'
             AND status = 'PENDING'
           RETURNING booking_id, amount`,
@@ -744,6 +765,7 @@ export const processWebhook = async (req: Request, _res: Response) => {
              FROM ${dbSchema}.payments
             WHERE provider = 'PAYMONGO'
               AND (provider_payment_id = $1
+                OR superseded_session_ids @> ARRAY[$1]
                 OR raw_response #>> '{data,id}' = $1
                 OR raw_response #>> '{data,attributes,data,id}' = $1)
             LIMIT 1`,
