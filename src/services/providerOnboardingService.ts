@@ -13,6 +13,7 @@
 
 import dbQuery from '../db/dbQuery';
 import { db } from '../config';
+import { markCaseSubmitted } from './adminOnboardingService';
 
 const dbSchema = db.schema;
 
@@ -364,6 +365,18 @@ export const submitOnboarding = async (uid: string) => {
     `,
     [uid],
   );
+
+  // The draft is the provider's copy of the form. The CASE is what the account
+  // state machine and the admin review queue actually read, and nothing here
+  // used to create one — so this function returned 'pending_review' while
+  // `/provider/account-state` went on reporting APPLICATION_NOT_SUBMITTED
+  // indefinitely. Reusing the admin service's writer rather than inserting here
+  // keeps one owner for the table (§10).
+  //
+  // Deliberately NOT swallowed. If the case cannot be written the provider is
+  // back in the exact broken state this fixes, so it must fail loudly and be
+  // retried; every write in this path is idempotent, so a retry converges.
+  await markCaseSubmitted(uid);
 
   return {
     status: 'pending_review',

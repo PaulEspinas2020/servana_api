@@ -506,6 +506,47 @@ const ensureCase = async (providerUid: string): Promise<any> => {
   )).rows[0];
 };
 
+/**
+ * Record that a provider has SUBMITTED their onboarding.
+ *
+ * The defect this closes: `providerOnboardingService.submitOnboarding` wrote
+ * `provider_onboarding_drafts.submitted = true` and nothing else, while
+ * `providerAccountStateService` derives the application status SOLELY from
+ * `provider_onboarding_cases` — defaulting to NOT_STARTED when no row exists.
+ * Cases were only ever created by admin code. So a provider could complete and
+ * submit everything and remain "APPLICATION_NOT_SUBMITTED" forever: told to
+ * submit an application they had already submitted, blocked from going online,
+ * and routed back into onboarding by the auth guard. Measured in production: a
+ * provider with `submitted = true` since 2026-08-07, 14 requirements uploaded
+ * and a COMPLETE profile still reported `application.status = NOT_STARTED`.
+ *
+ * Lives here because this service owns the table. The provider flow calls it
+ * rather than writing its own INSERT, so the two cannot drift (§10).
+ *
+ * MONOTONIC. Only `not_started` and `in_progress` advance. A case already
+ * queued, in review, or decided must never be dragged back to `submitted` by a
+ * re-submit — that would silently reset a reviewer's progress. Combined with
+ * `ensureCase` being idempotent, calling this twice is a no-op.
+ */
+export const markCaseSubmitted = async (providerUid: string) => {
+  const existing = await ensureCase(providerUid);
+
+  const advanced = await dbQuery.query(
+    `UPDATE ${dbSchema}.provider_onboarding_cases
+        SET onboarding_status = 'submitted',
+            submitted_at      = COALESCE(submitted_at, NOW()),
+            last_activity_at  = NOW(),
+            waiting_party     = 'servana',
+            version           = version + 1
+      WHERE provider_uid = $1
+        AND onboarding_status IN ('not_started', 'in_progress')
+      RETURNING id, onboarding_status`,
+    [providerUid],
+  );
+
+  return advanced.rows[0] ?? existing;
+};
+
 // ── Queue listing ─────────────────────────────────────────────────────────────
 
 export interface QueueFilter {
