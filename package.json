@@ -24,7 +24,8 @@
     "migrations:apply": "ts-node -r dotenv/config scripts/run-migrations.ts --apply",
     "migrate:legacy-provider-documents:plan": "ts-node -r dotenv/config scripts/migrate-legacy-provider-documents.ts",
     "migrate:legacy-provider-documents:apply": "ts-node -r dotenv/config scripts/migrate-legacy-provider-documents.ts --apply",
-    "measure:reviews": "node scripts/measure-review-api.mjs"
+    "measure:reviews": "node scripts/measure-review-api.mjs",
+    "check:db-ownership": "ts-node -r dotenv/config scripts/check-db-ownership.ts"
   },
   "keywords": [],
   "author": "Cla H.",

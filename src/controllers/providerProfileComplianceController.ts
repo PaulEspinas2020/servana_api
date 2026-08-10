@@ -7,6 +7,30 @@ import * as autoOnlineEngine from '../services/providerAutoOnlineEngine';
 const uidOf = (req: Request): string => String(req.user?.uid ?? '');
 const fail = (res: Response, error: any, fallback: string) => {
   const status = Number(error?.statusCode ?? 500);
+
+  // Log the 500s. Tagged domain errors (409, 422, 404 ...) carry their own
+  // meaning and the client renders them, so they need no server record — but an
+  // UNTAGGED error becomes a generic 500 here and, until now, vanished
+  // completely. That is why three providers reporting "Something went wrong on
+  // our side" during document upload produced no line anywhere in the logs, and
+  // why the cause could not be identified from the server at all.
+  //
+  // Server-side only. The response body is unchanged: the client still receives
+  // the generic message, never the driver text (§21).
+  if (status >= 500) {
+    console.error('[provider-compliance] unhandled failure:', {
+      fallback,
+      name: error?.name,
+      code: error?.code,
+      message: String(error?.message ?? '').slice(0, 300),
+      constraint: error?.constraint,
+      table: error?.table,
+      column: error?.column,
+      pgCode: error?.code,
+      stack: String(error?.stack ?? '').split(String.fromCharCode(10)).slice(0, 4).join(' | '),
+    });
+  }
+
   return res.status(status).json({
     status: 'failed',
     code: error?.code ?? (status === 500 ? 'PROFILE_COMPLIANCE_UNAVAILABLE' : 'REQUEST_REJECTED'),
