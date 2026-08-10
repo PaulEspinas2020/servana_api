@@ -1,6 +1,7 @@
 import { db } from "../config";
 import { splitRevenue } from './revenueSplit';
 import { paidAdditionalWorkSql } from './earningsBasis';
+import { PROVIDER_RELEASE_HOURS } from './payoutStatus';
 import dbQuery from "../db/dbQuery";
 import axios from "axios";
 import { getWorkerBankAccount } from "./technicianService";
@@ -9,7 +10,9 @@ const dbSchema = db.schema;
 
 // Rates live in revenueSplit.ts — see that file for why they are not here.
 const PAYMONGO_BASE_URL  = "https://api.paymongo.com/v1";
-const RELEASE_HOURS      = 72;
+// Single definition, shared with the earnings readers so a date shown to a
+// provider cannot disagree with the job that actually releases the money.
+const RELEASE_HOURS      = PROVIDER_RELEASE_HOURS;
 const PAYMONGO_TIMEOUT_MS = 15_000;
 
 const PAYOUT_SUCCEEDED_STATUSES = new Set(["succeeded", "deposited"]);

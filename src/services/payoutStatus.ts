@@ -94,3 +94,20 @@ export const ledgerPayoutDialect = (raw: string | null | undefined): string => {
   if (c === "failed") return "failed";
   return "pending";
 };
+
+/**
+ * Hours between a booking being completed and the provider share becoming
+ * eligible for release.
+ *
+ * Lives here rather than in `disbursement.service.ts` because it is now read by
+ * BOTH the writer (the release scheduler) and the readers (the earnings
+ * endpoints, which report an expected arrival date). It was previously a
+ * private const in the writer, so every reader that wanted to show a date had
+ * to restate it — and Provider Web restated it as 48 in seventy places while
+ * the writer released at 72, telling providers their money was due a day early.
+ *
+ * A reader importing this cannot drift from the scheduler again. Note that
+ * `bookingCancellationPolicy.ts` has a genuine and unrelated 48-hour rule for
+ * cancellation notice; the two must not be conflated.
+ */
+export const PROVIDER_RELEASE_HOURS = 72;

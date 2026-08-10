@@ -9,6 +9,7 @@ import {
 } from '../services/payoutStatus';
 import dbQuery from "../db/dbQuery";
 import { paidAdditionalWorkSql, earningsGross } from "../services/earningsBasis";
+import { PROVIDER_RELEASE_HOURS } from "../services/payoutStatus";
 import * as technicianService from "../services/technicianService";
 import * as userService from "../services/user.service";
 import mongoDb from "../db/mongodbQuery";
@@ -414,6 +415,12 @@ export const getEarnings = async (req: Request, res: Response) => {
               d.released_at,
               d.worker_share,
               bw.completed_at,
+              -- The same expression the release scheduler uses, from the same
+              -- constant, so a date shown to a provider cannot disagree with the
+              -- job that actually moves the money. Clients previously had to
+              -- recompute it, and Provider Web recomputed it with a 48-hour
+              -- window against a 72-hour scheduler.
+              bw.completed_at + INTERVAL '${PROVIDER_RELEASE_HOURS} hours' AS release_after,
               ${paidAdditionalWorkSql(dbSchema)} AS additional_paid
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
@@ -458,6 +465,10 @@ export const getEarnings = async (req: Request, res: Response) => {
         // the dialect above cannot express and §1 requires.
         payoutStatusCanonical: canonicalPayoutStatus(r.payout_status),
         disbursedAt: r.released_at || null,
+        // Backend-computed release date (§3). Additive — existing consumers
+        // ignore it. `disbursedAt` takes precedence for display: this is when
+        // the money BECOMES eligible, not proof it moved.
+        expectedArrivalAt: r.release_after ? new Date(r.release_after).toISOString() : null,
         paymentMethod: (r.payment_method || "cash").toLowerCase(),
         currency: "PHP",
       };
@@ -484,6 +495,7 @@ export const getEarningById = async (req: Request, res: Response) => {
               d.released_at,
               d.worker_share,
               bw.completed_at,
+              bw.completed_at + INTERVAL '${PROVIDER_RELEASE_HOURS} hours' AS release_after,
               ${paidAdditionalWorkSql(dbSchema)} AS additional_paid
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
@@ -524,6 +536,7 @@ export const getEarningById = async (req: Request, res: Response) => {
       // Additive (C20 F-03). Keeps PROCESSING distinct from PENDING.
       payoutStatusCanonical: canonicalPayoutStatus(r.payout_status),
       disbursedAt:         r.released_at || null,
+      expectedArrivalAt:   r.release_after ? new Date(r.release_after).toISOString() : null,
       paymentMethod:       (r.payment_method || "cash").toLowerCase(),
       currency:            "PHP",
     };
@@ -3229,8 +3242,17 @@ export const getAdditionalRequests = async (req: Request, res: Response) => {
        LIMIT 50`,
       [uid]
     );
-    return res.status(200).json({ success: true, data: result.rows });
-  } catch (err: any) {
-    return res.status(500).json({ status: "failed", message: err?.message || "Failed to fetch additional requests" });
+    // Additive: the split rate travels with the data instead of each client
+    // restating it. Provider Web held its own `PROVIDER_SHARE_PERCENT = 0.80`
+    // here, a second hardcode of a number only the backend actually decides —
+    // and the earnings endpoints already send it.
+    const data = result.rows.map((r: any) => ({
+      ...r,
+      providerSharePercent: PROVIDER_SHARE_PERCENT,
+    }));
+    return res.status(200).json({ success: true, data });
+  } catch {
+    // §21 — no driver text; both Flutter apps render this straight to the user.
+    return res.status(500).json({ status: "failed", message: "Failed to fetch additional requests" });
   }
 };
