@@ -8,6 +8,7 @@ import {
   ledgerPayoutDialect,
 } from '../services/payoutStatus';
 import dbQuery from "../db/dbQuery";
+import { paidAdditionalWorkSql, earningsGross } from "../services/earningsBasis";
 import * as technicianService from "../services/technicianService";
 import * as userService from "../services/user.service";
 import mongoDb from "../db/mongodbQuery";
@@ -412,7 +413,8 @@ export const getEarnings = async (req: Request, res: Response) => {
               d.status   AS payout_status,
               d.released_at,
               d.worker_share,
-              bw.completed_at
+              bw.completed_at,
+              ${paidAdditionalWorkSql(dbSchema)} AS additional_paid
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
        LEFT JOIN ${dbSchema}.payments p ON p.booking_id = b.id
@@ -427,7 +429,12 @@ export const getEarnings = async (req: Request, res: Response) => {
     );
 
     const data = result.rows.map((r: any) => {
-      const gross = Number(r.final_price || 0);
+      // `final_price` alone is NOT the gross the provider's share comes from —
+      // paid on-site additional work is charged separately and never written
+      // back to it. `createDisbursement` has always included it, so showing
+      // `final_price` here put a booking amount on screen that the provider
+      // share was visibly not 80% of. See `earningsBasis.ts`.
+      const gross = earningsGross(r.final_price, r.additional_paid);
       const workerShare = r.worker_share != null
         ? Math.round(Number(r.worker_share) * 100) / 100
         : providerShareOf(gross);
@@ -476,10 +483,17 @@ export const getEarningById = async (req: Request, res: Response) => {
               d.status   AS payout_status,
               d.released_at,
               d.worker_share,
-              bw.completed_at
+              bw.completed_at,
+              ${paidAdditionalWorkSql(dbSchema)} AS additional_paid
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+       -- additional_request_id IS NULL matches the list query. Without it a
+       -- booking carrying BOTH a base payment and an additional-work payment
+       -- fans out to several rows, and only rows[0] is read — so the detail
+       -- screen could report the additional charge's status as the booking's
+       -- payment status, and disagree with the list for the same booking.
        LEFT JOIN ${dbSchema}.payments        p  ON p.booking_id = b.id
+         AND p.additional_request_id IS NULL
        LEFT JOIN ${dbSchema}.disbursements   d  ON d.booking_id = b.id AND d.worker_uid = $1
        LEFT JOIN ${dbSchema}.booking_workers bw ON bw.booking_id = b.id AND bw.worker_uid = $1
        WHERE b.id = $2 AND b.worker_uid = $1`,
@@ -489,7 +503,8 @@ export const getEarningById = async (req: Request, res: Response) => {
       return res.status(404).json({ status: "failed", message: "Earning not found" });
     }
     const r = result.rows[0];
-    const gross = Number(r.final_price || 0);
+    // Same basis as the list endpoint — see earningsBasis.ts.
+    const gross = earningsGross(r.final_price, r.additional_paid);
     const workerShareDetail = r.worker_share != null
       ? Math.round(Number(r.worker_share) * 100) / 100
       : providerShareOf(gross);
@@ -556,11 +571,17 @@ export const getEarningsSummary = async (req: Request, res: Response) => {
     const result = await dbQuery.query(
       `SELECT
          COUNT(*) AS total_jobs,
-         COALESCE(SUM(b.final_price), 0) AS total_gross,
+         COALESCE(SUM(b.final_price + ${paidAdditionalWorkSql(dbSchema)}), 0) AS total_gross,
          COALESCE(SUM(CASE WHEN d.status = 'RELEASED' THEN d.worker_share ELSE 0 END), 0) AS total_paid,
          COALESCE(SUM(CASE WHEN d.status IN ('PENDING','PROCESSING') THEN d.worker_share ELSE 0 END), 0) AS pending_recorded,
+         -- The estimate fallback carried defect (1) too. It was the only branch
+         -- still multiplying final_price, so a completed booking with approved
+         -- extra work and no disbursement row yet was under-estimated by 80% of
+         -- that work — the same omission the comment above says was fixed, in
+         -- the one place the fix had not reached.
          COALESCE(SUM(CASE WHEN d.id IS NULL
-                           THEN b.final_price * ${PROVIDER_SHARE_RATE} ELSE 0 END), 0) AS pending_estimated,
+                           THEN (b.final_price + ${paidAdditionalWorkSql(dbSchema)}) * ${PROVIDER_SHARE_RATE}
+                           ELSE 0 END), 0) AS pending_estimated,
          COALESCE(SUM(CASE WHEN d.status = 'FAILED' THEN d.worker_share ELSE 0 END), 0) AS total_failed,
          COUNT(*) FILTER (WHERE d.id IS NULL) AS estimated_jobs
        FROM ${dbSchema}.bookings b

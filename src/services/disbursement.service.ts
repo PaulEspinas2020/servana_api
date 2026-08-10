@@ -1,5 +1,6 @@
 import { db } from "../config";
 import { splitRevenue } from './revenueSplit';
+import { paidAdditionalWorkSql } from './earningsBasis';
 import dbQuery from "../db/dbQuery";
 import axios from "axios";
 import { getWorkerBankAccount } from "./technicianService";
@@ -83,13 +84,7 @@ export const createDisbursement = async (bookingId: number) => {
     // payment row is the only evidence money arrived.
     `SELECT b.final_price,
             b.worker_uid,
-            COALESCE((
-              SELECT SUM(p.amount)
-              FROM ${dbSchema}.payments p
-              WHERE p.booking_id = b.id
-                AND p.additional_request_id IS NOT NULL
-                AND p.status = 'PAID'
-            ), 0) AS additional_paid
+            ${paidAdditionalWorkSql(dbSchema)} AS additional_paid
      FROM ${dbSchema}.bookings b
      WHERE b.id = $1`,
     [bookingId]

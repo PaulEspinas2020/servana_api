@@ -126,8 +126,16 @@ describe("defect 1 — the authoritative amount is read, not recomputed", () => 
     const sql = await sqlIssued();
 
     // The fallback multiplication must apply ONLY where no disbursement row
-    // exists. Anywhere else it silently drops additional_paid.
-    const fallbacks = sql.match(/final_price \* [\d.]+/g) ?? [];
+    // exists. Anywhere else it silently overrides an authoritative worker_share.
+    //
+    // The pattern is no longer `final_price * RATE`: the estimate now multiplies
+    // `(final_price + paid additional work)`, because defect (1) above was still
+    // live in this one branch — it was the only place left recomputing from
+    // final_price alone, so a completed booking with approved extra work and no
+    // disbursement row yet was under-estimated by 80% of that work. Matching on
+    // the multiplication by the RATE keeps the original guarantee without
+    // pinning the shape of the operand.
+    const fallbacks = sql.match(/\* 0\.8\b/g) ?? [];
     expect(fallbacks).toHaveLength(1);
 
     const at = sql.indexOf(fallbacks[0] as string);
@@ -138,7 +146,10 @@ describe("defect 1 — the authoritative amount is read, not recomputed", () => 
     // `d.status IN ('PENDING','FAILED') OR d.id IS NULL`, which contains it
     // and still recomputed rows that HAD an authoritative worker_share. The
     // no-row case must be the ONLY thing the fallback covers.
-    expect(clause).not.toMatch(/d\.status/);
+    // Word-anchored to the disbursement alias. Unanchored, `d.status` also
+    // matches inside `p_add.status` — the additional-work subquery now sits in
+    // this clause, so the loose pattern reported a defect that was not there.
+    expect(clause).not.toMatch(/\bd\.status/);
     expect(clause).not.toMatch(/\bOR\b/);
   });
 

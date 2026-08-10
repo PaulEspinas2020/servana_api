@@ -26,6 +26,7 @@
  */
 
 import fs from 'fs';
+import { paidAdditionalWorkSql } from '../src/services/earningsBasis';
 import path from 'path';
 
 const SRC = path.join(__dirname, '..', 'src');
@@ -166,12 +167,26 @@ describe('disbursement basis — additional work', () => {
     // A request can be ACCEPTED, IN_PROGRESS or PROCEEDING with the customer
     // having paid nothing. Paying a share of uncollected money turns a
     // shortfall into a loss, so the sum keys on the PAYMENT row.
-    const sub = src.match(/SELECT SUM\(p\.amount\)[\s\S]{0,320}?\)/);
-    expect(sub).not.toBeNull();
-    expect(sub![0]).toMatch(/p\.status = 'PAID'/);
-    expect(sub![0]).toMatch(/p\.additional_request_id IS NOT NULL/);
+    //
+    // The subquery no longer lives in this file. It moved to
+    // `services/earningsBasis.ts` when the READERS were fixed to use the same
+    // basis as this writer — the earnings screens were showing `final_price`
+    // alone beside a share computed from `final_price + additional_paid`.
+    // Asserting against the shared fragment tests the value both sides now use,
+    // rather than one file's text.
+    const sub = paidAdditionalWorkSql('servana');
+    expect(sub).toMatch(/SELECT SUM\(p_add\.amount\)/);
+    expect(sub).toMatch(/p_add\.status = 'PAID'/);
+    expect(sub).toMatch(/p_add\.additional_request_id IS NOT NULL/);
     // Not the request table, whose status does not evidence payment.
-    expect(sub![0]).not.toMatch(/booking_additional_requests/);
+    expect(sub).not.toMatch(/booking_additional_requests/);
+  });
+
+  test('the writer still uses the shared fragment', () => {
+    // Guards the move itself: if disbursement.service stopped importing it and
+    // grew its own copy again, the reader and writer could drift apart —
+    // which is the exact defect the shared fragment exists to prevent (§10).
+    expect(src).toMatch(/paidAdditionalWorkSql/);
   });
 });
 
