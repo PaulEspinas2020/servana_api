@@ -4,6 +4,7 @@ import {
   assertBookingAccess,
   sendBookingAccessError,
 } from "../services/bookingAccessService";
+import { resolvePaymentReturnOrigin } from "../services/paymentReturnOrigin";
 
 const actorUid = (req: Request): string | undefined => (req as any).user?.uid;
 
@@ -68,7 +69,9 @@ export const generatePayment = async (req: Request, res: Response) => {
         message: "Only the booking customer or an administrator can create this payment",
       });
     }
-    const link = await additionalService.generatePayment(Number(req.params.id));
+    const link = await additionalService.generatePayment(Number(req.params.id), {
+      returnOrigin: resolvePaymentReturnOrigin(req),
+    });
     res.json({ success: true, data: link });
   } catch (e: any) {
     sendError(res, e);

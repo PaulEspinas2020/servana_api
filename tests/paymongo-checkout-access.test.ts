@@ -48,11 +48,35 @@ describe('PayMongo checkout access', () => {
     access.mockResolvedValue(role);
     const res = response();
     await createPaymongoPayment({ params: { bookingId: '42' }, user: { uid: 'actor' } } as any, res);
-    expect(create).toHaveBeenCalledWith(42);
+    // No Origin header — a native mobile caller. returnOrigin is undefined, so
+    // the service falls back to the configured default exactly as before.
+    expect(create).toHaveBeenCalledWith(42, { returnOrigin: undefined });
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       checkout_url: 'https://checkout.paymongo.com/session/test',
     });
+  });
+
+  test('an allowlisted browser Origin is threaded through to the service', async () => {
+    access.mockResolvedValue('customer');
+    const res = response();
+    await createPaymongoPayment({
+      params: { bookingId: '42' },
+      user: { uid: 'customer' },
+      headers: { origin: 'https://client.servana.com.ph' },
+    } as any, res);
+    expect(create).toHaveBeenCalledWith(42, { returnOrigin: 'https://client.servana.com.ph' });
+  });
+
+  test('an unrecognised Origin falls back to the default, never to itself', async () => {
+    access.mockResolvedValue('customer');
+    const res = response();
+    await createPaymongoPayment({
+      params: { bookingId: '42' },
+      user: { uid: 'customer' },
+      headers: { origin: 'https://evil.example.com' },
+    } as any, res);
+    expect(create).toHaveBeenCalledWith(42, { returnOrigin: undefined });
   });
 
   test('provider cannot receive the customer checkout URL', async () => {

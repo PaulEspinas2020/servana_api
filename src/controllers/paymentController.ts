@@ -5,6 +5,7 @@ import {
   BookingAccessError,
 } from "../services/bookingAccessService";
 import * as paymentService from "../services/paymentService";
+import { resolvePaymentReturnOrigin } from "../services/paymentReturnOrigin";
 import { toCamel } from "../helpers/idGenerator";
 export const gcashSubmit = async (req: Request, res: Response) => {
   try {
@@ -93,7 +94,11 @@ export const createPaymongoPayment = async (req: Request, res: Response) => {
       );
     }
 
-    const result = await paymentService.createCheckoutSession(bookingId);
+    // Origin is matched against a server-side allowlist, never echoed. No
+    // Origin (native mobile) resolves to undefined = the configured default.
+    const result = await paymentService.createCheckoutSession(bookingId, {
+      returnOrigin: resolvePaymentReturnOrigin(req),
+    });
 
     return res.json({
       success: true,

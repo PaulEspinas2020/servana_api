@@ -170,7 +170,7 @@ class AdditionalService {
     return result.rows[0];
   }
 
-  async generatePayment(id: number) {
+  async generatePayment(id: number, options?: { returnOrigin?: string }) {
 
     const res = await dbQuery.query(
       `SELECT * FROM ${dbSchema}.booking_additional_requests WHERE id = $1`,
@@ -190,7 +190,7 @@ class AdditionalService {
        ORDER BY id DESC LIMIT 1`,
       [id]
     );
-    const checkoutUrl = existing.rows[0]?.checkout_url || await createPayment(request);
+    const checkoutUrl = existing.rows[0]?.checkout_url || await createPayment(request, options);
 
     // Notify customer that additional work was approved and payment is needed
     try {

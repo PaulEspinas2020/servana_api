@@ -160,8 +160,20 @@ const getAuthHeader = () => {
   return `Basic ${token}`;
 };
 
-const getReturnUrl = (path: "/payment-success" | "/payment-cancel", params: Record<string, string>) => {
-  const configured = String(process.env.PAYMONGO_RETURN_URL || process.env.APP_URL || "").trim();
+/**
+ * `returnOrigin` is an entry from the server-side allowlist in
+ * paymentReturnOrigin.ts — never a caller-supplied string. Omitted (native
+ * mobile, the scheduler) it falls back to the configured default, which is the
+ * behaviour every client had before the allowlist existed.
+ */
+const getReturnUrl = (
+  path: "/payment-success" | "/payment-cancel",
+  params: Record<string, string>,
+  returnOrigin?: string,
+) => {
+  const configured = String(
+    returnOrigin || process.env.PAYMONGO_RETURN_URL || process.env.APP_URL || "",
+  ).trim();
   let base: URL;
   try {
     base = new URL(configured);
@@ -228,7 +240,10 @@ const createPaymongoCheckout = async (payload: unknown, idempotencyKey: string) 
   return { providerPaymentId, checkoutUrl, result };
 };
 
-export const createCheckoutSession = async (bookingId: number) => {
+export const createCheckoutSession = async (
+  bookingId: number,
+  options?: { returnOrigin?: string },
+) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -296,8 +311,8 @@ export const createCheckoutSession = async (bookingId: number) => {
           payment_method_types: ["gcash", "card"],
           description: `Booking payment for booking #${bookingId}`,
           reference_number: `BOOKING-${bookingId}`,
-          success_url: getReturnUrl("/payment-success", { bookingId: String(bookingId) }),
-          cancel_url: getReturnUrl("/payment-cancel", { bookingId: String(bookingId) }),
+          success_url: getReturnUrl("/payment-success", { bookingId: String(bookingId) }, options?.returnOrigin),
+          cancel_url: getReturnUrl("/payment-cancel", { bookingId: String(bookingId) }, options?.returnOrigin),
           send_email_receipt: false,
           show_description: true,
           show_line_items: true,
@@ -399,7 +414,7 @@ function verifySignature(rawBody: Buffer, signatureHeader: string): boolean {
 //   );
 // };
 
-export const createPayment = async (request: any) => {
+export const createPayment = async (request: any, options?: { returnOrigin?: string }) => {
   const requestId = Number(request?.id);
   if (!Number.isSafeInteger(requestId) || requestId <= 0) {
     throw new Error("Additional work request is invalid");
@@ -460,10 +475,10 @@ export const createPayment = async (request: any) => {
           reference_number: `ADD-${requestId}`,
           success_url: getReturnUrl("/payment-success", {
             bookingId: String(currentRequest.booking_id), additionalRequestId: String(requestId),
-          }),
+          }, options?.returnOrigin),
           cancel_url: getReturnUrl("/payment-cancel", {
             bookingId: String(currentRequest.booking_id), additionalRequestId: String(requestId),
-          }),
+          }, options?.returnOrigin),
           send_email_receipt: false,
           show_description: true,
           show_line_items: true,
