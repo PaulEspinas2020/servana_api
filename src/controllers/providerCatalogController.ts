@@ -161,12 +161,29 @@ export const listAllSpecificServicesAdmin = async (req: Request, res: Response) 
     const data = await svc.listAllSpecificServices({
       search:     req.query.search     as string | undefined,
       offeringId: req.query.offeringId ? Number(req.query.offeringId) : undefined,
+      category:   req.query.category   as string | undefined,
+      level2:     req.query.level2     as string | undefined,
+      unit:       req.query.unit       as string | undefined,
+      minPrice:   req.query.minPrice   != null && req.query.minPrice !== '' ? Number(req.query.minPrice) : undefined,
+      maxPrice:   req.query.maxPrice   != null && req.query.maxPrice !== '' ? Number(req.query.maxPrice) : undefined,
+      mapped:     req.query.mapped     as string | undefined,
+      hasBanner:  req.query.hasBanner  as string | undefined,
       isActive:   req.query.isActive   as string | undefined,
       sortBy:     req.query.sortBy     as string | undefined,
       sortOrder:  req.query.sortOrder  as string | undefined,
       page:       req.query.page       ? Number(req.query.page)  : undefined,
       limit:      req.query.limit      ? Number(req.query.limit) : undefined,
     });
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
+  }
+};
+
+// GET /admin/provider-catalog/specific-services/filter-options
+export const getSpecificServiceFilterOptions = async (_req: Request, res: Response) => {
+  try {
+    const data = await svc.listSpecificServiceFilterOptions();
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: error?.message ?? "Server error" });
@@ -242,12 +259,51 @@ export const updateSpecificService = async (req: Request, res: Response) => {
         basePrice: body.basePrice != null ? Number(body.basePrice) : undefined,
         inclusions: body.inclusions,
         exclusions: body.exclusions,
+        // Distinguish absent (leave alone) from explicit null (clear the banner).
+        bannerUrl: 'bannerUrl' in (body ?? {}) ? (body.bannerUrl ?? null) : undefined,
       },
       adminUid
     );
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
     return res.status(400).json({ status: "failed", message: error?.message ?? "Bad request" });
+  }
+};
+
+// POST /admin/provider-catalog/specific-services/:serviceOptionId/banner
+export const setSpecificServiceBanner = async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.serviceOptionId);
+    if (!isPositiveId(id)) return invalidId(res, "serviceOptionId");
+    const fileDataUri = req.body?.fileDataUri ?? req.body?.file;
+    if (!fileDataUri || typeof fileDataUri !== 'string') {
+      return badRequest(res, 'fileDataUri is required');
+    }
+    const data = await svc.setSpecificServiceBanner(
+      id,
+      fileDataUri,
+      String(req.body?.fileName ?? 'banner'),
+      (req as any).user?.uid ?? "system",
+    );
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res
+      .status(error?.statusCode ?? 400)
+      .json({ status: "failed", message: error?.message ?? "Bad request" });
+  }
+};
+
+// DELETE /admin/provider-catalog/specific-services/:serviceOptionId/banner
+export const removeSpecificServiceBanner = async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.serviceOptionId);
+    if (!isPositiveId(id)) return invalidId(res, "serviceOptionId");
+    const data = await svc.removeSpecificServiceBanner(id, (req as any).user?.uid ?? "system");
+    return res.status(200).json({ status: "success", data });
+  } catch (error: any) {
+    return res
+      .status(error?.statusCode ?? 400)
+      .json({ status: "failed", message: error?.message ?? "Bad request" });
   }
 };
 

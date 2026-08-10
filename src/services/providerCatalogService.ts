@@ -97,6 +97,17 @@ export const initProviderCatalogSchema = async (): Promise<void> => {
     ALTER TABLE ${dbSchema}.service_options
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   `, []);
+
+  // 8. banner_url on service_options — the marketing image for one specific service.
+  //    Nullable with no default, so every existing row keeps its current meaning and
+  //    every consumer that does `SELECT so.*` simply gains one more key. Public
+  //    Firebase download URL (not a private storage path): a catalog banner is public
+  //    marketing content, unlike a provider document, so §44's private/signed rule
+  //    does not apply. Admin-written only — see setSpecificServiceBanner.
+  await dbQuery.query(`
+    ALTER TABLE ${dbSchema}.service_options
+    ADD COLUMN IF NOT EXISTS banner_url TEXT
+  `, []);
 };
 
 // ─── Seed ────────────────────────────────────────────────────────────────────
@@ -884,8 +895,15 @@ export const updateOfferingStatus = async (
 export const listAllSpecificServices = async (params: {
   search?: string;
   offeringId?: number;
+  category?: string;     // services.category — the service-family category
+  level2?: string;       // service group within the family
+  unit?: string;
+  minPrice?: number;
+  maxPrice?: number;
+  mapped?: string;       // 'true' | 'false' | omitted = all
+  hasBanner?: string;    // 'true' | 'false' | omitted = all
   isActive?: string;     // 'true' | 'false' | omitted = all
-  sortBy?: string;       // 'name' | 'catalog' | 'price' | 'updatedAt'
+  sortBy?: string;       // 'name' | 'catalog' | 'price' | 'updatedAt' | 'level2' | 'category'
   sortOrder?: string;    // 'asc' | 'desc'
   page?: number;
   limit?: number;
@@ -899,16 +917,64 @@ export const listAllSpecificServices = async (params: {
   let i = 1;
 
   if (params.search) {
-    conditions.push(`(LOWER(so.level_3) LIKE $${i} OR LOWER(so.level_2) LIKE $${i} OR LOWER(pco.name) LIKE $${i})`);
+    conditions.push(
+      // pco is the LATERAL below, whose column is aliased offering_name — not name.
+      `(LOWER(so.level_3) LIKE $${i} OR LOWER(so.level_2) LIKE $${i}` +
+      ` OR LOWER(COALESCE(pco.offering_name, '')) LIKE $${i}` +
+      ` OR LOWER(COALESCE(s.name, '')) LIKE $${i}` +
+      ` OR LOWER(COALESCE(s.category, '')) LIKE $${i})`,
+    );
     queryParams.push(`%${params.search.toLowerCase().trim()}%`);
     i++;
   }
 
+  // Filter across ALL of a service's mappings, not just the primary one resolved
+  // below — a service mapped to two offerings must still match either of them.
   if (params.offeringId) {
-    conditions.push(`pcom.offering_id = $${i}`);
+    conditions.push(`EXISTS (
+      SELECT 1 FROM ${dbSchema}.provider_catalog_offering_mappings m2
+      WHERE m2.service_id = so.service_id AND m2.level_2 = so.level_2
+        AND m2.is_active = true AND m2.offering_id = $${i}
+    )`);
     queryParams.push(Number(params.offeringId));
     i++;
   }
+
+  if (params.category) {
+    conditions.push(`LOWER(s.category) = $${i}`);
+    queryParams.push(String(params.category).toLowerCase().trim());
+    i++;
+  }
+
+  if (params.level2) {
+    conditions.push(`LOWER(so.level_2) = $${i}`);
+    queryParams.push(String(params.level2).toLowerCase().trim());
+    i++;
+  }
+
+  if (params.unit) {
+    conditions.push(`LOWER(so.unit) = $${i}`);
+    queryParams.push(String(params.unit).toLowerCase().trim());
+    i++;
+  }
+
+  if (params.minPrice != null && isFinite(Number(params.minPrice))) {
+    conditions.push(`so.base_price >= $${i}`);
+    queryParams.push(Number(params.minPrice));
+    i++;
+  }
+
+  if (params.maxPrice != null && isFinite(Number(params.maxPrice))) {
+    conditions.push(`so.base_price <= $${i}`);
+    queryParams.push(Number(params.maxPrice));
+    i++;
+  }
+
+  if (params.mapped === 'true')       conditions.push(`pco.id IS NOT NULL`);
+  else if (params.mapped === 'false') conditions.push(`pco.id IS NULL`);
+
+  if (params.hasBanner === 'true')       conditions.push(`so.banner_url IS NOT NULL AND so.banner_url <> ''`);
+  else if (params.hasBanner === 'false') conditions.push(`(so.banner_url IS NULL OR so.banner_url = '')`);
 
   if (params.isActive === 'true') {
     conditions.push(`COALESCE(so.is_active, true) = true`);
@@ -918,16 +984,27 @@ export const listAllSpecificServices = async (params: {
 
   const validSort: Record<string, string> = {
     name:      'so.level_3',
-    catalog:   'pco.name',
+    catalog:   'pco.offering_name',
     price:     'so.base_price',
     updatedAt: 'so.updated_at',
     level2:    'so.level_2',
+    category:  's.category',
   };
   const sortField = validSort[params.sortBy ?? ''] ?? 'so.level_3';
   const sortDir   = params.sortOrder === 'desc' ? 'DESC' : 'ASC';
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+  // Offerings are resolved through a LATERAL "primary mapping" lookup rather than a
+  // plain INNER JOIN. Two reasons, both correctness rather than taste:
+  //   1. INNER JOIN silently DROPPED every specific service with no active offering
+  //      mapping — an admin page that promises "all services" must not hide rows,
+  //      and an unmapped service is exactly the row an admin needs to find.
+  //   2. UNIQUE(offering_id, service_id, level_2) permits the same (service_id,
+  //      level_2) under several offerings, so the join emitted one DUPLICATE row per
+  //      extra mapping and inflated total_count with it.
+  // `offering` therefore stays a single object (unchanged shape, may now be null) and
+  // `offeringCount` is added so the UI can show when a service belongs to more.
   const sql = `
     SELECT
       so.id          AS service_option_id,
@@ -936,21 +1013,42 @@ export const listAllSpecificServices = async (params: {
       so.level_3     AS name,
       so.unit,
       so.base_price,
+      so.banner_url,
       COALESCE(so.is_active, true) AS is_active,
       so.updated_at,
-      pco.id         AS offering_id,
-      pco.name       AS offering_name,
+      s.name         AS service_family_name,
+      s.category     AS category,
+      COALESCE(m.description, '') AS description,
+      pco.offering_id,
+      pco.offering_name,
       pco.catalog_key,
       pco.icon_key,
-      pco.status     AS offering_status,
+      pco.offering_status,
+      (
+        SELECT COUNT(*) FROM ${dbSchema}.provider_catalog_offering_mappings m3
+        WHERE m3.service_id = so.service_id AND m3.level_2 = so.level_2 AND m3.is_active = true
+      ) AS offering_count,
       COUNT(*) OVER() AS total_count
     FROM ${dbSchema}.service_options so
-    INNER JOIN ${dbSchema}.provider_catalog_offering_mappings pcom
-      ON pcom.service_id = so.service_id
-     AND pcom.level_2    = so.level_2
-     AND pcom.is_active  = true
-    INNER JOIN ${dbSchema}.provider_catalog_offerings pco
-      ON pco.id = pcom.offering_id
+    LEFT JOIN ${dbSchema}.services s
+      ON s.id = so.service_id
+    LEFT JOIN ${dbSchema}.service_option_meta m
+      ON m.service_option_id = so.id
+    LEFT JOIN LATERAL (
+      SELECT o.id     AS offering_id,
+             o.name   AS offering_name,
+             o.catalog_key,
+             o.icon_key,
+             o.status AS offering_status
+      FROM ${dbSchema}.provider_catalog_offering_mappings pcom
+      INNER JOIN ${dbSchema}.provider_catalog_offerings o
+        ON o.id = pcom.offering_id
+      WHERE pcom.service_id = so.service_id
+        AND pcom.level_2    = so.level_2
+        AND pcom.is_active  = true
+      ORDER BY o.display_order ASC, o.id ASC
+      LIMIT 1
+    ) pco ON true
     ${where}
     ORDER BY ${sortField} ${sortDir}, so.level_3 ASC, so.id ASC
     LIMIT $${i} OFFSET $${i + 1}
@@ -968,9 +1066,14 @@ export const listAllSpecificServices = async (params: {
     level2:          r.level_2 as string,
     unit:            r.unit as string,
     basePrice:       Number(r.base_price),
+    bannerUrl:       r.banner_url || null,
+    description:     r.description || null,
+    category:        r.category || null,
+    serviceFamilyName: r.service_family_name || null,
     isActive:        r.is_active == null ? true : Boolean(r.is_active),
     updatedAt:       r.updated_at ? new Date(r.updated_at).toISOString() : null,
-    offering: {
+    offeringCount:   Number(r.offering_count ?? 0),
+    offering: r.offering_id == null ? null : {
       offeringId:  Number(r.offering_id),
       name:        r.offering_name as string,
       catalogKey:  r.catalog_key  as string,
@@ -980,6 +1083,59 @@ export const listAllSpecificServices = async (params: {
   }));
 
   return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
+};
+
+// Distinct filter values for the Services Management filter bar. Derived from the
+// live rows rather than the hardcoded CATALOG_OFFERINGS list in the portal, so a
+// category seeded by a migration shows up without a frontend release.
+export const listSpecificServiceFilterOptions = async (): Promise<{
+  categories: Array<{ category: string; serviceCount: number }>;
+  level2s: string[];
+  units: string[];
+  priceRange: { min: number | null; max: number | null };
+}> => {
+  const catRes = await dbQuery.query(
+    `SELECT s.category, COUNT(*)::int AS service_count
+     FROM ${dbSchema}.service_options so
+     INNER JOIN ${dbSchema}.services s ON s.id = so.service_id
+     WHERE so.option_type = 'MAIN' AND s.category IS NOT NULL AND s.category <> ''
+     GROUP BY s.category
+     ORDER BY s.category ASC`,
+    [],
+  );
+
+  const l2Res = await dbQuery.query(
+    `SELECT DISTINCT level_2 FROM ${dbSchema}.service_options
+     WHERE option_type = 'MAIN' AND level_2 IS NOT NULL AND level_2 <> ''
+     ORDER BY level_2 ASC`,
+    [],
+  );
+
+  const unitRes = await dbQuery.query(
+    `SELECT DISTINCT unit FROM ${dbSchema}.service_options
+     WHERE option_type = 'MAIN' AND unit IS NOT NULL AND unit <> ''
+     ORDER BY unit ASC`,
+    [],
+  );
+
+  const rangeRes = await dbQuery.query(
+    `SELECT MIN(base_price) AS min, MAX(base_price) AS max
+     FROM ${dbSchema}.service_options WHERE option_type = 'MAIN'`,
+    [],
+  );
+
+  return {
+    categories: catRes.rows.map((r: any) => ({
+      category: r.category as string,
+      serviceCount: Number(r.service_count),
+    })),
+    level2s: l2Res.rows.map((r: any) => r.level_2 as string),
+    units:   unitRes.rows.map((r: any) => r.unit as string),
+    priceRange: {
+      min: rangeRes.rows[0]?.min == null ? null : Number(rangeRes.rows[0].min),
+      max: rangeRes.rows[0]?.max == null ? null : Number(rangeRes.rows[0].max),
+    },
+  };
 };
 
 // ─── Admin — Specific Services CRUD ──────────────────────────────────────────
@@ -1149,7 +1305,10 @@ export const createSpecificService = async (
   );
 
   auditFire({ action: 'catalog_service_option.create', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_service_option', entityId: String(optionId), after: { level2: data.level2, level3: data.level3, basePrice: data.basePrice } });
-  return {
+  // Read back rather than echoing the input, so create and update return the SAME
+  // shape — the echoed object was missing category / serviceFamilyName / bannerUrl
+  // and left callers guessing which fields a create response actually carries.
+  return (await getAdminSpecificService(optionId)) ?? {
     serviceOptionId: optionId,
     serviceId,
     level2: data.level2,
@@ -1157,6 +1316,7 @@ export const createSpecificService = async (
     description: data.description ?? null,
     unit: data.unit,
     basePrice: data.basePrice,
+    bannerUrl: null,
     inclusions: data.inclusions ?? [],
     exclusions: data.exclusions ?? [],
     addons: [],
@@ -1166,10 +1326,14 @@ export const createSpecificService = async (
 export const getAdminSpecificService = async (serviceOptionId: number): Promise<any | null> => {
   const res = await dbQuery.query(
     `SELECT so.id, so.service_id, so.level_2, so.level_3, so.unit, so.base_price, so.is_active,
+            so.banner_url,
+            s.name     AS service_family_name,
+            s.category AS category,
             COALESCE(m.description, '') AS description,
             COALESCE(m.inclusions, '[]'::jsonb) AS inclusions,
             COALESCE(m.exclusions, '[]'::jsonb) AS exclusions
      FROM ${dbSchema}.service_options so
+     LEFT JOIN ${dbSchema}.services s ON s.id = so.service_id
      LEFT JOIN ${dbSchema}.service_option_meta m ON m.service_option_id = so.id
      WHERE so.id = $1 AND so.option_type = 'MAIN'`,
     [serviceOptionId]
@@ -1186,6 +1350,9 @@ export const getAdminSpecificService = async (serviceOptionId: number): Promise<
 
   return {
     ...toCamel(res.rows[0]),
+    // toCamel yields `id` from so.id, but every other catalog response calls this
+    // `serviceOptionId`. Emit both so callers do not have to know which one they got.
+    serviceOptionId: Number(res.rows[0].id),
     addons: addonRes.rows.map(toCamel),
   };
 };
@@ -1199,6 +1366,7 @@ export const updateSpecificService = async (
     basePrice?: number;
     inclusions?: string[];
     exclusions?: string[];
+    bannerUrl?: string | null;   // explicit null clears the banner
   },
   adminUid: string
 ): Promise<any> => {
@@ -1206,22 +1374,32 @@ export const updateSpecificService = async (
     throw new Error('basePrice must be a non-negative finite number');
   }
 
-  // Verify exists and is MAIN
+  // Read the pre-change row so the audit event carries a real `before` (§15) rather
+  // than only the submitted fields.
   const check = await dbQuery.query(
-    `SELECT id FROM ${dbSchema}.service_options WHERE id = $1 AND option_type = 'MAIN'`,
+    `SELECT id, level_3, unit, base_price, banner_url
+     FROM ${dbSchema}.service_options WHERE id = $1 AND option_type = 'MAIN'`,
     [serviceOptionId]
   );
   if (check.rows.length === 0) throw new Error('Specific service not found');
+  const before = check.rows[0];
 
-  // Update service_options — preserve id, service_id, level_2, option_type
+  // Update service_options — preserve id, service_id, level_2, option_type.
+  // banner_url uses a separate "explicitly provided?" flag because COALESCE cannot
+  // distinguish "leave alone" from "clear it": both arrive as null.
+  const clearBanner = data.bannerUrl === null;
   await dbQuery.query(
     `UPDATE ${dbSchema}.service_options SET
        level_3    = COALESCE($1, level_3),
        unit       = COALESCE($2, unit),
        base_price = COALESCE($3, base_price),
+       banner_url = CASE WHEN $5::boolean THEN NULL ELSE COALESCE($6::text, banner_url) END,
        updated_at = NOW()
      WHERE id = $4`,
-    [data.level3 ?? null, data.unit ?? null, data.basePrice ?? null, serviceOptionId]
+    [
+      data.level3 ?? null, data.unit ?? null, data.basePrice ?? null, serviceOptionId,
+      clearBanner, data.bannerUrl ?? null,
+    ]
   );
 
   // Upsert meta
@@ -1243,7 +1421,127 @@ export const updateSpecificService = async (
     );
   }
 
-  auditFire({ action: 'catalog_service_option.update', actionCategory: 'catalog', outcome: 'success', actorUid: adminUid, actorType: 'admin', entityType: 'catalog_service_option', entityId: String(serviceOptionId), after: data as Record<string, unknown> });
+  auditFire({
+    action: 'catalog_service_option.update', actionCategory: 'catalog', outcome: 'success',
+    actorUid: adminUid, actorType: 'admin', entityType: 'catalog_service_option',
+    entityId: String(serviceOptionId),
+    before: {
+      level3: before.level_3, unit: before.unit,
+      basePrice: before.base_price == null ? null : Number(before.base_price),
+      bannerUrl: before.banner_url ?? null,
+    },
+    after: data as Record<string, unknown>,
+    changedFields: Object.keys(data).filter((k) => (data as Record<string, unknown>)[k] !== undefined),
+  });
+  return getAdminSpecificService(serviceOptionId);
+};
+
+// ─── Admin — Specific Service Banner ─────────────────────────────────────────
+// A banner is public catalog marketing content, so it is stored as a permanent
+// public Firebase download URL (uploadFileToStorage) rather than a private path +
+// signed URL. Provider documents keep the private path treatment; do not copy this
+// helper for anything containing personal data.
+
+const ALLOWED_BANNER_MIMES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_BANNER_BYTES = 5 * 1024 * 1024;
+
+export const setSpecificServiceBanner = async (
+  serviceOptionId: number,
+  fileDataUri: string,
+  fileName: string,
+  adminUid: string,
+): Promise<any> => {
+  const check = await dbQuery.query(
+    `SELECT id, level_3, banner_url FROM ${dbSchema}.service_options
+     WHERE id = $1 AND option_type = 'MAIN'`,
+    [serviceOptionId],
+  );
+  if (check.rows.length === 0) {
+    throw Object.assign(new Error('Specific service not found'), { statusCode: 404 });
+  }
+
+  const match = /^data:([^;,]+);base64,(.+)$/i.exec(String(fileDataUri ?? '').trim());
+  if (!match) {
+    throw Object.assign(new Error('Banner must be a base64 data URI'), { statusCode: 400 });
+  }
+  const mimeType = match[1].toLowerCase();
+  if (!ALLOWED_BANNER_MIMES.includes(mimeType)) {
+    throw Object.assign(
+      new Error('Banner must be a JPG, PNG or WebP image'),
+      { statusCode: 400 },
+    );
+  }
+  // Decode to measure real bytes — a base64 length check overstates by ~33% and a
+  // client-declared size is not evidence.
+  const buffer = Buffer.from(match[2], 'base64');
+  if (buffer.byteLength === 0) {
+    throw Object.assign(new Error('Banner image is empty'), { statusCode: 400 });
+  }
+  if (buffer.byteLength > MAX_BANNER_BYTES) {
+    throw Object.assign(new Error('Banner image must be 5 MB or smaller'), { statusCode: 400 });
+  }
+  // Magic bytes must agree with the declared MIME — a renamed .exe otherwise sails
+  // through on the client-supplied content type alone.
+  const sniffed =
+    buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff ? 'image/jpeg'
+    : buffer.length > 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47 ? 'image/png'
+    : buffer.length > 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP' ? 'image/webp'
+    : null;
+  if (sniffed !== mimeType) {
+    throw Object.assign(
+      new Error('Banner file contents do not match its image type'),
+      { statusCode: 400 },
+    );
+  }
+
+  const safeName = String(fileName || 'banner')
+    .replace(/[^A-Za-z0-9._-]/g, '_')
+    .slice(-80);
+  // Imported lazily for the same reason adminProviderService does: the Firebase
+  // bucket accessor resolves credentials on first use, and nothing else in this
+  // module needs storage.
+  const { uploadFileToStorage } = await import('../helpers/firebaseStorageUploader');
+  const url = await uploadFileToStorage(
+    `service-banners/${serviceOptionId}`,
+    `${Date.now()}_${safeName}`,
+    fileDataUri,
+  );
+
+  await dbQuery.query(
+    `UPDATE ${dbSchema}.service_options SET banner_url = $1, updated_at = NOW() WHERE id = $2`,
+    [url, serviceOptionId],
+  );
+
+  auditFire({
+    action: 'catalog_service_option.banner_set', actionCategory: 'catalog', outcome: 'success',
+    actorUid: adminUid, actorType: 'admin', entityType: 'catalog_service_option',
+    entityId: String(serviceOptionId), entityDisplayName: check.rows[0].level_3 ?? null,
+    before: { bannerUrl: check.rows[0].banner_url ?? null },
+    after: { bannerUrl: url, mimeType, byteSize: buffer.byteLength },
+    changedFields: ['bannerUrl'],
+  });
+
+  return getAdminSpecificService(serviceOptionId);
+};
+
+export const removeSpecificServiceBanner = async (
+  serviceOptionId: number,
+  adminUid: string,
+): Promise<any> => {
+  const res = await dbQuery.query(
+    `UPDATE ${dbSchema}.service_options SET banner_url = NULL, updated_at = NOW()
+     WHERE id = $1 AND option_type = 'MAIN'
+     RETURNING id`,
+    [serviceOptionId],
+  );
+  if (res.rows.length === 0) {
+    throw Object.assign(new Error('Specific service not found'), { statusCode: 404 });
+  }
+  auditFire({
+    action: 'catalog_service_option.banner_removed', actionCategory: 'catalog', outcome: 'success',
+    actorUid: adminUid, actorType: 'admin', entityType: 'catalog_service_option',
+    entityId: String(serviceOptionId), after: { bannerUrl: null }, changedFields: ['bannerUrl'],
+  });
   return getAdminSpecificService(serviceOptionId);
 };
 
