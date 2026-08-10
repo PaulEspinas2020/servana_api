@@ -283,6 +283,25 @@ export const customerFirebaseLoginController = async (req: Request, res: Respons
     }
     return res.status(200).json(result);
   } catch (error: any) {
+    /**
+     * A link collision answers 200 with no token, deliberately.
+     *
+     * The shipped mobile client throws on ANY non-2xx before the body is read,
+     * and on 401 it also fires `onUnauthorized`, which drives a session-expiry
+     * redirect (`servana_api_client.dart` `_decodeJson`). Either would hide the
+     * message and, at sign-in, show "session expired" to somebody who has no
+     * session yet.
+     *
+     * Its exchanger treats "200 with an empty `token`" as a clean, displayable
+     * failure and surfaces the top-level `message`
+     * (`auth_token_exchanger.dart:30-35`), so this is the one shape the
+     * installed app can actually present. `{status:'failed'}` with 200 is also
+     * what the web's `unwrap()` already reads as a failure, so no consumer
+     * mistakes it for success.
+     */
+    if (error?.linkCollision) {
+      return res.status(200).json({ status: "failed", message: error.message });
+    }
     const isDisabled = error?.disabled || error?.message?.includes("disabled");
     return res.status(isDisabled ? 403 : 401).json({
       status: "failed",
