@@ -183,12 +183,22 @@ class AdditionalService {
       this.fail(`Cannot create payment from status: ${request.status}`, 409, "ADDITIONAL_WORK_INVALID_TRANSITION");
     }
 
+    // This is a THIRD reuse path, independent of the one inside createPayment,
+    // and it short-circuits before that function is ever called. It has to
+    // apply the same origin rule or it silently defeats it: a session built for
+    // one origin would be handed to a caller from another and the payer would
+    // return to the wrong application after paying.
+    //
+    // `return_origin IS NOT DISTINCT FROM $2` rather than `=`, because NULL
+    // means "the configured default" and must match a caller that resolved to
+    // the default — `NULL = NULL` is NULL, which would never reuse.
     const existing = await dbQuery.query(
       `SELECT checkout_url FROM ${dbSchema}.payments
        WHERE additional_request_id = $1 AND provider = 'PAYMONGO' AND status = 'PENDING'
          AND checkout_url IS NOT NULL AND updated_at > NOW() - INTERVAL '2 hours'
+         AND return_origin IS NOT DISTINCT FROM $2
        ORDER BY id DESC LIMIT 1`,
-      [id]
+      [id, options?.returnOrigin ?? null]
     );
     const checkoutUrl = existing.rows[0]?.checkout_url || await createPayment(request, options);
 

@@ -128,8 +128,13 @@ describe('the checkout call sites thread the resolved origin', () => {
 
   test('all four return URLs accept the per-request origin', () => {
     // Four call sites: success + cancel, for bookings and for additional work.
-    const threaded = service.match(/options\?\.returnOrigin/g) ?? [];
-    expect(threaded).toHaveLength(4);
+    //
+    // Counts getReturnUrl calls specifically. Counting every mention of
+    // `options?.returnOrigin` was a proxy that broke the moment the origin
+    // gained a second job — gating session reuse and being stored on the
+    // payment row added five more mentions, none of them return URLs.
+    const returnUrlCalls = service.match(/getReturnUrl\([\s\S]{0,240}?options\?\.returnOrigin\)/g) ?? [];
+    expect(returnUrlCalls).toHaveLength(4);
   });
 
   test('the configured default is still the fallback, so no caller is forced to pass one', () => {

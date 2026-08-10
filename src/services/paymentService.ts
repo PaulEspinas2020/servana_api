@@ -1,4 +1,5 @@
 import { db } from "../config";
+import { returnOriginMatches } from "./paymentReturnOrigin";
 import { Request, Response } from "express";
 import dbQuery, { pool } from "../db/dbQuery";
 import crypto from "crypto";
@@ -259,6 +260,7 @@ export const createCheckoutSession = async (
               p.status AS payment_status,
               p.provider,
               p.checkout_url,
+              p.return_origin,
               p.updated_at,
               COALESCE(p.checkout_attempt, 0) AS checkout_attempt
          FROM ${dbSchema}.bookings b
@@ -293,9 +295,14 @@ export const createCheckoutSession = async (
 
     const updatedAt = booking.updated_at ? new Date(booking.updated_at).getTime() : 0;
     const isRecent = updatedAt > 0 && Date.now() - updatedAt < 2 * 60 * 60 * 1000;
+    // The stored session encodes the return URLs it was created with, so it may
+    // only be handed back to a caller resolving to the SAME origin. A mismatch
+    // falls through and mints a fresh session rather than returning the payer to
+    // another application after they pay.
+    const originMatches = returnOriginMatches(booking.return_origin, options?.returnOrigin);
     if (paymentStatus === "PENDING" &&
         String(booking.provider).toUpperCase() === "PAYMONGO" &&
-        isAllowedCheckoutUrl(booking.checkout_url) && isRecent) {
+        isAllowedCheckoutUrl(booking.checkout_url) && isRecent && originMatches) {
       await client.query("COMMIT");
       return { booking_id: bookingId, checkout_url: booking.checkout_url, reused: true };
     }
@@ -325,10 +332,10 @@ export const createCheckoutSession = async (
       `UPDATE ${dbSchema}.payments
           SET provider = 'PAYMONGO', provider_payment_id = $2,
               checkout_url = $3, raw_response = $4, status = 'PENDING',
-              checkout_attempt = $5, updated_at = NOW()
+              checkout_attempt = $5, return_origin = $6, updated_at = NOW()
         WHERE id = $1 AND status IN ('PENDING', 'FAILED')
         RETURNING id`,
-      [booking.payment_id, providerPaymentId, checkoutUrl, result, attempt],
+      [booking.payment_id, providerPaymentId, checkoutUrl, result, attempt, options?.returnOrigin ?? null],
     );
     if (!updated.rowCount) throw paymentError("Payment changed while checkout was being created", "PAYMENT_STATE_CONFLICT", 409);
     await client.query("COMMIT");
@@ -443,7 +450,8 @@ export const createPayment = async (request: any, options?: { returnOrigin?: str
     }
 
     const existingRes = await client.query(
-      `SELECT id, status, checkout_url, updated_at, COALESCE(checkout_attempt, 0) AS checkout_attempt
+      `SELECT id, status, checkout_url, return_origin, updated_at,
+              COALESCE(checkout_attempt, 0) AS checkout_attempt
          FROM ${dbSchema}.payments
         WHERE additional_request_id = $1 AND provider = 'PAYMONGO'
         ORDER BY id DESC LIMIT 1
@@ -456,8 +464,11 @@ export const createPayment = async (request: any, options?: { returnOrigin?: str
       throw new Error("Additional work payment is already settled");
     }
     const updatedAt = existing?.updated_at ? new Date(existing.updated_at).getTime() : 0;
+    // Same rule as createCheckoutSession: a stored session carries the return
+    // URLs it was built with, so it is only reusable for the same origin.
     if (existingStatus === "PENDING" && isAllowedCheckoutUrl(existing.checkout_url) &&
-        updatedAt > 0 && Date.now() - updatedAt < 2 * 60 * 60 * 1000) {
+        updatedAt > 0 && Date.now() - updatedAt < 2 * 60 * 60 * 1000 &&
+        returnOriginMatches(existing.return_origin, options?.returnOrigin)) {
       await client.query("COMMIT");
       return existing.checkout_url;
     }
@@ -493,19 +504,20 @@ export const createPayment = async (request: any, options?: { returnOrigin?: str
         `UPDATE ${dbSchema}.payments
             SET amount = $2, status = 'PENDING', provider_payment_id = $3,
                 checkout_url = $4, raw_response = $5, checkout_attempt = $6,
-                updated_at = NOW()
+                return_origin = $7, updated_at = NOW()
           WHERE id = $1 AND status IN ('PENDING', 'FAILED')`,
-        [existing.id, currentRequest.total_amount, providerPaymentId, checkoutUrl, result, attempt],
+        [existing.id, currentRequest.total_amount, providerPaymentId, checkoutUrl, result, attempt,
+          options?.returnOrigin ?? null],
       );
       if (!updated.rowCount) throw new Error("Additional work payment changed during checkout creation");
     } else {
       await client.query(
         `INSERT INTO ${dbSchema}.payments
           (booking_id, additional_request_id, amount, status, provider_payment_id,
-           checkout_url, provider, raw_response, checkout_attempt)
-         VALUES ($1,$2,$3,'PENDING',$4,$5,'PAYMONGO',$6,$7)`,
+           checkout_url, provider, raw_response, checkout_attempt, return_origin)
+         VALUES ($1,$2,$3,'PENDING',$4,$5,'PAYMONGO',$6,$7,$8)`,
         [currentRequest.booking_id, requestId, currentRequest.total_amount,
-          providerPaymentId, checkoutUrl, result, attempt],
+          providerPaymentId, checkoutUrl, result, attempt, options?.returnOrigin ?? null],
       );
     }
     await client.query("COMMIT");

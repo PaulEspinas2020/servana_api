@@ -67,3 +67,25 @@ export const resolvePaymentReturnOrigin = (
     }
   });
 };
+
+/**
+ * Whether a stored checkout session may be reused for the current request.
+ *
+ * All three checkout paths reuse a PENDING PayMongo session for two hours. That
+ * predicate did not consider the return origin, so a session created for one
+ * origin could be handed to a caller from another and the payer would be
+ * returned to the wrong application after paying — the checkout itself works,
+ * which is what makes it easy to miss.
+ *
+ * NULL/undefined on either side means "the configured default", which is what
+ * every caller sending no `Origin` resolves to (native mobile, the scheduler).
+ * Two defaults therefore match, and rows written before `return_origin` existed
+ * compare correctly without a backfill.
+ *
+ * Only ever compares values that CAME FROM the allowlist, never a caller's
+ * string — `resolvePaymentReturnOrigin` has already discarded that.
+ */
+export const returnOriginMatches = (
+  stored: string | null | undefined,
+  resolved: string | null | undefined,
+): boolean => (stored ?? null) === (resolved ?? null);
