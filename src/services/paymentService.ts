@@ -411,7 +411,7 @@ function verifySignature(rawBody: Buffer, signatureHeader: string): boolean {
 //       ua.location_id
 //     FROM ${dbSchema}.bookings b
 //     JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-//     JOIN ${dbSchema}.service_families s ON s.id = so.service_id
+//     JOIN ${dbSchema}.services s ON s.id = so.service_id
 //     JOIN ${dbSchema}.user_address ua ON ua.address_id = b.user_address_id
 //     WHERE b.id = $1
 //     `,

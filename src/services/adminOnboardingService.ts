@@ -745,7 +745,7 @@ export const getCaseDetail = async (caseIdOrProviderUid: string) => {
       `SELECT wsa.id, wsa.service_id, wsa.status, wsa.submitted_at,
               '' AS category, s.name AS service_name
        FROM ${dbSchema}.worker_service_applications wsa
-       LEFT JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
+       LEFT JOIN ${dbSchema}.services s ON s.id = wsa.service_id
        WHERE wsa.worker_uid = $1
        ORDER BY wsa.submitted_at DESC`,
       [c.provider_uid]

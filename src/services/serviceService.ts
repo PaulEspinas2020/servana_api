@@ -4,7 +4,7 @@ import { toCamel } from "../helpers/idGenerator";
 const dbSchema = db.schema;
 
 export const getAllServices = async () => {
-    const r = `SELECT id, name, category, created_at FROM ${dbSchema}.service_families ORDER BY name`;
+    const r = `SELECT id, name, category, created_at FROM ${dbSchema}.services ORDER BY name`;
 
     try {
         const res = await dbQuery.query(r, []);
@@ -18,7 +18,7 @@ export const getAllServices = async () => {
 
 export const getServicesSimpleList = async () => {
     const res = await dbQuery.query(
-        `SELECT id, name FROM ${dbSchema}.service_families ORDER BY name`,
+        `SELECT id, name FROM ${dbSchema}.services ORDER BY name`,
         []
     );
     return res.rows as { id: number; name: string }[];
@@ -252,7 +252,7 @@ export const createFullService = async (payload: any) => {
          */
         const serviceRes = await dbQuery.query(
             `
-      INSERT INTO ${dbSchema}.service_families (name, category)
+      INSERT INTO ${dbSchema}.services (name, category)
       VALUES ($1, $2)
       RETURNING id
       `,
@@ -338,7 +338,7 @@ export const updateFullService = async (
          * 1. Validate service exists
          */
         const existing = await dbQuery.query(
-            `SELECT id FROM ${dbSchema}.service_families WHERE id = $1`,
+            `SELECT id FROM ${dbSchema}.services WHERE id = $1`,
             [serviceId]
         );
 
@@ -372,7 +372,7 @@ export const updateFullService = async (
          */
         await dbQuery.query(
             `
-      UPDATE ${dbSchema}.service_families
+      UPDATE ${dbSchema}.services
       SET name = $1,
           category = $2
       WHERE id = $3
@@ -485,7 +485,7 @@ export const hardDeleteService = async (serviceId: number) => {
         }
 
         const res = await dbQuery.query(
-            `SELECT id FROM ${dbSchema}.service_families WHERE id = $1`,
+            `SELECT id FROM ${dbSchema}.services WHERE id = $1`,
             [serviceId]
         );
 
@@ -516,7 +516,7 @@ export const hardDeleteService = async (serviceId: number) => {
 
         // 3. delete service
         await dbQuery.query(
-            `DELETE FROM ${dbSchema}.service_families WHERE id = $1`,
+            `DELETE FROM ${dbSchema}.services WHERE id = $1`,
             [serviceId]
         );
 
@@ -613,7 +613,7 @@ export const getFullServiceCatalog = async () => {
             COALESCE(m.inclusions, '[]'::jsonb) AS inclusions,
             COALESCE(m.exclusions, '[]'::jsonb) AS exclusions
         FROM ${dbSchema}.service_options so
-        LEFT JOIN ${dbSchema}.service_families s
+        LEFT JOIN ${dbSchema}.services s
             ON s.id = so.service_id
         LEFT JOIN ${dbSchema}.service_option_meta m
             ON m.service_option_id = so.id

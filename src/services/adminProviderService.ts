@@ -394,7 +394,7 @@ export const getProviderActiveServices = async (uid: string) => {
     `SELECT es.service_id, es.created_at,
             '' AS category, s.name AS service_name
      FROM ${dbSchema}.employee_services es
-     LEFT JOIN ${dbSchema}.service_families s ON s.id = es.service_id
+     LEFT JOIN ${dbSchema}.services s ON s.id = es.service_id
      WHERE es.employee_uid = $1
      ORDER BY es.created_at DESC`,
     [uid]
@@ -417,7 +417,7 @@ export const getProviderServiceApplications = async (uid: string) => {
             '' AS category, s.name AS service_name,
             rev.first_name AS reviewer_first, rev.last_name AS reviewer_last
      FROM ${dbSchema}.worker_service_applications wsa
-     LEFT JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
+     LEFT JOIN ${dbSchema}.services s ON s.id = wsa.service_id
      LEFT JOIN ${dbSchema}.user_credentials rev ON rev.uid = wsa.reviewed_by
      WHERE wsa.worker_uid = $1
      ORDER BY wsa.submitted_at DESC`,
@@ -453,7 +453,7 @@ export const getProviderCatalogCapabilities = async (uid: string) => {
             s.name AS category, ecc.level_2 AS service_name
      FROM ${dbSchema}.employee_catalog_capabilities ecc
      LEFT JOIN ${dbSchema}.provider_catalog_offerings pco ON pco.id = ecc.offering_id
-     LEFT JOIN ${dbSchema}.service_families s ON s.id = ecc.service_id
+     LEFT JOIN ${dbSchema}.services s ON s.id = ecc.service_id
      WHERE ecc.employee_uid = $1
      ORDER BY ecc.approved_at DESC NULLS LAST`,
     [uid]
@@ -753,7 +753,7 @@ export const getProviderJobs = async (uid: string, filter: ProviderJobsFilter = 
               uc.first_name AS customer_first, uc.last_name AS customer_last
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-       LEFT JOIN ${dbSchema}.service_families s ON s.id = so.service_id
+       LEFT JOIN ${dbSchema}.services s ON s.id = so.service_id
        LEFT JOIN ${dbSchema}.user_address ua ON ua.address_id = b.user_address_id
        LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = b.user_id
        WHERE ${where.join(' AND ')}

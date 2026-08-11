@@ -40,7 +40,7 @@ export const createBooking = async (
       `
       SELECT s.id AS service_id
       FROM ${dbSchema}.service_options so
-      JOIN ${dbSchema}.service_families s ON s.id = so.service_id
+      JOIN ${dbSchema}.services s ON s.id = so.service_id
       WHERE so.id = $1
         AND so.option_type = 'MAIN'
         AND so.is_active = true
@@ -435,7 +435,7 @@ export const getBookingById = async (
       ON p.booking_id = b.id
     LEFT JOIN ${dbSchema}.service_options so
       ON so.id = b.service_option_id
-    LEFT JOIN ${dbSchema}.service_families s
+    LEFT JOIN ${dbSchema}.services s
       ON s.id = so.service_id
     LEFT JOIN ${dbSchema}.branches br
       ON br.id = b.branch_id
@@ -589,7 +589,7 @@ export const getBookingsByUserId = async (userId: string) => {
     -- bookings from a customer's history to avoid a missing label.
     LEFT JOIN ${dbSchema}.service_options so
       ON so.id = b.service_option_id
-    LEFT JOIN ${dbSchema}.service_families s
+    LEFT JOIN ${dbSchema}.services s
       ON s.id = so.service_id
     LEFT JOIN ${dbSchema}.branches br
       ON br.id = b.branch_id

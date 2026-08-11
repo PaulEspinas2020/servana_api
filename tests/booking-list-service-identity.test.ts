@@ -68,10 +68,7 @@ describe('the customer booking list names the service', () => {
     // would not notice.
     expect(sql).toContain('service_options so');
     expect(sql).toContain('ON so.id = b.service_option_id');
-    // The legacy family table was renamed to service_families in Catalog V2;
-    // `services` now holds the bookable entity. The join is unchanged — a
-    // service_option still belongs to a family — only the name moved.
-    expect(sql).toContain('service_families s');
+    expect(sql).toContain('services s');
     expect(sql).toContain('ON s.id = so.service_id');
   });
 
@@ -82,7 +79,7 @@ describe('the customer booking list names the service', () => {
     const serviceJoin = sql.slice(sql.indexOf('service_options so') - 60, sql.indexOf('service_options so'));
     expect(serviceJoin).toContain('LEFT JOIN');
 
-    const servicesJoin = sql.slice(sql.indexOf('.service_families s') - 60, sql.indexOf('.service_families s'));
+    const servicesJoin = sql.slice(sql.indexOf('.services s') - 60, sql.indexOf('.services s'));
     expect(servicesJoin).toContain('LEFT JOIN');
   });
 
