@@ -228,7 +228,7 @@ const BUILTIN_OFFERINGS: OfferingSeed[] = [
 export const seedBuiltInOfferings = async (): Promise<void> => {
   // Pre-load service name → id map for mapping resolution
   const svcs = await dbQuery.query(
-    `SELECT id, name FROM ${dbSchema}.services ORDER BY id`,
+    `SELECT id, name FROM ${dbSchema}.service_families ORDER BY id`,
     []
   );
   const serviceIdByName = new Map<string, number>();
@@ -303,7 +303,7 @@ export const getOfferingsForProvider = async (workerUid: string): Promise<any[]>
   const mappingsRes = await dbQuery.query(
     `SELECT m.offering_id, m.service_id, m.level_2, s.name AS service_family_name
      FROM ${dbSchema}.provider_catalog_offering_mappings m
-     JOIN ${dbSchema}.services s ON s.id = m.service_id
+     JOIN ${dbSchema}.service_families s ON s.id = m.service_id
      WHERE m.offering_id = ANY($1) AND m.is_active = true
      ORDER BY m.offering_id, m.display_order`,
     [ids]
@@ -445,7 +445,7 @@ export const getOfferingProviders = async (offeringId: number): Promise<any[]> =
 
 export const listServiceFamilies = async (): Promise<Array<{ id: number; name: string }>> => {
   const res = await dbQuery.query(
-    `SELECT id, name FROM ${dbSchema}.services ORDER BY name`,
+    `SELECT id, name FROM ${dbSchema}.service_families ORDER BY name`,
     []
   );
   return res.rows.map((r: any) => ({ id: Number(r.id), name: r.name as string }));
@@ -486,7 +486,7 @@ export const getAdminOffering = async (offeringId: number): Promise<any | null> 
     `SELECT m.id AS mapping_id, m.offering_id, m.service_id, m.level_2, m.display_order, m.is_active,
             s.name AS service_family_name
      FROM ${dbSchema}.provider_catalog_offering_mappings m
-     JOIN ${dbSchema}.services s ON s.id = m.service_id
+     JOIN ${dbSchema}.service_families s ON s.id = m.service_id
      WHERE m.offering_id = $1
      ORDER BY m.display_order`,
     [offeringId]
@@ -1030,7 +1030,7 @@ export const listAllSpecificServices = async (params: {
       ) AS offering_count,
       COUNT(*) OVER() AS total_count
     FROM ${dbSchema}.service_options so
-    LEFT JOIN ${dbSchema}.services s
+    LEFT JOIN ${dbSchema}.service_families s
       ON s.id = so.service_id
     LEFT JOIN ${dbSchema}.service_option_meta m
       ON m.service_option_id = so.id
@@ -1097,7 +1097,7 @@ export const listSpecificServiceFilterOptions = async (): Promise<{
   const catRes = await dbQuery.query(
     `SELECT s.category, COUNT(*)::int AS service_count
      FROM ${dbSchema}.service_options so
-     INNER JOIN ${dbSchema}.services s ON s.id = so.service_id
+     INNER JOIN ${dbSchema}.service_families s ON s.id = so.service_id
      WHERE so.option_type = 'MAIN' AND s.category IS NOT NULL AND s.category <> ''
      GROUP BY s.category
      ORDER BY s.category ASC`,
@@ -1258,14 +1258,14 @@ export const createSpecificService = async (
     let resolvedServiceId: number | null = null;
     if (familyName) {
       const famRes = await dbQuery.query(
-        `SELECT id FROM ${dbSchema}.services WHERE LOWER(name) = LOWER($1) LIMIT 1`,
+        `SELECT id FROM ${dbSchema}.service_families WHERE LOWER(name) = LOWER($1) LIMIT 1`,
         [familyName]
       );
       if (famRes.rows.length > 0) resolvedServiceId = Number(famRes.rows[0].id);
     }
     if (!resolvedServiceId) {
       const anyRes = await dbQuery.query(
-        `SELECT id FROM ${dbSchema}.services ORDER BY id LIMIT 1`, []
+        `SELECT id FROM ${dbSchema}.service_families ORDER BY id LIMIT 1`, []
       );
       if (anyRes.rows.length > 0) resolvedServiceId = Number(anyRes.rows[0].id);
     }
@@ -1337,7 +1337,7 @@ export const getAdminSpecificService = async (serviceOptionId: number): Promise<
             COALESCE(m.inclusions, '[]'::jsonb) AS inclusions,
             COALESCE(m.exclusions, '[]'::jsonb) AS exclusions
      FROM ${dbSchema}.service_options so
-     LEFT JOIN ${dbSchema}.services s ON s.id = so.service_id
+     LEFT JOIN ${dbSchema}.service_families s ON s.id = so.service_id
      LEFT JOIN ${dbSchema}.service_option_meta m ON m.service_option_id = so.id
      WHERE so.id = $1 AND so.option_type = 'MAIN'`,
     [serviceOptionId]
@@ -1731,7 +1731,7 @@ export const getCatalogOverview = async (filter: {
     `SELECT m.id, m.offering_id, m.service_id, m.level_2, m.display_order, m.is_active,
             s.name AS service_family_name
      FROM ${dbSchema}.provider_catalog_offering_mappings m
-     JOIN ${dbSchema}.services s ON s.id = m.service_id
+     JOIN ${dbSchema}.service_families s ON s.id = m.service_id
      WHERE m.offering_id = ANY($1)
      ORDER BY m.offering_id, m.display_order`,
     [ids]
@@ -1836,7 +1836,7 @@ export const createOfferingMapping = async (
   if (offering.rows.length === 0) throw new Error('Offering not found');
 
   const svc = await dbQuery.query(
-    `SELECT id, name FROM ${dbSchema}.services WHERE id = $1`,
+    `SELECT id, name FROM ${dbSchema}.service_families WHERE id = $1`,
     [data.serviceId]
   );
   if (svc.rows.length === 0) throw new Error('Service not found');
@@ -1877,7 +1877,7 @@ export const updateOfferingMapping = async (
        is_active     = COALESCE($2, is_active),
        updated_at    = NOW()
      WHERE id = $3
-     RETURNING *, (SELECT name FROM ${dbSchema}.services s WHERE s.id = service_id) AS service_family_name`,
+     RETURNING *, (SELECT name FROM ${dbSchema}.service_families s WHERE s.id = service_id) AS service_family_name`,
     [data.displayOrder ?? null, data.isActive ?? null, mappingId]
   );
   if (res.rows.length === 0) throw new Error('Mapping not found');

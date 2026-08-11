@@ -68,7 +68,9 @@ describe('the customer booking list names the service', () => {
     // would not notice.
     expect(sql).toContain('service_options so');
     expect(sql).toContain('ON so.id = b.service_option_id');
-    expect(sql).toContain('services s');
+    // Deploy 1 repointed legacy-family reads at the service_families compatibility
+    // view. Same rows, same join — only the name the query uses has moved.
+    expect(sql).toContain('service_families s');
     expect(sql).toContain('ON s.id = so.service_id');
   });
 
@@ -79,7 +81,7 @@ describe('the customer booking list names the service', () => {
     const serviceJoin = sql.slice(sql.indexOf('service_options so') - 60, sql.indexOf('service_options so'));
     expect(serviceJoin).toContain('LEFT JOIN');
 
-    const servicesJoin = sql.slice(sql.indexOf('.services s') - 60, sql.indexOf('.services s'));
+    const servicesJoin = sql.slice(sql.indexOf('.service_families s') - 60, sql.indexOf('.service_families s'));
     expect(servicesJoin).toContain('LEFT JOIN');
   });
 

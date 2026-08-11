@@ -141,7 +141,7 @@ export const getProviderCatalogAssociation = async (
     `
     SELECT es.service_id, s.name AS service_name
     FROM   ${dbSchema}.employee_services es
-    LEFT JOIN ${dbSchema}.services s ON s.id = es.service_id
+    LEFT JOIN ${dbSchema}.service_families s ON s.id = es.service_id
     WHERE  es.employee_uid = $1
     `,
     [providerUid],
