@@ -177,6 +177,42 @@ export interface AdminCatalogCategory {
  */
 const money = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
 
+/**
+ * Timestamps out of this API are ISO 8601 with an explicit UTC designator.
+ *
+ * Measured in production: these columns arrive as
+ * `2026-08-11 11:03:23.421016+00` — a space instead of `T`, and a two-digit
+ * offset. The pool's type parser normalises the legacy tables (a pre-existing
+ * admin endpoint returns `2026-07-15T02:51:24.993Z` from the same pool) but
+ * leaves this form untouched, so a canonical response was shipping a shape no
+ * other Servana endpoint uses.
+ *
+ * That is not cosmetic. `new Date('2026-08-11 11:03:23.421016+00')` is
+ * implementation-defined — WebKit has historically rejected the space form
+ * outright — and the Flutter clients about to migrate onto this contract parse
+ * these values directly. Normalising here rather than in the shared parser
+ * keeps the change contained to the new surface (§4).
+ */
+const toIso = (v: unknown): string | null => {
+  if (v === null || v === undefined) return null;
+  if (v instanceof Date) return v.toISOString();
+  const raw = String(v);
+
+  // Two separate deviations, and both must be repaired before Date sees the
+  // string. Postgres emits `2026-08-11 11:03:23.421016+00`: a space where ISO
+  // wants `T`, and a two-digit offset where ISO wants ±HH:MM. `new Date()`
+  // rejects the bare `+00` outright, so repairing only the separator returns
+  // NaN and silently falls through to the raw value — which is how the first
+  // version of this helper passed its own reasoning and failed its test.
+  let candidate = raw.replace(' ', 'T');
+  candidate = candidate.replace(/([+-]\d{2})$/, '$1:00');
+
+  const parsed = new Date(candidate);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  // Unparseable: hand back the original rather than inventing a time.
+  return raw;
+};
+
 const priceSummary = (basePrice: unknown, unit: unknown): string | null => {
   const amount = money(basePrice);
   if (amount === null || Number.isNaN(amount)) return null;
@@ -199,7 +235,7 @@ const mapService = (r: any): AdminCatalogServiceSummary => ({
   basePrice: money(r.base_price),
   unit: r.unit ?? null,
   basePriceSummary: priceSummary(r.base_price, r.unit),
-  updatedAt: r.updated_at ?? null,
+  updatedAt: toIso(r.updated_at),
 });
 
 // ─── Hierarchy read ──────────────────────────────────────────────────────────
@@ -518,8 +554,8 @@ export const getService = async (serviceId: number) => {
     fullDescription: r.full_description ?? null,
     imageUrl: r.image_url ?? null,
     estimatedDurationMins: r.estimated_duration_mins === null ? null : Number(r.estimated_duration_mins),
-    archivedAt: r.archived_at ?? null,
-    createdAt: r.created_at ?? null,
+    archivedAt: toIso(r.archived_at),
+    createdAt: toIso(r.created_at),
     // Provenance only — never presented as the bookable identity (§52).
     legacyServiceOptionId: r.legacy_service_option_id === null ? null : Number(r.legacy_service_option_id),
     legacyServiceFamilyId: r.legacy_service_family_id === null ? null : Number(r.legacy_service_family_id),
@@ -554,7 +590,7 @@ export const getServiceProviders = async (serviceId: number) => {
     name: [r.first_name, r.last_name].filter(Boolean).join(' ') || null,
     status: r.status,
     source: r.source,
-    grantedAt: r.created_at ?? null,
+    grantedAt: toIso(r.created_at),
   }));
 
   const approvedCount = providers.filter((p) => p.status === 'active').length;

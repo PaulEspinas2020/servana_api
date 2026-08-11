@@ -73,8 +73,22 @@ app.use(express.urlencoded({ extended: true }));
 
 // SWEEP request parity — enriches incoming request bodies with cross-platform field aliases
 app.use(requestParityMiddleware);
-// SWEEP response parity — enriches every JSON response with cross-platform field aliases
-app.use(parityMiddleware);
+// SWEEP response parity — enriches every JSON response with cross-platform field aliases.
+//
+// The canonical Admin Catalog is exempt, and the reason is not tidiness.
+// Parity maps `name` → `serviceName`, `service_name`, `level2`, `level_2`, so a
+// canonical Service came back carrying `level2: "Wiring fuitures"` — its own
+// name. In the legacy model `level2` is the SUBCATEGORY. Shipping a key whose
+// established meaning is contradicted by its value, on the exact contract the
+// Flutter clients are about to migrate onto, would plant precisely the
+// ambiguity Catalog V2 exists to remove (§52).
+//
+// Scoped by path prefix so no existing route's response shape moves (§4).
+const CANONICAL_CATALOG_PREFIX = '/api/admin/catalog';
+app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.path.startsWith(CANONICAL_CATALOG_PREFIX)) return next();
+    return parityMiddleware(req, res, next);
+});
 app.use((req: Request, res: Response, next: NextFunction) => {
     if (req.is("multipart/form-data") == "multipart/form-data") {
         const form = formidable({ multiples: true, maxFileSize: 15 * 1024 * 1024 });

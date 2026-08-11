@@ -27,6 +27,8 @@ jest.mock('../src/services/adminAuditService', () => ({
   auditFire: jest.fn(),
 }));
 
+import fs from 'fs';
+import path from 'path';
 import dbQuery, { pool } from '../src/db/dbQuery';
 import { auditFire } from '../src/services/adminAuditService';
 import * as svc from '../src/services/catalogAdminService';
@@ -556,6 +558,78 @@ describe('normalised duplicate names are refused', () => {
     // The duplicate check must exclude archived rows, or a name can never be reused.
     expect(find(/SELECT id FROM servana\.catalog_categories WHERE lower/)[0].sql)
       .toMatch(/status <> 'archived'/);
+  });
+});
+
+// ─── Wire-format contract (found in production, post-deploy) ────────────────
+
+describe('timestamps are ISO 8601 with an explicit UTC designator', () => {
+  // Override must precede BASE_RULES — first pattern match wins.
+  const rules: Rule[] = [
+    [/SELECT s\.\*/, [serviceRow({
+      // The exact shape measured coming out of production: space separator,
+      // two-digit offset. Neither is ISO 8601.
+      updated_at: '2026-08-11 11:03:23.421016+00',
+      created_at: '2026-01-01 00:00:00+00',
+      archived_at: null,
+    })]],
+    ...BASE_RULES,
+  ];
+
+  test('a space-separated Postgres timestamp is normalised', async () => {
+    useDb(rules);
+    const service = await svc.getService(501);
+    expect(service.updatedAt).toBe('2026-08-11T11:03:23.421Z');
+    expect(service.createdAt).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  test('the wire value parses in a plain JS Date', async () => {
+    useDb(rules);
+    const service = await svc.getService(501);
+    // `new Date('2026-08-11 11:03:23.421016+00')` is implementation-defined and
+    // has been rejected outright by WebKit. The normalised form must not be.
+    expect(Number.isNaN(new Date(service.updatedAt!).getTime())).toBe(false);
+    expect(service.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  test('null stays null rather than becoming an epoch date', async () => {
+    useDb(rules);
+    const service = await svc.getService(501);
+    expect(service.archivedAt).toBeNull();
+  });
+
+  test('an unparseable value is passed through, never invented', async () => {
+    useDb([[/SELECT s\.\*/, [serviceRow({ updated_at: 'not-a-date' })]], ...BASE_RULES]);
+    const service = await svc.getService(501);
+    expect(service.updatedAt).toBe('not-a-date');
+  });
+
+  test('coverage grant timestamps are normalised too', async () => {
+    useDb([
+      [/SELECT 1 FROM servana\.services WHERE id = \$1/, [{ '?column?': 1 }]],
+      [/FROM servana\.catalog_provider_services cps/, [
+        { provider_uid: 'uid-a', status: 'active', source: 'admin_grant',
+          created_at: '2026-08-11 11:03:23.421016+00', first_name: 'Ana', last_name: 'Cruz' },
+      ]],
+    ]);
+    const coverage = await svc.getServiceProviders(501);
+    expect(coverage.providers[0].grantedAt).toBe('2026-08-11T11:03:23.421Z');
+  });
+});
+
+describe('the canonical catalog is exempt from response parity aliases', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'src', 'app.ts'), 'utf8');
+
+  test('parityMiddleware is skipped for /api/admin/catalog', () => {
+    // Parity maps `name` → `level2`, so a canonical Service shipped
+    // `level2: "<its own name>"` while `level2` means the SUBCATEGORY in the
+    // legacy model. Measured in production before this exemption existed.
+    expect(app).toContain("'/api/admin/catalog'");
+    expect(app).toMatch(/startsWith\(CANONICAL_CATALOG_PREFIX\)\s*\)\s*return next\(\)/);
+  });
+
+  test('every other route still gets parity', () => {
+    expect(app).toMatch(/return parityMiddleware\(req, res, next\)/);
   });
 });
 
