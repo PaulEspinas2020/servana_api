@@ -140,6 +140,13 @@ app.use("/api", cors(corsOptionsDelegate), locationRoutes);
 import providerCatalogRoutes from "./routes/providerCatalog.routes";
 app.use("/api", cors(corsOptionsDelegate), providerCatalogRoutes);
 
+// Canonical Admin Catalog — Category → Subcategory → Service, keyed on
+// services.id. Additive: it introduces new paths only and leaves every existing
+// route, including the /api/services* provider-compatibility projections,
+// untouched (§4).
+import catalogAdminRoutes from "./routes/catalogAdmin.routes";
+app.use("/api", cors(corsOptionsDelegate), catalogAdminRoutes);
+
 import adminProviderRoutes from "./routes/adminProvider.routes";
 app.use("/api", cors(corsOptionsDelegate), adminProviderRoutes);
 

@@ -14,6 +14,9 @@ export type AuditEntityType =
   | 'service_option' | 'addon' | 'provider_application' | 'provider_requirement'
   | 'onboarding_case' | 'payment' | 'notification' | 'settings' | 'admin_role' | 'system'
   | 'catalog_offering' | 'catalog_mapping' | 'catalog_service_option' | 'catalog_addon'
+  // Canonical Catalog V2 entities. `catalog_service` is the bookable Specific
+  // Service (services.id) and is distinct from the legacy `catalog_service_option`.
+  | 'catalog_category' | 'catalog_subcategory' | 'catalog_service'
   | 'disbursement' | 'refund_review' | 'reconciliation_exception' | 'ledger_entry'
   | 'admin_user' | 'permission_grant' | 'permission_profile' | 'support_case';
 
