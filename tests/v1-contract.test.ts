@@ -115,13 +115,18 @@ describe('contract integrity', () => {
     }
   });
 
-  it('a mutation that is not idempotent would have to say so', () => {
-    // Everything shipped in this phase IS idempotent — the two writes are a
-    // full-replace PUT and a mark-read that reaches the same end state twice.
-    // If that ever stops being true the endpoint needs the Idempotency-Key
-    // convention, and this assertion is where that decision surfaces.
-    const nonIdempotentImplemented = IMPLEMENTED.filter((e) => !e.idempotent);
-    expect(nonIdempotentImplemented).toEqual([]);
+  it('every non-idempotent endpoint names what bounds a replay', () => {
+    // Not every mutation can be made idempotent — bolting an Idempotency-Key
+    // onto a credential exchange would be theatre. But "not idempotent" cannot
+    // be the end of the sentence: something has to bound the replay, and if
+    // nobody can name it there is nothing there.
+    const unguarded = V1_CONTRACT.filter((e) => !e.idempotent && !(e.replayGuard && e.replayGuard.length > 30));
+    expect(unguarded.map((e) => e.id)).toEqual([]);
+  });
+
+  it('an idempotent endpoint does not claim a replay guard it does not need', () => {
+    const confused = V1_CONTRACT.filter((e) => e.idempotent && e.replayGuard);
+    expect(confused.map((e) => e.id)).toEqual([]);
   });
 
   it('every GET is idempotent', () => {

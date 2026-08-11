@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**18 implemented** · **6 planned** · 24 total.
+**27 implemented** · **5 planned** · 32 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -272,17 +272,120 @@ Replaces the caller's notification preferences. Idempotent by construction.
 
 | Method | Path | Status | Auth | Request | Response | Idem | Owner |
 |---|---|---|---|---|---|---|---|
-| `POST` | `/api/v1/auth/refresh` | _planned_ | public | — | `Session` | no | auth |
+| `POST` | `/api/v1/auth/register` | **live** | public | `RegisterRequest` | `RegisterResult` | no | auth |
+| `POST` | `/api/v1/auth/login` | **live** | public | `LoginRequest` | `Session` | no | auth |
+| `POST` | `/api/v1/auth/refresh` | **live** | public | `RefreshRequest` | `Session` | no | auth |
+| `POST` | `/api/v1/auth/logout` | **live** | any signed-in | — | `LogoutResult` | yes | auth |
+| `POST` | `/api/v1/auth/forgot-password` | **live** | public | `ForgotPasswordRequest` | `NeutralAck` | yes | auth |
+| `POST` | `/api/v1/auth/reset-password` | **live** | public | `ResetPasswordRequest` | `NeutralAck` | no | auth |
+| `POST` | `/api/v1/auth/verify-email` | **live** | public | `VerifyEmailRequest` | `VerificationResult` | no | auth |
+| `POST` | `/api/v1/auth/resend-verification` | **live** | public | `ResendVerificationRequest` | `NeutralAck` | yes | auth |
+| `POST` | `/api/v1/auth/verify-mobile` | **live** | any signed-in | `VerifyMobileRequest` | `VerificationResult` | yes | auth |
+
+### `POST /api/v1/auth/register`
+
+Creates an account from an email + password, or from a Firebase ID token.
+
+> Registration answers identity only. Provider onboarding, service selection and profile completion are separate domains and are NOT triggered from here beyond the existing non-blocking attribution hooks the legacy path already fires.
+
+- **Domain service** — `services/auth.service.registerUser \| services/firebaseFunctions.service.firebaseProviderRegister`
+- **Error codes** — `ACCOUNT_LINK_REQUIRED`, `INTERNAL`, `RATE_LIMITED`, `REGISTRATION_REJECTED`, `VALIDATION_FAILED`, `WEAK_PASSWORD`
+- **Callers** — Cust Mobile ⏳ · Cust Web · · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `POST /api/auth/signup` — **ALIAS_TEMPORARILY** — Email + password registration. Same service; v1 accepts either credential kind on one path instead of splitting them across two routes with two response shapes.
+  - `POST /api/auth/provider/register` — **ALIAS_TEMPORARILY** — Firebase-token registration, provider-shaped. Same service. Its 403 for a non-provider role is preserved in v1 as an audience assertion rather than a separate path.
+  - `POST /api/auth/add-employees` — **ROLE_SPECIFIC** — Admin bulk-creates provider accounts with generated temporary passwords. Genuinely different: a different actor, a different credential origin, and a partial-success response shape. Retained; it is account PROVISIONING, not registration.
+
+### `POST /api/v1/auth/login`
+
+One sign-in for every identifier and every surface: email or mobile + password, or a Firebase ID token.
+
+> Mobile + password works only for an account that also has an email: Firebase is the password authority and its password grant is keyed on email. An account with a mobile and no email gets PASSWORD_NOT_AVAILABLE and must use the token path — stated, not guessed.
+
+- **Domain service** — `services/authLoginService → services/auth.service.loggedInUser \| firebaseFunctions.firebaseAuthLogin`
+- **Error codes** — `ACCOUNT_DISABLED`, `ACCOUNT_LINK_REQUIRED`, `ACCOUNT_UNVERIFIED`, `AUDIENCE_MISMATCH`, `INTERNAL`, `INVALID_CREDENTIALS`, `PASSWORD_NOT_AVAILABLE`, `RATE_LIMITED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ⏳
+- **Legacy it replaces**
+  - `POST /api/auth/signin` — **ALIAS_TEMPORARILY** — Email + password. v1 calls the same `authService.loggedInUser` and adds identifier resolution in front of it, so a mobile number now names the account.
+  - `POST /api/auth/admin-signin` — **ALIAS_TEMPORARILY** — Identical to /auth/signin plus a role-1 gate. The gate is a property of the CALLER, not the credential, so v1 takes it as `audience: "admin"` rather than as a second path.
+  - `POST /api/auth/firebase-login` — **ALIAS_TEMPORARILY** — Firebase ID token, provider-shaped. Same service; v1 expresses the role gate as an audience.
+  - `POST /api/auth/customer-firebase-login` — **ROLE_SPECIFIC** — NOT collapsed. Its link-collision contract is a 200 carrying `status: "failed"` and no token, because the installed customer app throws on any non-2xx before reading the body and fires onUnauthorized on 401 — either would show "session expired" to somebody who has no session yet. Changing that shape is a client release, so it stays until the customer app migrates.
 
 ### `POST /api/v1/auth/refresh`
 
 Exchanges a refresh token for a fresh session.
 
-- **Domain service** — `services/auth.service (to be extracted)`
-- **Error codes** — `INTERNAL`, `RATE_LIMITED`, `UNAUTHENTICATED`
+- **Domain service** — `services/tokenRefreshService.refreshIdToken`
+- **Error codes** — `INTERNAL`, `RATE_LIMITED`, `REFRESH_TOKEN_INVALID`, `REFRESH_UNAVAILABLE`, `VALIDATION_FAILED`
 - **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ⏳
 - **Legacy it replaces**
-  - `POST /api/auth/refresh` — **CANONICALIZE** — Deliberately NOT duplicated in this command. Every one of the five clients holds a session obtained from this route; standing up a second path to the same credential exchange before the auth domain is swept is how you get two session state machines. Owned by the auth domain command.
+  - `POST /api/auth/refresh` — **ALIAS_TEMPORARILY** — Same service. Unauthenticated by design on both: the caller is here BECAUSE their ID token expired, so requiring a valid one would be circular. The refresh token is the credential and Google validates it.
+
+### `POST /api/v1/auth/logout`
+
+Ends every session for the authenticated account and clears its push token.
+
+> Ends ALL sessions, not this device only. Firebase has no per-session revocation, and a logout that silently left other devices signed in would be worse than one that says so.
+
+- **Domain service** — `services/authSessionService.endAllSessions`
+- **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ⏳
+- **Legacy it replaces**
+  - `POST /api/auth/logout` — **ALIAS_TEMPORARILY** — Same effect; both now go through the one session service so the side-effect set is decided once.
+
+### `POST /api/v1/auth/forgot-password`
+
+Starts password recovery. Always answers the same way, whether or not the account exists.
+
+> EMAIL ONLY today. Recovery requires a VERIFIED identifier, and mobile recovery would need an SMS sender this platform does not have — so it is refused rather than half-built. The response is identical for an unknown address, an unverified one and a mobile number.
+
+- **Domain service** — `services/auth.service.forgotPassword`
+- **Error codes** — `INTERNAL`, `RATE_LIMITED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ⏳
+- **Legacy it replaces**
+  - `POST /api/auth/forgot-password` — **ALIAS_TEMPORARILY** — Same service, same neutral acknowledgement, same platform-scoped continue URL.
+
+### `POST /api/v1/auth/reset-password`
+
+Completes a password reset and ends every existing session.
+
+- **Domain service** — `services/auth.service.resetPassword → services/authSessionService.endSessionsOnCredentialChange`
+- **Error codes** — `INTERNAL`, `RATE_LIMITED`, `RESET_TOKEN_INVALID`, `VALIDATION_FAILED`, `WEAK_PASSWORD`
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ⏳
+- **Legacy it replaces**
+  - `POST /api/auth/reset-password` — **ALIAS_TEMPORARILY** — Same service — and the session revocation added in this command applies to BOTH, because it lives in the service rather than in either handler.
+
+### `POST /api/v1/auth/verify-email`
+
+Verifies an email address with a one-time code issued for registration.
+
+- **Domain service** — `services/otpService.verifyEmailOtp + services/auth.service.verifyEmailOtp`
+- **Error codes** — `INTERNAL`, `OTP_EXPIRED`, `OTP_INVALID`, `RATE_LIMITED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile ⏳ · Cust Web · · Prov Mobile ⏳ · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/auth/verify-email-otp` — **ALIAS_TEMPORARILY** — Same service. v1 scopes the read to the REGISTRATION_VERIFICATION purpose, so a code minted for a different purpose can never satisfy it.
+
+### `POST /api/v1/auth/resend-verification`
+
+Re-sends an email verification code or link. Always answers the same way.
+
+- **Domain service** — `services/auth.service.resendEmailOtp \| getAndSendEmailVerificationLink`
+- **Error codes** — `INTERNAL`, `RATE_LIMITED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile ⏳ · Cust Web · · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `POST /api/auth/resend-email-otp` — **ALIAS_TEMPORARILY** — Same service. v1 takes `channel: "otp" \| "link"` instead of splitting the two across paths.
+  - `GET /api/auth/resendverification` — **ALIAS_TEMPORARILY** — A GET that sends an email — a read path that writes and mails. v1 is a POST. The legacy form stays until both mobile clients move, because it is what they call today.
+
+### `POST /api/v1/auth/verify-mobile`
+
+Records a mobile number as verified, proven by a Firebase phone credential.
+
+> There is no server-side SMS OTP and this does not add one. The proof is a Firebase ID token whose sign-in provider is `phone`, which Firebase only issues after its own OTP. The number must not already belong to another account — `accountLinkGuard` decides, and a collision is ACCOUNT_LINK_REQUIRED rather than a silent second account.
+
+- **Domain service** — `services/identityVerificationSync.provenFrom + recordProvenIdentifiers, guarded by services/accountLinkGuard`
+- **Error codes** — `ACCOUNT_LINK_REQUIRED`, `INTERNAL`, `INVALID_CREDENTIALS`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces** — none; new capability.
 
 ## search
 
@@ -391,7 +494,15 @@ Admin booking operations list.
 | `GET /api/v1/reviews/providers/:providerUid/rating` | · | · | — | — | — |
 | `GET /api/v1/settings/notification-preferences` | · | · | ⏳ | ⏳ | — |
 | `PUT /api/v1/settings/notification-preferences` | · | · | ⏳ | ⏳ | — |
+| `POST /api/v1/auth/register` | ⏳ | · | ⏳ | ⏳ | — |
+| `POST /api/v1/auth/login` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
 | `POST /api/v1/auth/refresh` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
+| `POST /api/v1/auth/logout` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
+| `POST /api/v1/auth/forgot-password` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
+| `POST /api/v1/auth/reset-password` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
+| `POST /api/v1/auth/verify-email` | ⏳ | · | ⏳ | · | — |
+| `POST /api/v1/auth/resend-verification` | ⏳ | · | ⏳ | ⏳ | — |
+| `POST /api/v1/auth/verify-mobile` | · | · | · | · | — |
 | `GET /api/v1/search` | · | · | — | — | — |
 | `GET /api/v1/home` | · | · | — | — | — |
 | `GET /api/v1/conversations` | ⏳ | ⏳ | ⏳ | ⏳ | — |

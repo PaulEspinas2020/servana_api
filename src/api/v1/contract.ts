@@ -96,9 +96,20 @@ export interface ContractEntry {
   /**
    * `true` when a repeat of the identical request produces the identical
    * end state. GETs are idempotent by definition; a mutation must say so
-   * explicitly and honour the Idempotency-Key convention if it is not.
+   * explicitly.
    */
   idempotent: boolean;
+  /**
+   * REQUIRED when `idempotent` is false: what stops a replay doing damage.
+   *
+   * Not every mutation can be made idempotent, and pretending otherwise by
+   * bolting an Idempotency-Key onto a credential exchange would be theatre. But
+   * "this one is not idempotent" cannot be the end of the sentence either —
+   * something has to bound the replay, and if nobody can name it there is
+   * nothing there. `tests/v1-contract.test.ts` fails on a non-idempotent entry
+   * with no guard named, so a new one cannot slip in unexamined.
+   */
+  replayGuard?: string;
   /** Name of the response DTO in `openapi.ts`'s component schemas. */
   responseSchema: string;
   /** Every failure code this endpoint can return, beyond the auth defaults. */
@@ -632,6 +643,129 @@ export const V1_CONTRACT: ContractEntry[] = [
   // PLANNED — documented so the migration matrix can name a successor.
   // Not mounted. Each belongs to a later domain command.
   // ───────────────────────────────────────────────────────────────────────────
+  // ───────────────────────────────────────────────────────────────────────────
+  // Auth and identity
+  //
+  // Every entry here delegates to the state machine the legacy route already
+  // uses; none of them re-implements one. `domainService` names which, and
+  // `tests/v1-auth-contract.test.ts` asserts the delegation rather than
+  // describing it.
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: 'auth.register',
+    domain: 'auth',
+    method: 'post',
+    path: '/auth/register',
+    summary: 'Creates an account from an email + password, or from a Firebase ID token.',
+    auth: 'public',
+    idempotent: false,
+    replayGuard:
+      'Firebase enforces one account per identifier, so a replayed registration collides with the identity it just created rather than making a second account. The 409 is the guard.',
+    requestSchema: 'RegisterRequest',
+    responseSchema: 'RegisterResult',
+    errors: ['VALIDATION_FAILED', 'REGISTRATION_REJECTED', 'WEAK_PASSWORD', 'ACCOUNT_LINK_REQUIRED', 'RATE_LIMITED'],
+    status: 'implemented',
+    domainService: 'services/auth.service.registerUser | services/firebaseFunctions.service.firebaseProviderRegister',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/auth/signup',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Email + password registration. Same service; v1 accepts either credential kind on ' +
+          'one path instead of splitting them across two routes with two response shapes.',
+      },
+      {
+        method: 'post',
+        path: '/api/auth/provider/register',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Firebase-token registration, provider-shaped. Same service. Its 403 for a non-provider ' +
+          'role is preserved in v1 as an audience assertion rather than a separate path.',
+      },
+      {
+        method: 'post',
+        path: '/api/auth/add-employees',
+        disposition: 'ROLE_SPECIFIC',
+        note:
+          'Admin bulk-creates provider accounts with generated temporary passwords. Genuinely ' +
+          'different: a different actor, a different credential origin, and a partial-success ' +
+          'response shape. Retained; it is account PROVISIONING, not registration.',
+      },
+    ],
+    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'auth',
+    notes:
+      'Registration answers identity only. Provider onboarding, service selection and profile ' +
+      'completion are separate domains and are NOT triggered from here beyond the existing ' +
+      'non-blocking attribution hooks the legacy path already fires.',
+  },
+  {
+    id: 'auth.login',
+    domain: 'auth',
+    method: 'post',
+    path: '/auth/login',
+    summary: 'One sign-in for every identifier and every surface: email or mobile + password, or a Firebase ID token.',
+    auth: 'public',
+    idempotent: false,
+    replayGuard:
+      'A replay re-authenticates the same credential and mints another session. Nothing accumulates, and the per-account limiter bounds the rate — an Idempotency-Key here would be theatre on a read-shaped operation that happens to issue a token.',
+    requestSchema: 'LoginRequest',
+    responseSchema: 'Session',
+    errors: [
+      'VALIDATION_FAILED',
+      'INVALID_CREDENTIALS',
+      'ACCOUNT_UNVERIFIED',
+      'ACCOUNT_DISABLED',
+      'AUDIENCE_MISMATCH',
+      'PASSWORD_NOT_AVAILABLE',
+      'ACCOUNT_LINK_REQUIRED',
+      'RATE_LIMITED',
+    ],
+    status: 'implemented',
+    domainService: 'services/authLoginService → services/auth.service.loggedInUser | firebaseFunctions.firebaseAuthLogin',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/auth/signin',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Email + password. v1 calls the same `authService.loggedInUser` and adds identifier ' +
+          'resolution in front of it, so a mobile number now names the account.',
+      },
+      {
+        method: 'post',
+        path: '/api/auth/admin-signin',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Identical to /auth/signin plus a role-1 gate. The gate is a property of the CALLER, ' +
+          'not the credential, so v1 takes it as `audience: "admin"` rather than as a second path.',
+      },
+      {
+        method: 'post',
+        path: '/api/auth/firebase-login',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Firebase ID token, provider-shaped. Same service; v1 expresses the role gate as an audience.',
+      },
+      {
+        method: 'post',
+        path: '/api/auth/customer-firebase-login',
+        disposition: 'ROLE_SPECIFIC',
+        note:
+          'NOT collapsed. Its link-collision contract is a 200 carrying `status: "failed"` and no ' +
+          'token, because the installed customer app throws on any non-2xx before reading the body ' +
+          'and fires onUnauthorized on 401 — either would show "session expired" to somebody who ' +
+          'has no session yet. Changing that shape is a client release, so it stays until the ' +
+          'customer app migrates.',
+      },
+    ],
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'legacy' },
+    observability: 'auth',
+    notes:
+      'Mobile + password works only for an account that also has an email: Firebase is the ' +
+      'password authority and its password grant is keyed on email. An account with a mobile and ' +
+      'no email gets PASSWORD_NOT_AVAILABLE and must use the token path — stated, not guessed.',
+  },
   {
     id: 'auth.refresh',
     domain: 'auth',
@@ -640,24 +774,190 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Exchanges a refresh token for a fresh session.',
     auth: 'public',
     idempotent: false,
+    replayGuard:
+      'Google owns the exchange and decides whether a refresh token is still redeemable. A replay yields another ID token or a refusal; nothing on this side accumulates.',
+    requestSchema: 'RefreshRequest',
     responseSchema: 'Session',
-    errors: ['UNAUTHENTICATED', 'RATE_LIMITED'],
-    status: 'planned',
-    domainService: 'services/auth.service (to be extracted)',
+    errors: ['VALIDATION_FAILED', 'REFRESH_TOKEN_INVALID', 'REFRESH_UNAVAILABLE', 'RATE_LIMITED'],
+    status: 'implemented',
+    domainService: 'services/tokenRefreshService.refreshIdToken',
     legacy: [
       {
         method: 'post',
         path: '/api/auth/refresh',
-        disposition: 'CANONICALIZE',
+        disposition: 'ALIAS_TEMPORARILY',
         note:
-          'Deliberately NOT duplicated in this command. Every one of the five clients holds a ' +
-          'session obtained from this route; standing up a second path to the same credential ' +
-          'exchange before the auth domain is swept is how you get two session state machines. ' +
-          'Owned by the auth domain command.',
+          'Same service. Unauthenticated by design on both: the caller is here BECAUSE their ID ' +
+          'token expired, so requiring a valid one would be circular. The refresh token is the ' +
+          'credential and Google validates it.',
       },
     ],
     callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'legacy' },
     observability: 'auth',
+  },
+  {
+    id: 'auth.logout',
+    domain: 'auth',
+    method: 'post',
+    path: '/auth/logout',
+    summary: 'Ends every session for the authenticated account and clears its push token.',
+    auth: 'authenticated',
+    idempotent: true,
+    responseSchema: 'LogoutResult',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/authSessionService.endAllSessions',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/auth/logout',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same effect; both now go through the one session service so the side-effect set is decided once.',
+      },
+    ],
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'legacy' },
+    observability: 'auth',
+    notes:
+      'Ends ALL sessions, not this device only. Firebase has no per-session revocation, and a ' +
+      'logout that silently left other devices signed in would be worse than one that says so.',
+  },
+  {
+    id: 'auth.forgotPassword',
+    domain: 'auth',
+    method: 'post',
+    path: '/auth/forgot-password',
+    summary: 'Starts password recovery. Always answers the same way, whether or not the account exists.',
+    auth: 'public',
+    idempotent: true,
+    requestSchema: 'ForgotPasswordRequest',
+    responseSchema: 'NeutralAck',
+    errors: ['VALIDATION_FAILED', 'RATE_LIMITED'],
+    status: 'implemented',
+    domainService: 'services/auth.service.forgotPassword',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/auth/forgot-password',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same neutral acknowledgement, same platform-scoped continue URL.',
+      },
+    ],
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'legacy' },
+    observability: 'auth',
+    notes:
+      'EMAIL ONLY today. Recovery requires a VERIFIED identifier, and mobile recovery would need ' +
+      'an SMS sender this platform does not have — so it is refused rather than half-built. The ' +
+      'response is identical for an unknown address, an unverified one and a mobile number.',
+  },
+  {
+    id: 'auth.resetPassword',
+    domain: 'auth',
+    method: 'post',
+    path: '/auth/reset-password',
+    summary: 'Completes a password reset and ends every existing session.',
+    auth: 'public',
+    idempotent: false,
+    replayGuard:
+      'The oobCode is SINGLE-USE and consumed by Firebase on the first successful call. A replay finds it spent and answers RESET_TOKEN_INVALID.',
+    requestSchema: 'ResetPasswordRequest',
+    responseSchema: 'NeutralAck',
+    errors: ['VALIDATION_FAILED', 'RESET_TOKEN_INVALID', 'WEAK_PASSWORD', 'RATE_LIMITED'],
+    status: 'implemented',
+    domainService: 'services/auth.service.resetPassword → services/authSessionService.endSessionsOnCredentialChange',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/auth/reset-password',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service — and the session revocation added in this command applies to BOTH, ' +
+          'because it lives in the service rather than in either handler.',
+      },
+    ],
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'legacy' },
+    observability: 'auth',
+  },
+  {
+    id: 'auth.verifyEmail',
+    domain: 'auth',
+    method: 'post',
+    path: '/auth/verify-email',
+    summary: 'Verifies an email address with a one-time code issued for registration.',
+    auth: 'public',
+    idempotent: false,
+    replayGuard:
+      'The code is consumed by a compare-and-swap UPDATE (services/otpService.consumeOtp), so two concurrent verifications of one code cannot both succeed.',
+    requestSchema: 'VerifyEmailRequest',
+    responseSchema: 'VerificationResult',
+    errors: ['VALIDATION_FAILED', 'OTP_INVALID', 'OTP_EXPIRED', 'RATE_LIMITED'],
+    status: 'implemented',
+    domainService: 'services/otpService.verifyEmailOtp + services/auth.service.verifyEmailOtp',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/auth/verify-email-otp',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. v1 scopes the read to the REGISTRATION_VERIFICATION purpose, so a code ' +
+          'minted for a different purpose can never satisfy it.',
+      },
+    ],
+    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'legacy', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'auth',
+  },
+  {
+    id: 'auth.resendVerification',
+    domain: 'auth',
+    method: 'post',
+    path: '/auth/resend-verification',
+    summary: 'Re-sends an email verification code or link. Always answers the same way.',
+    auth: 'public',
+    idempotent: true,
+    requestSchema: 'ResendVerificationRequest',
+    responseSchema: 'NeutralAck',
+    errors: ['VALIDATION_FAILED', 'RATE_LIMITED'],
+    status: 'implemented',
+    domainService: 'services/auth.service.resendEmailOtp | getAndSendEmailVerificationLink',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/auth/resend-email-otp',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. v1 takes `channel: "otp" | "link"` instead of splitting the two across paths.',
+      },
+      {
+        method: 'get',
+        path: '/api/auth/resendverification',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'A GET that sends an email — a read path that writes and mails. v1 is a POST. The legacy ' +
+          'form stays until both mobile clients move, because it is what they call today.',
+      },
+    ],
+    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'auth',
+  },
+  {
+    id: 'auth.verifyMobile',
+    domain: 'auth',
+    method: 'post',
+    path: '/auth/verify-mobile',
+    summary: 'Records a mobile number as verified, proven by a Firebase phone credential.',
+    auth: 'authenticated',
+    idempotent: true,
+    requestSchema: 'VerifyMobileRequest',
+    responseSchema: 'VerificationResult',
+    errors: ['VALIDATION_FAILED', 'INVALID_CREDENTIALS', 'ACCOUNT_LINK_REQUIRED'],
+    status: 'implemented',
+    domainService: 'services/identityVerificationSync.provenFrom + recordProvenIdentifiers, guarded by services/accountLinkGuard',
+    legacy: [],
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'auth',
+    notes:
+      'There is no server-side SMS OTP and this does not add one. The proof is a Firebase ID ' +
+      'token whose sign-in provider is `phone`, which Firebase only issues after its own OTP. ' +
+      'The number must not already belong to another account — `accountLinkGuard` decides, and a ' +
+      'collision is ACCOUNT_LINK_REQUIRED rather than a silent second account.',
   },
   {
     id: 'search.query',

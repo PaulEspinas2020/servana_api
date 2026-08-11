@@ -1786,23 +1786,154 @@
         }
       }
     },
-    "/api/v1/auth/refresh": {
+    "/api/v1/auth/register": {
       "post": {
-        "operationId": "auth.refresh",
-        "summary": "Exchanges a refresh token for a fresh session.",
+        "operationId": "auth.register",
+        "summary": "Creates an account from an email + password, or from a Firebase ID token.",
         "tags": [
           "auth"
         ],
-        "deprecated": false,
-        "x-status": "planned",
-        "x-implemented": false,
+        "x-implemented": true,
         "x-idempotent": false,
-        "x-domain-service": "services/auth.service (to be extracted)",
+        "x-domain-service": "services/auth.service.registerUser | services/firebaseFunctions.service.firebaseProviderRegister",
         "x-legacy": [
           {
             "method": "POST",
-            "path": "/api/auth/refresh",
-            "disposition": "CANONICALIZE"
+            "path": "/api/auth/signup",
+            "disposition": "ALIAS_TEMPORARILY"
+          },
+          {
+            "method": "POST",
+            "path": "/api/auth/provider/register",
+            "disposition": "ALIAS_TEMPORARILY"
+          },
+          {
+            "method": "POST",
+            "path": "/api/auth/add-employees",
+            "disposition": "ROLE_SPECIFIC"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "planned",
+          "providerMobile": "legacy",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "auth",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RegisterResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "REGISTRATION_REJECTED | VALIDATION_FAILED | WEAK_PASSWORD",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ACCOUNT_LINK_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Registration answers identity only. Provider onboarding, service selection and profile completion are separate domains and are NOT triggered from here beyond the existing non-blocking attribution hooks the legacy path already fires."
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "auth.login",
+        "summary": "One sign-in for every identifier and every surface: email or mobile + password, or a Firebase ID token.",
+        "tags": [
+          "auth"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/authLoginService → services/auth.service.loggedInUser | firebaseFunctions.firebaseAuthLogin",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/auth/signin",
+            "disposition": "ALIAS_TEMPORARILY"
+          },
+          {
+            "method": "POST",
+            "path": "/api/auth/admin-signin",
+            "disposition": "ALIAS_TEMPORARILY"
+          },
+          {
+            "method": "POST",
+            "path": "/api/auth/firebase-login",
+            "disposition": "ALIAS_TEMPORARILY"
+          },
+          {
+            "method": "POST",
+            "path": "/api/auth/customer-firebase-login",
+            "disposition": "ROLE_SPECIFIC"
           }
         ],
         "x-callers": {
@@ -1814,6 +1945,16 @@
         },
         "x-observability-owner": "auth",
         "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Success.",
@@ -1842,8 +1983,433 @@
               }
             }
           },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "401": {
-            "description": "UNAUTHENTICATED",
+            "description": "INVALID_CREDENTIALS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ACCOUNT_DISABLED | ACCOUNT_UNVERIFIED | AUDIENCE_MISMATCH",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ACCOUNT_LINK_REQUIRED | PASSWORD_NOT_AVAILABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Mobile + password works only for an account that also has an email: Firebase is the password authority and its password grant is keyed on email. An account with a mobile and no email gets PASSWORD_NOT_AVAILABLE and must use the token path — stated, not guessed."
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "operationId": "auth.refresh",
+        "summary": "Exchanges a refresh token for a fresh session.",
+        "tags": [
+          "auth"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/tokenRefreshService.refreshIdToken",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/auth/refresh",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "legacy",
+          "providerMobile": "legacy",
+          "providerWeb": "legacy",
+          "admin": "legacy"
+        },
+        "x-observability-owner": "auth",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Session"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "REFRESH_TOKEN_INVALID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "REFRESH_UNAVAILABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "auth.logout",
+        "summary": "Ends every session for the authenticated account and clears its push token.",
+        "tags": [
+          "auth"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/authSessionService.endAllSessions",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/auth/logout",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "legacy",
+          "providerMobile": "legacy",
+          "providerWeb": "legacy",
+          "admin": "legacy"
+        },
+        "x-observability-owner": "auth",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/LogoutResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Ends ALL sessions, not this device only. Firebase has no per-session revocation, and a logout that silently left other devices signed in would be worse than one that says so."
+      }
+    },
+    "/api/v1/auth/forgot-password": {
+      "post": {
+        "operationId": "auth.forgotPassword",
+        "summary": "Starts password recovery. Always answers the same way, whether or not the account exists.",
+        "tags": [
+          "auth"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/auth.service.forgotPassword",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/auth/forgot-password",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "legacy",
+          "providerMobile": "legacy",
+          "providerWeb": "legacy",
+          "admin": "legacy"
+        },
+        "x-observability-owner": "auth",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/NeutralAck"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "EMAIL ONLY today. Recovery requires a VERIFIED identifier, and mobile recovery would need an SMS sender this platform does not have — so it is refused rather than half-built. The response is identical for an unknown address, an unverified one and a mobile number."
+      }
+    },
+    "/api/v1/auth/reset-password": {
+      "post": {
+        "operationId": "auth.resetPassword",
+        "summary": "Completes a password reset and ends every existing session.",
+        "tags": [
+          "auth"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/auth.service.resetPassword → services/authSessionService.endSessionsOnCredentialChange",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/auth/reset-password",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "legacy",
+          "providerMobile": "legacy",
+          "providerWeb": "legacy",
+          "admin": "legacy"
+        },
+        "x-observability-owner": "auth",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/NeutralAck"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "RESET_TOKEN_INVALID | VALIDATION_FAILED | WEAK_PASSWORD",
             "content": {
               "application/json": {
                 "schema": {
@@ -1873,6 +2439,321 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/auth/verify-email": {
+      "post": {
+        "operationId": "auth.verifyEmail",
+        "summary": "Verifies an email address with a one-time code issued for registration.",
+        "tags": [
+          "auth"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/otpService.verifyEmailOtp + services/auth.service.verifyEmailOtp",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/auth/verify-email-otp",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "planned",
+          "providerMobile": "legacy",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "auth",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyEmailRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/VerificationResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "OTP_INVALID | VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "OTP_EXPIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/resend-verification": {
+      "post": {
+        "operationId": "auth.resendVerification",
+        "summary": "Re-sends an email verification code or link. Always answers the same way.",
+        "tags": [
+          "auth"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/auth.service.resendEmailOtp | getAndSendEmailVerificationLink",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/auth/resend-email-otp",
+            "disposition": "ALIAS_TEMPORARILY"
+          },
+          {
+            "method": "GET",
+            "path": "/api/auth/resendverification",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "planned",
+          "providerMobile": "legacy",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "auth",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResendVerificationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/NeutralAck"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/verify-mobile": {
+      "post": {
+        "operationId": "auth.verifyMobile",
+        "summary": "Records a mobile number as verified, proven by a Firebase phone credential.",
+        "tags": [
+          "auth"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/identityVerificationSync.provenFrom + recordProvenIdentifiers, guarded by services/accountLinkGuard",
+        "x-legacy": [],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "auth",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyMobileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/VerificationResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "INVALID_CREDENTIALS | TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ACCOUNT_LINK_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "There is no server-side SMS OTP and this does not add one. The proof is a Firebase ID token whose sign-in provider is `phone`, which Firebase only issues after its own OTP. The number must not already belong to another account — `accountLinkGuard` decides, and a collision is ACCOUNT_LINK_REQUIRED rather than a silent second account."
       }
     },
     "/api/v1/search": {
@@ -2331,6 +3212,10 @@
               "code": {
                 "type": "string",
                 "enum": [
+                  "ACCOUNT_DISABLED",
+                  "ACCOUNT_LINK_REQUIRED",
+                  "ACCOUNT_UNVERIFIED",
+                  "AUDIENCE_MISMATCH",
                   "BOOKING_ACCESS_DENIED",
                   "BOOKING_NOT_FOUND",
                   "CATALOG_SERVICE_NOT_FOUND",
@@ -2339,19 +3224,28 @@
                   "IDEMPOTENCY_KEY_INVALID",
                   "IDEMPOTENCY_KEY_REUSED",
                   "INTERNAL",
+                  "INVALID_CREDENTIALS",
                   "NOTIFICATION_NOT_ACTIONABLE",
                   "NOTIFICATION_NOT_FOUND",
                   "NOT_FOUND",
+                  "OTP_EXPIRED",
+                  "OTP_INVALID",
+                  "PASSWORD_NOT_AVAILABLE",
                   "PERMISSION_REQUIRED",
                   "PROVIDER_ROLE_REQUIRED",
                   "RATE_LIMITED",
+                  "REFRESH_TOKEN_INVALID",
+                  "REFRESH_UNAVAILABLE",
+                  "REGISTRATION_REJECTED",
+                  "RESET_TOKEN_INVALID",
                   "ROLE_REQUIRED",
                   "STALE_STATE",
                   "TOKEN_EXPIRED",
                   "TOKEN_REVOKED",
                   "UNAUTHENTICATED",
                   "UNSUPPORTED_MEDIA_TYPE",
-                  "VALIDATION_FAILED"
+                  "VALIDATION_FAILED",
+                  "WEAK_PASSWORD"
                 ]
               },
               "message": {
@@ -2758,7 +3652,297 @@
       },
       "Session": {
         "type": "object",
-        "description": "PLANNED — owned by the auth domain command."
+        "required": [
+          "token",
+          "uid",
+          "identifierType"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Firebase ID token. Lives ONE HOUR — refresh before it expires."
+          },
+          "refreshToken": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Long-lived. Belongs in secure device storage, never a log or a query string. Exchange it at POST /api/v1/auth/refresh."
+          },
+          "uid": {
+            "type": "string",
+            "description": "The Firebase uid. THE primary key — there is no numeric user id."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "1 admin, 2 and 4 provider, 3 customer."
+          },
+          "firstName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isEmailVerified": {
+            "type": "boolean"
+          },
+          "identifierType": {
+            "type": "string",
+            "enum": [
+              "email",
+              "mobile",
+              "token"
+            ],
+            "description": "Which identifier the caller actually presented."
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "description": "Email address OR Philippine mobile number, in any form a person types (0917…, +63917…, 9171234567). Required with `password`."
+          },
+          "password": {
+            "type": "string"
+          },
+          "idToken": {
+            "type": "string",
+            "description": "Firebase ID token. Alternative to identifier+password."
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "provider",
+              "customer",
+              "any"
+            ],
+            "description": "Which surface is asking. Asserted AFTER authentication, so the admin login box is not an oracle for \"is this address an admin\". Defaults to `any`."
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "2",
+              "3"
+            ],
+            "description": "Token path only: role a NEW account is created with."
+          },
+          "fcmToken": {
+            "type": "string",
+            "description": "Optional. Registered non-blocking; failure never fails the sign-in."
+          }
+        },
+        "description": "Exactly one credential: `identifier`+`password`, or `idToken`."
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "firstName": {
+            "type": "string"
+          },
+          "lastName": {
+            "type": "string"
+          },
+          "role": {
+            "description": "2 provider or 3 customer. Admin accounts cannot be created here."
+          },
+          "idToken": {
+            "type": "string",
+            "description": "Firebase-first registration. Alternative to email+password."
+          },
+          "platform": {
+            "type": "string",
+            "description": "Governs whether verification is a code or a link."
+          },
+          "sourceClient": {
+            "type": "string"
+          }
+        }
+      },
+      "RegisterResult": {
+        "type": "object",
+        "properties": {
+          "uid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verificationType": {
+            "type": "string",
+            "enum": [
+              "otp",
+              "link",
+              "none"
+            ]
+          },
+          "verificationDeliveryPending": {
+            "type": "boolean",
+            "description": "The account exists but the code or link did not go out. Not a failure — retry delivery via resend-verification rather than re-registering, which would collide with the identity."
+          },
+          "onboardingPending": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RefreshRequest": {
+        "type": "object",
+        "required": [
+          "refreshToken"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "refreshToken": {
+            "type": "string"
+          }
+        }
+      },
+      "ForgotPasswordRequest": {
+        "type": "object",
+        "required": [
+          "identifier"
+        ],
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "description": "Email address. Mobile recovery is not configured — see the contract."
+          },
+          "platform": {
+            "type": "string",
+            "description": "Allowlisted name, never a URL. Chooses where the link lands."
+          }
+        }
+      },
+      "ResetPasswordRequest": {
+        "type": "object",
+        "required": [
+          "oobCode",
+          "newPassword"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "oobCode": {
+            "type": "string",
+            "description": "Single-use code from the reset email."
+          },
+          "newPassword": {
+            "type": "string"
+          }
+        }
+      },
+      "VerifyEmailRequest": {
+        "type": "object",
+        "required": [
+          "identifier",
+          "code"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "description": "The email address being verified."
+          },
+          "code": {
+            "type": "string",
+            "description": "Six digits."
+          }
+        }
+      },
+      "ResendVerificationRequest": {
+        "type": "object",
+        "required": [
+          "identifier"
+        ],
+        "properties": {
+          "identifier": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "otp",
+              "link"
+            ],
+            "description": "Defaults to `otp`."
+          },
+          "platform": {
+            "type": "string",
+            "description": "Link channel only. Allowlisted name, never a URL."
+          }
+        }
+      },
+      "VerifyMobileRequest": {
+        "type": "object",
+        "required": [
+          "idToken"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "idToken": {
+            "type": "string",
+            "description": "A Firebase ID token whose sign-in provider is `phone`, or which has a phone credential linked. Firebase only issues one after its own SMS OTP."
+          }
+        }
+      },
+      "VerificationResult": {
+        "type": "object",
+        "properties": {
+          "verified": {
+            "type": "boolean"
+          },
+          "identifierType": {
+            "type": "string",
+            "enum": [
+              "email",
+              "mobile"
+            ]
+          }
+        }
+      },
+      "LogoutResult": {
+        "type": "object",
+        "properties": {
+          "sessionsRevoked": {
+            "type": "boolean"
+          },
+          "pushCleared": {
+            "type": "boolean"
+          }
+        },
+        "description": "Ends ALL sessions — Firebase has no per-session revocation."
+      },
+      "NeutralAck": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "description": "Deliberately identical whether or not the account exists. The difference between \"that address is not registered\" and \"sent\" is a free membership check."
       },
       "SearchResults": {
         "type": "object",
@@ -2824,6 +4008,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 18,
-  "x-total-count": 24
+  "x-implemented-count": 27,
+  "x-total-count": 32
 }

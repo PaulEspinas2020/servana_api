@@ -219,8 +219,173 @@ export const SCHEMAS: Record<string, unknown> = {
 
   NotificationPreferences: { type: 'object', additionalProperties: true, description: 'Per-channel preference flags, keyed by uid.' },
 
+  // ── Auth and identity ─────────────────────────────────────────────────────
+
+  Session: {
+    type: 'object',
+    required: ['token', 'uid', 'identifierType'],
+    properties: {
+      token: { type: 'string', description: 'Firebase ID token. Lives ONE HOUR — refresh before it expires.' },
+      refreshToken: {
+        type: ['string', 'null'],
+        description:
+          'Long-lived. Belongs in secure device storage, never a log or a query string. ' +
+          'Exchange it at POST /api/v1/auth/refresh.',
+      },
+      uid: { type: 'string', description: 'The Firebase uid. THE primary key — there is no numeric user id.' },
+      email: { type: ['string', 'null'] },
+      role: { type: ['integer', 'null'], description: '1 admin, 2 and 4 provider, 3 customer.' },
+      firstName: { type: ['string', 'null'] },
+      lastName: { type: ['string', 'null'] },
+      isEmailVerified: { type: 'boolean' },
+      identifierType: {
+        type: 'string',
+        enum: ['email', 'mobile', 'token'],
+        description: 'Which identifier the caller actually presented.',
+      },
+    },
+  },
+
+  LoginRequest: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      identifier: {
+        type: 'string',
+        description:
+          'Email address OR Philippine mobile number, in any form a person types ' +
+          '(0917…, +63917…, 9171234567). Required with `password`.',
+      },
+      password: { type: 'string' },
+      idToken: { type: 'string', description: 'Firebase ID token. Alternative to identifier+password.' },
+      audience: {
+        type: 'string',
+        enum: ['admin', 'provider', 'customer', 'any'],
+        description:
+          'Which surface is asking. Asserted AFTER authentication, so the admin login box is not ' +
+          'an oracle for "is this address an admin". Defaults to `any`.',
+      },
+      role: { type: 'string', enum: ['2', '3'], description: 'Token path only: role a NEW account is created with.' },
+      fcmToken: { type: 'string', description: 'Optional. Registered non-blocking; failure never fails the sign-in.' },
+    },
+    description: 'Exactly one credential: `identifier`+`password`, or `idToken`.',
+  },
+
+  RegisterRequest: {
+    type: 'object',
+    properties: {
+      email: { type: 'string' },
+      password: { type: 'string' },
+      firstName: { type: 'string' },
+      lastName: { type: 'string' },
+      role: { description: '2 provider or 3 customer. Admin accounts cannot be created here.' },
+      idToken: { type: 'string', description: 'Firebase-first registration. Alternative to email+password.' },
+      platform: { type: 'string', description: 'Governs whether verification is a code or a link.' },
+      sourceClient: { type: 'string' },
+    },
+  },
+
+  RegisterResult: {
+    type: 'object',
+    properties: {
+      uid: { type: ['string', 'null'] },
+      verificationType: { type: 'string', enum: ['otp', 'link', 'none'] },
+      verificationDeliveryPending: {
+        type: 'boolean',
+        description:
+          'The account exists but the code or link did not go out. Not a failure — retry delivery ' +
+          'via resend-verification rather than re-registering, which would collide with the identity.',
+      },
+      onboardingPending: { type: 'boolean' },
+    },
+  },
+
+  RefreshRequest: {
+    type: 'object',
+    required: ['refreshToken'],
+    additionalProperties: false,
+    properties: { refreshToken: { type: 'string' } },
+  },
+
+  ForgotPasswordRequest: {
+    type: 'object',
+    required: ['identifier'],
+    properties: {
+      identifier: { type: 'string', description: 'Email address. Mobile recovery is not configured — see the contract.' },
+      platform: { type: 'string', description: 'Allowlisted name, never a URL. Chooses where the link lands.' },
+    },
+  },
+
+  ResetPasswordRequest: {
+    type: 'object',
+    required: ['oobCode', 'newPassword'],
+    additionalProperties: false,
+    properties: {
+      oobCode: { type: 'string', description: 'Single-use code from the reset email.' },
+      newPassword: { type: 'string' },
+    },
+  },
+
+  VerifyEmailRequest: {
+    type: 'object',
+    required: ['identifier', 'code'],
+    additionalProperties: false,
+    properties: {
+      identifier: { type: 'string', description: 'The email address being verified.' },
+      code: { type: 'string', description: 'Six digits.' },
+    },
+  },
+
+  ResendVerificationRequest: {
+    type: 'object',
+    required: ['identifier'],
+    properties: {
+      identifier: { type: 'string' },
+      channel: { type: 'string', enum: ['otp', 'link'], description: 'Defaults to `otp`.' },
+      platform: { type: 'string', description: 'Link channel only. Allowlisted name, never a URL.' },
+    },
+  },
+
+  VerifyMobileRequest: {
+    type: 'object',
+    required: ['idToken'],
+    additionalProperties: false,
+    properties: {
+      idToken: {
+        type: 'string',
+        description:
+          'A Firebase ID token whose sign-in provider is `phone`, or which has a phone credential ' +
+          'linked. Firebase only issues one after its own SMS OTP.',
+      },
+    },
+  },
+
+  VerificationResult: {
+    type: 'object',
+    properties: {
+      verified: { type: 'boolean' },
+      identifierType: { type: 'string', enum: ['email', 'mobile'] },
+    },
+  },
+
+  LogoutResult: {
+    type: 'object',
+    properties: {
+      sessionsRevoked: { type: 'boolean' },
+      pushCleared: { type: 'boolean' },
+    },
+    description: 'Ends ALL sessions — Firebase has no per-session revocation.',
+  },
+
+  NeutralAck: {
+    type: 'object',
+    properties: { message: { type: 'string' } },
+    description:
+      'Deliberately identical whether or not the account exists. The difference between "that ' +
+      'address is not registered" and "sent" is a free membership check.',
+  },
+
   // ── Planned. Documented so the migration matrix can name a successor. ──────
-  Session: { type: 'object', description: 'PLANNED — owned by the auth domain command.' },
   SearchResults: { type: 'object', description: 'PLANNED — no backend search exists today.' },
   HomeFeed: { type: 'object', description: 'PLANNED — composed client-side today.' },
   ConversationList: { type: 'object', description: 'PLANNED — owned by the messaging domain command.' },

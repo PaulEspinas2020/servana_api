@@ -115,7 +115,20 @@ export interface BuildResult {
   mounted: Array<{ id: string; method: HttpMethod; path: string }>;
 }
 
-export function buildV1Router(handlers: V1Handlers): BuildResult {
+/**
+ * Extra middleware for specific endpoints, keyed by contract id.
+ *
+ * Runs AFTER the auth chain and before the handler. This is where rate limiters
+ * live: they are per-endpoint policy rather than a property of the contract's
+ * auth mode, and putting them on the contract would mean either a `rateLimit`
+ * field the OpenAPI generator has to ignore, or a limiter instance in a data
+ * file. A key that names no implemented entry is a throw, not a silent no-op —
+ * a rate limiter that is configured and not mounted is worse than none, because
+ * it reads as protection.
+ */
+export type V1Middleware = Record<string, RequestHandler[]>;
+
+export function buildV1Router(handlers: V1Handlers, middleware: V1Middleware = {}): BuildResult {
   const handlerIds = new Set(Object.keys(handlers));
   const implementedIds = new Set(IMPLEMENTED.map((e) => e.id));
 
@@ -147,11 +160,23 @@ export function buildV1Router(handlers: V1Handlers): BuildResult {
     seen.add(key);
   }
 
+  const strayMiddleware = Object.keys(middleware).filter((id) => !implementedIds.has(id));
+  if (strayMiddleware.length) {
+    throw new Error(
+      `v1 contract: middleware declared for non-implemented entr${strayMiddleware.length === 1 ? 'y' : 'ies'} — ${strayMiddleware.join(', ')}`,
+    );
+  }
+
   const router = Router();
   const mounted: BuildResult['mounted'] = [];
 
   for (const entry of [...IMPLEMENTED].sort(bySpecificity)) {
-    router[entry.method](entry.path, ...authChain(entry), guard(entry.id, handlers[entry.id]));
+    router[entry.method](
+      entry.path,
+      ...authChain(entry),
+      ...(middleware[entry.id] ?? []),
+      guard(entry.id, handlers[entry.id]),
+    );
     mounted.push({ id: entry.id, method: entry.method, path: entry.path });
   }
 
@@ -179,6 +204,14 @@ import { handlers as providerJobHandlers } from './domains/providerJobs';
 import { handlers as notificationHandlers } from './domains/notifications';
 import { handlers as reviewHandlers } from './domains/reviews';
 import { handlers as settingsHandlers } from './domains/settings';
+import { handlers as authHandlers } from './domains/auth';
+import {
+  perAccountLoginLimiter,
+  perIpLoginLimiter,
+  perAccountRegisterLimiter,
+  perAccountOtpLimiter,
+  perAccountRecoveryLimiter,
+} from '../../middleware/credentialLimiter';
 
 export const V1_HANDLERS: V1Handlers = {
   ...catalogHandlers,
@@ -188,9 +221,29 @@ export const V1_HANDLERS: V1Handlers = {
   ...notificationHandlers,
   ...reviewHandlers,
   ...settingsHandlers,
+  ...authHandlers,
 };
 
-const built = buildV1Router(V1_HANDLERS);
+/**
+ * Rate limits, per endpoint.
+ *
+ * Credential endpoints carry TWO limiters. Keyed on the identifier alone, an
+ * attacker spraying one password across thousands of accounts from one host
+ * gets a fresh budget per account and is never slowed; keyed on IP alone, one
+ * carrier NAT locks out a city. Both must pass. See `middleware/credentialLimiter`.
+ */
+export const V1_MIDDLEWARE: V1Middleware = {
+  'auth.login': [perAccountLoginLimiter, perIpLoginLimiter],
+  'auth.register': [perAccountRegisterLimiter, perIpLoginLimiter],
+  'auth.refresh': [perIpLoginLimiter],
+  'auth.verifyEmail': [perAccountOtpLimiter, perIpLoginLimiter],
+  'auth.verifyMobile': [perIpLoginLimiter],
+  'auth.forgotPassword': [perAccountRecoveryLimiter, perIpLoginLimiter],
+  'auth.resetPassword': [perAccountRecoveryLimiter, perIpLoginLimiter],
+  'auth.resendVerification': [perAccountRecoveryLimiter, perIpLoginLimiter],
+};
+
+const built = buildV1Router(V1_HANDLERS, V1_MIDDLEWARE);
 
 export const v1Router = built.router;
 export const V1_MOUNTED = built.mounted;

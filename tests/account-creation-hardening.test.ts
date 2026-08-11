@@ -9,6 +9,7 @@ const read = (file: string) => fs.readFileSync(
 const auth = read('services/auth.service.ts');
 const users = read('services/user.service.ts');
 const controller = read('controllers/auth.controller.ts');
+const otp = read('services/otpService.ts');
 
 describe('account creation is atomic and recoverable', () => {
   test('classic signup derives normalized identifiers and creates the provider profile atomically', () => {
@@ -76,11 +77,37 @@ describe('account identity and verification contracts', () => {
   });
 
   test('OTP lookup is case-stable and consumption is single-use', () => {
+    // The lookup and the compare-and-swap moved to `services/otpService.ts`
+    // when one-time codes gained an explicit PURPOSE — `user.service`'s three
+    // OTP functions now delegate to it. This asserts the GUARANTEE wherever it
+    // lives rather than the file the SQL used to sit in: the previous version
+    // of this test pinned the literal string in user.service and would have
+    // failed on a move that strengthened the thing it protects.
     expect(users).toContain('const canonicalEmail = normalizeEmail(email)');
     expect(users).toContain('WHERE email_normalized = $1');
-    expect(users).toContain('WHERE id = $1 AND used = FALSE AND expires_at > NOW()');
-    expect(users).toContain('return result.rows.length === 1');
+
+    // Case-stable: every read and write normalises the address first.
+    expect(otp).toContain('const canonicalEmail = normalizeEmail(email)');
+
+    // Single-use: the UPDATE re-checks `used` and `expires_at`, so two
+    // concurrent verifications of one code cannot both succeed. A read-then-
+    // write would let both through.
+    expect(otp).toContain('WHERE id = $1 AND used = FALSE AND expires_at > NOW()');
+    expect(otp).toContain('return rows.length === 1');
+
+    // And the legacy consumer still refuses an unclaimed code.
     expect(auth).toContain('if (!claimed) throw "Invalid or expired OTP"');
+  });
+
+  test('every OTP read is scoped to a purpose, so one code cannot satisfy two decisions', () => {
+    // Registration is the only purpose in production today, which is exactly
+    // why the scoping goes in now: the second purpose is where an unscoped read
+    // becomes a code minted for a password reset satisfying a registration
+    // screen.
+    expect(otp).toContain('AND purpose = $2');
+    expect(otp).toContain("REGISTRATION_VERIFICATION: 'REGISTRATION_VERIFICATION'");
+    // The legacy wrappers pass the default purpose rather than reading unscoped.
+    expect(users).toContain('otpService.DEFAULT_PURPOSE');
   });
 
   test('the success response reports the real formatted DB id and additive recovery state', () => {

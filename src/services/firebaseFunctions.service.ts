@@ -583,6 +583,19 @@ const getFirebaseUserByUid = async (uid: string) => {
     return await defaultAuthAdmin.getUser(uid);
 };
 
+/**
+ * Verifies an ID token presented as PROOF rather than as a session.
+ *
+ * `checkRevoked: true` deliberately, unlike `middleware/verifyAuth`, which uses
+ * the cached `tokensValidAfterTime` comparison to avoid a network round trip on
+ * every request. This runs once, on a rare path, and the thing being decided is
+ * whether to write a verified identifier onto an account — the one place where
+ * paying for a live answer from Firebase is obviously worth it.
+ */
+const verifyIdTokenStrict = async (idToken: string) => {
+    return await defaultAuthAdmin.verifyIdToken(idToken, /* checkRevoked */ true);
+};
+
 export {
     toE164PH,
     checkUserIfExistInFirebase,
@@ -594,6 +607,7 @@ export {
     customerFirebaseLogin,
     getFirebaseUserByEmail,
     getFirebaseUserByUid,
+    verifyIdTokenStrict,
     updateFirebaseEmailVerified,
     deleteFirebaseUser,
     generatePasswordResetLink,

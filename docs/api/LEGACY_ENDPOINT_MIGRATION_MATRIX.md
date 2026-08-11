@@ -7,11 +7,11 @@ Every route the app mounts outside `/api/v1`: **520**.
 
 | Disposition | Count | Meaning |
 |---|---:|---|
-| `ALIAS_TEMPORARILY` | 22 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
-| `CANONICALIZE` | 5 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
-| `ROLE_SPECIFIC` | 2 | Legitimately separate: different auth, action or payload — same domain service. |
+| `ALIAS_TEMPORARILY` | 34 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
+| `CANONICALIZE` | 4 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
+| `ROLE_SPECIFIC` | 4 | Legitimately separate: different auth, action or payload — same domain service. |
 | `RETIRE` | 0 | No caller and no successor. Delete once telemetry confirms zero traffic. |
-| `KEEP` | 491 | Not a duplicate of anything canonical. Untouched by this command. |
+| `KEEP` | 478 | Not a duplicate of anything canonical. Untouched by this command. |
 
 ## Retirement criteria
 
@@ -27,11 +27,23 @@ build knows how to call.
 
 Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 
-## ALIAS_TEMPORARILY (22)
+## ALIAS_TEMPORARILY (34)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
 | `GET` | `/api/auth/me` | `/api/v1/me` | Provider Web reads this on every session bootstrap. It now delegates to the same identityService.getIdentity this route uses, so the two cannot drift; only the envelope differs. |
+| `POST` | `/api/auth/signup` | `/api/v1/auth/register` | Email + password registration. Same service; v1 accepts either credential kind on one path instead of splitting them across two routes with two response shapes. |
+| `POST` | `/api/auth/verify-email-otp` | `/api/v1/auth/verify-email` | Same service. v1 scopes the read to the REGISTRATION_VERIFICATION purpose, so a code minted for a different purpose can never satisfy it. |
+| `POST` | `/api/auth/resend-email-otp` | `/api/v1/auth/resend-verification` | Same service. v1 takes `channel: "otp" \| "link"` instead of splitting the two across paths. |
+| `POST` | `/api/auth/signin` | `/api/v1/auth/login` | Email + password. v1 calls the same `authService.loggedInUser` and adds identifier resolution in front of it, so a mobile number now names the account. |
+| `POST` | `/api/auth/admin-signin` | `/api/v1/auth/login` | Identical to /auth/signin plus a role-1 gate. The gate is a property of the CALLER, not the credential, so v1 takes it as `audience: "admin"` rather than as a second path. |
+| `POST` | `/api/auth/refresh` | `/api/v1/auth/refresh` | Same service. Unauthenticated by design on both: the caller is here BECAUSE their ID token expired, so requiring a valid one would be circular. The refresh token is the credential and Google validates it. |
+| `GET` | `/api/auth/resendverification` | `/api/v1/auth/resend-verification` | A GET that sends an email — a read path that writes and mails. v1 is a POST. The legacy form stays until both mobile clients move, because it is what they call today. |
+| `POST` | `/api/auth/firebase-login` | `/api/v1/auth/login` | Firebase ID token, provider-shaped. Same service; v1 expresses the role gate as an audience. |
+| `POST` | `/api/auth/provider/register` | `/api/v1/auth/register` | Firebase-token registration, provider-shaped. Same service. Its 403 for a non-provider role is preserved in v1 as an audience assertion rather than a separate path. |
+| `POST` | `/api/auth/forgot-password` | `/api/v1/auth/forgot-password` | Same service, same neutral acknowledgement, same platform-scoped continue URL. |
+| `POST` | `/api/auth/reset-password` | `/api/v1/auth/reset-password` | Same service — and the session revocation added in this command applies to BOTH, because it lives in the service rather than in either handler. |
+| `POST` | `/api/auth/logout` | `/api/v1/auth/logout` | Same effect; both now go through the one session service so the side-effect set is decided once. |
 | `GET` | `/api/user/notifications/unread-count` | `/api/v1/notifications/unread-count` | Declared before /user/notifications/:key on the legacy router precisely so "unread-count" is not parsed as a notification key. v1 has the same ordering requirement and the shadow test now enforces it. |
 | `POST` | `/api/user/notifications/mark-all-read` | `/api/v1/notifications/read-all` | Same service; v1 uses the resource-shaped path. |
 | `GET` | `/api/user/notifications` | `/api/v1/notifications` | Customer clients call this today. |
@@ -54,24 +66,25 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `GET` | `/api/providers/:providerUid/reviews` | `/api/v1/reviews/providers/:providerUid` | Same service. The legacy form does not clamp limit/offset; v1 does (BE-10). |
 | `GET` | `/api/providers/:providerUid/rating` | `/api/v1/reviews/providers/:providerUid/rating` | Same service. Kept because it sits beside the reviews list that a future customer client may already be calling; retiring one without the other would be half a change. |
 
-## CANONICALIZE (5)
+## CANONICALIZE (4)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
-| `POST` | `/api/auth/refresh` | `/api/v1/auth/refresh` | Deliberately NOT duplicated in this command. Every one of the five clients holds a session obtained from this route; standing up a second path to the same credential exchange before the auth domain is swept is how you get two session state machines. Owned by the auth domain command. |
 | `GET` | `/api/services/full` | `/api/v1/catalog` | The legacy LEVEL-2/LEVEL-3 projection the customer app reads today. Cannot be retired until ServanaClient migrates: it is the only catalog either Flutter app has ever consumed. |
 | `GET` | `/api/chat/conversations` | `/api/v1/conversations` | Chat endpoints do NOT use the {status,data} envelope — the store reads a top-level `conversations` key. Re-enveloping under v1 is a real client change, so it is sequenced with the messaging domain command rather than bundled here. |
 | `GET` | `/api/provider/earnings` | `/api/v1/provider/earnings` | Provider Web reads this. |
 | `GET` | `/api/admin/bookings` | `/api/v1/admin/bookings` | The admin portal is the only caller and deploys from git on every push, so it is the cheapest client to migrate — but it is also the only one whose list carries permission-scoped columns, so the DTO needs the permission model resolved first. |
 
-## ROLE_SPECIFIC (2)
+## ROLE_SPECIFIC (4)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
+| `POST` | `/api/auth/customer-firebase-login` | `/api/v1/auth/login` | NOT collapsed. Its link-collision contract is a 200 carrying `status: "failed"` and no token, because the installed customer app throws on any non-2xx before reading the body and fires onUnauthorized on 401 — either would show "session expired" to somebody who has no session yet. Changing that shape is a client release, so it stays until the customer app migrates. |
+| `POST` | `/api/auth/add-employees` | `/api/v1/auth/register` | Admin bulk-creates provider accounts with generated temporary passwords. Genuinely different: a different actor, a different credential origin, and a partial-success response shape. Retained; it is account PROVISIONING, not registration. |
 | `GET` | `/api/user/profile` | `/api/v1/me` | Not a duplicate: returns the CUSTOMER profile aggregate (addresses, preferences), not the identity record. Retained; a v1 successor belongs in the customer-profile domain command, not here. |
 | `GET` | `/api/provider/bookings/:bookingId/timeline` | `/api/v1/bookings/:bookingId/timeline` | Genuinely role-specific: the shared builder is written from the provider's seat, where "YOU" means the provider. Same domain service, different voicing. Documented rather than merged. |
 
-## KEEP (491)
+## KEEP (478)
 
 Mounted, not superseded, not a duplicate. Listed so the inventory is complete and so a
 later domain command starts from a route list rather than from a grep.
@@ -81,20 +94,7 @@ later domain command starts from a route list rather than from a grep.
 | `GET` | `/x-servana-client` | `src/api/v1/legacyTelemetry.ts:143` |
 | `GET` | `/x-servana-client-version` | `src/api/v1/legacyTelemetry.ts:145` |
 | `GET` | `/user-agent` | `src/api/v1/legacyTelemetry.ts:148` |
-| `POST` | `/api/auth/signup` | `src/routes/auth.route.ts:104` |
-| `POST` | `/api/auth/verify-email-otp` | `src/routes/auth.route.ts:105` |
-| `POST` | `/api/auth/resend-email-otp` | `src/routes/auth.route.ts:106` |
-| `POST` | `/api/auth/signin` | `src/routes/auth.route.ts:107` |
-| `POST` | `/api/auth/admin-signin` | `src/routes/auth.route.ts:108` |
-| `GET` | `/api/auth/resendverification` | `src/routes/auth.route.ts:122` |
-| `POST` | `/api/auth/firebase-login` | `src/routes/auth.route.ts:123` |
-| `POST` | `/api/auth/customer-firebase-login` | `src/routes/auth.route.ts:124` |
-| `POST` | `/api/auth/provider/register` | `src/routes/auth.route.ts:125` |
-| `POST` | `/api/auth/add-employees` | `src/routes/auth.route.ts:126` |
 | `PATCH` | `/api/auth/employees/:uid` | `src/routes/auth.route.ts:127` |
-| `POST` | `/api/auth/forgot-password` | `src/routes/auth.route.ts:128` |
-| `POST` | `/api/auth/reset-password` | `src/routes/auth.route.ts:129` |
-| `POST` | `/api/auth/logout` | `src/routes/auth.route.ts:130` |
 | `GET` | `/api/user/registereduser` | `src/routes/user.route.ts:7` |
 | `GET` | `/api/user/alluseraddresses` | `src/routes/user.route.ts:12` |
 | `GET` | `/api/user/:userId/addresses` | `src/routes/user.route.ts:17` |

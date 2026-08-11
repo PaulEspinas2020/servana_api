@@ -17,6 +17,7 @@ import { idGenerator } from "../helpers/idGenerator";
 import { continueUrlFor } from "../constants/platformContinueUrls";
 import { normalizeEmail } from "../helpers/phoneIdentifier";
 import { normalizeProfileName } from "./profileCreationContract";
+import { endSessionsOnCredentialChange } from "./authSessionService";
 
 const now = dayjs();
 const dbSchema = db.schema;
@@ -776,6 +777,27 @@ const resetPassword = async (payload: { oobCode: string; newPassword: string }) 
         if (firebaseUser) {
             const updateQuery = `UPDATE ${dbSchema}.user_credentials SET password = $1 WHERE uid = $2`;
             await dbQuery.query(updateQuery, [hashPassword(newPassword), firebaseUser.uid]);
+
+            /**
+             * End every session on the account (§ session policy).
+             *
+             * This path did not revoke anything. Firebase's `confirmPasswordReset`
+             * is widely believed to revoke refresh tokens and may well do so, but
+             * that behaviour was never verified against this project's
+             * configuration — and a password reset is the one action somebody
+             * takes when they think another person is in their account. An
+             * inherited assumption is the wrong control there.
+             *
+             * Explicit, idempotent, and effective on the NEXT request rather than
+             * at the next refresh, because `verifyAuth` compares `auth_time`
+             * against `tokensValidAfterTime` (services/tokenRevocation.ts).
+             *
+             * Deliberately not awaited into the failure path: the password has
+             * already changed and the oobCode is spent, so reporting failure here
+             * would tell the person their reset did not work when it did — and
+             * send them back for a code that no longer exists.
+             */
+            await endSessionsOnCredentialChange(firebaseUser.uid, 'password_reset');
         }
     } catch (syncErr: any) {
         console.error('resetPassword: DB hash sync failed after Firebase reset', { email: email?.slice(0, 3) + '***', syncErr: syncErr?.message || syncErr });

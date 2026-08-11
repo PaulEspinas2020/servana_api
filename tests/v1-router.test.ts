@@ -124,10 +124,95 @@ jest.mock('../src/services/notification.service', () => ({
   markAllCustomerNotificationsRead: jest.fn().mockResolvedValue(undefined),
   getNotificationPrefs: jest.fn().mockResolvedValue({ jobAssigned: true }),
   saveNotificationPrefs: jest.fn(async (_uid: string, body: any) => ({ ...body, saved: true })),
+  clearFcmToken: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../src/services/customerReviewService', () => ({
   listProviderReviews: jest.fn().mockResolvedValue({ reviews: [{ id: 'r1' }], total: 1 }),
   getProviderAggregate: jest.fn().mockResolvedValue({ providerUid: 'p', average: 4.5, count: 2 }),
+}));
+
+// ── Auth. `firebaseApp` initialises the Admin SDK from a service-account file
+//    at import time, so it has to be stubbed before anything in the auth chain
+//    is pulled in — otherwise the suite fails to LOAD, which reads as a broken
+//    test rather than a missing credential.
+jest.mock('../src/middleware/firebaseApp', () => ({ firebaseAdmin: {}, __esModule: true }));
+jest.mock('firebase-admin/auth', () => ({ getAuth: () => ({}) }));
+jest.mock('../src/services/firebaseFunctions.service', () => ({
+  firebaseAuthLogin: jest.fn().mockResolvedValue({
+    data: { token: 'tok', refreshToken: 'ref', uid: 'uid-token', email: 't@x.co', role: 2, isEmailVerified: true },
+  }),
+  firebaseProviderRegister: jest.fn().mockResolvedValue({ data: { uid: 'uid-new', role: 2 } }),
+  getFirebaseUserByEmail: jest.fn().mockResolvedValue({ uid: 'uid-under-test' }),
+  getFirebaseUserByUid: jest.fn().mockResolvedValue({ uid: 'uid-under-test', phoneNumber: '+639171234567', providerData: [{ providerId: 'phone' }] }),
+  verifyIdTokenStrict: jest.fn().mockResolvedValue({ uid: 'uid-under-test', firebase: { sign_in_provider: 'phone' } }),
+  updateFirebaseEmailVerified: jest.fn().mockResolvedValue(undefined),
+  revokeTokenInFirebase: jest.fn().mockResolvedValue(undefined),
+}));
+jest.mock('../src/services/auth.service', () => ({
+  loggedInUser: jest.fn(async (email: string, password: string) => {
+    if (password !== 'correct-horse') {
+      throw Object.assign(new Error('Invalid email or password.'), { statusCode: 401 });
+    }
+    if (email === 'unverified@x.co') {
+      throw Object.assign(new Error('Email not verified.'), { statusCode: 403 });
+    }
+    return { token: 'tok', refreshToken: 'ref', uid: 'uid-pw', email, role: 3, firstName: 'A', lastName: 'B', isEmailVerified: true };
+  }),
+  registerUser: jest.fn().mockResolvedValue({ dbRegister: { uid: 'uid-reg' }, verificationType: 'otp', otpDeliveryPending: false }),
+  forgotPassword: jest.fn().mockResolvedValue({ message: 'sent' }),
+  resetPassword: jest.fn(async ({ oobCode }: any) => {
+    if (oobCode === 'spent') throw new Error('invalid oob');
+    return { message: 'ok' };
+  }),
+  resendEmailOtp: jest.fn().mockResolvedValue({ message: 'neutral' }),
+  getAndSendEmailVerificationLink: jest.fn().mockResolvedValue({ message: 'sent' }),
+  updateFcmToken: jest.fn().mockResolvedValue(undefined),
+}));
+jest.mock('../src/services/tokenRefreshService', () => {
+  class TokenRefreshError extends Error {
+    constructor(readonly statusCode: number, readonly code: string, message: string) { super(message); }
+  }
+  return {
+    TokenRefreshError,
+    refreshIdToken: jest.fn(async (token: string) => {
+      if (token === 'bad') throw new TokenRefreshError(401, 'REFRESH_TOKEN_INVALID', 'nope');
+      if (token === 'down') throw new TokenRefreshError(503, 'REFRESH_UNAVAILABLE', 'upstream');
+      return { token: 'fresh', refreshToken: 'ref2', uid: 'uid-pw' };
+    }),
+  };
+});
+jest.mock('../src/services/otpService', () => ({
+  DEFAULT_PURPOSE: 'REGISTRATION_VERIFICATION',
+  verifyEmailOtp: jest.fn(async (_email: string, code: string) => {
+    if (code === '111111') return { ok: true };
+    if (code === '222222') return { ok: false, reason: 'OTP_EXPIRED' };
+    return { ok: false, reason: 'OTP_INVALID' };
+  }),
+}));
+jest.mock('../src/services/identifierResolver', () => ({
+  resolveIdentifier: jest.fn(async (raw: unknown) => {
+    // +639170000000 is the mobile of an account whose email is known.
+    if (String(raw).includes('9170000000')) {
+      return { type: 'mobile', normalized: '+639170000000', account: { uid: 'uid-pw', email: 'mobile-user@x.co' } };
+    }
+    // +639179999999 exists but has no email — no password to check.
+    if (String(raw).includes('9179999999')) {
+      return { type: 'mobile', normalized: '+639179999999', account: { uid: 'uid-nopw', email: null } };
+    }
+    return { type: 'mobile', normalized: null, account: null };
+  }),
+}));
+jest.mock('../src/services/accountLinkGuard', () => ({
+  findLinkCollision: jest.fn(async (_uid: string, _email: unknown, phone: string | null) =>
+    phone === '+639170000001' ? { existingUid: 'someone-else', via: 'mobile' } : null,
+  ),
+}));
+jest.mock('../src/services/providerOnboardingService', () => ({
+  upsertSourceAttribution: jest.fn().mockResolvedValue(undefined),
+}));
+jest.mock('../src/constants/platformContinueUrls', () => ({
+  continueUrlFor: () => undefined,
+  assertContinueUrlsAreUsable: () => {},
 }));
 
 import v1Router from '../src/api/v1/register';
@@ -204,6 +289,30 @@ describe('every implemented contract entry is reachable at its declared path', (
     'settings.notificationPreferences.get': () => call('GET', '/api/v1/settings/notification-preferences'),
     'settings.notificationPreferences.put': () =>
       call('PUT', '/api/v1/settings/notification-preferences', { body: { jobAssigned: false } }),
+    'auth.register': () =>
+      call('POST', '/api/v1/auth/register', {
+        auth: false,
+        body: { email: 'new@x.co', password: 'correct-horse', firstName: 'A', lastName: 'B', role: 3 },
+      }),
+    'auth.login': () =>
+      call('POST', '/api/v1/auth/login', {
+        auth: false,
+        body: { identifier: 'a@x.co', password: 'correct-horse' },
+      }),
+    'auth.refresh': () => call('POST', '/api/v1/auth/refresh', { auth: false, body: { refreshToken: 'good' } }),
+    'auth.logout': () => call('POST', '/api/v1/auth/logout'),
+    'auth.forgotPassword': () =>
+      call('POST', '/api/v1/auth/forgot-password', { auth: false, body: { identifier: 'a@x.co' } }),
+    'auth.resetPassword': () =>
+      call('POST', '/api/v1/auth/reset-password', {
+        auth: false,
+        body: { oobCode: 'fresh', newPassword: 'correct-horse' },
+      }),
+    'auth.verifyEmail': () =>
+      call('POST', '/api/v1/auth/verify-email', { auth: false, body: { identifier: 'a@x.co', code: '111111' } }),
+    'auth.resendVerification': () =>
+      call('POST', '/api/v1/auth/resend-verification', { auth: false, body: { identifier: 'a@x.co' } }),
+    'auth.verifyMobile': () => call('POST', '/api/v1/auth/verify-mobile', { body: { idToken: 'phone-token' } }),
   };
 
   it('has a live request case for every implemented entry, and no more', () => {
@@ -211,9 +320,11 @@ describe('every implemented contract entry is reachable at its declared path', (
   });
 
   for (const entry of IMPLEMENTED) {
-    it(`${entry.method.toUpperCase()} ${fullPath(entry)} answers 200 in the v1 success shape`, async () => {
+    it(`${entry.method.toUpperCase()} ${fullPath(entry)} answers 2xx in the v1 success shape`, async () => {
       const res = await CASES[entry.id]();
-      expect(res.status).toBe(200);
+      // 200 or 201 — registration creates a resource and says so. Pinning 200
+      // would force every creation to lie about what it did.
+      expect([200, 201]).toContain(res.status);
       expect(res.body).toHaveProperty('data');
       // The v1 success body must NOT carry a second, independently-settable
       // success signal — that is how `{ success: true }` ends up on a 500.

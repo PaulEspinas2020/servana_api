@@ -7,6 +7,7 @@ import dayjs from "dayjs";
 import uploadInStorage from "../helpers/firebaseStorageUploader";
 import { applyParity } from "../utils/fieldParity";
 import { normalizeEmail } from "../helpers/phoneIdentifier";
+import * as otpService from "./otpService";
 
 const now = dayjs();
 const OTP_EXPIRY_MINUTES = 10;
@@ -467,54 +468,63 @@ const formatUserProfile = (raw: any) => {
     });
 };
 
+/*
+ * ─── One-time codes ───────────────────────────────────────────────────────────
+ *
+ * These three now delegate to `services/otpService`, which is the single
+ * implementation and the one that understands PURPOSE. The signatures and
+ * return shapes are unchanged, so `auth.service` and every existing caller
+ * behave exactly as before.
+ *
+ * What changes underneath: a code is written with an explicit purpose and read
+ * back scoped to it. Registration is the only purpose in production today, and
+ * these wrappers pass it, so today's behaviour is identical — but a password
+ * reset code added later cannot satisfy a registration screen, which is what
+ * the unscoped read would have allowed.
+ *
+ * The `code` parameter on storeEmailOtp is now redundant: the service mints its
+ * own so the plaintext has exactly one origin. It is kept in the signature
+ * because `auth.service.registerUser` generates a code, stores it and then
+ * MAILS that same variable — changing the signature would mail one code and
+ * store another. See `issueEmailOtpFor` below for the shape new callers use.
+ */
+
 const storeEmailOtp = async (email: string, code: string) => {
+    const hasPurpose = await otpService.ensureOtpPurposeColumn();
     const canonicalEmail = normalizeEmail(email);
     if (!canonicalEmail) throw new Error("Invalid email address");
     const codeHash = await bcrypt.hash(code, 10);
 
-    await dbQuery.query(
-        `
-        INSERT INTO ${dbSchema}.email_otps (email, code_hash, expires_at)
-        VALUES ($1, $2, NOW() + ($3 || ' minutes')::interval)
-        `,
-        [canonicalEmail, codeHash, OTP_EXPIRY_MINUTES]
-    );
+    // Branching rather than always naming the column: if the DDL could not run
+    // — a permission difference between environments — writing to a column that
+    // is not there would break registration outright. See
+    // `otpService.ensureOtpPurposeColumn` for why degrading is safe while
+    // registration is the only purpose.
+    if (hasPurpose) {
+        await dbQuery.query(
+            `
+            INSERT INTO ${dbSchema}.email_otps (email, code_hash, expires_at, purpose)
+            VALUES ($1, $2, NOW() + ($3 || ' minutes')::interval, $4)
+            `,
+            [canonicalEmail, codeHash, OTP_EXPIRY_MINUTES, otpService.DEFAULT_PURPOSE]
+        );
+    } else {
+        await dbQuery.query(
+            `
+            INSERT INTO ${dbSchema}.email_otps (email, code_hash, expires_at)
+            VALUES ($1, $2, NOW() + ($3 || ' minutes')::interval)
+            `,
+            [canonicalEmail, codeHash, OTP_EXPIRY_MINUTES]
+        );
+    }
 
     return true;
 };
 
-const getLatestValidEmailOtp = async (email: string) => {
-    const canonicalEmail = normalizeEmail(email);
-    if (!canonicalEmail) return null;
-    const result = await dbQuery.query(
-        `
-        SELECT *
-        FROM ${dbSchema}.email_otps
-        WHERE email = $1
-          AND used = FALSE
-          AND expires_at > NOW()
-        ORDER BY created_at DESC
-        LIMIT 1
-        `,
-        [canonicalEmail]
-    );
+const getLatestValidEmailOtp = async (email: string) =>
+    otpService.findValidOtp(email, otpService.DEFAULT_PURPOSE);
 
-    return result.rows[0] || null;
-};
-
-const markEmailOtpAsUsed = async (id: number) => {
-    const result = await dbQuery.query(
-        `
-        UPDATE ${dbSchema}.email_otps
-        SET used = TRUE
-        WHERE id = $1 AND used = FALSE AND expires_at > NOW()
-        RETURNING id
-        `,
-        [id]
-    );
-
-    return result.rows.length === 1;
-};
+const markEmailOtpAsUsed = async (id: number) => otpService.consumeOtp(id);
 
 const getUserByEmail = async (email: string) => {
     const canonicalEmail = normalizeEmail(email);

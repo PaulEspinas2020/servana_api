@@ -59,6 +59,48 @@ export const V1_ERROR_STATUS = {
 
   // ── Provider ───────────────────────────────────────────────────────────────
   PROVIDER_ROLE_REQUIRED: 403,
+
+  // ── Auth and identity ──────────────────────────────────────────────────────
+  //
+  // These mirror `src/errors/authErrors.ts`, which the legacy routes emit and
+  // which every client already branches on. The mapping is asserted by
+  // `tests/v1-auth-contract.test.ts` so the two vocabularies cannot drift into
+  // meaning different things under the same name — one vocabulary that is
+  // slightly off-spec beats two that are each half-right.
+  //
+  /** Identifier or password did not match. Deliberately does NOT distinguish
+   *  "no such account" from "wrong password" — that difference is a free
+   *  membership check for anyone holding a list of addresses. */
+  INVALID_CREDENTIALS: 401,
+  /** The credential was CORRECT; the identifier is not yet verified. 403, not
+   *  401 — sending this to a login screen makes people retype a password that
+   *  was never the problem. */
+  ACCOUNT_UNVERIFIED: 403,
+  /** Authenticated, but the account may not sign in at all. */
+  ACCOUNT_DISABLED: 403,
+  /** Authenticated, but not on this surface. Asserted AFTER authentication so
+   *  the admin login box is not an oracle for "is this address an admin". */
+  AUDIENCE_MISMATCH: 403,
+  /** The identifier belongs to an account reachable another way. Retrying the
+   *  same way fails identically forever, which is why it is not a 401. */
+  ACCOUNT_LINK_REQUIRED: 409,
+  /** The account has no password credential — it signs in with a code. */
+  PASSWORD_NOT_AVAILABLE: 409,
+  /** Wrong, unknown, already used, or never issued. One outcome on purpose. */
+  OTP_INVALID: 400,
+  /** A code for this identifier and purpose existed and its window has passed. */
+  OTP_EXPIRED: 410,
+  /** The reset link is malformed, spent or past its life. */
+  RESET_TOKEN_INVALID: 400,
+  /** A refresh token that Google will not exchange. */
+  REFRESH_TOKEN_INVALID: 401,
+  /** Google's token endpoint could not be reached. Transient, retryable. */
+  REFRESH_UNAVAILABLE: 502,
+  /** The password does not meet the policy. */
+  WEAK_PASSWORD: 400,
+  /** Registration could not proceed. Deliberately does not say why — "that
+   *  email is taken" is the same membership check by another route. */
+  REGISTRATION_REJECTED: 400,
 } as const;
 
 export type V1ErrorCode = keyof typeof V1_ERROR_STATUS;
