@@ -4,7 +4,12 @@ import { toCamel } from "../helpers/idGenerator";
 const dbSchema = db.schema;
 
 export const getAllServices = async () => {
-    const r = `SELECT id, name, category, created_at FROM ${dbSchema}.services ORDER BY name`;
+    // Soft-deleted services must not reach ANY consumer. `deleted_at` has
+    // existed on this table all along and nothing read it, so an admin
+    // "delete" left the row being served to the client app and to the
+    // provider service-application picker. Adding the predicate is a no-op
+    // for every existing consumer unless a row is explicitly soft-deleted.
+    const r = `SELECT id, name, category, created_at FROM ${dbSchema}.services WHERE deleted_at IS NULL ORDER BY name`;
 
     try {
         const res = await dbQuery.query(r, []);
@@ -18,7 +23,7 @@ export const getAllServices = async () => {
 
 export const getServicesSimpleList = async () => {
     const res = await dbQuery.query(
-        `SELECT id, name FROM ${dbSchema}.services ORDER BY name`,
+        `SELECT id, name FROM ${dbSchema}.services WHERE deleted_at IS NULL ORDER BY name`,
         []
     );
     return res.rows as { id: number; name: string }[];
@@ -619,6 +624,7 @@ export const getFullServiceCatalog = async () => {
             ON m.service_option_id = so.id
         WHERE so.option_type = 'MAIN'
           AND so.is_active = true
+          AND s.deleted_at IS NULL
         ORDER BY so.service_id, so.level_2, so.level_3
     `, []);
 
