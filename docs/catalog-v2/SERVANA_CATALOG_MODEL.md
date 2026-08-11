@@ -35,31 +35,47 @@ user-facing surfaces.
 
 | Target | Today | Migration |
 |---|---|---|
-| Category | `services.category` (free text) | Promote to `catalog_categories`. 3 real values; 7 junk values archived. |
+| Category | `services.category` (free text) | Promote to `catalog_categories`. 3 real values; the 7 junk strings are never migrated. |
 | Subcategory | `service_options.level_2` | Promote to `catalog_subcategories` with `category_id`. 12 values. |
-| Service | `service_options` MAIN | **Unchanged.** Keeps its id. Gains `subcategory_id`. |
-| Options / Add-ons | `service_options` ADD_ON | Unchanged. |
+| **Service — BOOKABLE** | `service_options` MAIN (`level_3`) | Promote to `catalog_services`. **These are Specific Services masquerading as level-3 options.** |
+| Options / Variants | — | `service_options` becomes configuration only (1.0 HP / 1.5 HP). Today it holds the service itself, which is the confusion being removed. |
+| Add-ons | `service_options` ADD_ON | Unchanged, hangs off the Service. |
 | — | `provider_catalog_offerings` + mappings | **Retired** after Provider Web moves off it. |
-| — | `services` (family) | Becomes a compatibility shim: still the provider-eligibility key, no longer a taxonomy layer. |
+| — | `services` (the 19 families) | Dissolved. It is a redundant fourth layer; its 4 non-empty rows are already represented by Category + Subcategory. Renamed out of the way, then the name `services` is freed for the bookable entity in Phase 6. |
 
-**Service ids are preserved.** That is what keeps 109 bookings, 105 provider links
-and 45 applications intact.
+### The identifier decision
+
+`catalog_services.id` is **seeded from `service_options.id`**, not from a fresh
+sequence. So the number a customer already booked *is* its canonical service id.
+
+That single choice is what makes this safe:
+
+- the legacy mapping is an identity function — no lookup table to drift;
+- historical bookings resolve through the new model without being rewritten;
+- the shipped Flutter app keeps posting `serviceOptionId` and it keeps resolving;
+- `bookings.service_option_id` stays authoritative until Phase 4.
+
+**Proven by dry run against production, rolled back:** 3 categories, 12
+subcategories, 95 services, 109 bookings linked, **0 broken chains, 0 fidelity
+mismatches** — every migrated service keeps exactly the category and subcategory it
+has today.
 
 ---
 
-## The one genuinely hard part
+## The one genuinely hard part — now measured and solved
 
-Bookings are keyed to the **Service** (`service_options.id`); provider eligibility is
-keyed to the **family** (`services.id`). Providers qualify at a coarser grain than
-customers book at.
+Bookings key on the **Service**; provider eligibility keys on the **family**. One
+family approval covers every bookable service beneath it — measured: 14 providers
+approved for `Aircon 2` (30 services each), 12 for `Beauty & Wellness` (54 each).
 
-Under the new model the natural eligibility key is the **Subcategory** — "this
-provider does AC Cleaning" — which is what the family means in practice today.
-Migrating eligibility from family to subcategory is the only step that can change
-*who can be assigned to what*, so it gets its own phase, its own reconciliation
-report, and a before/after diff of every provider's assignable service set.
+The migration **fans each family approval out to one row per bookable service**:
+105 legacy links become **1,128** rows. This is behaviour-preserving, not widening —
+those providers are already assignable to all of those services today, because
+eligibility is checked at family grain. Approvals against the 15 empty families
+produce nothing, because those families contain no bookable service.
 
-Do not fold this into the schema phase.
+Verified in the dry run: 1,128 rows, every one carrying `legacy_service_family_id`
+so the expansion is reversible and auditable.
 
 ---
 
@@ -71,11 +87,11 @@ until Phase 2, and nothing changes client contracts until Phase 4.
 | Phase | Scope | Risk |
 |---|---|---|
 | **0 — SWEEP** ✅ done | Current state measured, migration matrix generated, 95/95 AUTO_MAPPABLE | none |
-| **1 — EXPAND** | Add `catalog_categories` + `catalog_subcategories`; add nullable `subcategory_id` to `service_options`. Nothing reads them yet. | none — additive DDL only |
-| **2 — BACKFILL + VERIFY** | Populate from the existing tree; reconciliation asserts every active service resolves Service → Subcategory → Category and matches its old `category`/`level_2` exactly | low — reversible, old columns still authoritative |
+| **1 — EXPAND** ✅ written, dry-run clean | `020-catalog-v2-expand.sql` — creates `catalog_categories`, `catalog_subcategories`, `catalog_services`, `catalog_provider_services` + nullable `bookings.catalog_service_id`. Nothing reads them. **Not applied.** | none — additive DDL only |
+| **2 — BACKFILL** ✅ written, dry-run clean | `021-catalog-v2-backfill.sql` — proven against production and rolled back: 3 / 12 / 95 / 1,128 / 109, 0 broken chains, 0 fidelity mismatches. **Not applied.** | low — writes only into catalog_* |
 | **3 — ADMIN UI** | Rebuild Admin catalog on the new entities: Categories, Subcategories, Services, dependent dropdowns, breadcrumbs, tree view. Retire the 8-step wizard's Mappings step. | low — admin only |
 | **4 — READ SWITCH** | New `GET /api/catalog` hierarchical projection for Customer Web + Admin. **`/api/services/full` keeps its exact current shape** for the Flutter apps. | medium — new endpoint, old untouched |
-| **5 — ELIGIBILITY** | Move provider qualification from family to subcategory, with a per-provider before/after diff | **high — isolate** |
+| **5 — ELIGIBILITY SWITCH** | Point assignment at `catalog_provider_services` instead of `employee_services`. The rows already exist from Phase 2 and are behaviour-identical, so this is a read switch with a per-provider before/after diff, not a data change | **high — isolate** |
 | **6 — CLEANUP** | Archive 15 empty families + 7 junk categories; resolve the Massage duplicate; retire `provider_catalog_offerings` once Provider Web is off it | low |
 
 ---
@@ -114,6 +130,13 @@ permission split (`EDIT_CATEGORY` / `EDIT_SUBCATEGORY` / `MIGRATE_CATALOG`), cat
 events and cache invalidation, search synonyms, SEO slugs and redirects, the 20
 CATALOG-E2E tests, and the per-platform regression reports.
 
-**CATALOG MIGRATION VERDICT: NOT_READY** — correctly so. Phase 0 is complete and the
-data is far healthier than assumed, but no schema exists, no code has changed, and
-the eligibility question in Phase 5 is unresolved.
+**CATALOG MIGRATION VERDICT: READY_WITH_NONBLOCKING_GAPS** for Phases 1–2.
+
+The schema and backfill are written and have been proven end to end against the
+production database inside a rolled-back transaction: 3 categories, 12
+subcategories, 95 bookable services, 1,128 provider capabilities, 109 bookings
+linked, **0 broken chains and 0 fidelity mismatches**. Neither file has been
+applied — applying is a one-word decision.
+
+Phases 3–6 remain NOT_READY: no API, no Admin UI, no client migration, and the
+CATALOG-E2E suite is unwritten.
