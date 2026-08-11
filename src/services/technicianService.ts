@@ -348,7 +348,7 @@ export const getWorkerByUid = async (uid: string) => {
       `
       SELECT s.id, s.name, s.category, es.created_at AS assigned_at
       FROM ${dbSchema}.employee_services es
-      JOIN ${dbSchema}.services s ON s.id = es.service_id
+      JOIN ${dbSchema}.service_families s ON s.id = es.service_id
       WHERE es.employee_uid = $1
       ORDER BY s.name
       `,
@@ -2018,7 +2018,7 @@ export const getServicesByEmployee = async (employeeUid: string) => {
     SELECT s.id, s.name, s.category, es.created_at AS assigned_at,
            COALESCE(es.status, 'active') AS status, es.pause_reason
     FROM ${dbSchema}.employee_services es
-    JOIN ${dbSchema}.services s ON s.id = es.service_id
+    JOIN ${dbSchema}.service_families s ON s.id = es.service_id
     WHERE es.employee_uid = $1
     ORDER BY s.name
     `,

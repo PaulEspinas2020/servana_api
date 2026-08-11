@@ -26,7 +26,7 @@ const ensureTable = (): Promise<void> => {
       CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_service_applications (
         id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         worker_uid    TEXT NOT NULL,
-        service_id    INT NOT NULL REFERENCES ${dbSchema}.services(id),
+        service_id    INT NOT NULL REFERENCES ${dbSchema}.service_families(id),
         status        TEXT NOT NULL DEFAULT 'pending_review'
                       CHECK (status IN ('pending_review','action_required','rejected','cancelled','approved')),
         submitted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -152,7 +152,7 @@ export const getApplicationsByWorker = async (workerUid: string) => {
   const res = await dbQuery.query(
     `SELECT ${APPLICATION_SELECT_FIELDS}, s.name AS service_name, s.category AS service_category
      FROM ${dbSchema}.worker_service_applications wsa
-     JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+     JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
      WHERE wsa.worker_uid = $1
      ORDER BY
        CASE wsa.status WHEN 'action_required' THEN 0 WHEN 'pending_review' THEN 1
@@ -201,7 +201,7 @@ export const evaluateApplicationEligibility = async (
     `SELECT s.id, s.name, s.category,
             COALESCE(MAX(o.version), 1)::int AS catalog_version,
             BOOL_OR(o.status = 'active' AND o.provider_web_visible = true AND m.is_active = true) AS application_open
-     FROM ${dbSchema}.services s
+     FROM ${dbSchema}.service_families s
      LEFT JOIN ${dbSchema}.provider_catalog_offering_mappings m ON m.service_id = s.id
      LEFT JOIN ${dbSchema}.provider_catalog_offerings o ON o.id = m.offering_id
      WHERE s.id = $1
@@ -285,7 +285,7 @@ export const getApplicationByWorker = async (applicationId: string, workerUid: s
   const result = await dbQuery.query(
     `SELECT ${APPLICATION_SELECT_FIELDS}, s.name AS service_name, s.category AS service_category
      FROM ${dbSchema}.worker_service_applications wsa
-     JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+     JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
      WHERE wsa.id = $1 AND wsa.worker_uid = $2 LIMIT 1`,
     [applicationId, workerUid],
   );
@@ -308,7 +308,7 @@ export const getProviderServicesOverview = async (workerUid: string) => {
               COALESCE(es.status, 'active') AS operational_status,
               es.pause_reason, es.updated_at
        FROM ${dbSchema}.employee_services es
-       JOIN ${dbSchema}.services s ON s.id = es.service_id
+       JOIN ${dbSchema}.service_families s ON s.id = es.service_id
        WHERE es.employee_uid = $1 ORDER BY s.name`,
       [workerUid],
     ),
@@ -366,7 +366,7 @@ export const approveApplicationAtomic = async (
     await client.query('BEGIN');
     const locked = await client.query(
       `SELECT wsa.*, s.name AS service_name FROM ${dbSchema}.worker_service_applications wsa
-       JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+       JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
        WHERE wsa.id = $1 FOR UPDATE`,
       [applicationId],
     );
@@ -438,7 +438,7 @@ export const decideApplicationAtomic = async (
     await client.query('BEGIN');
     const locked = await client.query(
       `SELECT wsa.*, s.name AS service_name FROM ${dbSchema}.worker_service_applications wsa
-       JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+       JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
        WHERE wsa.id = $1 FOR UPDATE`,
       [applicationId],
     );
@@ -737,7 +737,7 @@ export const approveApplication = async (applicationId: string, adminUid: string
             wsa.reviewed_at, wsa.review_reason, wsa.version,
             s.name AS service_name
      FROM ${dbSchema}.worker_service_applications wsa
-     LEFT JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+     LEFT JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
      WHERE wsa.id = $1 AND wsa.status IN ('pending_review', 'action_required') LIMIT 1`,
     [applicationId],
   );
@@ -802,7 +802,7 @@ export const rejectApplication = async (applicationId: string, adminUid: string,
     const app = res.rows[0];
     // Fetch service name for notification copy
     const svcRes = await dbQuery.query(
-      `SELECT name FROM ${dbSchema}.services WHERE id = $1 LIMIT 1`,
+      `SELECT name FROM ${dbSchema}.service_families WHERE id = $1 LIMIT 1`,
       [app.service_id],
     ).catch(() => ({ rows: [] }));
     const serviceName: string = svcRes.rows[0]?.name ?? `service #${app.service_id}`;
@@ -843,7 +843,7 @@ export const flagApplicationActionRequired = async (applicationId: string, admin
   if (res.rowCount) {
     const app = res.rows[0];
     const svcRes = await dbQuery.query(
-      `SELECT name FROM ${dbSchema}.services WHERE id = $1 LIMIT 1`,
+      `SELECT name FROM ${dbSchema}.service_families WHERE id = $1 LIMIT 1`,
       [app.service_id],
     ).catch(() => ({ rows: [] }));
     const serviceName: string = svcRes.rows[0]?.name ?? `service #${app.service_id}`;
@@ -907,7 +907,7 @@ export const listApplicationsAdmin = async (params: {
        COUNT(*) OVER() AS total_count
      FROM ${dbSchema}.worker_service_applications wsa
      LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = wsa.worker_uid
-     LEFT JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+     LEFT JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
      ${where}
      ORDER BY ${sortField} ${sortDir}, wsa.id ASC
      LIMIT $${idx} OFFSET $${idx + 1}`,
