@@ -1242,92 +1242,10 @@ export const getAvailableWorkers = async (schedule: string, serviceId?: number) 
     }));
 };
 
-export const assignWorker = async (bookingId: number, workerUid: string) => {
-  // 1. Get the booking's schedule and service
-  const bookingRes = await dbQuery.query(
-    `
-    SELECT b.id, b.schedule, b.status, so.service_id
-    FROM ${dbSchema}.bookings b
-    JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-    WHERE b.id = $1
-    `,
-    [bookingId]
-  );
-
-  if (!bookingRes.rowCount) {
-    throw new Error("Booking not found");
-  }
-
-  const booking = bookingRes.rows[0];
-  const schedule = new Date(booking.schedule);
-  const serviceId = Number(booking.service_id);
-
-  // 2. Validate the worker is qualified for this service
-  const eligibilityRes = await dbQuery.query(
-    `
-    SELECT 1
-    FROM ${dbSchema}.employee_services
-    WHERE employee_uid = $1 AND service_id = $2
-    LIMIT 1
-    `,
-    [workerUid, serviceId]
-  );
-
-  const approvedApplicationUids = eligibilityRes.rowCount
-    ? []
-    : await getAutoBookableProviderUids(serviceId);
-  if (!eligibilityRes.rowCount && !approvedApplicationUids.includes(workerUid)) {
-    // Fetch service name for a helpful error message
-    const svcRes = await dbQuery.query(
-      `SELECT name FROM ${dbSchema}.services WHERE id = $1`,
-      [serviceId]
-    );
-    const serviceName = svcRes.rows[0]?.name || `service #${serviceId}`;
-    throw new Error(
-      `Worker is not qualified for "${serviceName}". ` +
-      `Assign the service to this worker first via POST /workers/:uid/services.`
-    );
-  }
-
-  // 3. Check if the worker already has a conflicting booking within ±2h
-  const availability = await filterUidsAvailableAt(
-    [workerUid],
-    schedule.toISOString(),
-    new Date(schedule.getTime() + 60 * 60 * 1000).toISOString(),
-    { missingScheduleIsAvailable: true },
-  );
-  if (!availability.eligible.includes(workerUid)) {
-    throw new Error(
-      `Worker is not available at ${schedule.toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })}. ` +
-      `Their saved schedule or time off excludes this booking.`
-    );
-  }
-
-  const persisted = await persistWorkerAssignment({
-    bookingId,
-    workerUid,
-    note: "Worker manually assigned",
-  });
-  if (persisted.kind === "busy") {
-    throw new Error(
-      `Worker is not available at ${schedule.toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })}. ` +
-      `They have an existing booking within a 2-hour window.`
-    );
-  }
-
-  if (persisted.kind === "created") {
-    publishWorkerAssignment({
-      bookingId,
-      workerUid,
-      customerUid: persisted.customerUid,
-      source: "manual",
-    });
-  }
-
-  return persisted.kind === "existing"
-    ? { booking_id: bookingId, worker_uid: workerUid, status: "ASSIGNED", idempotent: true }
-    : persisted.assignment;
-};
+// assignWorker was removed with PUT /admin/bookings/:bookingId/assign, its only
+// caller. Admin assignment goes through adminBookingService.adminAssignProvider,
+// which audits the actor and records a reason. persistWorkerAssignment — the
+// shared transactional write this used — stays: assignNearestWorker still uses it.
 
 export const getJobCardByWorker = async (workerId: string, bookingId: number) => {
   const rows = await getJobCardsByWorker(workerId, bookingId);

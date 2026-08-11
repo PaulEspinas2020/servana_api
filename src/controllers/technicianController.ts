@@ -446,35 +446,13 @@ export const deleteBankAccount = async (req: Request, res: Response) => {
   }
 };
 
-export const assignWorker = async (req: Request, res: Response) => {
-  try {
-    const bookingId = Number(req.params.bookingId);
-    const workerUid = req.query.workerUid as string;
-
-    if (!Number.isSafeInteger(bookingId) || bookingId <= 0 || !workerUid) {
-      return res.status(400).json({
-        success: false,
-        message: "bookingId and workerUid are required",
-      });
-    }
-
-    const result = await technician.assignWorker(
-      bookingId,
-      workerUid
-    );
-
-    return res.json({
-      success: true,
-      message: "Worker assigned successfully",
-      data: result,
-    });
-  } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      message: error.message || "Failed to assign worker",
-    });
-  }
-};
+// assignWorker and its PUT /admin/bookings/:bookingId/assign route were removed.
+// It was a DUPLICATE of POST /admin/bookings/:id/assign (adminBooking.routes.ts),
+// and the weaker of the two: verifyRoles([1]) with no requirePermission, where the
+// canonical route is gated on bookings.assign_provider. It also took the target
+// provider from a query string with no requireProviderTarget, wrote no audit event,
+// and returned a different envelope. Its only client was the admin portal's
+// AssignEmployee dialog, itself unreachable and since deleted.
 
 /**
  * The worker performing a lifecycle action on their own job.
