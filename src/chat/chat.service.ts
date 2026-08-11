@@ -2,6 +2,7 @@ import * as repo from "./chat.repository";
 import { emitToConversation, evictUserFromConversation } from "./chat.realtime";
 import { toCamel } from "../helpers/idGenerator";
 import { notifyAdminsSafely } from '../services/adminNotificationService';
+import { createCustomerNotification, createNotification } from '../services/notification.service';
 import { firebaseConfig } from '../config';
 
 /**
@@ -373,6 +374,145 @@ const hydrateMessage = async (row: any) => {
   return { ...toCamel(row), attachments: attachments.map(toCamel) };
 };
 
+/**
+ * Tell the OTHER participants that a message arrived.
+ *
+ * ## The gap this closes (SW-03)
+ *
+ * Until now `sendMessage` did exactly two things after persisting: emit
+ * `message:new` over Socket.IO, and notify ADMINS. Neither reaches a provider's
+ * phone — ServanaWorker has no Socket.IO client at all, and it does not poll —
+ * so a customer's message reached the provider through **no channel**. They
+ * discovered it only by opening Messages and pulling to refresh.
+ *
+ * `notification.service` already carried a `newMessage` push preference with no
+ * producer, which is exactly what made this look wired.
+ *
+ * Riding the notification service rather than pushing directly is what makes
+ * this reach installed builds with no client release: the row lands in the
+ * inbox both apps already read, and the FCM push is sent by the same code that
+ * sends every other one — including the per-type preference check, so a
+ * provider who has turned `newMessage` off still gets the row and not the push.
+ *
+ * ## Rules it obeys
+ *
+ * - **§58.** The message BODY never travels. A push payload is readable by the
+ *   OS on a lock screen, and this is a conversation between a customer and
+ *   someone standing in their home. Only who-and-which-booking goes out.
+ * - **§11, fail closed.** Recipients come from the BOOKING — the same source
+ *   `resolveAccessForBooking` authorizes reads from — so a notification can
+ *   never be sent to somebody who would be refused the transcript. Anyone whose
+ *   participant row records a `left_at` is then subtracted, so a reassigned or
+ *   declined provider stops hearing about the thread.
+ * - **§17.** Keyed `chat_msg:<messageId>`, and both INSERTs are
+ *   `ON CONFLICT DO NOTHING` per recipient, so a retried send cannot produce a
+ *   second notification.
+ * - **§45.** Fire-and-forget. A message that is already committed must not fail
+ *   because a notification could not be written.
+ *
+ * ## Why the two sides get different routes
+ *
+ * The customer gets `CONVERSATION` + the conversation id: client mobile maps
+ * that straight to the thread (`notification_target.dart`), and client web has
+ * no such key so the notification renders un-clickable rather than wrong.
+ *
+ * The provider gets `page: 'messages'` and deliberately **no `bookingId`**.
+ * ServanaWorker's `NotificationRouteResolver` prefers a booking id over a page
+ * name and would open `JobDetailsView` — which has no chat entry point (PM-257),
+ * so a tap would land them on a screen with no way to reach the message they
+ * were told about. Without the id it falls back to the tab shell, where
+ * Messages is one tap away. Restore the id once the job screen can open a
+ * thread.
+ */
+export const messageNotificationRecipients = (input: {
+  clientUid: string | null | undefined;
+  workerUids: readonly string[];
+  departedUids: readonly string[];
+  senderUid: string;
+}): { providers: string[]; customer: string | null } => {
+  // Subtractive, not a membership requirement: a `left_at` is evidence that
+  // someone LEFT, and the absence of a participant row is not evidence that
+  // they are not on the booking. Requiring presence would silently drop the
+  // customer on any conversation whose seeding predates their row.
+  const departed = new Set(input.departedUids.map(String));
+  const eligible = (uid: string | null | undefined): uid is string =>
+    !!uid && uid !== input.senderUid && !departed.has(String(uid));
+
+  const providers: string[] = [];
+  for (const uid of input.workerUids) {
+    // A booking can carry the same provider twice after a reassignment
+    // (production booking 75 has two booking_workers rows), and two rows must
+    // not become two notifications.
+    if (eligible(uid) && !providers.includes(uid)) providers.push(uid);
+  }
+
+  return {
+    providers,
+    customer: eligible(input.clientUid) ? String(input.clientUid) : null,
+  };
+};
+
+const notifyMessageRecipients = async (
+  conversation: any,
+  messageId: number | string,
+  senderUid: string,
+  senderRole: "client" | "coworker" | "admin" | null,
+): Promise<void> => {
+  const bookingId = conversation?.booking_id ?? null;
+  if (!bookingId) return;
+
+  const [clientUid, workerUids, participants] = await Promise.all([
+    repo.getBookingClientUid(bookingId),
+    repo.getBookingWorkerUids(bookingId),
+    repo.listParticipants(conversation.id, true),
+  ]);
+
+  const { providers, customer } = messageNotificationRecipients({
+    clientUid,
+    workerUids: (workerUids ?? []) as string[],
+    departedUids: (participants ?? [])
+      .filter((p: any) => p.left_at != null)
+      .map((p: any) => String(p.user_uid)),
+    senderUid,
+  });
+
+  const code = `SVN-${String(bookingId).padStart(6, '0')}`;
+  const notificationKey = `chat_msg:${messageId}`;
+  const sender =
+    senderRole === 'admin' ? 'Servana support'
+      : senderRole === 'client' ? 'The customer'
+        : 'Another provider';
+
+  for (const uid of providers) {
+    void createNotification(uid, {
+      notificationKey,
+      type: 'new_message',
+      severity: 'info',
+      title: 'New message',
+      safeBody: `${sender} sent a message about booking ${code}.`,
+      safeContextLabel: code,
+      route: { page: 'messages' },
+      canOpenDetail: true,
+    }).catch((e: any) =>
+      console.error('[chat] provider message notification failed:', e?.message));
+  }
+
+  if (customer) {
+    const toCustomer = senderRole === 'admin' ? 'Servana support' : 'Your provider';
+    void createCustomerNotification(customer, {
+      notificationKey,
+      type: 'new_message',
+      severity: 'info',
+      title: 'New message',
+      safeBody: `${toCustomer} sent you a message about booking ${code}.`,
+      safeContextLabel: code,
+      route: { routeKey: 'CONVERSATION', resourceId: String(conversation.id) },
+      canOpenDetail: true,
+    }).catch((e: any) =>
+      console.error('[chat] customer message notification failed:', e?.message));
+  }
+};
+
 const MESSAGE_BODY_MAX = 4000;
 const ATTACHMENT_MAX = 5;
 const ATTACHMENT_BYTES_MAX = 10 * 1024 * 1024;
@@ -542,6 +682,10 @@ export const sendMessage = async (
       notificationKey: `chat_message_${message.id}`,
     });
   }
+  // The other side of the conversation. Admins were already told above; until
+  // now the people actually talking to each other were not. See SW-03.
+  void notifyMessageRecipients(conversation, message.id, actor.uid, access.role)
+    .catch((e: any) => console.error('[chat] message notification failed:', e?.message));
   return full;
 };
 
