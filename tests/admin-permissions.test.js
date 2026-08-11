@@ -33,7 +33,10 @@ describe('adminPermissionService — file structure', () => {
   const src = read(SVC);
 
   test('imports dbQuery and db from config', () => {
-    expect(src).toContain("import dbQuery from '../db/dbQuery'");
+    // Matches the default import regardless of any named imports alongside it —
+    // pinning the exact string broke as soon as `pool` was added for
+    // bootstrapSuperAdmin's transaction, which is not what this test is about.
+    expect(src).toMatch(/import dbQuery(?:,\s*\{[^}]*\})?\s+from '\.\.\/db\/dbQuery'/);
     expect(src).toContain("import { db } from '../config'");
   });
 
@@ -251,11 +254,50 @@ describe('adminPermissionService — safety guards', () => {
     expect(segment).toContain('assertAtLeastOneSuperAdmin');
   });
 
+  // Scans the WHOLE function body rather than a fixed byte window. The previous
+  // `substring(fnStart, fnStart + 600)` broke the moment the function grew a
+  // comment, which says nothing about whether the guard still works.
+  function bootstrapBody() {
+    const start = src.indexOf('export async function bootstrapSuperAdmin');
+    expect(start).toBeGreaterThan(-1);
+    const after = src.indexOf('\nexport ', start + 1);
+    return src.substring(start, after === -1 ? src.length : after);
+  }
+
   test('bootstrapSuperAdmin rejects if super admin already exists', () => {
-    const fnStart = src.indexOf('export async function bootstrapSuperAdmin');
-    const segment = src.substring(fnStart, fnStart + 600);
+    const segment = bootstrapBody();
     expect(segment).toContain('Super Admin already exists');
     expect(segment).toContain("code: 'CONFLICT'");
+  });
+
+  test('bootstrapSuperAdmin counts super admins regardless of account_status', () => {
+    // Filtering the count on account_status = 'active' meant deactivating every
+    // Super Admin reopened self-promotion to any authenticated user.
+    const segment = bootstrapBody();
+    expect(segment).toContain("FILTER (WHERE is_super_admin = TRUE)");
+    expect(segment).not.toContain("account_status = 'active'");
+  });
+
+  test('bootstrapSuperAdmin checks and writes inside one locked transaction', () => {
+    // Without this the check and the insert are separable and two concurrent
+    // callers can both pass the "no super admin yet" check.
+    const segment = bootstrapBody();
+    expect(segment).toContain('pg_advisory_xact_lock');
+    expect(segment).toContain("client.query('BEGIN')");
+    expect(segment).toContain("client.query('COMMIT')");
+    expect(segment).toContain("client.query('ROLLBACK')");
+  });
+
+  test('bootstrapSuperAdmin requires an existing admin when admin users exist', () => {
+    // Only a completely empty admin_users table is open to any authenticated
+    // caller; otherwise a customer could claim the first Super Admin slot.
+    const segment = bootstrapBody();
+    expect(segment).toContain('NOT_AN_EXISTING_ADMIN');
+  });
+
+  test('bootstrapSuperAdmin audits refused attempts', () => {
+    const segment = bootstrapBody();
+    expect(segment).toContain('super_admin_bootstrap_denied');
   });
 
   test('updateAdminUserPermissions requires reason', () => {

@@ -1,4 +1,4 @@
-import dbQuery from '../db/dbQuery';
+import dbQuery, { pool } from '../db/dbQuery';
 import { markInviteAccepted, ensureInviteColumns } from './adminInviteState';
 import { db } from '../config';
 import { auditFire } from './adminAuditService';
@@ -409,8 +409,12 @@ async function insertAdminUserRow(opts: {
   createdBy: string;
   onConflict: AdminRowConflict;
   returning?: boolean;
-}): Promise<any | null> {
-  const res = await dbQuery.query(
+}, client?: { query: (text: string, values?: any[]) => Promise<any> }): Promise<any | null> {
+  // `client` lets a caller run this inside an existing transaction. bootstrapSuperAdmin
+  // needs that: its "is there already a Super Admin?" check and this insert must not be
+  // separable, or two concurrent callers can both pass the check.
+  const runner = client ?? dbQuery;
+  const res = await runner.query(
     `INSERT INTO ${s}.admin_users ${ADMIN_USER_COLUMNS}
      VALUES ($1, $2, $3, $4, 'active', $5)
      ${CONFLICT_SQL[opts.onConflict]}
@@ -1184,43 +1188,113 @@ export async function assertAtLeastOneSuperAdmin(excludeUid?: string): Promise<v
   }
 }
 
-// One-time bootstrap: promote caller to Super Admin when no Super Admins exist
+// One-time bootstrap: promote caller to Super Admin when no Super Admins exist.
+//
+// This route is reachable by ANY authenticated Firebase user — a customer, a
+// provider — because of an unavoidable chicken-and-egg: the very first Super Admin
+// cannot already be an admin. That makes the checks below the only thing standing
+// between a customer account and full platform control, so they are deliberately
+// strict and fail closed.
+//
+// Three things were wrong with the previous version:
+//
+//  1. It counted only `account_status = 'active'`. Deactivating every Super Admin
+//     — an ordinary admin action, or an accident — silently REOPENED self-promotion
+//     to the whole authenticated internet. Existence, not activeness, is what makes
+//     bootstrap unnecessary, so the count no longer filters on status.
+//  2. The count and the insert were separate statements with no transaction and no
+//     lock, so two simultaneous callers could both read zero and both be promoted.
+//     Everything now runs in one transaction behind an advisory lock.
+//  3. Only success was audited. A refused attempt is the more interesting security
+//     event, and it left no trace at all.
+//
+// It also now distinguishes a genuine first run from a half-configured system: if
+// admin_users has rows but none of them is a Super Admin, the caller must already
+// be one of those admins. Only a completely empty admin table is open to any
+// authenticated caller, because only then is there nobody who could do it instead.
 export async function bootstrapSuperAdmin(
   adminUid: string,
   email: string,
   displayName: string | null,
   requestId: string | null
 ): Promise<{ adminUid: string; isSuperAdmin: boolean }> {
-  const superAdminCount = await dbQuery.query(
-    `SELECT COUNT(*) FROM ${s}.admin_users WHERE is_super_admin = TRUE AND account_status = 'active'`
-  );
-  if (Number(superAdminCount.rows[0]?.count ?? 0) > 0) {
-    throw Object.assign(
-      new Error('Super Admin already exists — bootstrap not allowed'),
-      { code: 'CONFLICT' }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Serialise concurrent bootstrap attempts; the lock is released at COMMIT.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      'servana-admin-bootstrap-super-admin',
+    ]);
+
+    const counts = await client.query(
+      `SELECT COUNT(*) FILTER (WHERE is_super_admin = TRUE) AS super_admins,
+              COUNT(*)                                      AS admins
+         FROM ${s}.admin_users`
     );
+    const superAdmins = Number(counts.rows[0]?.super_admins ?? 0);
+    const admins      = Number(counts.rows[0]?.admins ?? 0);
+
+    const deny = async (message: string, code: string) => {
+      await client.query('ROLLBACK').catch(() => {});
+      auditFire({
+        actionCategory: 'admin', action: 'super_admin_bootstrap_denied',
+        entityType: 'admin_user' as any, entityId: adminUid,
+        actorUid: adminUid, actorDisplayName: displayName, outcome: 'blocked',
+        metadata: { reason: code, superAdmins, admins }, requestId,
+      });
+      throw Object.assign(new Error(message), { code: 'CONFLICT' });
+    };
+
+    if (superAdmins > 0) {
+      // Covers suspended/deactivated Super Admins too — see (1) above.
+      await deny('Super Admin already exists — bootstrap not allowed', 'SUPER_ADMIN_EXISTS');
+    }
+
+    if (admins > 0) {
+      const isExistingAdmin = await client.query(
+        `SELECT 1 FROM ${s}.admin_users WHERE admin_uid = $1 LIMIT 1`,
+        [adminUid]
+      );
+      if (!isExistingAdmin.rowCount) {
+        await deny(
+          'Admin accounts already exist — an existing admin must perform this bootstrap',
+          'NOT_AN_EXISTING_ADMIN'
+        );
+      }
+    }
+
+    await insertAdminUserRow({
+      adminUid, email, displayName,
+      isSuperAdmin: true,
+      createdBy: "bootstrap",
+      onConflict: "elevate",
+    }, client);
+    // Same NOT NULL requirement as createAdminUser, and it was the same bug here.
+    // Found only because a test asserted the broken shape was GONE rather than
+    // that the fixed shape was present — the first phrasing would have passed
+    // with this copy still sitting untouched a thousand lines below.
+    //
+    // Inside the transaction on purpose: this is the half that actually grants
+    // role 1. Committing the admin_users row without it, or vice versa, leaves a
+    // Super Admin the role checks do not recognise (or a role-1 account with no
+    // admin record) with no way to tell which half landed.
+    const boot = splitNameForCredentials(displayName, email);
+    await client.query(
+      `INSERT INTO ${s}.user_credentials (uid, email, first_name, last_name, role)
+       VALUES ($1, $2, $3, $4, 1)
+       ON CONFLICT (uid) DO UPDATE SET
+         role = 1,
+         email = COALESCE(${s}.user_credentials.email, EXCLUDED.email)`,
+      [adminUid, email, boot.first, boot.last]
+    );
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
-
-  await insertAdminUserRow({
-    adminUid, email, displayName,
-    isSuperAdmin: true,
-    createdBy: "bootstrap",
-    onConflict: "elevate",
-  });
-
-  // Same NOT NULL requirement as createAdminUser, and it was the same bug here.
-  // Found only because a test asserted the broken shape was GONE rather than
-  // that the fixed shape was present — the first phrasing would have passed
-  // with this copy still sitting untouched a thousand lines below.
-  const boot = splitNameForCredentials(displayName, email);
-  await dbQuery.query(
-    `INSERT INTO ${s}.user_credentials (uid, email, first_name, last_name, role)
-     VALUES ($1, $2, $3, $4, 1)
-     ON CONFLICT (uid) DO UPDATE SET
-       role = 1,
-       email = COALESCE(${s}.user_credentials.email, EXCLUDED.email)`,
-    [adminUid, email, boot.first, boot.last]
-  );
 
   auditFire({
     actionCategory: 'admin', action: 'super_admin_granted',
