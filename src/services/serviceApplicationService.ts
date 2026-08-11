@@ -26,12 +26,10 @@ const ensureTable = (): Promise<void> => {
       CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_service_applications (
         id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         worker_uid    TEXT NOT NULL,
-        -- Deploy 1: deliberately NOT repointed. A FOREIGN KEY cannot reference a
-        -- VIEW, so this must keep naming the physical table. Harmless today because
-        -- CREATE TABLE IF NOT EXISTS skips the existing table, but on a fresh database
-        -- it would bind to the wrong table once Deploy 2 renames the services table to the
-        -- bookable entity. Deploy 2 must repoint this to service_families.
-        service_id    INT NOT NULL REFERENCES ${dbSchema}.services(id),
+        -- Deploy 2: service_families is a real TABLE now, so this FK can finally name
+        -- it. It could not in Deploy 1, when service_families was a view and a FOREIGN
+        -- KEY cannot reference one.
+        service_id    INT NOT NULL REFERENCES ${dbSchema}.service_families(id),
         status        TEXT NOT NULL DEFAULT 'pending_review'
                       CHECK (status IN ('pending_review','action_required','rejected','cancelled','approved')),
         submitted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
