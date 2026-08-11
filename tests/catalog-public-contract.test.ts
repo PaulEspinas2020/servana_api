@@ -132,8 +132,14 @@ describe('level2 regression guard', () => {
 
   it('app.ts exempts the public catalog prefix from parity', () => {
     const appSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'app.ts'), 'utf8');
+    // Assert the guarantee, not the identifier holding it. The first version of
+    // this pinned the name `CANONICAL_CATALOG_PREFIXES` and broke the moment the
+    // list was renamed to CANONICAL_CONTRACT_PREFIXES to take `/api/v1` — a
+    // failure that reported a regression where the exemption had actually
+    // widened. Same mistake this file corrects in catalog-admin-contract.
     expect(appSrc).toContain("'/api/catalog'");
-    expect(appSrc).toMatch(/CANONICAL_CATALOG_PREFIXES[\s\S]{0,400}parityMiddleware/);
+    expect(appSrc).toMatch(/startsWith\([\s\S]{0,80}\)[\s\S]{0,40}return next\(\)/);
+    expect(appSrc).toMatch(/return parityMiddleware\(req, res, next\)/);
   });
 });
 
