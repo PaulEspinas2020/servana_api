@@ -1425,6 +1425,12 @@ export const updateSpecificService = async (
     );
   }
 
+  // The panel can clear a banner through this route rather than DELETE .../banner,
+  // so the same withdrawal has to happen here or that path leaks a live token URL.
+  if (clearBanner && before.banner_url) {
+    await deleteBannerObject(before.banner_url);
+  }
+
   auditFire({
     action: 'catalog_service_option.update', actionCategory: 'catalog', outcome: 'success',
     actorUid: adminUid, actorType: 'admin', entityType: 'catalog_service_option',
@@ -1448,6 +1454,33 @@ export const updateSpecificService = async (
 
 const ALLOWED_BANNER_MIMES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_BANNER_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Best-effort removal of the storage object behind a banner URL.
+ *
+ * Replacing or removing a banner used to leave the old object in the bucket
+ * forever — and because these URLs carry an embedded download token, a "removed"
+ * banner stayed publicly fetchable by anyone who had ever seen its URL. Clearing
+ * the column is not the same as withdrawing the image.
+ *
+ * Never throws: losing the old file is not a reason to fail the admin's edit, and
+ * the new banner is already the record of truth by the time this runs.
+ */
+const deleteBannerObject = async (bannerUrl: string | null | undefined): Promise<void> => {
+  const url = String(bannerUrl ?? '');
+  if (!url.startsWith('https://firebasestorage.googleapis.com/')) return;
+  try {
+    // Format we mint in uploadFileToStorage: .../o/<uri-encoded path>?alt=media&token=...
+    const encoded = url.split('/o/')[1]?.split('?')[0];
+    if (!encoded) return;
+    const storagePath = decodeURIComponent(encoded);
+    if (!storagePath.startsWith('service-banners/')) return;  // never touch another domain's files
+    const { deletePrivateStoredFile } = await import('../helpers/firebaseStorageUploader');
+    await deletePrivateStoredFile(storagePath);
+  } catch (err: any) {
+    console.error('[catalog] banner cleanup failed:', err?.message ?? err);
+  }
+};
 
 export const setSpecificServiceBanner = async (
   serviceOptionId: number,
@@ -1498,9 +1531,14 @@ export const setSpecificServiceBanner = async (
     );
   }
 
+  // uploadFileToStorage appends its own extension derived from the MIME type, so
+  // strip any the caller supplied — otherwise "photo.png" became "…photo.png.png".
   const safeName = String(fileName || 'banner')
+    .replace(/\.(jpe?g|png|webp)$/i, '')
     .replace(/[^A-Za-z0-9._-]/g, '_')
-    .slice(-80);
+    .replace(/\.{2,}/g, '_')   // no dot runs, so no traversal segment survives
+    .replace(/^[.\-]+/, '')    // and nothing starts with a dot or dash
+    .slice(0, 60) || 'banner';
   // Imported lazily for the same reason adminProviderService does: the Firebase
   // bucket accessor resolves credentials on first use, and nothing else in this
   // module needs storage.
@@ -1515,6 +1553,9 @@ export const setSpecificServiceBanner = async (
     `UPDATE ${dbSchema}.service_options SET banner_url = $1, updated_at = NOW() WHERE id = $2`,
     [url, serviceOptionId],
   );
+
+  // Withdraw the image this one replaced, after the new URL is committed.
+  await deleteBannerObject(check.rows[0].banner_url);
 
   auditFire({
     action: 'catalog_service_option.banner_set', actionCategory: 'catalog', outcome: 'success',
@@ -1532,6 +1573,18 @@ export const removeSpecificServiceBanner = async (
   serviceOptionId: number,
   adminUid: string,
 ): Promise<any> => {
+  // Read the old URL BEFORE clearing it: RETURNING on an UPDATE yields the new row,
+  // where banner_url is already NULL, so there would be nothing left to delete.
+  const existing = await dbQuery.query(
+    `SELECT banner_url FROM ${dbSchema}.service_options
+     WHERE id = $1 AND option_type = 'MAIN'`,
+    [serviceOptionId],
+  );
+  if (existing.rows.length === 0) {
+    throw Object.assign(new Error('Specific service not found'), { statusCode: 404 });
+  }
+  const previousBannerUrl = existing.rows[0].banner_url as string | null;
+
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.service_options SET banner_url = NULL, updated_at = NOW()
      WHERE id = $1 AND option_type = 'MAIN'
@@ -1541,6 +1594,7 @@ export const removeSpecificServiceBanner = async (
   if (res.rows.length === 0) {
     throw Object.assign(new Error('Specific service not found'), { statusCode: 404 });
   }
+  await deleteBannerObject(previousBannerUrl);
   auditFire({
     action: 'catalog_service_option.banner_removed', actionCategory: 'catalog', outcome: 'success',
     actorUid: adminUid, actorType: 'admin', entityType: 'catalog_service_option',
