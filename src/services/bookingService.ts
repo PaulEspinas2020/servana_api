@@ -132,14 +132,39 @@ export const createBooking = async (
           });
         }
       }
+      // Catalog V2 dual-write.
+      //
+      // Migration 020 added `bookings.catalog_service_id` and its comment reads
+      // "written only from Phase 4, for NEW bookings". Phase 4 was never built,
+      // so migration 021 backfilled history and then nothing ever wrote the
+      // column again — measured on production: 109 of 111 bookings carry it,
+      // and the two most recent, created after the backfill, are NULL. A
+      // canonical column that only history populates is worse than an absent
+      // one, because a reader cannot tell "not migrated" from "new booking".
+      //
+      // The subselect, not `payload.serviceOptionId` directly, is the point.
+      // Canonical `services.id` currently EQUALS the legacy option id for all
+      // 95 promoted rows, so copying the value would look correct today and
+      // silently write a dangling id the moment a Service is created through
+      // the Admin API — those take their id from `catalog_services_id_seq` and
+      // have no legacy option at all. Resolving through
+      // `legacy_service_option_id` stays correct on both sides of that change.
+      //
+      // NULL when the option has no canonical Service (the 5 active ADD_ON
+      // rows, which are configuration and were never promoted). `service_option_id`
+      // remains authoritative and is untouched, so no reader moves (§4).
       const bookingRes = await client.query(
         `
         INSERT INTO ${dbSchema}.bookings
-          (user_id, user_address_id, service_option_id,
+          (user_id, user_address_id, service_option_id, catalog_service_id,
            schedule, payment_method, branch_id,
            otp_code, status,
            quoted_price, final_price, pricing_breakdown)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,'PENDING_OTP',$8,$9,$10)
+        VALUES (
+          $1,$2,$3,
+          (SELECT s.id FROM ${dbSchema}.services s WHERE s.legacy_service_option_id = $3),
+          $4,$5,$6,$7,'PENDING_OTP',$8,$9,$10
+        )
         RETURNING *
         `,
         [

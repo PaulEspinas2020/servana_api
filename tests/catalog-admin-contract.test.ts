@@ -624,8 +624,21 @@ describe('the canonical catalog is exempt from response parity aliases', () => {
     // Parity maps `name` → `level2`, so a canonical Service shipped
     // `level2: "<its own name>"` while `level2` means the SUBCATEGORY in the
     // legacy model. Measured in production before this exemption existed.
+    //
+    // Asserted as "this prefix is exempt", not as one particular spelling of
+    // the check. The original form pinned a singular `CANONICAL_CATALOG_PREFIX`
+    // identifier and failed the moment the public catalog earned the same
+    // exemption and the constant became a list — a break that reported a
+    // regression where the guarantee had actually widened.
     expect(app).toContain("'/api/admin/catalog'");
-    expect(app).toMatch(/startsWith\(CANONICAL_CATALOG_PREFIX\)\s*\)\s*return next\(\)/);
+    expect(app).toMatch(/startsWith\([\s\S]{0,80}\)[\s\S]{0,40}return next\(\)/);
+  });
+
+  test('the public catalog carries the same exemption', () => {
+    // It needs it more, not less: `/api/catalog` is the surface the Flutter
+    // clients migrate onto, so a parity-generated `level2` there would be read
+    // by a customer app as the Subcategory while holding the Service's name.
+    expect(app).toContain("'/api/catalog'");
   });
 
   test('every other route still gets parity', () => {

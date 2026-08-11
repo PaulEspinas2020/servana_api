@@ -84,9 +84,15 @@ app.use(requestParityMiddleware);
 // ambiguity Catalog V2 exists to remove (§52).
 //
 // Scoped by path prefix so no existing route's response shape moves (§4).
-const CANONICAL_CATALOG_PREFIX = '/api/admin/catalog';
+//
+// The public canonical catalog carries the same exemption and needs it more,
+// not less: it is the surface the Flutter clients actually migrate onto, so a
+// parity-generated `level2` there would be read by a customer app as the
+// Subcategory name while holding the Service's own name. Neither prefix
+// overlaps an existing route — provider catalog is `/api/provider-catalog/*`.
+const CANONICAL_CATALOG_PREFIXES = ['/api/admin/catalog', '/api/catalog'];
 app.use((req: Request, res: Response, next: NextFunction) => {
-    if (req.path.startsWith(CANONICAL_CATALOG_PREFIX)) return next();
+    if (CANONICAL_CATALOG_PREFIXES.some((p) => req.path.startsWith(p))) return next();
     return parityMiddleware(req, res, next);
 });
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -160,6 +166,16 @@ app.use("/api", cors(corsOptionsDelegate), providerCatalogRoutes);
 // untouched (§4).
 import catalogAdminRoutes from "./routes/catalogAdmin.routes";
 app.use("/api", cors(corsOptionsDelegate), catalogAdminRoutes);
+
+// Canonical PUBLIC Catalog — the customer-facing read half of the same model.
+// Catalog V2 shipped Admin-only, which left the Client App with no canonical
+// hierarchy it could legally read: `/api/admin/catalog/*` requires role 1, and
+// a customer app must never hold that. Without this router the only way to give
+// the app a Category → Subcategory → Service tree was to rebuild it in Dart
+// from the legacy option shape — manufacturing the catalog on the frontend,
+// which §3 and §30 forbid. Read-only and additive (§4).
+import catalogPublicRoutes from "./routes/catalogPublic.routes";
+app.use("/api", cors(corsOptionsDelegate), catalogPublicRoutes);
 
 import adminProviderRoutes from "./routes/adminProvider.routes";
 app.use("/api", cors(corsOptionsDelegate), adminProviderRoutes);
