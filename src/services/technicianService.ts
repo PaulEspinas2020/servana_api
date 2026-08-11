@@ -1126,6 +1126,19 @@ export const getJobCardsByWorker = async (workerId: string, bookingId?: number |
       ua.label,
       b.service_address->>'instructions' AS delivery_instructions,
 
+      -- SW-05. The exact point, from whichever source holds it. user_address
+      -- carries the canonical loc_{lat}_{lng}; admin-created bookings put
+      -- lat/lon straight into service_address. jobCardView parses these and
+      -- releases them at full disclosure only, so a provider who has not
+      -- accepted still gets no precise location.
+      --
+      -- Selected, never trusted: one production row holds a Google place id in
+      -- location_id instead of a location id (SW-13), which is why the parser
+      -- returns null rather than guessing.
+      ua.location_id,
+      b.service_address->>'lat' AS service_address_lat,
+      b.service_address->>'lon' AS service_address_lon,
+
       s.level_2 AS service_name,
       s.level_3 AS service_type,
 

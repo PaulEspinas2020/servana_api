@@ -1,4 +1,5 @@
 import { actionsForWorkerStatus } from "./bookingActions";
+import { coordinatesForAddress } from "../helpers/servanaLocationId";
 
 /// Stages customer disclosure by the provider's relationship to the booking.
 ///
@@ -66,13 +67,35 @@ export function formatJobCard(job: any) {
         phone: null,
       };
 
+  // Coordinates travel at FULL DISCLOSURE ONLY, and they are additive (§4) —
+  // `lat`/`lng` are new keys on an object that already existed.
+  //
+  // SW-05. The exact point has always been in the database: `user_address`
+  // holds the canonical `loc_{lat}_{lng}`, and admin-created bookings put
+  // lat/lon into `service_address`. The job card sent neither, so ServanaWorker
+  // fell back to geocoding the address TEXT on the device — and pre-acceptance
+  // that text is city + country, so "Makati, PH" resolved to the city centre
+  // and was drawn under the heading "Service location". §39 forbids exactly
+  // that: do not fabricate coordinates from a city centre.
+  //
+  // Withholding them before acceptance is not a limitation, it is the same
+  // staging as the street address. A precise pin IS the street address, so
+  // sending it early would hand over what the text above deliberately withholds.
+  const coords = fullDisclosure
+    ? coordinatesForAddress({
+        locationId: job.location_id,
+        lat: job.service_address_lat,
+        lng: job.service_address_lon,
+      })
+    : null;
+
   // Pre-acceptance the provider gets the AREA, which is what a travel decision
   // needs. After declining they get nothing.
   const address = fullDisclosure
-    ? { addressOne: job.address_one, addressTwo: job.address_two, city: job.post_town, zipCode: job.zip_code, country: job.country, label: job.label, instructions: job.delivery_instructions ?? null }
+    ? { addressOne: job.address_one, addressTwo: job.address_two, city: job.post_town, zipCode: job.zip_code, country: job.country, label: job.label, instructions: job.delivery_instructions ?? null, lat: coords ? coords.lat : null, lng: coords ? coords.lng : null }
     : relinquished
-      ? { addressOne: null, addressTwo: null, city: null, zipCode: null, country: null, label: null, instructions: null }
-      : { addressOne: null, addressTwo: null, city: job.post_town, zipCode: null, country: job.country, label: job.label, instructions: null };
+      ? { addressOne: null, addressTwo: null, city: null, zipCode: null, country: null, label: null, instructions: null, lat: null, lng: null }
+      : { addressOne: null, addressTwo: null, city: job.post_town, zipCode: null, country: job.country, label: job.label, instructions: null, lat: null, lng: null };
 
   return {
     bookingId:    job.booking_id,
