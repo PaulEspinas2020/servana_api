@@ -28,6 +28,7 @@ import * as availEngine from "../services/providerAvailabilityEngine";
 import * as areaEngine from "../services/providerServiceAreaEngine";
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 import * as availabilityService from "../services/providerOperationalAvailabilityService";
+import * as activationService from "../services/providerActivationService";
 import { touchProviderActivity } from "../services/adminProviderService";
 import { getProviderPerformance } from "../services/providerPerformanceService";
 import { randomUUID } from 'crypto';
@@ -2015,6 +2016,43 @@ export const requestProviderDataExport = async (req: Request, res: Response) => 
       message: "Export request submitted. You will be notified when your data is ready.",
     });
   } catch (error: any) {
+    return res.status(500).json({ status: "failed", message: "Server error" });
+  }
+};
+
+/**
+ * POST /provider/activation/policy-acknowledgement
+ *
+ * The provider accepts the Servana provider agreement.
+ *
+ * This endpoint did not exist, and `policy_acknowledgement` is a BLOCKING
+ * checklist requirement — so the row could never be ticked by anybody, on any
+ * client. See `acknowledgeProviderPolicy` for the measurement.
+ *
+ * Additive: a new route, no existing contract touched. Idempotent, so a retry
+ * or a double tap returns the ORIGINAL acceptance date rather than moving it.
+ */
+export const acknowledgeProviderPolicy = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+
+    // Optional, and recorded rather than validated: the client states which
+    // version of the agreement it displayed. Rejecting an unknown value would
+    // block acceptance whenever the document is revised before the app is.
+    const raw = (req.body ?? {}).policyVersion;
+    const policyVersion =
+      typeof raw === "string" && raw.trim() && raw.trim().length <= 64
+        ? raw.trim()
+        : null;
+
+    const result = await activationService.acknowledgeProviderPolicy(uid, {
+      version: policyVersion,
+    });
+
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error: any) {
+    console.error("[activation] policy acknowledgement failed:", error?.message);
     return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };

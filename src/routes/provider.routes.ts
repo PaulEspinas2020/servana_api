@@ -179,6 +179,11 @@ router.post("/provider/payout", verifyAuth, requireProviderRole, requireActivePr
 // Privacy / account actions (P1)
 router.get("/provider/privacy", verifyAuth, requireProviderRole, provider.getProviderPrivacy);
 router.post("/provider/privacy/export", verifyAuth, requireProviderRole, provider.requestProviderDataExport);
+// The provider accepts the Servana provider agreement.
+// `policy_acknowledgement` is a BLOCKING checklist requirement and nothing
+// wrote `policy_acknowledged_at` anywhere — measured on production, 0 rows
+// acknowledged — so no provider could ever clear it. Additive route.
+router.post("/provider/activation/policy-acknowledgement", verifyAuth, requireProviderRole, provider.acknowledgeProviderPolicy);
 router.post("/provider/account/deactivate", verifyAuth, requireProviderRole, provider.requestProviderDeactivation);
 router.post("/provider/account/delete", verifyAuth, requireProviderRole, provider.requestProviderDeletion);
 
