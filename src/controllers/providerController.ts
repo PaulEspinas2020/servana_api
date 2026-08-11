@@ -11,6 +11,7 @@ import dbQuery from "../db/dbQuery";
 import { paidAdditionalWorkSql, earningsGross } from "../services/earningsBasis";
 import { PROVIDER_RELEASE_HOURS } from "../services/payoutStatus";
 import * as technicianService from "../services/technicianService";
+import { getIdentity } from "../services/identityService";
 import * as userService from "../services/user.service";
 import mongoDb from "../db/mongodbQuery";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
@@ -116,32 +117,26 @@ function bridgeToWebTimeOff(timeOff: availEngine.ProviderTimeOff[]): any[] {
 
 // ─── Auth/Me ──────────────────────────────────────────────────────────────────
 
+/**
+ * GET /api/auth/me — the legacy identity read, kept on its legacy envelope.
+ *
+ * The projection used to be built inline here, which made this controller the
+ * only definition of "who is this caller". It now delegates to
+ * `identityService.getIdentity`, the same function `/api/v1/me` calls, so the
+ * canonical route and this alias cannot drift apart (§10). The response shape
+ * is byte-for-byte what it was — Provider Web reads `data.role` on every
+ * session bootstrap — so this is a pure de-duplication, not a contract change.
+ */
 export const getMe = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
 
-    const result = await dbQuery.query(
-      `SELECT uid, email, first_name, last_name, role, is_email_verified, phone_number
-       FROM ${dbSchema}.user_credentials WHERE uid = $1 LIMIT 1`,
-      [uid]
-    );
+    const user = await getIdentity(uid);
 
-    if (!result.rows.length) {
+    if (!user) {
       return res.status(404).json({ status: "failed", message: "User not found" });
     }
-
-    const row = result.rows[0];
-    const user = {
-      id: row.uid,
-      uid: row.uid,
-      email: row.email,
-      firstName: row.first_name,
-      lastName: row.last_name,
-      role: row.role,
-      isEmailVerified: row.is_email_verified,
-      phoneNumber: row.phone_number,
-    };
 
     return res.status(200).json({ status: "success", data: user });
   } catch (error: any) {

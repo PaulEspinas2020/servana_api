@@ -1,0 +1,2829 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Servana API — canonical v1",
+    "version": "1.0.0",
+    "description": "The canonical Servana contract. Generated from src/api/v1/contract.ts — do not edit by hand; `npm run api:docs` rewrites it and the contract test fails if it drifts.\n\nOperations marked `x-implemented: false` are DOCUMENTED BUT NOT MOUNTED. They exist so the legacy migration matrix can name a canonical successor before it is built, and they will 404.\n\nRoutes under /api/v1 are exempt from the cross-platform field-parity middleware that rewrites every other response, so the shapes below are exactly what the wire carries."
+  },
+  "servers": [
+    {
+      "url": "https://servana.com.ph",
+      "description": "Production"
+    },
+    {
+      "url": "http://localhost:8000",
+      "description": "Local"
+    }
+  ],
+  "paths": {
+    "/api/v1/catalog": {
+      "get": {
+        "operationId": "catalog.browse",
+        "summary": "The full public catalog tree: categories, their subcategories and their services.",
+        "tags": [
+          "catalog"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/catalogPublicService.getPublicCatalog + getPublicCatalogSummary",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/catalog",
+            "disposition": "ALIAS_TEMPORARILY"
+          },
+          {
+            "method": "GET",
+            "path": "/api/services/full",
+            "disposition": "CANONICALIZE"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "catalog",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CatalogTree"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/summary": {
+      "get": {
+        "operationId": "catalog.summary",
+        "summary": "Counts and last-updated stamp for the catalog, for cache validation.",
+        "tags": [
+          "catalog"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/catalogPublicService.getPublicCatalogSummary",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/catalog/summary",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "catalog",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CatalogSummary"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/services": {
+      "get": {
+        "operationId": "catalog.services.list",
+        "summary": "Flat list of every bookable service, for search and deep links.",
+        "tags": [
+          "catalog"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/catalogPublicService.listPublicServices",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/catalog/services",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "catalog",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CatalogServiceList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/services/{serviceId}": {
+      "get": {
+        "operationId": "catalog.services.get",
+        "summary": "One service by its canonical services.id, including its place in the hierarchy.",
+        "tags": [
+          "catalog"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/catalogPublicService.getServiceDetail",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/catalog/services/:serviceId",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "catalog",
+        "security": [],
+        "parameters": [
+          {
+            "name": "serviceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Canonical services.id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CatalogServiceDetail"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CATALOG_SERVICE_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Deliberately NOT status-filtered: an archived deep link resolves to an honest \"unavailable\" rather than a 404 dead end. `available` folds in subcategory and category status."
+      }
+    },
+    "/api/v1/me": {
+      "get": {
+        "operationId": "identity.me",
+        "summary": "The authenticated caller, whatever their role.",
+        "tags": [
+          "identity"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/identityService.getIdentity",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/auth/me",
+            "disposition": "ALIAS_TEMPORARILY"
+          },
+          {
+            "method": "GET",
+            "path": "/api/user/profile",
+            "disposition": "ROLE_SPECIFIC"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "planned",
+          "providerWeb": "legacy",
+          "admin": "planned"
+        },
+        "x-observability-owner": "identity",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Identity"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bookings": {
+      "get": {
+        "operationId": "bookings.listMine",
+        "summary": "The caller's own bookings. Identity comes from the token, never from a parameter.",
+        "tags": [
+          "bookings"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/bookingService.getBookingsByUserId + formatBookings",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/users/:userId/bookings",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "legacy",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "bookings",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Page size, 1-100, default 20"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Rows to skip, default 0"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BookingList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Paginated at the API boundary. The underlying service returns the whole set, so this bounds the RESPONSE, not the query — noted in the matrix as a follow-up for the bookings domain command."
+      }
+    },
+    "/api/v1/bookings/{bookingId}": {
+      "get": {
+        "operationId": "bookings.get",
+        "summary": "One booking, if the caller is its customer, its active provider, or an admin.",
+        "tags": [
+          "bookings"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/bookingAccessService.assertBookingAccess + bookingService.getBookingById",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/:id",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "legacy",
+          "providerMobile": "legacy",
+          "providerWeb": "planned",
+          "admin": "planned"
+        },
+        "x-observability-owner": "bookings",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bookingId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "bookings.id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Booking"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "BOOKING_ACCESS_DENIED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "BOOKING_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bookings/{bookingId}/timeline": {
+      "get": {
+        "operationId": "bookings.timeline",
+        "summary": "A booking's operational history, voiced for the customer.",
+        "tags": [
+          "bookings"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/bookingAccessService.assertBookingAccess + bookingService.getCustomerBookingTimeline",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/:id/timeline",
+            "disposition": "ALIAS_TEMPORARILY"
+          },
+          {
+            "method": "GET",
+            "path": "/api/provider/bookings/:bookingId/timeline",
+            "disposition": "ROLE_SPECIFIC"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "bookings",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bookingId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "bookings.id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BookingTimeline"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "BOOKING_ACCESS_DENIED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "BOOKING_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provider/jobs": {
+      "get": {
+        "operationId": "provider.jobs.list",
+        "summary": "The authenticated provider's job cards.",
+        "tags": [
+          "provider-jobs"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/technicianService.getJobCardsByWorker + controllers/jobCardView.formatJobCard",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/worker/job-cards",
+            "disposition": "ALIAS_TEMPORARILY"
+          },
+          {
+            "method": "GET",
+            "path": "/api/workers/:workerId/job-cards",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "legacy",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-jobs",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Page size, 1-100, default 50"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Rows to skip, default 0"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/JobCardList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Three paths, one domain service. This is the clearest centralization case in the backend: two clients, two shapes, one query."
+      }
+    },
+    "/api/v1/provider/jobs/{bookingId}": {
+      "get": {
+        "operationId": "provider.jobs.get",
+        "summary": "One job card, scoped to the authenticated provider's own assignment.",
+        "tags": [
+          "provider-jobs"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/technicianService.getJobCardByWorker + controllers/jobCardView.formatJobCard",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/worker/job-cards/:bookingId",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-jobs",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bookingId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "bookings.id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/JobCard"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications": {
+      "get": {
+        "operationId": "notifications.list",
+        "summary": "The caller's notifications.",
+        "tags": [
+          "notifications"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/notificationService.listCustomerNotifications",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/user/notifications",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "legacy",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "notifications",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional service-side filter key"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Page size, 1-100, default 50"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Rows to skip, default 0"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/NotificationList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/unread-count": {
+      "get": {
+        "operationId": "notifications.unreadCount",
+        "summary": "How many unread notifications the caller has.",
+        "tags": [
+          "notifications"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/notificationService.countCustomerUnreadNotifications",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/user/notifications/unread-count",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "legacy",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "notifications",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/UnreadCount"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/{key}/read": {
+      "patch": {
+        "operationId": "notifications.markRead",
+        "summary": "Marks one notification read. Repeating it is a no-op, not an error.",
+        "tags": [
+          "notifications"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/notificationService.markCustomerNotificationReadByKey",
+        "x-legacy": [
+          {
+            "method": "PATCH",
+            "path": "/api/user/notifications/:key/read",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "legacy",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "notifications",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque notification key"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/NotificationMutation"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOTIFICATION_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "NOTIFICATION_NOT_ACTIONABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/read-all": {
+      "post": {
+        "operationId": "notifications.markAllRead",
+        "summary": "Marks every notification read. Naturally idempotent.",
+        "tags": [
+          "notifications"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/notificationService.markAllCustomerNotificationsRead",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/user/notifications/mark-all-read",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "legacy",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "notifications",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/NotificationMutation"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reviews/providers/{providerUid}": {
+      "get": {
+        "operationId": "reviews.provider.list",
+        "summary": "A provider's published reviews. No customer identity is projected.",
+        "tags": [
+          "reviews"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/customerReviewService.listProviderReviews",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/providers/:providerUid/reviews",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "reviews",
+        "security": [],
+        "parameters": [
+          {
+            "name": "providerUid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Canonical provider uid"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Page size, 1-50, default 20"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Rows to skip, default 0"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderReviewList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reviews/providers/{providerUid}/rating": {
+      "get": {
+        "operationId": "reviews.provider.rating",
+        "summary": "A provider's aggregate rating.",
+        "tags": [
+          "reviews"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/customerReviewService.getProviderAggregate",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/providers/:providerUid/rating",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "reviews",
+        "security": [],
+        "parameters": [
+          {
+            "name": "providerUid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Canonical provider uid"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderRating"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/notification-preferences": {
+      "get": {
+        "operationId": "settings.notificationPreferences.get",
+        "summary": "The caller's notification preferences.",
+        "tags": [
+          "settings"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/notificationService.getNotificationPrefs",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/notification-preferences",
+            "disposition": "ALIAS_TEMPORARILY"
+          },
+          {
+            "method": "GET",
+            "path": "/api/workers/:uid/notification-preferences",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "legacy",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "settings",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/NotificationPreferences"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Three legacy paths, one uid-keyed service, and two of the three are gated on a provider role for a preference table that has no role column. The role gate is the accident, not the capability."
+      },
+      "put": {
+        "operationId": "settings.notificationPreferences.put",
+        "summary": "Replaces the caller's notification preferences. Idempotent by construction.",
+        "tags": [
+          "settings"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/notificationService.saveNotificationPrefs",
+        "x-legacy": [
+          {
+            "method": "PUT",
+            "path": "/api/provider/notification-preferences",
+            "disposition": "ALIAS_TEMPORARILY"
+          },
+          {
+            "method": "PUT",
+            "path": "/api/workers/:uid/notification-preferences",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "legacy",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "settings",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationPreferences"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/NotificationPreferences"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "operationId": "auth.refresh",
+        "summary": "Exchanges a refresh token for a fresh session.",
+        "tags": [
+          "auth"
+        ],
+        "deprecated": false,
+        "x-status": "planned",
+        "x-implemented": false,
+        "x-idempotent": false,
+        "x-domain-service": "services/auth.service (to be extracted)",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/auth/refresh",
+            "disposition": "CANONICALIZE"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "legacy",
+          "providerMobile": "legacy",
+          "providerWeb": "legacy",
+          "admin": "legacy"
+        },
+        "x-observability-owner": "auth",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Session"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search": {
+      "get": {
+        "operationId": "search.query",
+        "summary": "Cross-catalog search.",
+        "tags": [
+          "search"
+        ],
+        "deprecated": false,
+        "x-status": "planned",
+        "x-implemented": false,
+        "x-idempotent": true,
+        "x-domain-service": "none yet — no backend search endpoint exists",
+        "x-legacy": [],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "search",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SearchResults"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "There is no backend search today. ServanaClient searches the catalog CLIENT-SIDE off the /api/services/full payload, which is why an empty level2 silently emptied the search cache. Building it belongs to the catalog/search domain command."
+      }
+    },
+    "/api/v1/home": {
+      "get": {
+        "operationId": "home.feed",
+        "summary": "The composed customer home surface.",
+        "tags": [
+          "home"
+        ],
+        "deprecated": false,
+        "x-status": "planned",
+        "x-implemented": false,
+        "x-idempotent": true,
+        "x-domain-service": "none yet — composed client-side today",
+        "x-legacy": [],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "home",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/HomeFeed"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "No legacy equivalent exists. The customer home surface is assembled on the device from three or four separate calls, so there is nothing to alias — this is a new capability, and building it is a product decision about what home should contain rather than a migration. Listed here so the target architecture is complete."
+      }
+    },
+    "/api/v1/conversations": {
+      "get": {
+        "operationId": "conversations.list",
+        "summary": "The caller's booking conversations.",
+        "tags": [
+          "conversations"
+        ],
+        "deprecated": false,
+        "x-status": "planned",
+        "x-implemented": false,
+        "x-idempotent": true,
+        "x-domain-service": "chat/chat.service.listConversations",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/chat/conversations",
+            "disposition": "CANONICALIZE"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "legacy",
+          "providerMobile": "legacy",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "messaging",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ConversationList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provider/earnings": {
+      "get": {
+        "operationId": "provider.earnings.summary",
+        "summary": "The authenticated provider's earnings summary.",
+        "tags": [
+          "provider-earnings"
+        ],
+        "deprecated": false,
+        "x-status": "planned",
+        "x-implemented": false,
+        "x-idempotent": true,
+        "x-domain-service": "services/technicianService (earnings family)",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/earnings",
+            "disposition": "CANONICALIZE"
+          },
+          {
+            "method": "GET",
+            "path": "/api/workers/:uid/earnings-history",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-earnings",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/EarningsSummary"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Money. Deliberately not adapted in a foundation command: the payout window is already documented as 48h in copy and 72h in reality, and a second read path before that is settled would give two answers to \"when am I paid\"."
+      }
+    },
+    "/api/v1/admin/bookings": {
+      "get": {
+        "operationId": "admin.bookings.list",
+        "summary": "Admin booking operations list.",
+        "tags": [
+          "admin-bookings"
+        ],
+        "deprecated": false,
+        "x-status": "planned",
+        "x-implemented": false,
+        "x-idempotent": true,
+        "x-domain-service": "services/adminBookingService.listBookings",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/admin/bookings",
+            "disposition": "CANONICALIZE"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "legacy"
+        },
+        "x-observability-owner": "admin-bookings",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminBookingList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PERMISSION_REQUIRED | ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "firebaseIdToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "Firebase ID token",
+        "description": "Verified signature AND revocation state — a token issued before a session revocation is rejected with TOKEN_REVOKED, not accepted until expiry."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "requestId"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "BOOKING_ACCESS_DENIED",
+                  "BOOKING_NOT_FOUND",
+                  "CATALOG_SERVICE_NOT_FOUND",
+                  "CONFLICT",
+                  "FORBIDDEN",
+                  "IDEMPOTENCY_KEY_INVALID",
+                  "IDEMPOTENCY_KEY_REUSED",
+                  "INTERNAL",
+                  "NOTIFICATION_NOT_ACTIONABLE",
+                  "NOTIFICATION_NOT_FOUND",
+                  "NOT_FOUND",
+                  "PERMISSION_REQUIRED",
+                  "PROVIDER_ROLE_REQUIRED",
+                  "RATE_LIMITED",
+                  "ROLE_REQUIRED",
+                  "STALE_STATE",
+                  "TOKEN_EXPIRED",
+                  "TOKEN_REVOKED",
+                  "UNAUTHENTICATED",
+                  "UNSUPPORTED_MEDIA_TYPE",
+                  "VALIDATION_FAILED"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable. Never branch on this — branch on `code`."
+              },
+              "details": {
+                "description": "Optional structured context. Shape depends on `code`."
+              },
+              "requestId": {
+                "type": "string",
+                "description": "Also returned as the X-Request-Id header."
+              }
+            }
+          }
+        }
+      },
+      "PageMeta": {
+        "type": "object",
+        "required": [
+          "limit",
+          "offset",
+          "total",
+          "hasMore"
+        ],
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "null when the total is not cheaply knowable."
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CatalogSummary": {
+        "type": "object",
+        "properties": {
+          "categories": {
+            "type": "integer"
+          },
+          "subcategories": {
+            "type": "integer"
+          },
+          "services": {
+            "type": "integer"
+          },
+          "lastUpdatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO 8601 with a UTC designator. Never Postgres' native \"2026-08-11 11:03:23.421016+00\"."
+          }
+        }
+      },
+      "CatalogService": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Canonical services.id — THE bookable identity."
+          },
+          "subcategoryId": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "shortDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "imageUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "bookable": {
+            "type": "boolean"
+          },
+          "basePrice": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "estimatedDurationMins": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "description": "Never carries `level2`/`level_2`. In the legacy model those mean the SUBCATEGORY; response parity used to map `name` onto them, which made a Service claim its own name as its subcategory. /api/v1 is exempt from that middleware."
+      },
+      "CatalogSubcategory": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "categoryId": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string",
+            "description": "Unique PER CATEGORY, not globally."
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogService"
+            }
+          }
+        }
+      },
+      "CatalogCategory": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string",
+            "description": "Globally unique."
+          },
+          "subcategories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogSubcategory"
+            }
+          }
+        }
+      },
+      "CatalogTree": {
+        "type": "object",
+        "required": [
+          "categories"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogCategory"
+            }
+          }
+        }
+      },
+      "CatalogServiceList": {
+        "type": "object",
+        "required": [
+          "services"
+        ],
+        "properties": {
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogService"
+            }
+          }
+        }
+      },
+      "CatalogServiceDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CatalogService"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "fullDescription": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "inclusions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "exclusions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "addons": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "available": {
+                "type": "boolean",
+                "description": "Folds in subcategory and category status. Detail is NOT status-filtered, so an archived deep link resolves to an honest \"unavailable\" rather than a 404."
+              }
+            }
+          }
+        ]
+      },
+      "Identity": {
+        "type": "object",
+        "required": [
+          "uid"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Same value as uid. Present for clients that key on `id`."
+          },
+          "uid": {
+            "type": "string",
+            "description": "The Firebase uid. THE primary key — there is no numeric user id."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "firstName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "description": "1 admin, 2 and 4 provider, 3 customer. See servana_role_map."
+          },
+          "isEmailVerified": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "phoneNumber": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Booking": {
+        "type": "object",
+        "description": "A booking as produced by bookingService.formatBooking."
+      },
+      "BookingList": {
+        "type": "object",
+        "required": [
+          "bookings"
+        ],
+        "properties": {
+          "bookings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Booking"
+            }
+          }
+        }
+      },
+      "BookingTimeline": {
+        "type": "object",
+        "required": [
+          "timeline"
+        ],
+        "properties": {
+          "timeline": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "description": "Operational history, voiced for the customer. Not the audit record (§16)."
+      },
+      "JobCard": {
+        "type": "object",
+        "description": "A job card as produced by controllers/jobCardView.formatJobCard."
+      },
+      "JobCardList": {
+        "type": "object",
+        "required": [
+          "jobs"
+        ],
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobCard"
+            }
+          }
+        }
+      },
+      "NotificationList": {
+        "type": "object",
+        "required": [
+          "notifications"
+        ],
+        "properties": {
+          "notifications": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "UnreadCount": {
+        "type": "object",
+        "required": [
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "NotificationMutation": {
+        "type": "object",
+        "description": "Outcome flags from the notification service."
+      },
+      "ProviderReviewList": {
+        "type": "object",
+        "required": [
+          "reviews"
+        ],
+        "properties": {
+          "reviews": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "description": "No customer identity is projected (§58)."
+      },
+      "ProviderRating": {
+        "type": "object",
+        "properties": {
+          "providerUid": {
+            "type": "string"
+          },
+          "average": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "NotificationPreferences": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Per-channel preference flags, keyed by uid."
+      },
+      "Session": {
+        "type": "object",
+        "description": "PLANNED — owned by the auth domain command."
+      },
+      "SearchResults": {
+        "type": "object",
+        "description": "PLANNED — no backend search exists today."
+      },
+      "HomeFeed": {
+        "type": "object",
+        "description": "PLANNED — composed client-side today."
+      },
+      "ConversationList": {
+        "type": "object",
+        "description": "PLANNED — owned by the messaging domain command."
+      },
+      "EarningsSummary": {
+        "type": "object",
+        "description": "PLANNED — owned by the provider-earnings domain command."
+      },
+      "AdminBookingList": {
+        "type": "object",
+        "description": "PLANNED — owned by the admin-bookings domain command."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "admin-bookings"
+    },
+    {
+      "name": "auth"
+    },
+    {
+      "name": "bookings"
+    },
+    {
+      "name": "catalog"
+    },
+    {
+      "name": "conversations"
+    },
+    {
+      "name": "home"
+    },
+    {
+      "name": "identity"
+    },
+    {
+      "name": "notifications"
+    },
+    {
+      "name": "provider-earnings"
+    },
+    {
+      "name": "provider-jobs"
+    },
+    {
+      "name": "reviews"
+    },
+    {
+      "name": "search"
+    },
+    {
+      "name": "settings"
+    }
+  ],
+  "x-generated-from": "src/api/v1/contract.ts",
+  "x-implemented-count": 18,
+  "x-total-count": 24
+}

@@ -71,8 +71,14 @@ app.use((req, _res, next) => {
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// SWEEP request parity — enriches incoming request bodies with cross-platform field aliases
-app.use(requestParityMiddleware);
+// SWEEP request parity — enriches incoming request bodies with cross-platform
+// field aliases. Exempt under /api/v1 for the same reason the response half is:
+// a v1 endpoint declares the body it accepts, and a middleware that invents
+// additional keys means the declared shape is not the shape the handler reads.
+app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.path.startsWith('/api/v1')) return next();
+    return requestParityMiddleware(req, res, next);
+});
 // SWEEP response parity — enriches every JSON response with cross-platform field aliases.
 //
 // The canonical Admin Catalog is exempt, and the reason is not tidiness.
@@ -90,9 +96,19 @@ app.use(requestParityMiddleware);
 // parity-generated `level2` there would be read by a customer app as the
 // Subcategory name while holding the Service's own name. Neither prefix
 // overlaps an existing route — provider catalog is `/api/provider-catalog/*`.
-const CANONICAL_CATALOG_PREFIXES = ['/api/admin/catalog', '/api/catalog'];
+// `/api/v1` carries the same exemption for a stronger reason than the catalog
+// prefixes do. v1 publishes an explicit DTO per endpoint and an OpenAPI
+// document generated from it. A middleware that adds keys to every response
+// makes that document false the moment it runs — the wire would carry fields
+// the contract does not declare, and a client generated from the spec would be
+// reading a shape nobody wrote down. Explicit DTOs and global field rewriting
+// are two answers to the same question, and only one of them can be true.
+//
+// `tests/v1-parity-exemption.test.ts` pins this. It is the kind of guarantee
+// that survives exactly as long as nobody edits this list by hand.
+export const CANONICAL_CONTRACT_PREFIXES = ['/api/v1', '/api/admin/catalog', '/api/catalog'];
 app.use((req: Request, res: Response, next: NextFunction) => {
-    if (CANONICAL_CATALOG_PREFIXES.some((p) => req.path.startsWith(p))) return next();
+    if (CANONICAL_CONTRACT_PREFIXES.some((p) => req.path.startsWith(p))) return next();
     return parityMiddleware(req, res, next);
 });
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -121,6 +137,39 @@ app.get("/hello", (req: Request, res: Response) => {
     res.json({ message: "Hello, from router!" });
 });
 
+/**
+ * ─── CANONICAL v1 — mounted FIRST, deliberately ─────────────────────────────
+ *
+ * Every path below this line belongs to the legacy tree, and that tree contains
+ * `GET /api/:id` (booking.routes) — a single-segment wildcard at the API root.
+ * Anything registered after it that is one segment long is unreachable, which
+ * is exactly what happened to `GET /api/catalog`.
+ *
+ * `/api/v1/*` is two segments so it could not be shadowed by that route today,
+ * but "could not be shadowed today" is the property that quietly stops being
+ * true. Mounting the canonical namespace first makes it unshadowable by
+ * construction, and `tests/route-shadowing.test.ts` fails the build if any
+ * route in the composed app eclipses another.
+ *
+ * The v1 router ends in its own 404, so an unknown `/api/v1` path says so
+ * rather than falling through to the legacy tree and answering 401.
+ */
+import v1Router from "./api/v1/register";
+app.use("/api/v1", cors(corsOptionsDelegate), v1Router);
+
+/**
+ * Counts every legacy route that the v1 contract names as superseded.
+ *
+ * Mounted after v1 and before the legacy tree, so a v1 call is never counted as
+ * legacy traffic and every legacy call is counted exactly once regardless of
+ * which router eventually answers it. The watch list is derived from
+ * `V1_CONTRACT.legacy`, so it cannot fall out of step with the migration matrix.
+ *
+ * Read it with: pm2 logs servana-prod | grep legacy-contract
+ */
+import { legacyContractTelemetry } from "./api/v1/legacyTelemetry";
+app.use(legacyContractTelemetry);
+
 import authRoute from "./routes/auth.route";
 app.use("/api", cors(corsOptionsDelegate), authRoute);
 
@@ -132,6 +181,25 @@ app.use("/api", cors(corsOptionsDelegate), serviceRoute);
 
 import pricingRoutes from "./routes/pricing.routes";
 app.use("/api", cors(corsOptionsDelegate), pricingRoutes);
+
+/**
+ * The public canonical catalog is mounted BEFORE bookings, and the order is
+ * load-bearing.
+ *
+ * `booking.routes` registers `GET /:id`. Mounted at `/api`, that matches any
+ * single-segment GET — so with the catalog router below it, `GET /api/catalog`
+ * resolved to the booking getter: 401 for the unauthenticated customer app the
+ * route exists for, and 400 "Invalid booking id" for everyone else. The three
+ * deeper `/catalog/*` paths were unaffected, which is what made it survive a
+ * green test run.
+ *
+ * Moving the mount is the whole fix. No path, payload or guard changes, and no
+ * booking id can be the literal string "catalog", so no booking call is
+ * affected. Retiring `GET /:id` instead would have been the tidier repair and
+ * is not available: it is a live protected-client contract (§5).
+ */
+import catalogPublicRoutes from "./routes/catalogPublic.routes";
+app.use("/api", cors(corsOptionsDelegate), catalogPublicRoutes);
 
 import bookingRoutes from "./routes/booking.routes";
 app.use("/api", cors(corsOptionsDelegate), bookingRoutes);
@@ -174,8 +242,9 @@ app.use("/api", cors(corsOptionsDelegate), catalogAdminRoutes);
 // the app a Category → Subcategory → Service tree was to rebuild it in Dart
 // from the legacy option shape — manufacturing the catalog on the frontend,
 // which §3 and §30 forbid. Read-only and additive (§4).
-import catalogPublicRoutes from "./routes/catalogPublic.routes";
-app.use("/api", cors(corsOptionsDelegate), catalogPublicRoutes);
+//
+// MOUNTED ABOVE `booking.routes`, not here — see the comment there. Leaving the
+// registration at this position is what made `GET /api/catalog` unreachable.
 
 import adminProviderRoutes from "./routes/adminProvider.routes";
 app.use("/api", cors(corsOptionsDelegate), adminProviderRoutes);
