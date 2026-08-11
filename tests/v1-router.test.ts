@@ -74,14 +74,55 @@ jest.mock('../src/middleware/verifyRoles', () => ({
 
 // ── Domain services. Each returns a marker the assertions can recognise, so a
 //    200 proves the RIGHT handler ran, not merely that something answered.
-jest.mock('../src/services/catalogPublicService', () => ({
-  getPublicCatalogSummary: jest.fn().mockResolvedValue({ categories: 3, subcategories: 12, services: 95, lastUpdatedAt: null }),
-  getPublicCatalog: jest.fn().mockResolvedValue([{ id: 3, name: 'Personal Care', subcategories: [] }]),
-  listPublicServices: jest.fn().mockResolvedValue([{ id: 15, name: 'Pimple Facial' }]),
-  getServiceDetail: jest.fn(async (id: number) => {
-    if (id === 999) { const e: any = new Error('Service not found'); e.statusCode = 404; throw e; }
-    return { id, name: 'Pimple Facial', available: true };
-  }),
+jest.mock('../src/services/catalogPublicService', () => {
+  const notFound = (what: string) => {
+    const e: any = new Error(`${what} not found`);
+    e.statusCode = 404;
+    return e;
+  };
+  return {
+    // `makeRef`/`parseRef` are pure and are NOT mocked — the ref format is part
+    // of what these tests check, so faking it would prove nothing.
+    REF_TYPES: ['category', 'subcategory', 'service', 'addon'],
+    makeRef: (t: string, id: number | string) => `${t}:${id}`,
+    parseRef: jest.requireActual('../src/services/catalogPublicService').parseRef,
+    getPublicCatalogSummary: jest.fn().mockResolvedValue({ categories: 3, subcategories: 12, services: 95, lastUpdatedAt: null }),
+    getPublicCatalog: jest.fn().mockResolvedValue([{ ref: 'category:3', id: 3, name: 'Personal Care', subcategories: [] }]),
+    listPublicServices: jest.fn().mockResolvedValue([{ ref: 'service:15', id: 15, name: 'Pimple Facial' }]),
+    getServiceDetail: jest.fn(async (id: number) => {
+      if (id === 999) throw notFound('Service');
+      return { ref: `service:${id}`, id, name: 'Pimple Facial', available: true };
+    }),
+    listCategories: jest.fn().mockResolvedValue([
+      { ref: 'category:3', id: 3, name: 'Personal Care', subcategoryCount: 4, serviceCount: 30 },
+    ]),
+    getCategory: jest.fn(async (id: number) => {
+      if (id === 999) throw notFound('Category');
+      return { ref: `category:${id}`, id, name: 'Personal Care', available: true };
+    }),
+    listSubcategoriesOfCategory: jest.fn(async (id: number) => {
+      if (id === 999) throw notFound('Category');
+      return [{ ref: 'subcategory:7', id: 7, categoryId: id, name: 'Facial', serviceCount: 5 }];
+    }),
+    getSubcategory: jest.fn(async (id: number) => {
+      if (id === 999) throw notFound('Subcategory');
+      return { ref: `subcategory:${id}`, id, categoryId: 3, name: 'Facial', available: true };
+    }),
+    listServicesOfSubcategory: jest.fn(async (id: number) => {
+      if (id === 999) throw notFound('Subcategory');
+      return [{ ref: 'service:15', id: 15, subcategoryId: id, name: 'Pimple Facial' }];
+    }),
+  };
+});
+jest.mock('../src/services/catalogSearchService', () => ({
+  searchCatalog: jest.fn(async (q: string, opts: any = {}) => ({
+    query: q,
+    expandedTerms: [q],
+    total: 1,
+    hits: [{ ref: 'service:15', type: 'service', id: 15, name: 'Pimple Facial', score: 4, matchedTerm: q }],
+    counts: { category: 0, subcategory: 0, service: 1 },
+    __types: opts.types,
+  })),
 }));
 jest.mock('../src/services/identityService', () => ({
   getIdentity: jest.fn(async (uid: string) => (uid === 'uid-under-test' ? { uid, id: uid, email: 'a@b.c', role: 3 } : null)),
@@ -313,6 +354,15 @@ describe('every implemented contract entry is reachable at its declared path', (
     'auth.resendVerification': () =>
       call('POST', '/api/v1/auth/resend-verification', { auth: false, body: { identifier: 'a@x.co' } }),
     'auth.verifyMobile': () => call('POST', '/api/v1/auth/verify-mobile', { body: { idToken: 'phone-token' } }),
+    'catalog.categories.list': () => call('GET', '/api/v1/catalog/categories', { auth: false }),
+    'catalog.categories.get': () => call('GET', '/api/v1/catalog/categories/3', { auth: false }),
+    'catalog.categories.subcategories': () =>
+      call('GET', '/api/v1/catalog/categories/3/subcategories', { auth: false }),
+    'catalog.subcategories.get': () => call('GET', '/api/v1/catalog/subcategories/7', { auth: false }),
+    'catalog.subcategories.services': () =>
+      call('GET', '/api/v1/catalog/subcategories/7/services', { auth: false }),
+    'search.query': () => call('GET', '/api/v1/search?q=facial', { auth: false }),
+    'catalog.search': () => call('GET', '/api/v1/catalog/search?q=facial', { auth: false }),
   };
 
   it('has a live request case for every implemented entry, and no more', () => {
@@ -468,5 +518,87 @@ describe('pagination is clamped at the boundary', () => {
   it('limit is capped at the endpoint maximum', async () => {
     const res = await call('GET', '/api/v1/reviews/providers/provider-uid-1?limit=5000', { auth: false });
     expect(res.body.meta.page.limit).toBe(50);
+  });
+});
+
+// ─── Catalog hierarchy routing ───────────────────────────────────────────────
+
+describe('the catalog hierarchy resolves to the right level', () => {
+  it('a literal segment beats a parameter: /catalog/categories is not a service id', async () => {
+    const res = await call('GET', '/api/v1/catalog/categories', { auth: false });
+    expect(res.status).toBe(200);
+    expect(res.body.data.categories[0].ref).toBe('category:3');
+  });
+
+  it('/catalog/search is not parsed as a service id', async () => {
+    // `/catalog/services/:serviceId` and `/catalog/search` share a prefix, and
+    // the composition layer's specificity sort is what keeps "search" a literal.
+    const res = await call('GET', '/api/v1/catalog/search?q=facial', { auth: false });
+    expect(res.status).toBe(200);
+    expect(res.body.data.hits[0].ref).toBe('service:15');
+  });
+
+  it('each hierarchy level reports its OWN not-found code', async () => {
+    expect((await call('GET', '/api/v1/catalog/categories/999', { auth: false })).body.error.code)
+      .toBe('CATALOG_CATEGORY_NOT_FOUND');
+    expect((await call('GET', '/api/v1/catalog/subcategories/999', { auth: false })).body.error.code)
+      .toBe('CATALOG_SUBCATEGORY_NOT_FOUND');
+    expect((await call('GET', '/api/v1/catalog/services/999', { auth: false })).body.error.code)
+      .toBe('CATALOG_SERVICE_NOT_FOUND');
+  });
+
+  it('a missing parent 404s rather than returning an empty child list', async () => {
+    // Empty and missing are different facts; a client rendering "no
+    // subcategories yet" for a deleted id is showing a page that should not exist.
+    const res = await call('GET', '/api/v1/catalog/categories/999/subcategories', { auth: false });
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects a non-numeric id at every level with the same code', async () => {
+    for (const path of [
+      '/api/v1/catalog/categories/abc',
+      '/api/v1/catalog/subcategories/abc',
+      '/api/v1/catalog/services/abc',
+    ]) {
+      const res = await call('GET', path, { auth: false });
+      expect(res.body.error.code).toBe('VALIDATION_FAILED');
+    }
+  });
+
+  it('every entity in every catalog response carries a qualified ref', async () => {
+    const cats = await call('GET', '/api/v1/catalog/categories', { auth: false });
+    const subs = await call('GET', '/api/v1/catalog/categories/3/subcategories', { auth: false });
+    const svcs = await call('GET', '/api/v1/catalog/subcategories/7/services', { auth: false });
+
+    expect(cats.body.data.categories.every((c: any) => /^category:\d+$/.test(c.ref))).toBe(true);
+    expect(subs.body.data.subcategories.every((x: any) => /^subcategory:\d+$/.test(x.ref))).toBe(true);
+    expect(svcs.body.data.services.every((x: any) => /^service:\d+$/.test(x.ref))).toBe(true);
+  });
+});
+
+describe('search', () => {
+  it('/search and /catalog/search return the same body', async () => {
+    const a = await call('GET', '/api/v1/search?q=facial', { auth: false });
+    const b = await call('GET', '/api/v1/catalog/search?q=facial', { auth: false });
+    expect(a.body.data).toEqual(b.body.data);
+  });
+
+  it('passes a valid type filter through', async () => {
+    const res = await call('GET', '/api/v1/search?q=facial&types=service,category', { auth: false });
+    expect(res.status).toBe(200);
+    expect(res.body.data.__types).toEqual(['service', 'category']);
+  });
+
+  it('refuses an unrecognised type instead of silently narrowing', async () => {
+    // Answering with services for `types=provider` would tell a client that
+    // providers are searchable.
+    const res = await call('GET', '/api/v1/search?q=facial&types=provider', { auth: false });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_FAILED');
+  });
+
+  it('every hit carries a ref, so a mixed result set is keyable', async () => {
+    const res = await call('GET', '/api/v1/search?q=facial', { auth: false });
+    expect(res.body.data.hits.every((h: any) => typeof h.ref === 'string' && h.ref.includes(':'))).toBe(true);
   });
 });

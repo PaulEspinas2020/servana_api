@@ -13,6 +13,7 @@
     "verify": "npm run typecheck && npm run guard:protected-contracts && npm run api:docs:check && npm run test:ci",
     "verify:quick": "npm run typecheck",
     "guard:protected-contracts": "node scripts/guard-protected-contracts.mjs",
+    "catalog:integrity": "ts-node -r dotenv/config scripts/catalog-integrity-report.ts",
     "api:docs": "ts-node scripts/generate-api-docs.ts",
     "api:docs:check": "ts-node scripts/generate-api-docs.ts --check",
     "_comment:ops": "Operational scripts. -r dotenv/config is REQUIRED, not decoration: src/config.ts loads '../.env', which resolves correctly for dist/app.js but points one directory above the app for anything run from the repo root \u2014 so DB_PASSWORD is undefined and pg fails with 'SASL: client password must be a string'. Preloading dotenv reads ./.env from the CWD instead.",

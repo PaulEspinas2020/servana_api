@@ -2759,25 +2759,58 @@
     "/api/v1/search": {
       "get": {
         "operationId": "search.query",
-        "summary": "Cross-catalog search.",
+        "summary": "Search Categories, Subcategories and Services in one ranked result set.",
         "tags": [
           "search"
         ],
-        "deprecated": false,
-        "x-status": "planned",
-        "x-implemented": false,
+        "x-implemented": true,
         "x-idempotent": true,
-        "x-domain-service": "none yet — no backend search endpoint exists",
-        "x-legacy": [],
+        "x-domain-service": "services/catalogSearchService.searchCatalog",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/services/full",
+            "disposition": "CANONICALIZE"
+          }
+        ],
         "x-callers": {
-          "customerMobile": "planned",
+          "customerMobile": "legacy",
           "customerWeb": "planned",
           "providerMobile": "n/a",
           "providerWeb": "n/a",
           "admin": "n/a"
         },
-        "x-observability-owner": "search",
+        "x-observability-owner": "catalog",
         "security": [],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search term. Under 2 characters returns an empty result, not an error."
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated: category,subcategory,service. Default all three."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Max hits, 1-50, default 20."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success.",
@@ -2827,7 +2860,558 @@
             }
           }
         },
-        "description": "There is no backend search today. ServanaClient searches the catalog CLIENT-SIDE off the /api/services/full payload, which is why an empty level2 silently emptied the search cache. Building it belongs to the catalog/search domain command."
+        "description": "Every hit carries a qualified `ref` (`service:180`), so a mixed result set is keyable without the client inferring type from which array it arrived in. Aliases widen what a term MATCHES and never what exists — \"aircon\" and \"air conditioning\" return the same Services with the same ids."
+      }
+    },
+    "/api/v1/catalog/search": {
+      "get": {
+        "operationId": "catalog.search",
+        "summary": "Alias of /search, scoped under the catalog namespace.",
+        "tags": [
+          "catalog"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/catalogSearchService.searchCatalog",
+        "x-legacy": [],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "catalog",
+        "security": [],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search term."
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated entity types."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Max hits, 1-50, default 20."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SearchResults"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "The command named both paths as the target. Both are mounted and both call the SAME function — two paths, one implementation, which is a naming convenience rather than a second search. If it ever becomes two implementations it is a defect, and tests/v1-catalog-contract.test.ts asserts the shared handler."
+      }
+    },
+    "/api/v1/catalog/categories": {
+      "get": {
+        "operationId": "catalog.categories.list",
+        "summary": "Lightweight Category summaries with counts, no nested children.",
+        "tags": [
+          "catalog"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/catalogPublicService.listCategories",
+        "x-legacy": [],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "catalog",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CategorySummaryList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "The counterpart to GET /catalog, which returns the whole tree. A category chooser needing three names should not receive 95 services with prices and images."
+      }
+    },
+    "/api/v1/catalog/categories/{categoryId}": {
+      "get": {
+        "operationId": "catalog.categories.get",
+        "summary": "One Category by canonical catalog_categories.id.",
+        "tags": [
+          "catalog"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/catalogPublicService.getCategory",
+        "x-legacy": [],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "catalog",
+        "security": [],
+        "parameters": [
+          {
+            "name": "categoryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Canonical catalog_categories.id — NOT a service_families.id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CategoryDetail"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CATALOG_CATEGORY_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Not status-filtered: a deep link to a deactivated Category lands on an honest `available: false`."
+      }
+    },
+    "/api/v1/catalog/categories/{categoryId}/subcategories": {
+      "get": {
+        "operationId": "catalog.categories.subcategories",
+        "summary": "The Subcategories of one Category.",
+        "tags": [
+          "catalog"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/catalogPublicService.listSubcategoriesOfCategory",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/services/:serviceId/level2",
+            "disposition": "CANONICALIZE"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "legacy",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "catalog",
+        "security": [],
+        "parameters": [
+          {
+            "name": "categoryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Canonical catalog_categories.id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SubcategorySummaryList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CATALOG_CATEGORY_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "404s on a missing Category rather than returning an empty list — empty and missing are different facts."
+      }
+    },
+    "/api/v1/catalog/subcategories/{subcategoryId}": {
+      "get": {
+        "operationId": "catalog.subcategories.get",
+        "summary": "One Subcategory by canonical catalog_subcategories.id.",
+        "tags": [
+          "catalog"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/catalogPublicService.getSubcategory",
+        "x-legacy": [],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "catalog",
+        "security": [],
+        "parameters": [
+          {
+            "name": "subcategoryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Canonical catalog_subcategories.id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SubcategoryDetail"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CATALOG_SUBCATEGORY_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "`available` folds in the parent Category, as service detail folds in both ancestors."
+      }
+    },
+    "/api/v1/catalog/subcategories/{subcategoryId}/services": {
+      "get": {
+        "operationId": "catalog.subcategories.services",
+        "summary": "The Services of one Subcategory.",
+        "tags": [
+          "catalog"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/catalogPublicService.listServicesOfSubcategory",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/services/:serviceId/options-with-addons",
+            "disposition": "CANONICALIZE"
+          },
+          {
+            "method": "GET",
+            "path": "/api/:serviceId/options-with-addons",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "legacy",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "catalog",
+        "security": [],
+        "parameters": [
+          {
+            "name": "subcategoryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Canonical catalog_subcategories.id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CatalogServiceList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CATALOG_SUBCATEGORY_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/home": {
@@ -3218,7 +3802,9 @@
                   "AUDIENCE_MISMATCH",
                   "BOOKING_ACCESS_DENIED",
                   "BOOKING_NOT_FOUND",
+                  "CATALOG_CATEGORY_NOT_FOUND",
                   "CATALOG_SERVICE_NOT_FOUND",
+                  "CATALOG_SUBCATEGORY_NOT_FOUND",
                   "CONFLICT",
                   "FORBIDDEN",
                   "IDEMPOTENCY_KEY_INVALID",
@@ -3312,13 +3898,22 @@
           }
         }
       },
+      "CatalogRef": {
+        "type": "string",
+        "pattern": "^(category|subcategory|service|addon):[0-9]+$",
+        "description": "Qualified canonical reference, e.g. `service:180`. Four different things in this platform are called a \"service id\" — services.id, service_families.id, service_options.id and a subcategory id — and three are integers in overlapping ranges. A ref cannot be read as the wrong one. Prefer it as a cache key and for cross-entity result sets; `id` remains authoritative for path parameters."
+      },
       "CatalogService": {
         "type": "object",
         "required": [
+          "ref",
           "id",
           "name"
         ],
         "properties": {
+          "ref": {
+            "$ref": "#/components/schemas/CatalogRef"
+          },
           "id": {
             "type": "integer",
             "description": "Canonical services.id — THE bookable identity."
@@ -3374,6 +3969,9 @@
       "CatalogSubcategory": {
         "type": "object",
         "properties": {
+          "ref": {
+            "$ref": "#/components/schemas/CatalogRef"
+          },
           "id": {
             "type": "integer"
           },
@@ -3398,6 +3996,9 @@
       "CatalogCategory": {
         "type": "object",
         "properties": {
+          "ref": {
+            "$ref": "#/components/schemas/CatalogRef"
+          },
           "id": {
             "type": "integer"
           },
@@ -3483,6 +4084,290 @@
             }
           }
         ]
+      },
+      "CategorySummary": {
+        "type": "object",
+        "required": [
+          "ref",
+          "id",
+          "name"
+        ],
+        "properties": {
+          "ref": {
+            "$ref": "#/components/schemas/CatalogRef"
+          },
+          "id": {
+            "type": "integer",
+            "description": "Canonical catalog_categories.id."
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string",
+            "description": "Globally unique."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "imageUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayOrder": {
+            "type": "integer"
+          },
+          "subcategoryCount": {
+            "type": "integer"
+          },
+          "serviceCount": {
+            "type": "integer"
+          }
+        },
+        "description": "No nested children. Use /catalog/categories/{id}/subcategories for the next level."
+      },
+      "CategorySummaryList": {
+        "type": "object",
+        "required": [
+          "categories"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CategorySummary"
+            }
+          }
+        }
+      },
+      "CategoryDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CategorySummary"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "available": {
+                "type": "boolean",
+                "description": "Detail is NOT status-filtered, so a deep link to a deactivated Category resolves honestly."
+              }
+            }
+          }
+        ]
+      },
+      "SubcategorySummary": {
+        "type": "object",
+        "required": [
+          "ref",
+          "id",
+          "name"
+        ],
+        "properties": {
+          "ref": {
+            "$ref": "#/components/schemas/CatalogRef"
+          },
+          "id": {
+            "type": "integer",
+            "description": "Canonical catalog_subcategories.id."
+          },
+          "categoryId": {
+            "type": "integer"
+          },
+          "categoryName": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string",
+            "description": "Unique PER CATEGORY, not globally."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "imageUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayOrder": {
+            "type": "integer"
+          },
+          "serviceCount": {
+            "type": "integer"
+          }
+        }
+      },
+      "SubcategorySummaryList": {
+        "type": "object",
+        "required": [
+          "subcategories"
+        ],
+        "properties": {
+          "subcategories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubcategorySummary"
+            }
+          }
+        }
+      },
+      "SubcategoryDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SubcategorySummary"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "available": {
+                "type": "boolean",
+                "description": "Folds in the parent Category status."
+              }
+            }
+          }
+        ]
+      },
+      "SearchHit": {
+        "type": "object",
+        "required": [
+          "ref",
+          "type",
+          "id",
+          "name",
+          "score"
+        ],
+        "properties": {
+          "ref": {
+            "$ref": "#/components/schemas/CatalogRef"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "category",
+              "subcategory",
+              "service"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "description": "Canonical id WITHIN its type. Read `ref` to key across types."
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "context": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Parent path, e.g. \"Personal Care > Facial\"."
+          },
+          "imageUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bookable": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Services only. A Category cannot be booked."
+          },
+          "status": {
+            "type": "string"
+          },
+          "displayOrder": {
+            "type": "integer"
+          },
+          "basePrice": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "categoryId": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "subcategoryId": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "score": {
+            "type": "integer",
+            "description": "4 exact, 3 name-prefix, 2 word-prefix, 1 contains."
+          },
+          "matchedTerm": {
+            "type": "string",
+            "description": "The query, or the alias that widened it. Makes a surprising hit explainable."
+          }
+        }
+      },
+      "SearchResults": {
+        "type": "object",
+        "required": [
+          "query",
+          "hits",
+          "total"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "expandedTerms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every term the query was widened to via the alias table."
+          },
+          "total": {
+            "type": "integer",
+            "description": "Total matches before the limit."
+          },
+          "hits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            }
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "category": {
+                "type": "integer"
+              },
+              "subcategory": {
+                "type": "integer"
+              },
+              "service": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "description": "Aliases widen what a term MATCHES, never what exists. \"aircon\" and \"air conditioning\" return the same Services with the same ids."
       },
       "Identity": {
         "type": "object",
@@ -3944,10 +4829,6 @@
         },
         "description": "Deliberately identical whether or not the account exists. The difference between \"that address is not registered\" and \"sent\" is a free membership check."
       },
-      "SearchResults": {
-        "type": "object",
-        "description": "PLANNED — no backend search exists today."
-      },
       "HomeFeed": {
         "type": "object",
         "description": "PLANNED — composed client-side today."
@@ -4008,6 +4889,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 27,
-  "x-total-count": 32
+  "x-implemented-count": 34,
+  "x-total-count": 38
 }

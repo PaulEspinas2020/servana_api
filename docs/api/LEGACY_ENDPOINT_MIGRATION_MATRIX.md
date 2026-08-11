@@ -7,11 +7,11 @@ Every route the app mounts outside `/api/v1`: **520**.
 
 | Disposition | Count | Meaning |
 |---|---:|---|
-| `ALIAS_TEMPORARILY` | 34 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
-| `CANONICALIZE` | 4 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
+| `ALIAS_TEMPORARILY` | 35 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
+| `CANONICALIZE` | 6 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
 | `ROLE_SPECIFIC` | 4 | Legitimately separate: different auth, action or payload — same domain service. |
 | `RETIRE` | 0 | No caller and no successor. Delete once telemetry confirms zero traffic. |
-| `KEEP` | 478 | Not a duplicate of anything canonical. Untouched by this command. |
+| `KEEP` | 475 | Not a duplicate of anything canonical. Untouched by this command. |
 
 ## Retirement criteria
 
@@ -27,7 +27,7 @@ build knows how to call.
 
 Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 
-## ALIAS_TEMPORARILY (34)
+## ALIAS_TEMPORARILY (35)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
@@ -48,6 +48,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `POST` | `/api/user/notifications/mark-all-read` | `/api/v1/notifications/read-all` | Same service; v1 uses the resource-shaped path. |
 | `GET` | `/api/user/notifications` | `/api/v1/notifications` | Customer clients call this today. |
 | `PATCH` | `/api/user/notifications/:key/read` | `/api/v1/notifications/:key/read` | Same service and the same key validation. The path differs only in the /user prefix, which named the caller rather than the resource. |
+| `GET` | `/api/:serviceId/options-with-addons` | `/api/v1/catalog/subcategories/:subcategoryId/services` | The original un-prefixed form, and what ServanaWorker calls in production. It cannot be retired until that app moves; the customer app followed the convention instead of the exception and 404d for months as a result. |
 | `GET` | `/api/catalog` | `/api/v1/catalog` | Shadowed by booking.routes GET /:id until this command reordered the mounts. Never deployed, has no installed caller, and is superseded by this route — but it stays because the unpushed 2bdaf0d advertised it and removing a path in the same session it was fixed would be two contradictory signals to the Client team. |
 | `GET` | `/api/catalog/summary` | `/api/v1/catalog/summary` | Same router, superseded by this route. |
 | `GET` | `/api/catalog/services` | `/api/v1/catalog/services` | Same router, superseded by this route. |
@@ -66,11 +67,13 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `GET` | `/api/providers/:providerUid/reviews` | `/api/v1/reviews/providers/:providerUid` | Same service. The legacy form does not clamp limit/offset; v1 does (BE-10). |
 | `GET` | `/api/providers/:providerUid/rating` | `/api/v1/reviews/providers/:providerUid/rating` | Same service. Kept because it sits beside the reviews list that a future customer client may already be calling; retiring one without the other would be half a change. |
 
-## CANONICALIZE (4)
+## CANONICALIZE (6)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
 | `GET` | `/api/services/full` | `/api/v1/catalog` | The legacy LEVEL-2/LEVEL-3 projection the customer app reads today. Cannot be retired until ServanaClient migrates: it is the only catalog either Flutter app has ever consumed. |
+| `GET` | `/api/services/:serviceId/level2` | `/api/v1/catalog/categories/:categoryId/subcategories` | The legacy equivalent, and NOT a rename. Its `:serviceId` is a service_families.id and it returns DISTINCT level_2 STRINGS with no ids at all. This route takes a catalog_categories.id and returns identified Subcategories. Different input, different output, different table. |
+| `GET` | `/api/services/:serviceId/options-with-addons` | `/api/v1/catalog/subcategories/:subcategoryId/services` | The legacy shape. Its `:serviceId` is a service_families.id and it returns level_2 / level_3 option groups, not Services. ServanaWorker calls the un-prefixed twin instead, which is the only catalog route without the /services/ prefix its neighbours use. |
 | `GET` | `/api/chat/conversations` | `/api/v1/conversations` | Chat endpoints do NOT use the {status,data} envelope — the store reads a top-level `conversations` key. Re-enveloping under v1 is a real client change, so it is sequenced with the messaging domain command rather than bundled here. |
 | `GET` | `/api/provider/earnings` | `/api/v1/provider/earnings` | Provider Web reads this. |
 | `GET` | `/api/admin/bookings` | `/api/v1/admin/bookings` | The admin portal is the only caller and deploys from git on every push, so it is the cheapest client to migrate — but it is also the only one whose list carries permission-scoped columns, so the DTO needs the permission model resolved first. |
@@ -84,7 +87,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `GET` | `/api/user/profile` | `/api/v1/me` | Not a duplicate: returns the CUSTOMER profile aggregate (addresses, preferences), not the identity record. Retained; a v1 successor belongs in the customer-profile domain command, not here. |
 | `GET` | `/api/provider/bookings/:bookingId/timeline` | `/api/v1/bookings/:bookingId/timeline` | Genuinely role-specific: the shared builder is written from the provider's seat, where "YOU" means the provider. Same domain service, different voicing. Documented rather than merged. |
 
-## KEEP (478)
+## KEEP (475)
 
 Mounted, not superseded, not a duplicate. Listed so the inventory is complete and so a
 later domain command starts from a route list rather than from a grep.
@@ -109,9 +112,6 @@ later domain command starts from a route list rather than from a grep.
 | `DELETE` | `/api/user/notifications/:key` | `src/routes/user.route.ts:51` |
 | `GET` | `/api/services` | `src/routes/service.route.ts:8` |
 | `GET` | `/api/services/list` | `src/routes/service.route.ts:9` |
-| `GET` | `/api/services/:serviceId/level2` | `src/routes/service.route.ts:11` |
-| `GET` | `/api/:serviceId/options-with-addons` | `src/routes/service.route.ts:23` |
-| `GET` | `/api/services/:serviceId/options-with-addons` | `src/routes/service.route.ts:24` |
 | `GET` | `/api/services/:serviceId/branches` | `src/routes/service.route.ts:25` |
 | `GET` | `/api/branches/:branchId/slots` | `src/routes/service.route.ts:26` |
 | `GET` | `/api/services/:serviceId/coverage-geo` | `src/routes/service.route.ts:27` |

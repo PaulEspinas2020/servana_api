@@ -247,11 +247,111 @@ export interface GeneratedFile {
   content: string;
 }
 
+// ─── CATALOG_ENDPOINT_REGISTRY.md ─────────────────────────────────────────────
+
+/**
+ * The catalog + search slice of the registry, with the identifier semantics
+ * spelled out per parameter.
+ *
+ * Generated rather than written, for the same reason as the main registry — but
+ * the extra column is the point of this one. Four different things in this
+ * platform are called a "service id", so a registry that lists paths without
+ * saying which table each parameter resolves against is the document that
+ * causes the confusion rather than the one that ends it.
+ */
+function catalogRegistryMarkdown(): string {
+  const entries = V1_CONTRACT.filter((e) => e.domain === 'catalog' || e.domain === 'search');
+
+  /** Which table each canonical path parameter resolves against. */
+  const RESOLVES: Record<string, string> = {
+    serviceId: '`services.id` — the canonical Specific Service (95 rows)',
+    categoryId: '`catalog_categories.id` (3 rows)',
+    subcategoryId: '`catalog_subcategories.id` (12 rows)',
+  };
+
+  const L: string[] = [];
+  L.push('# Catalog Endpoint Registry');
+  L.push('');
+  L.push('> GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand.');
+  L.push('');
+  L.push(`**${entries.length} canonical catalog and search endpoints.** All public, all read-only.`);
+  L.push('');
+  L.push('Mutation lives on `/api/admin/catalog/*` behind `verifyAuth → verifyRoles([1]) →');
+  L.push('requirePermission`. There is no write handler on the public surface and there must not be —');
+  L.push('server-side authorization is not satisfiable on an unauthenticated route.');
+  L.push('');
+
+  L.push('## Endpoints');
+  L.push('');
+  L.push('| Method | Path | Response | Errors |');
+  L.push('|---|---|---|---|');
+  for (const e of entries) {
+    L.push(
+      `| \`${e.method.toUpperCase()}\` | \`${fullPath(e)}\` | \`${e.responseSchema}\` ` +
+        `| ${allErrorsFor(e).map((c) => `\`${c}\``).join(', ') || '—'} |`,
+    );
+  }
+  L.push('');
+
+  L.push('## What every path parameter resolves against');
+  L.push('');
+  L.push('This is the table that matters. `GET /api/services/:serviceId/level2` resolves its');
+  L.push('parameter against `service_families.id`; `GET /api/v1/catalog/services/:serviceId`');
+  L.push('resolves the same-named parameter against `services.id`. The integer `3` is meaningful');
+  L.push('to both and means different things to each.');
+  L.push('');
+  L.push('| Endpoint | Parameter | Resolves against |');
+  L.push('|---|---|---|');
+  for (const e of entries) {
+    for (const p of e.params ?? []) {
+      L.push(`| \`${fullPath(e)}\` | \`${p.name}\` | ${RESOLVES[p.name] ?? esc(p.description)} |`);
+    }
+  }
+  L.push('');
+  L.push('**No canonical endpoint accepts a `service_families.id` or a `service_options.id`.**');
+  L.push('`tests/v1-catalog-contract.test.ts` asserts it against the contract, not against prose.');
+  L.push('');
+
+  L.push('## Domain services');
+  L.push('');
+  L.push('| Endpoint | Delegates to |');
+  L.push('|---|---|');
+  for (const e of entries) {
+    L.push(`| \`${e.method.toUpperCase()} ${fullPath(e)}\` | \`${esc(e.domainService)}\` |`);
+  }
+  L.push('');
+
+  L.push('## Caller matrix');
+  L.push('');
+  L.push(`| Endpoint | ${CLIENTS.map((c) => CLIENT_LABEL[c]).join(' | ')} |`);
+  L.push(`|---|${CLIENTS.map(() => '---').join('|')}|`);
+  for (const e of entries) {
+    L.push(`| \`${fullPath(e)}\` | ${CLIENTS.map((c) => CALLER_MARK[e.callers[c]]).join(' | ')} |`);
+  }
+  L.push('');
+  L.push('Legend: ✅ migrated · ⏳ still on a legacy route · · planned · — not applicable.');
+  L.push('');
+
+  const legacy = entries.flatMap((e) => e.legacy.map((l) => ({ ...l, canonical: fullPath(e) })));
+  L.push('## Legacy catalog routes this replaces');
+  L.push('');
+  L.push('| Method | Legacy path | Disposition | Canonical |');
+  L.push('|---|---|---|---|');
+  for (const l of legacy) {
+    L.push(`| \`${l.method.toUpperCase()}\` | \`${l.path}\` | \`${l.disposition}\` | \`${l.canonical}\` |`);
+  }
+  L.push('');
+  L.push('Full reasoning per route: [`CATALOG_LEGACY_MIGRATION_MAP.md`](CATALOG_LEGACY_MIGRATION_MAP.md).');
+  L.push('');
+  return L.join('\n');
+}
+
 export function generateAll(): GeneratedFile[] {
   return [
     { relPath: 'docs/api/openapi.v1.json', content: openApiJson() },
     { relPath: 'docs/api/API_ENDPOINT_REGISTRY.md', content: registryMarkdown() },
     { relPath: 'docs/api/LEGACY_ENDPOINT_MIGRATION_MATRIX.md', content: matrixMarkdown() },
+    { relPath: 'docs/api/CATALOG_ENDPOINT_REGISTRY.md', content: catalogRegistryMarkdown() },
   ];
 }
 

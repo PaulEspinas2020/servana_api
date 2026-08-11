@@ -47,7 +47,14 @@ export const V1_ERROR_STATUS = {
   INTERNAL: 500,
 
   // ── Catalog ────────────────────────────────────────────────────────────────
+  //
+  // One code per LEVEL of the hierarchy, deliberately. A single
+  // CATALOG_NOT_FOUND would leave a client unable to tell "that subcategory is
+  // gone" from "that service is gone" — which are different screens and
+  // different recoveries.
   CATALOG_SERVICE_NOT_FOUND: 404,
+  CATALOG_CATEGORY_NOT_FOUND: 404,
+  CATALOG_SUBCATEGORY_NOT_FOUND: 404,
 
   // ── Bookings ───────────────────────────────────────────────────────────────
   BOOKING_NOT_FOUND: 404,

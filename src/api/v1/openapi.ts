@@ -73,10 +73,22 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  CatalogRef: {
+    type: 'string',
+    pattern: '^(category|subcategory|service|addon):[0-9]+$',
+    description:
+      'Qualified canonical reference, e.g. `service:180`. Four different things in this platform ' +
+      'are called a "service id" — services.id, service_families.id, service_options.id and a ' +
+      'subcategory id — and three are integers in overlapping ranges. A ref cannot be read as the ' +
+      'wrong one. Prefer it as a cache key and for cross-entity result sets; `id` remains ' +
+      'authoritative for path parameters.',
+  },
+
   CatalogService: {
     type: 'object',
-    required: ['id', 'name'],
+    required: ['ref', 'id', 'name'],
     properties: {
+      ref: { $ref: '#/components/schemas/CatalogRef' },
       id: { type: 'integer', description: 'Canonical services.id — THE bookable identity.' },
       subcategoryId: { type: 'integer' },
       name: { type: 'string' },
@@ -98,6 +110,7 @@ export const SCHEMAS: Record<string, unknown> = {
   CatalogSubcategory: {
     type: 'object',
     properties: {
+      ref: { $ref: '#/components/schemas/CatalogRef' },
       id: { type: 'integer' },
       categoryId: { type: 'integer' },
       name: { type: 'string' },
@@ -109,6 +122,7 @@ export const SCHEMAS: Record<string, unknown> = {
   CatalogCategory: {
     type: 'object',
     properties: {
+      ref: { $ref: '#/components/schemas/CatalogRef' },
       id: { type: 'integer' },
       name: { type: 'string' },
       slug: { type: 'string', description: 'Globally unique.' },
@@ -151,6 +165,127 @@ export const SCHEMAS: Record<string, unknown> = {
         },
       },
     ],
+  },
+
+  CategorySummary: {
+    type: 'object',
+    required: ['ref', 'id', 'name'],
+    properties: {
+      ref: { $ref: '#/components/schemas/CatalogRef' },
+      id: { type: 'integer', description: 'Canonical catalog_categories.id.' },
+      name: { type: 'string' },
+      slug: { type: 'string', description: 'Globally unique.' },
+      description: { type: ['string', 'null'] },
+      imageUrl: { type: ['string', 'null'] },
+      displayOrder: { type: 'integer' },
+      subcategoryCount: { type: 'integer' },
+      serviceCount: { type: 'integer' },
+    },
+    description: 'No nested children. Use /catalog/categories/{id}/subcategories for the next level.',
+  },
+
+  CategorySummaryList: {
+    type: 'object',
+    required: ['categories'],
+    properties: { categories: { type: 'array', items: { $ref: '#/components/schemas/CategorySummary' } } },
+  },
+
+  CategoryDetail: {
+    allOf: [
+      { $ref: '#/components/schemas/CategorySummary' },
+      {
+        type: 'object',
+        properties: {
+          available: {
+            type: 'boolean',
+            description: 'Detail is NOT status-filtered, so a deep link to a deactivated Category resolves honestly.',
+          },
+        },
+      },
+    ],
+  },
+
+  SubcategorySummary: {
+    type: 'object',
+    required: ['ref', 'id', 'name'],
+    properties: {
+      ref: { $ref: '#/components/schemas/CatalogRef' },
+      id: { type: 'integer', description: 'Canonical catalog_subcategories.id.' },
+      categoryId: { type: 'integer' },
+      categoryName: { type: 'string' },
+      name: { type: 'string' },
+      slug: { type: 'string', description: 'Unique PER CATEGORY, not globally.' },
+      description: { type: ['string', 'null'] },
+      imageUrl: { type: ['string', 'null'] },
+      displayOrder: { type: 'integer' },
+      serviceCount: { type: 'integer' },
+    },
+  },
+
+  SubcategorySummaryList: {
+    type: 'object',
+    required: ['subcategories'],
+    properties: { subcategories: { type: 'array', items: { $ref: '#/components/schemas/SubcategorySummary' } } },
+  },
+
+  SubcategoryDetail: {
+    allOf: [
+      { $ref: '#/components/schemas/SubcategorySummary' },
+      {
+        type: 'object',
+        properties: {
+          available: { type: 'boolean', description: 'Folds in the parent Category status.' },
+        },
+      },
+    ],
+  },
+
+  SearchHit: {
+    type: 'object',
+    required: ['ref', 'type', 'id', 'name', 'score'],
+    properties: {
+      ref: { $ref: '#/components/schemas/CatalogRef' },
+      type: { type: 'string', enum: ['category', 'subcategory', 'service'] },
+      id: { type: 'integer', description: 'Canonical id WITHIN its type. Read `ref` to key across types.' },
+      name: { type: 'string' },
+      slug: { type: 'string' },
+      context: { type: ['string', 'null'], description: 'Parent path, e.g. "Personal Care > Facial".' },
+      imageUrl: { type: ['string', 'null'] },
+      bookable: { type: ['boolean', 'null'], description: 'Services only. A Category cannot be booked.' },
+      status: { type: 'string' },
+      displayOrder: { type: 'integer' },
+      basePrice: { type: ['number', 'null'] },
+      categoryId: { type: ['integer', 'null'] },
+      subcategoryId: { type: ['integer', 'null'] },
+      score: { type: 'integer', description: '4 exact, 3 name-prefix, 2 word-prefix, 1 contains.' },
+      matchedTerm: { type: 'string', description: 'The query, or the alias that widened it. Makes a surprising hit explainable.' },
+    },
+  },
+
+  SearchResults: {
+    type: 'object',
+    required: ['query', 'hits', 'total'],
+    properties: {
+      query: { type: 'string' },
+      expandedTerms: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Every term the query was widened to via the alias table.',
+      },
+      total: { type: 'integer', description: 'Total matches before the limit.' },
+      hits: { type: 'array', items: { $ref: '#/components/schemas/SearchHit' } },
+      counts: {
+        type: 'object',
+        properties: {
+          category: { type: 'integer' },
+          subcategory: { type: 'integer' },
+          service: { type: 'integer' },
+        },
+      },
+    },
+    description:
+      'Aliases widen what a term MATCHES, never what exists. "aircon" and "air conditioning" ' +
+      'return the same Services with the same ids.',
   },
 
   Identity: {
@@ -386,7 +521,6 @@ export const SCHEMAS: Record<string, unknown> = {
   },
 
   // ── Planned. Documented so the migration matrix can name a successor. ──────
-  SearchResults: { type: 'object', description: 'PLANNED — no backend search exists today.' },
   HomeFeed: { type: 'object', description: 'PLANNED — composed client-side today.' },
   ConversationList: { type: 'object', description: 'PLANNED — owned by the messaging domain command.' },
   EarningsSummary: { type: 'object', description: 'PLANNED — owned by the provider-earnings domain command.' },

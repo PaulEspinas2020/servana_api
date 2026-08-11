@@ -964,20 +964,184 @@ export const V1_CONTRACT: ContractEntry[] = [
     domain: 'search',
     method: 'get',
     path: '/search',
-    summary: 'Cross-catalog search.',
+    summary: 'Search Categories, Subcategories and Services in one ranked result set.',
     auth: 'public',
     idempotent: true,
     responseSchema: 'SearchResults',
     errors: ['VALIDATION_FAILED'],
-    status: 'planned',
-    domainService: 'none yet — no backend search endpoint exists',
-    legacy: [],
-    callers: { ...ALL_PLANNED, admin: 'n/a', providerMobile: 'n/a', providerWeb: 'n/a' },
-    observability: 'search',
+    query: [
+      { name: 'q', type: 'string', required: true, description: 'Search term. Under 2 characters returns an empty result, not an error.' },
+      { name: 'types', type: 'string', required: false, description: 'Comma-separated: category,subcategory,service. Default all three.' },
+      { name: 'limit', type: 'integer', required: false, description: 'Max hits, 1-50, default 20.' },
+    ],
+    status: 'implemented',
+    domainService: 'services/catalogSearchService.searchCatalog',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/services/full',
+        disposition: 'CANONICALIZE',
+        note:
+          'Not a search endpoint — it is the whole legacy catalog, which ServanaClient downloads ' +
+          'and searches ON THE DEVICE. That is why one absent `level2` key emptied the search ' +
+          'cache and every query rendered "No services match your search". Retiring it needs the ' +
+          'client to move to this route AND to /api/v1/catalog.',
+      },
+    ],
+    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'n/a', providerWeb: 'n/a', admin: 'n/a' },
+    observability: 'catalog',
     notes:
-      'There is no backend search today. ServanaClient searches the catalog CLIENT-SIDE off ' +
-      'the /api/services/full payload, which is why an empty level2 silently emptied the search ' +
-      'cache. Building it belongs to the catalog/search domain command.',
+      'Every hit carries a qualified `ref` (`service:180`), so a mixed result set is keyable ' +
+      'without the client inferring type from which array it arrived in. Aliases widen what a ' +
+      'term MATCHES and never what exists — "aircon" and "air conditioning" return the same ' +
+      'Services with the same ids.',
+  },
+  {
+    id: 'catalog.search',
+    domain: 'catalog',
+    method: 'get',
+    path: '/catalog/search',
+    summary: 'Alias of /search, scoped under the catalog namespace.',
+    auth: 'public',
+    idempotent: true,
+    responseSchema: 'SearchResults',
+    errors: ['VALIDATION_FAILED'],
+    query: [
+      { name: 'q', type: 'string', required: true, description: 'Search term.' },
+      { name: 'types', type: 'string', required: false, description: 'Comma-separated entity types.' },
+      { name: 'limit', type: 'integer', required: false, description: 'Max hits, 1-50, default 20.' },
+    ],
+    status: 'implemented',
+    domainService: 'services/catalogSearchService.searchCatalog',
+    legacy: [],
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'n/a', providerWeb: 'n/a', admin: 'n/a' },
+    observability: 'catalog',
+    notes:
+      'The command named both paths as the target. Both are mounted and both call the SAME ' +
+      'function — two paths, one implementation, which is a naming convenience rather than a ' +
+      'second search. If it ever becomes two implementations it is a defect, and ' +
+      'tests/v1-catalog-contract.test.ts asserts the shared handler.',
+  },
+  {
+    id: 'catalog.categories.list',
+    domain: 'catalog',
+    method: 'get',
+    path: '/catalog/categories',
+    summary: 'Lightweight Category summaries with counts, no nested children.',
+    auth: 'public',
+    idempotent: true,
+    responseSchema: 'CategorySummaryList',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/catalogPublicService.listCategories',
+    legacy: [],
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'n/a', providerWeb: 'n/a', admin: 'n/a' },
+    observability: 'catalog',
+    notes:
+      'The counterpart to GET /catalog, which returns the whole tree. A category chooser needing ' +
+      'three names should not receive 95 services with prices and images.',
+  },
+  {
+    id: 'catalog.categories.get',
+    domain: 'catalog',
+    method: 'get',
+    path: '/catalog/categories/:categoryId',
+    summary: 'One Category by canonical catalog_categories.id.',
+    auth: 'public',
+    idempotent: true,
+    responseSchema: 'CategoryDetail',
+    errors: ['VALIDATION_FAILED', 'CATALOG_CATEGORY_NOT_FOUND'],
+    params: [{ name: 'categoryId', type: 'integer', description: 'Canonical catalog_categories.id — NOT a service_families.id.' }],
+    status: 'implemented',
+    domainService: 'services/catalogPublicService.getCategory',
+    legacy: [],
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'n/a', providerWeb: 'n/a', admin: 'n/a' },
+    observability: 'catalog',
+    notes: 'Not status-filtered: a deep link to a deactivated Category lands on an honest `available: false`.',
+  },
+  {
+    id: 'catalog.categories.subcategories',
+    domain: 'catalog',
+    method: 'get',
+    path: '/catalog/categories/:categoryId/subcategories',
+    summary: 'The Subcategories of one Category.',
+    auth: 'public',
+    idempotent: true,
+    responseSchema: 'SubcategorySummaryList',
+    errors: ['VALIDATION_FAILED', 'CATALOG_CATEGORY_NOT_FOUND'],
+    params: [{ name: 'categoryId', type: 'integer', description: 'Canonical catalog_categories.id.' }],
+    status: 'implemented',
+    domainService: 'services/catalogPublicService.listSubcategoriesOfCategory',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/services/:serviceId/level2',
+        disposition: 'CANONICALIZE',
+        note:
+          'The legacy equivalent, and NOT a rename. Its `:serviceId` is a service_families.id ' +
+          'and it returns DISTINCT level_2 STRINGS with no ids at all. This route takes a ' +
+          'catalog_categories.id and returns identified Subcategories. Different input, different ' +
+          'output, different table.',
+      },
+    ],
+    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'n/a', providerWeb: 'n/a', admin: 'n/a' },
+    observability: 'catalog',
+    notes: '404s on a missing Category rather than returning an empty list — empty and missing are different facts.',
+  },
+  {
+    id: 'catalog.subcategories.get',
+    domain: 'catalog',
+    method: 'get',
+    path: '/catalog/subcategories/:subcategoryId',
+    summary: 'One Subcategory by canonical catalog_subcategories.id.',
+    auth: 'public',
+    idempotent: true,
+    responseSchema: 'SubcategoryDetail',
+    errors: ['VALIDATION_FAILED', 'CATALOG_SUBCATEGORY_NOT_FOUND'],
+    params: [{ name: 'subcategoryId', type: 'integer', description: 'Canonical catalog_subcategories.id.' }],
+    status: 'implemented',
+    domainService: 'services/catalogPublicService.getSubcategory',
+    legacy: [],
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'n/a', providerWeb: 'n/a', admin: 'n/a' },
+    observability: 'catalog',
+    notes: '`available` folds in the parent Category, as service detail folds in both ancestors.',
+  },
+  {
+    id: 'catalog.subcategories.services',
+    domain: 'catalog',
+    method: 'get',
+    path: '/catalog/subcategories/:subcategoryId/services',
+    summary: 'The Services of one Subcategory.',
+    auth: 'public',
+    idempotent: true,
+    responseSchema: 'CatalogServiceList',
+    errors: ['VALIDATION_FAILED', 'CATALOG_SUBCATEGORY_NOT_FOUND'],
+    params: [{ name: 'subcategoryId', type: 'integer', description: 'Canonical catalog_subcategories.id.' }],
+    status: 'implemented',
+    domainService: 'services/catalogPublicService.listServicesOfSubcategory',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/services/:serviceId/options-with-addons',
+        disposition: 'CANONICALIZE',
+        note:
+          'The legacy shape. Its `:serviceId` is a service_families.id and it returns level_2 / ' +
+          'level_3 option groups, not Services. ServanaWorker calls the un-prefixed twin ' +
+          'instead, which is the only catalog route without the /services/ prefix its ' +
+          'neighbours use.',
+      },
+      {
+        method: 'get',
+        path: '/api/:serviceId/options-with-addons',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'The original un-prefixed form, and what ServanaWorker calls in production. It cannot ' +
+          'be retired until that app moves; the customer app followed the convention instead of ' +
+          'the exception and 404d for months as a result.',
+      },
+    ],
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'legacy', providerWeb: 'n/a', admin: 'n/a' },
+    observability: 'catalog',
   },
   {
     id: 'home.feed',

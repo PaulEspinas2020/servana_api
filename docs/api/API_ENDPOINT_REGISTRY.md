@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**27 implemented** · **5 planned** · 32 total.
+**34 implemented** · **4 planned** · 38 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -18,6 +18,12 @@ Caller legend: ✅ migrated · ⏳ still on a legacy route · · planned · — 
 | `GET` | `/api/v1/catalog/summary` | **live** | public | — | `CatalogSummary` | yes | catalog |
 | `GET` | `/api/v1/catalog/services` | **live** | public | — | `CatalogServiceList` | yes | catalog |
 | `GET` | `/api/v1/catalog/services/:serviceId` | **live** | public | — | `CatalogServiceDetail` | yes | catalog |
+| `GET` | `/api/v1/catalog/search` | **live** | public | — | `SearchResults` | yes | catalog |
+| `GET` | `/api/v1/catalog/categories` | **live** | public | — | `CategorySummaryList` | yes | catalog |
+| `GET` | `/api/v1/catalog/categories/:categoryId` | **live** | public | — | `CategoryDetail` | yes | catalog |
+| `GET` | `/api/v1/catalog/categories/:categoryId/subcategories` | **live** | public | — | `SubcategorySummaryList` | yes | catalog |
+| `GET` | `/api/v1/catalog/subcategories/:subcategoryId` | **live** | public | — | `SubcategoryDetail` | yes | catalog |
+| `GET` | `/api/v1/catalog/subcategories/:subcategoryId/services` | **live** | public | — | `CatalogServiceList` | yes | catalog |
 
 ### `GET /api/v1/catalog`
 
@@ -62,6 +68,78 @@ One service by its canonical services.id, including its place in the hierarchy.
 - **Callers** — Cust Mobile · · Cust Web · · Prov Mobile — · Prov Web — · Admin —
 - **Legacy it replaces**
   - `GET /api/catalog/services/:serviceId` — **ALIAS_TEMPORARILY** — Same router, superseded by this route.
+
+### `GET /api/v1/catalog/search`
+
+Alias of /search, scoped under the catalog namespace.
+
+> The command named both paths as the target. Both are mounted and both call the SAME function — two paths, one implementation, which is a naming convenience rather than a second search. If it ever becomes two implementations it is a defect, and tests/v1-catalog-contract.test.ts asserts the shared handler.
+
+- **Domain service** — `services/catalogSearchService.searchCatalog`
+- **Error codes** — `INTERNAL`, `VALIDATION_FAILED`
+- **Query** — `q` (string, required) Search term.; `types` (string) Comma-separated entity types.; `limit` (integer) Max hits, 1-50, default 20.
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile — · Prov Web — · Admin —
+- **Legacy it replaces** — none; new capability.
+
+### `GET /api/v1/catalog/categories`
+
+Lightweight Category summaries with counts, no nested children.
+
+> The counterpart to GET /catalog, which returns the whole tree. A category chooser needing three names should not receive 95 services with prices and images.
+
+- **Domain service** — `services/catalogPublicService.listCategories`
+- **Error codes** — `INTERNAL`
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile — · Prov Web — · Admin —
+- **Legacy it replaces** — none; new capability.
+
+### `GET /api/v1/catalog/categories/:categoryId`
+
+One Category by canonical catalog_categories.id.
+
+> Not status-filtered: a deep link to a deactivated Category lands on an honest `available: false`.
+
+- **Domain service** — `services/catalogPublicService.getCategory`
+- **Error codes** — `CATALOG_CATEGORY_NOT_FOUND`, `INTERNAL`, `VALIDATION_FAILED`
+- **Path params** — `categoryId` (integer) Canonical catalog_categories.id — NOT a service_families.id.
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile — · Prov Web — · Admin —
+- **Legacy it replaces** — none; new capability.
+
+### `GET /api/v1/catalog/categories/:categoryId/subcategories`
+
+The Subcategories of one Category.
+
+> 404s on a missing Category rather than returning an empty list — empty and missing are different facts.
+
+- **Domain service** — `services/catalogPublicService.listSubcategoriesOfCategory`
+- **Error codes** — `CATALOG_CATEGORY_NOT_FOUND`, `INTERNAL`, `VALIDATION_FAILED`
+- **Path params** — `categoryId` (integer) Canonical catalog_categories.id.
+- **Callers** — Cust Mobile ⏳ · Cust Web · · Prov Mobile — · Prov Web — · Admin —
+- **Legacy it replaces**
+  - `GET /api/services/:serviceId/level2` — **CANONICALIZE** — The legacy equivalent, and NOT a rename. Its `:serviceId` is a service_families.id and it returns DISTINCT level_2 STRINGS with no ids at all. This route takes a catalog_categories.id and returns identified Subcategories. Different input, different output, different table.
+
+### `GET /api/v1/catalog/subcategories/:subcategoryId`
+
+One Subcategory by canonical catalog_subcategories.id.
+
+> `available` folds in the parent Category, as service detail folds in both ancestors.
+
+- **Domain service** — `services/catalogPublicService.getSubcategory`
+- **Error codes** — `CATALOG_SUBCATEGORY_NOT_FOUND`, `INTERNAL`, `VALIDATION_FAILED`
+- **Path params** — `subcategoryId` (integer) Canonical catalog_subcategories.id.
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile — · Prov Web — · Admin —
+- **Legacy it replaces** — none; new capability.
+
+### `GET /api/v1/catalog/subcategories/:subcategoryId/services`
+
+The Services of one Subcategory.
+
+- **Domain service** — `services/catalogPublicService.listServicesOfSubcategory`
+- **Error codes** — `CATALOG_SUBCATEGORY_NOT_FOUND`, `INTERNAL`, `VALIDATION_FAILED`
+- **Path params** — `subcategoryId` (integer) Canonical catalog_subcategories.id.
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ⏳ · Prov Web — · Admin —
+- **Legacy it replaces**
+  - `GET /api/services/:serviceId/options-with-addons` — **CANONICALIZE** — The legacy shape. Its `:serviceId` is a service_families.id and it returns level_2 / level_3 option groups, not Services. ServanaWorker calls the un-prefixed twin instead, which is the only catalog route without the /services/ prefix its neighbours use.
+  - `GET /api/:serviceId/options-with-addons` — **ALIAS_TEMPORARILY** — The original un-prefixed form, and what ServanaWorker calls in production. It cannot be retired until that app moves; the customer app followed the convention instead of the exception and 404d for months as a result.
 
 ## identity
 
@@ -391,18 +469,20 @@ Records a mobile number as verified, proven by a Firebase phone credential.
 
 | Method | Path | Status | Auth | Request | Response | Idem | Owner |
 |---|---|---|---|---|---|---|---|
-| `GET` | `/api/v1/search` | _planned_ | public | — | `SearchResults` | yes | search |
+| `GET` | `/api/v1/search` | **live** | public | — | `SearchResults` | yes | catalog |
 
 ### `GET /api/v1/search`
 
-Cross-catalog search.
+Search Categories, Subcategories and Services in one ranked result set.
 
-> There is no backend search today. ServanaClient searches the catalog CLIENT-SIDE off the /api/services/full payload, which is why an empty level2 silently emptied the search cache. Building it belongs to the catalog/search domain command.
+> Every hit carries a qualified `ref` (`service:180`), so a mixed result set is keyable without the client inferring type from which array it arrived in. Aliases widen what a term MATCHES and never what exists — "aircon" and "air conditioning" return the same Services with the same ids.
 
-- **Domain service** — `none yet — no backend search endpoint exists`
+- **Domain service** — `services/catalogSearchService.searchCatalog`
 - **Error codes** — `INTERNAL`, `VALIDATION_FAILED`
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile — · Prov Web — · Admin —
-- **Legacy it replaces** — none; new capability.
+- **Query** — `q` (string, required) Search term. Under 2 characters returns an empty result, not an error.; `types` (string) Comma-separated: category,subcategory,service. Default all three.; `limit` (integer) Max hits, 1-50, default 20.
+- **Callers** — Cust Mobile ⏳ · Cust Web · · Prov Mobile — · Prov Web — · Admin —
+- **Legacy it replaces**
+  - `GET /api/services/full` — **CANONICALIZE** — Not a search endpoint — it is the whole legacy catalog, which ServanaClient downloads and searches ON THE DEVICE. That is why one absent `level2` key emptied the search cache and every query rendered "No services match your search". Retiring it needs the client to move to this route AND to /api/v1/catalog.
 
 ## home
 
@@ -503,7 +583,13 @@ Admin booking operations list.
 | `POST /api/v1/auth/verify-email` | ⏳ | · | ⏳ | · | — |
 | `POST /api/v1/auth/resend-verification` | ⏳ | · | ⏳ | ⏳ | — |
 | `POST /api/v1/auth/verify-mobile` | · | · | · | · | — |
-| `GET /api/v1/search` | · | · | — | — | — |
+| `GET /api/v1/search` | ⏳ | · | — | — | — |
+| `GET /api/v1/catalog/search` | · | · | — | — | — |
+| `GET /api/v1/catalog/categories` | · | · | — | — | — |
+| `GET /api/v1/catalog/categories/:categoryId` | · | · | — | — | — |
+| `GET /api/v1/catalog/categories/:categoryId/subcategories` | ⏳ | · | — | — | — |
+| `GET /api/v1/catalog/subcategories/:subcategoryId` | · | · | — | — | — |
+| `GET /api/v1/catalog/subcategories/:subcategoryId/services` | · | · | ⏳ | — | — |
 | `GET /api/v1/home` | · | · | — | — | — |
 | `GET /api/v1/conversations` | ⏳ | ⏳ | ⏳ | ⏳ | — |
 | `GET /api/v1/provider/earnings` | — | — | · | ⏳ | — |

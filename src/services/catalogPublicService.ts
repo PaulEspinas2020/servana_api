@@ -91,7 +91,63 @@ const priceSummary = (basePrice: unknown, unit: unknown): string | null => {
  */
 const VISIBLE_STATUS = 'active';
 
+/**
+ * ─── Qualified canonical references ──────────────────────────────────────────
+ *
+ * Every catalog entity carries a `ref` of the form `<type>:<id>` alongside its
+ * numeric `id`.
+ *
+ * ## Why a bare integer is not enough
+ *
+ * Four different things in this platform are called a "service id" and three of
+ * them are integers in overlapping ranges:
+ *
+ *   `services.id`            the canonical Specific Service  — 95 rows
+ *   `service_families.id`    the legacy coarse family        — 10 rows
+ *   `service_options.id`     a legacy option or add-on       — ≤ 231 rows
+ *   `catalog_subcategories.id` / `catalog_categories.id`     — 12 / 3 rows
+ *
+ * `GET /api/services/:serviceId/level2` resolves its parameter against
+ * `service_options.service_id`, which is a foreign key to **service_families**.
+ * `GET /api/v1/catalog/services/:serviceId` resolves the same-named parameter
+ * against **services.id**. The integer `3` is meaningful to both and means
+ * different things to each — a coarse family on one, a Specific Service on the
+ * other. Neither errors; both answer.
+ *
+ * Today the numeric ranges happen not to collide in the one place it would be
+ * dangerous: a promoted `services.id` IS the id of a MAIN `service_options`
+ * row, and add-on ids are different rows of the same unique key, so a Service
+ * id and an add-on id are never the same integer. That is a property of how the
+ * migration happened, not a rule anything enforces — and new Services come from
+ * a sequence starting at 100000 precisely because somebody noticed.
+ *
+ * A `ref` removes the reliance on that accident. `service:180` cannot be read
+ * as a family, an add-on or a subcategory, and a search result mixing all three
+ * entity types can be keyed unambiguously without the client inferring type
+ * from which array it arrived in.
+ *
+ * Additive: `id` is unchanged and still authoritative. Nothing that reads the
+ * deployed contract has to change.
+ */
+export const REF_TYPES = ['category', 'subcategory', 'service', 'addon'] as const;
+export type RefType = (typeof REF_TYPES)[number];
+
+export const makeRef = (type: RefType, id: number | string): string => `${type}:${id}`;
+
+/** Parses a qualified reference. Returns null for anything malformed. */
+export const parseRef = (raw: unknown): { type: RefType; id: number } | null => {
+  if (typeof raw !== 'string') return null;
+  const [type, rest, ...extra] = raw.split(':');
+  if (extra.length || !rest) return null;
+  if (!(REF_TYPES as readonly string[]).includes(type)) return null;
+  const id = Number(rest);
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  return { type: type as RefType, id };
+};
+
 export interface PublicService {
+  /** Qualified canonical reference, e.g. `service:180`. */
+  ref: string;
   id: number;
   subcategoryId: number;
   subcategoryName: string;
@@ -112,6 +168,8 @@ export interface PublicService {
 }
 
 export interface PublicSubcategory {
+  /** Qualified canonical reference, e.g. `subcategory:7`. */
+  ref: string;
   id: number;
   categoryId: number;
   name: string;
@@ -124,6 +182,8 @@ export interface PublicSubcategory {
 }
 
 export interface PublicCategory {
+  /** Qualified canonical reference, e.g. `category:3`. */
+  ref: string;
   id: number;
   name: string;
   slug: string;
@@ -143,6 +203,7 @@ export interface PublicCategory {
  * availability from the absence of a key.
  */
 const mapService = (r: any): PublicService => ({
+  ref: makeRef('service', Number(r.id)),
   id: Number(r.id),
   subcategoryId: Number(r.subcategory_id),
   subcategoryName: r.subcategory_name ?? '',
@@ -235,6 +296,7 @@ export const getPublicCatalog = async (): Promise<PublicCategory[]> => {
     const key = Number(row.category_id);
     if (!subsByCategory.has(key)) subsByCategory.set(key, []);
     subsByCategory.get(key)!.push({
+      ref: makeRef('subcategory', Number(row.id)),
       id: Number(row.id),
       categoryId: key,
       name: row.name,
@@ -250,6 +312,7 @@ export const getPublicCatalog = async (): Promise<PublicCategory[]> => {
   return categories.rows.map((row: any) => {
     const subs = subsByCategory.get(Number(row.id)) ?? [];
     return {
+      ref: makeRef('category', Number(row.id)),
       id: Number(row.id),
       name: row.name,
       slug: row.slug,
@@ -276,6 +339,16 @@ export const listPublicServices = async (): Promise<PublicService[]> => {
 };
 
 export interface PublicAddon {
+  /**
+   * Qualified canonical reference, e.g. `addon:130`.
+   *
+   * An add-on id is a `service_options` id and is NOT a Service id. Without the
+   * ref, a client caching `addons[].id` and later calling
+   * `/catalog/services/<that id>` would be asking a question about a different
+   * kind of thing — and on today's data it would 404 rather than error, which
+   * is the quietest possible way to be wrong.
+   */
+  ref: string;
   id: number;
   name: string;
   unit: string | null;
@@ -356,6 +429,7 @@ export const getServiceDetail = async (
     inclusions: asStringArray(row.inclusions),
     exclusions: asStringArray(row.exclusions),
     addons: addonRes.rows.map((a: any) => ({
+      ref: makeRef('addon', Number(a.id)),
       id: Number(a.id),
       name: a.level_3,
       unit: a.unit ?? null,
@@ -368,6 +442,203 @@ export const getServiceDetail = async (
     })),
     available,
   };
+};
+
+/* ─── Lightweight summaries and hierarchy navigation ─────────────────────────
+ *
+ * `getPublicCatalog` returns the whole tree in three statements, which is right
+ * for a cold start and wrong for everything else: a category chooser that only
+ * needs three names should not receive 95 services with prices and images.
+ *
+ * These reads are the other half of that trade. A summary carries counts and no
+ * children; a detail carries one level of children and no grandchildren. §92 is
+ * about round trips, and the answer to it is not "always send everything" — it
+ * is "send the level being rendered".
+ */
+
+export interface CategorySummary {
+  ref: string;
+  id: number;
+  name: string;
+  slug: string;
+  description: string | null;
+  imageUrl: string | null;
+  displayOrder: number;
+  subcategoryCount: number;
+  serviceCount: number;
+}
+
+export interface SubcategorySummary {
+  ref: string;
+  id: number;
+  categoryId: number;
+  categoryName: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  imageUrl: string | null;
+  displayOrder: number;
+  serviceCount: number;
+}
+
+/**
+ * Counts come from a LEFT JOIN aggregate rather than a per-row subquery.
+ *
+ * Three categories today, so either is instant — but the per-row form is the
+ * shape that turns into 95 statements the first time somebody adds a category
+ * per city, and it reads identically until it does.
+ */
+export const listCategories = async (): Promise<CategorySummary[]> => {
+  const res = await dbQuery.query(
+    `SELECT c.id, c.name, c.slug, c.description, c.image_url, c.display_order,
+            COUNT(DISTINCT sc.id) FILTER (WHERE sc.status = $1) AS subcategory_count,
+            COUNT(DISTINCT s.id)  FILTER (WHERE s.status = $1 AND sc.status = $1) AS service_count
+       FROM ${dbSchema}.catalog_categories c
+       LEFT JOIN ${dbSchema}.catalog_subcategories sc ON sc.category_id = c.id
+       LEFT JOIN ${dbSchema}.services s ON s.subcategory_id = sc.id
+      WHERE c.status = $1
+      GROUP BY c.id, c.name, c.slug, c.description, c.image_url, c.display_order
+      ORDER BY c.display_order, c.name`,
+    [VISIBLE_STATUS],
+  );
+  return res.rows.map((r: any) => ({
+    ref: makeRef('category', Number(r.id)),
+    id: Number(r.id),
+    name: r.name,
+    slug: r.slug,
+    description: r.description ?? null,
+    imageUrl: r.image_url ?? null,
+    displayOrder: Number(r.display_order),
+    subcategoryCount: Number(r.subcategory_count ?? 0),
+    serviceCount: Number(r.service_count ?? 0),
+  }));
+};
+
+/**
+ * One Category by canonical id.
+ *
+ * Not status-filtered, for the same reason `getServiceDetail` is not: a deep
+ * link to a deactivated Category must land on an honest "unavailable" rather
+ * than a 404 that a client cannot tell apart from a typo.
+ */
+export const getCategory = async (categoryId: number): Promise<CategorySummary & { available: boolean }> => {
+  const res = await dbQuery.query(
+    `SELECT c.id, c.name, c.slug, c.description, c.image_url, c.display_order, c.status,
+            COUNT(DISTINCT sc.id) FILTER (WHERE sc.status = $2) AS subcategory_count,
+            COUNT(DISTINCT s.id)  FILTER (WHERE s.status = $2 AND sc.status = $2) AS service_count
+       FROM ${dbSchema}.catalog_categories c
+       LEFT JOIN ${dbSchema}.catalog_subcategories sc ON sc.category_id = c.id
+       LEFT JOIN ${dbSchema}.services s ON s.subcategory_id = sc.id
+      WHERE c.id = $1
+      GROUP BY c.id, c.name, c.slug, c.description, c.image_url, c.display_order, c.status`,
+    [categoryId, VISIBLE_STATUS],
+  );
+  const r = res.rows[0];
+  if (!r) throw fail('Category not found', 404, 'NOT_FOUND');
+  return {
+    ref: makeRef('category', Number(r.id)),
+    id: Number(r.id),
+    name: r.name,
+    slug: r.slug,
+    description: r.description ?? null,
+    imageUrl: r.image_url ?? null,
+    displayOrder: Number(r.display_order),
+    subcategoryCount: Number(r.subcategory_count ?? 0),
+    serviceCount: Number(r.service_count ?? 0),
+    available: r.status === VISIBLE_STATUS,
+  };
+};
+
+const mapSubcategorySummary = (r: any): SubcategorySummary => ({
+  ref: makeRef('subcategory', Number(r.id)),
+  id: Number(r.id),
+  categoryId: Number(r.category_id),
+  categoryName: r.category_name ?? '',
+  name: r.name,
+  slug: r.slug,
+  description: r.description ?? null,
+  imageUrl: r.image_url ?? null,
+  displayOrder: Number(r.display_order),
+  serviceCount: Number(r.service_count ?? 0),
+});
+
+const SUBCATEGORY_SUMMARY_SQL = `
+  SELECT sc.id, sc.category_id, sc.name, sc.slug, sc.description, sc.image_url,
+         sc.display_order, sc.status,
+         c.name AS category_name, c.status AS category_status,
+         COUNT(s.id) FILTER (WHERE s.status = $1) AS service_count
+    FROM ${dbSchema}.catalog_subcategories sc
+    JOIN ${dbSchema}.catalog_categories c ON c.id = sc.category_id
+    LEFT JOIN ${dbSchema}.services s ON s.subcategory_id = sc.id
+`;
+
+/**
+ * The Subcategories of one Category.
+ *
+ * Throws 404 when the Category does not exist, rather than returning an empty
+ * list. An empty Category and a missing one are different facts, and a client
+ * rendering "no subcategories yet" for a deleted id is showing a page that
+ * should not exist.
+ */
+export const listSubcategoriesOfCategory = async (
+  categoryId: number,
+): Promise<SubcategorySummary[]> => {
+  const parent = await dbQuery.query(
+    `SELECT 1 FROM ${dbSchema}.catalog_categories WHERE id = $1`,
+    [categoryId],
+  );
+  if (!parent.rows.length) throw fail('Category not found', 404, 'NOT_FOUND');
+
+  const res = await dbQuery.query(
+    `${SUBCATEGORY_SUMMARY_SQL}
+      WHERE sc.category_id = $2 AND sc.status = $1
+      GROUP BY sc.id, sc.category_id, sc.name, sc.slug, sc.description, sc.image_url,
+               sc.display_order, sc.status, c.name, c.status
+      ORDER BY sc.display_order, sc.name`,
+    [VISIBLE_STATUS, categoryId],
+  );
+  return res.rows.map(mapSubcategorySummary);
+};
+
+export const getSubcategory = async (
+  subcategoryId: number,
+): Promise<SubcategorySummary & { available: boolean }> => {
+  const res = await dbQuery.query(
+    `${SUBCATEGORY_SUMMARY_SQL}
+      WHERE sc.id = $2
+      GROUP BY sc.id, sc.category_id, sc.name, sc.slug, sc.description, sc.image_url,
+               sc.display_order, sc.status, c.name, c.status`,
+    [VISIBLE_STATUS, subcategoryId],
+  );
+  const r = res.rows[0];
+  if (!r) throw fail('Subcategory not found', 404, 'NOT_FOUND');
+  return {
+    ...mapSubcategorySummary(r),
+    // Folds in the parent, exactly as `getServiceDetail.available` does: a
+    // Subcategory under a deactivated Category is not reachable, whatever its
+    // own status says.
+    available: r.status === VISIBLE_STATUS && r.category_status === VISIBLE_STATUS,
+  };
+};
+
+/** The Services of one Subcategory. 404s on a missing parent, for the reason above. */
+export const listServicesOfSubcategory = async (
+  subcategoryId: number,
+): Promise<PublicService[]> => {
+  const parent = await dbQuery.query(
+    `SELECT 1 FROM ${dbSchema}.catalog_subcategories WHERE id = $1`,
+    [subcategoryId],
+  );
+  if (!parent.rows.length) throw fail('Subcategory not found', 404, 'NOT_FOUND');
+
+  const res = await dbQuery.query(
+    `SELECT ${SERVICE_COLUMNS}
+     ${SERVICE_JOINS}
+      WHERE s.subcategory_id = $2 AND s.status = $1 AND sc.status = $1 AND c.status = $1
+      ORDER BY s.display_order, s.name`,
+    [VISIBLE_STATUS, subcategoryId],
+  );
+  return res.rows.map(mapService);
 };
 
 /** Shape counters for cache validation and the client's empty-state copy. */

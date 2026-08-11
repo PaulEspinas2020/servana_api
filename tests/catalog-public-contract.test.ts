@@ -241,7 +241,12 @@ describe('leak boundary', () => {
     ]);
     const detail = await svc.getServiceDetail(15);
     expect(JSON.stringify(detail)).not.toContain('legacy');
+    // `ref` is ADDITIVE and deliberate: an add-on id is a `service_options` id
+    // and is NOT a Service id, and nothing in the payload used to say so. A
+    // client caching `addons[].id` and later calling `/catalog/services/<id>`
+    // was asking a question about a different kind of thing.
     expect(detail.addons).toEqual([{
+      ref: 'addon:6',
       id: 6, name: 'Vitamin C', unit: 'per session',
       basePrice: 500, basePriceSummary: '₱500 / per session', durationMins: 15,
     }]);
