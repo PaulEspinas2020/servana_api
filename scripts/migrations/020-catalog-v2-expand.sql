@@ -146,3 +146,13 @@ CREATE INDEX IF NOT EXISTS catalog_provider_services_provider_idx
 -- are backfilled read-only later, and no existing booking is ever rewritten.
 ALTER TABLE servana.bookings
   ADD COLUMN IF NOT EXISTS catalog_service_id INT;
+
+-- Ownership, added after the deploy outage: objects created as `postgres` were
+-- unusable by `admin`, the deploy and runtime role, and the deployment died on
+-- "permission denied for table catalog_subcategories". Setting it explicitly makes
+-- the result correct regardless of which role runs the migration. Idempotent.
+ALTER TABLE servana.catalog_categories        OWNER TO admin;
+ALTER TABLE servana.catalog_subcategories     OWNER TO admin;
+ALTER TABLE servana.catalog_services          OWNER TO admin;
+ALTER TABLE servana.catalog_provider_services OWNER TO admin;
+ALTER SEQUENCE servana.catalog_services_id_seq OWNER TO admin;
