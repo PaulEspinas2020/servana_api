@@ -751,11 +751,31 @@ export const getAssignmentCandidates = async (bookingId: number): Promise<any[]>
   const { schedule, service_id } = bkRes.rows[0];
   const serviceId = Number(service_id);
 
+  // Two corrections here, both about matching what adminAssignProvider will actually
+  // accept — a candidate list narrower than the assign guard hides usable providers,
+  // and one wider than it offers providers the assign will reject.
+  //
+  //  1. role IN (2,4), not role = 2. Role 4 is the second provider role (internal /
+  //     employee providers) and every other provider query in the codebase uses
+  //     IN (2,4). Filtering on 2 alone meant no internal provider could ever be
+  //     offered for a booking. Role 6 is deliberately NOT included: two production
+  //     accounts hold it and its meaning is undefined, so it fails closed.
+  //  2. Qualification is employee_services OR an approved worker_service_application,
+  //     which is exactly the UNION adminAssignProvider's eligibility check uses. The
+  //     INNER JOIN on employee_services alone hid providers whose approval had not
+  //     been mirrored into that table yet — assignable, but never listed.
   const providersRes = await dbQuery.query(
-    `SELECT uc.uid, uc.first_name, uc.last_name, uc.phone_number
+    `SELECT DISTINCT uc.uid, uc.first_name, uc.last_name, uc.phone_number
      FROM ${dbSchema}.user_credentials uc
-     JOIN ${dbSchema}.employee_services es ON es.employee_uid = uc.uid
-     WHERE es.service_id = $1 AND uc.is_archive = false AND uc.role::int = 2`,
+     WHERE uc.is_archive = false
+       AND uc.role::int IN (2, 4)
+       AND (
+         EXISTS (SELECT 1 FROM ${dbSchema}.employee_services es
+                  WHERE es.employee_uid = uc.uid AND es.service_id = $1)
+         OR EXISTS (SELECT 1 FROM ${dbSchema}.worker_service_applications wsa
+                     WHERE wsa.worker_uid = uc.uid AND wsa.service_id = $1
+                       AND wsa.status = 'approved')
+       )`,
     [serviceId]
   );
 

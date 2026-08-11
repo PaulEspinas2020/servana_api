@@ -35,3 +35,36 @@ describe('admin booking list and input boundaries', () => {
     expect(controller).toMatch(/endAt must be after startAt/);
   });
 });
+
+describe('assignment candidates match what the assign path will accept', () => {
+  const candidatesBlock = service.slice(
+    service.indexOf('export const getAssignmentCandidates'),
+    service.indexOf('export const adminAssignProvider'),
+  );
+
+  it('offers both provider roles, not just role 2', () => {
+    // Role 4 is the second provider role. `role::int = 2` meant no internal
+    // provider could ever be offered for a booking, while every other provider
+    // query in the codebase uses IN (2,4).
+    expect(candidatesBlock).toMatch(/role::int IN \(2,\s*4\)/);
+    expect(candidatesBlock).not.toMatch(/role::int = 2/);
+  });
+
+  it('does not admit role 6, whose meaning is undefined', () => {
+    // Two production accounts hold role 6 and nothing defines it. Fail closed.
+    expect(candidatesBlock).not.toMatch(/\b6\b\s*\)/);
+  });
+
+  it('qualifies on approved applications as well as employee_services', () => {
+    // adminAssignProvider accepts the UNION of both, so a candidate list built
+    // from employee_services alone hides providers that are in fact assignable.
+    expect(candidatesBlock).toMatch(/employee_services/);
+    expect(candidatesBlock).toMatch(/worker_service_applications/);
+    expect(candidatesBlock).toMatch(/status = 'approved'/);
+  });
+
+  it('cannot silently drop a provider through an inner join', () => {
+    expect(candidatesBlock).not.toMatch(/JOIN \$\{dbSchema\}\.employee_services/);
+    expect(candidatesBlock).toMatch(/EXISTS \(SELECT 1/);
+  });
+});
