@@ -146,6 +146,18 @@ export const BOOKING_GUARDS: Record<BookingGuardName, (ctx: GuardContext) => Gua
         allowedUntil: verdict.allowedUntil,
         noticeHours: verdict.noticeHours,
         hoursUntilStart: verdict.hoursUntilStart,
+        /**
+         * The legacy block code and the whole verdict.
+         *
+         * `providerController.cancelAcceptedBooking` answers
+         * `409 { code: blockCode, data: eligibility }`, and Provider Web
+         * branches on that shape. Carrying it here is what lets the controller
+         * FORMAT the refusal instead of RE-EVALUATING the policy — the
+         * difference between one implementation with two readers and two
+         * implementations that can drift.
+         */
+        blockCode: verdict.blockCode,
+        eligibility: verdict,
       },
     };
   },
@@ -978,6 +990,8 @@ const LEGACY_TRACKING: Partial<Record<BookingAction, { status: string; note: str
   // The tracking STATUS is the booking's new status, not the canonical state —
   // the row records where the booking landed, and it landed back at CONFIRMED.
   PROVIDER_DECLINE: { status: 'CONFIRMED', note: 'Worker declined — seeking reassignment' },
+  // technicianService.cancelAcceptedJob, via the same shared release.
+  PROVIDER_CANCEL: { status: 'CONFIRMED', note: 'Provider cancelled — seeking reassignment' },
   // technicianService.markEnRoute. Here the tracking status IS the canonical
   // state, because the legacy path cascaded it onto `bookings.status` too.
   PROVIDER_EN_ROUTE: { status: 'EN_ROUTE', note: 'Provider is on the way' },
@@ -1255,12 +1269,28 @@ async function applyState(
       if (!providerUid) return;
 
       const declined = input.action === 'PROVIDER_DECLINE';
+      /**
+       * One statement for both, because they differ only in which record
+       * columns they stamp. A decline records `declined_at`; a provider
+       * cancellation records the cancellation trail §26 requires — when, why
+       * and the free-text note — and both are written with the status rather
+       * than after it.
+       */
       await client.query(
         `UPDATE ${s}.booking_workers
             SET status = $3,
-                declined_at = CASE WHEN $4 THEN NOW() ELSE declined_at END
+                declined_at  = CASE WHEN $4 THEN NOW() ELSE declined_at END,
+                cancelled_at = CASE WHEN $4 THEN cancelled_at ELSE NOW() END,
+                cancellation_reason_code = CASE WHEN $4 THEN cancellation_reason_code ELSE $5 END,
+                cancellation_note        = CASE WHEN $4 THEN cancellation_note ELSE $6 END
           WHERE booking_id = $1 AND worker_uid = $2`,
-        [loaded.id, providerUid, declined ? 'DECLINED' : CANONICAL_CANCELLED, declined],
+        [
+          loaded.id, providerUid,
+          declined ? 'DECLINED' : CANONICAL_CANCELLED,
+          declined,
+          input.metadata?.reasonCode ?? null,
+          input.metadata?.note ?? null,
+        ],
       );
 
       /**

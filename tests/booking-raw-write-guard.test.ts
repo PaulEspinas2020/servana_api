@@ -125,16 +125,16 @@ const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason
       + 'writers OUTSIDE the executor.',
   },
   'services/technicianService.ts': {
-    count: 3,
-    phase: 'E — provider cancel; TAB 05 — assignWorker',
+    count: 2,
+    phase: 'E2 — auto-assignment write ownership',
     reason:
-      'THE ENTIRE PROVIDER LIFECYCLE IS MIGRATED. Accept, decline, en-route, ' +
-      'arrived, start and complete all go through the executor; ' +
-      'advanceArrivalStage, the duplicate worker-code predicate and the ' +
-      'unpaid-cash EXISTS clause are gone. Three sites remain and none is a ' +
-      'lifecycle fragment: the shared release still used by cancelAcceptedJob ' +
-      'until PROVIDER_CANCEL migrates, and assignWorker, which belongs to ' +
-      'TAB 05.',
+      'THE LAST LEGACY WRITER. Every provider and admin action goes through '
+      + 'the executor; PROVIDER_CANCEL (E1) took the 48-hour policy with it, so '
+      + 'no controller evaluates that rule any more. Two sites remain, both in '
+      + 'assignWorker — auto-assignment. Its SELECTION logic belongs to '
+      + 'TAB 05; its WRITE does not, and E2 moves it. The gate stays 0: an '
+      + 'assignment engine may choose a provider, never mutate lifecycle '
+      + 'state.',
   },
 };
 

@@ -24,6 +24,7 @@ import {
   evaluateCancellation,
   CANCELLATION_NOTICE_HOURS,
 } from "../services/booking/bookingPolicies";
+import { TransitionError } from "../services/booking/transitionExecutor";
 import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
 import * as serviceApplicationService from "../services/serviceApplicationService";
 import * as onboardingService from "../services/providerOnboardingService";
@@ -2671,27 +2672,31 @@ export const cancelAcceptedBooking = async (req: Request, res: Response) => {
     const ctx = await loadCancellationContext(bookingId, uid);
     if (!ctx) return res.status(404).json({ success: false, message: "Booking not found" });
 
-    // Re-evaluated at mutation time (§1), not trusted from whatever the client
-    // was shown when it rendered the button.
-    const eligibility = evaluateCancellation({
-      workerStatus: ctx.worker_status,
-      schedule: ctx.schedule,
-      now: new Date(),
-      reasonCode,
-    });
-
-    if (!eligibility.canCancel) {
-      return res.status(409).json({
-        success: false,
-        code: eligibility.blockCode,
-        message: CANCELLATION_BLOCK_MESSAGES[eligibility.blockCode!] ?? "Cancellation is not available.",
-        data: eligibility,
-      });
-    }
-
+    /**
+     * The policy is NOT evaluated here any more.
+     *
+     * It used to be, and that was the problem: a rule enforced in a controller
+     * applies only to callers that go through that controller. It is now the
+     * canonical guard `providerCancellationWindow`, run inside the transition
+     * transaction, so nothing can reach a provider cancellation without it.
+     *
+     * What remains here is FORMATTING. The refusal carries the whole
+     * eligibility verdict, so this rebuilds the exact 409 Provider Web already
+     * branches on — same `code`, same message, same `data` — without a second
+     * evaluation that could disagree with the one that actually decided.
+     */
     const result = await technicianService.cancelAcceptedJob(bookingId, uid, reasonCode, note);
     return res.json({ success: true, message: "Booking cancelled", data: result });
   } catch (error: any) {
+    if (error instanceof TransitionError && error.code === 'POLICY_REFUSED') {
+      const blockCode = String(error.detail?.blockCode ?? '');
+      return res.status(409).json({
+        success: false,
+        code: blockCode,
+        message: CANCELLATION_BLOCK_MESSAGES[blockCode] ?? "Cancellation is not available.",
+        data: error.detail?.eligibility,
+      });
+    }
     return sendBookingResponseOutcome(res, error, "Booking cancelled");
   }
 };

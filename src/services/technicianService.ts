@@ -1482,40 +1482,99 @@ export const acceptJob = async (
  * runs; the compare-and-swap here is what makes it safe against a double tap,
  * mirroring acceptJob/declineJob.
  */
+let cancellationColumnsReady: Promise<void> | null = null;
+
+/**
+ * Lazily adds the cancellation record columns, like the arrival ones.
+ *
+ * Stays here rather than moving with the transition: a booking transition must
+ * not be able to alter schema. Queued for a real migration alongside 027's
+ * arrival columns.
+ */
+const ensureCancellationColumns = (): Promise<void> => {
+  cancellationColumnsReady ??= dbQuery
+    .query(
+      `ALTER TABLE ${dbSchema}.booking_workers
+         ADD COLUMN IF NOT EXISTS cancelled_at             TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS cancellation_reason_code VARCHAR(60),
+         ADD COLUMN IF NOT EXISTS cancellation_note        TEXT`,
+      []
+    )
+    .then(() => undefined)
+    .catch((e: any) => {
+      cancellationColumnsReady = null;
+      throw e;
+    });
+  return cancellationColumnsReady;
+};
+
+/**
+ * ─── E1 · PROVIDER_CANCEL, on the canonical executor ─────────────────────────
+ *
+ * Provider cancels a booking they already accepted (C18 §26).
+ *
+ * Operator policy, recorded not inferred: allowed up to 48 hours before the
+ * scheduled start, RECORD ONLY (no penalty, no fee, no rating impact), and it
+ * auto-reassigns exactly like a decline while notifying admin.
+ *
+ * ## The 48-hour policy is now the executor's, not the controller's
+ *
+ * `providerCancellationWindow` runs inside the transition transaction, so no
+ * caller can reach a provider cancellation without it — which was the whole
+ * point of moving the policy into the domain layer. The controller no longer
+ * evaluates it; it formats the refusal the executor produces.
+ *
+ * ## The cancellation record is written WITH the status
+ *
+ * `cancelled_at`, `cancellation_reason_code` and `cancellation_note` land in
+ * the same statement as CANCELLED. §26 requires the reason to be recorded, and
+ * a cancelled assignment with no reason is the shape support cannot act on.
+ *
+ * ## Everything else preserved
+ *
+ * The six-code conflict contract on a refusal, the release back to the pool,
+ * the reassignment search after commit, and the provider's own notification —
+ * unchanged, in the same order.
+ *
+ * `ensureCancellationColumns()` stays here with `ensureArrivalColumns()`: lazy
+ * DDL is not a booking transition's business.
+ */
 export const cancelAcceptedJob = async (
   bookingId: number,
   workerUid: string,
   reasonCode: string,
-  note?: string | null
+  note?: string | null,
+  options: { correlationId?: string } = {},
 ) => {
   await ensureArrivalColumns();
   await ensureCancellationColumns();
 
-  const res = await dbQuery.query(
-    `
-    UPDATE ${dbSchema}.booking_workers
-    SET status = 'CANCELLED',
-        cancelled_at = NOW(),
-        cancellation_reason_code = $3,
-        cancellation_note = $4
-    WHERE booking_id = $1
-      AND worker_uid = $2
-      AND status IN ('ACCEPTED','EN_ROUTE','ARRIVED')
-    RETURNING *
-    `,
-    [bookingId, workerUid, reasonCode, note ?? null]
-  );
-
-  if (!res.rowCount) {
-    // Same classification the response path uses, so a double tap reads as
-    // "already done" rather than a server error.
-    throw await classifyResponseMiss(bookingId, workerUid, "DECLINE");
+  try {
+    await transitionBooking({
+      action: 'PROVIDER_CANCEL',
+      bookingId,
+      actorRole: 'assigned_provider',
+      actorUid: workerUid,
+      correlationId: options.correlationId,
+      metadata: { reasonCode, note: note ?? null },
+    });
+  } catch (error) {
+    if (error instanceof TransitionError) {
+      // A policy refusal is the controller's to format — it carries the whole
+      // eligibility verdict — so it travels unchanged.
+      if (error.code === 'POLICY_REFUSED') throw error;
+      // Everything else is the assignment having moved on, which this endpoint
+      // has always reported through the six-code conflict vocabulary.
+      throw declineConflictForSnapshot({
+        actorAssignmentStatus: error.snapshot?.actorAssignmentStatus ?? null,
+      });
+    }
+    throw error;
   }
 
-  const reassignment = await releaseBookingAndReassign(
+  const reassignment = await findAndAssignNextProvider(
     bookingId,
     workerUid,
-    "Provider cancelled — seeking reassignment",
     "provider_cancelled",
     "The assigned provider can no longer attend this booking. We are finding a new provider for you."
   );
@@ -1532,26 +1591,6 @@ export const cancelAcceptedJob = async (
   }).catch((e: any) => console.error("cancellation notification failed:", e?.message));
 
   return { cancelled: true, bookingId, workerUid, reasonCode, reassignment };
-};
-
-let cancellationColumnsReady: Promise<void> | null = null;
-
-/** Lazily adds the cancellation record columns, like the arrival ones. */
-const ensureCancellationColumns = (): Promise<void> => {
-  cancellationColumnsReady ??= dbQuery
-    .query(
-      `ALTER TABLE ${dbSchema}.booking_workers
-         ADD COLUMN IF NOT EXISTS cancelled_at             TIMESTAMPTZ,
-         ADD COLUMN IF NOT EXISTS cancellation_reason_code VARCHAR(60),
-         ADD COLUMN IF NOT EXISTS cancellation_note        TEXT`,
-      []
-    )
-    .then(() => undefined)
-    .catch((e: any) => {
-      cancellationColumnsReady = null;
-      throw e;
-    });
-  return cancellationColumnsReady;
 };
 
 /**
