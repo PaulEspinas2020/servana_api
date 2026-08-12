@@ -18,7 +18,8 @@ import { formatJobCard } from '../src/controllers/jobCardView';
 import { actionsForWorkerStatus } from '../src/controllers/bookingActions';
 import {
   providerActionsForState,
-  UNROUTED_PROVIDER_ACTIONS,
+  UNADVERTISED_PROVIDER_ACTIONS,
+  MAPPED_PROVIDER_ACTIONS,
 } from '../src/services/booking/providerActions';
 import {
   BOOKING_STATES,
@@ -165,6 +166,8 @@ describe('provider actions come from the transition whitelist', () => {
       DISPUTED:            ['VIEW_DETAILS'],
       EXPIRED:             ['VIEW_DETAILS'],
     };
+    // No policy verdict supplied, so the conditional action is absent — the
+    // matrix is the STATE-only answer, deliberately.
     for (const state of BOOKING_STATES) {
       expect(`${state}: ${providerActionsForState(state).map((a) => a.code).join(',')}`)
         .toBe(`${state}: ${expected[state].join(',')}`);
@@ -195,34 +198,96 @@ describe('provider actions come from the transition whitelist', () => {
     }
   });
 
-  it('omits an UNADVERTISED action BY NAME, with a reason', () => {
+  it('CANCEL_JOB is advertised, driven by the guard and not by the state', () => {
     /**
-     * `providerCancel` is omitted, and the reason is a product decision rather
-     * than a transport gap — an earlier version of this test asserted it had no
-     * route, which was false: the endpoint exists and ServanaWorker calls it.
+     * The decision that retired the omission. `providerCancel` was hidden while
+     * its product status was unresolved; the transport was always complete.
      *
-     * The entry has to say WHY, because "omitted" with no reason is
-     * indistinguishable from "forgotten".
+     * It is advertised only when a POLICY VERDICT is supplied, because the
+     * state alone cannot answer the 48-hour question. No verdict means the
+     * caller could not run the policy, and offering it anyway would be guessing
+     * on the provider's behalf.
      */
-    expect(Object.keys(UNROUTED_PROVIDER_ACTIONS)).toContain('providerCancel');
-    expect(UNROUTED_PROVIDER_ACTIONS.providerCancel).toContain('ROUTED AND WORKING');
-    expect(UNROUTED_PROVIDER_ACTIONS.providerCancel).toContain('PRODUCT decision');
+    const open = providerActionsForState('ACCEPTED', {
+      cancellation: { canCancel: true, allowedUntil: '2026-09-05T09:00:00.000Z', blockCode: null },
+    });
+    const cancel = open.find((a) => a.code === 'CANCEL_JOB');
+    expect(cancel).toBeDefined();
+    expect(cancel!.enabled).toBe(true);
+    expect(cancel!.requiresConfirmation).toBe(true);
+    expect(cancel!.allowedUntil).toBe('2026-09-05T09:00:00.000Z');
+    expect(cancel!.reasonCode).toBeUndefined();
+  });
 
-    for (const state of ['ACCEPTED', 'EN_ROUTE', 'ARRIVED'] as BookingState[]) {
-      expect(allowedActions(state, 'assigned_provider')).toContain('providerCancel');
-      expect(providerActionsForState(state).map((a) => a.code))
-        .not.toContain('REQUEST_CANCELLATION' as never);
+  it('inside the notice window it is DISABLED, with the code the POST would use', () => {
+    const late = providerActionsForState('ACCEPTED', {
+      cancellation: {
+        canCancel: false, allowedUntil: '2026-09-05T09:00:00.000Z',
+        blockCode: 'INSIDE_NOTICE_WINDOW',
+      },
+    });
+    const cancel = late.find((a) => a.code === 'CANCEL_JOB');
+    expect(cancel).toBeDefined();
+    expect(cancel!.enabled).toBe(false);
+    // The SAME wire code the executor's guard refuses with, so a greyed button
+    // and a 409 name the same thing.
+    expect(cancel!.reasonCode).toBe('BOOKING_PROVIDER_CANCEL_WINDOW_EXPIRED');
+    // Supplied so a client can say "until Thursday" without doing the maths.
+    expect(cancel!.allowedUntil).toBe('2026-09-05T09:00:00.000Z');
+  });
+
+  it('is OMITTED when no verdict is available — never offered optimistically', () => {
+    // Advertising it unevaluated is exactly the "button says yes, backend says
+    // no" failure this wiring exists to prevent.
+    const blind = providerActionsForState('ACCEPTED');
+    expect(blind.map((a) => a.code)).not.toContain('CANCEL_JOB');
+  });
+
+  it('is not offered where the MACHINE forbids it, whatever the verdict says', () => {
+    /**
+     * The policy can only narrow. A verdict claiming cancellation is fine does
+     * not create a transition the whitelist does not have — IN_PROGRESS and
+     * ASSIGNED are not provider-cancellable states.
+     */
+    for (const state of ['ASSIGNED', 'IN_PROGRESS', 'COMPLETED'] as BookingState[]) {
+      const actions = providerActionsForState(state, {
+        cancellation: { canCancel: true, allowedUntil: null, blockCode: null },
+      });
+      expect(actions.map((a) => a.code)).not.toContain('CANCEL_JOB');
     }
   });
 
-  it('every unrouted entry is still a real machine action', () => {
-    // Otherwise the exclusion list rots into a note about something that no
-    // longer exists, and stops explaining anything.
+  it('EN_ROUTE and ARRIVED follow the same canonical policy', () => {
+    for (const state of ['EN_ROUTE', 'ARRIVED'] as BookingState[]) {
+      expect(allowedActions(state, 'assigned_provider')).toContain('providerCancel');
+      const actions = providerActionsForState(state, {
+        cancellation: { canCancel: true, allowedUntil: null, blockCode: null },
+      });
+      expect(actions.map((a) => a.code)).toContain('CANCEL_JOB');
+    }
+  });
+
+  it('THE COMPLETENESS GUARD: no executable action may be unreachable', () => {
+    /**
+     * Every action the machine lets a provider perform must have either a UI
+     * mapping or a documented reason for being hidden. Without this the
+     * unadvertised list becomes a graveyard of capabilities nobody remembers
+     * deciding to hide — which is how `providerCancel` sat there.
+     */
     const everyProviderAction = new Set(
       BOOKING_STATES.flatMap((s) => allowedActions(s, 'assigned_provider')),
     );
-    for (const name of Object.keys(UNROUTED_PROVIDER_ACTIONS)) {
-      expect([...everyProviderAction]).toContain(name);
+    const unreachable = [...everyProviderAction].filter(
+      (name) => !MAPPED_PROVIDER_ACTIONS.includes(name)
+        && !(name in UNADVERTISED_PROVIDER_ACTIONS),
+    );
+    expect(unreachable).toEqual([]);
+  });
+
+  it('the unadvertised list is now EMPTY, and any entry must carry a reason', () => {
+    expect(Object.keys(UNADVERTISED_PROVIDER_ACTIONS)).toEqual([]);
+    for (const reason of Object.values(UNADVERTISED_PROVIDER_ACTIONS)) {
+      expect(reason.length).toBeGreaterThan(60);
     }
   });
 
@@ -274,9 +339,12 @@ describe('DECLARED CHANGE: inconsistent rows are now read-only', () => {
   it('consistent rows are UNCHANGED — the common case did not move', () => {
     const cases: Array<[string, string, string[]]> = [
       ['WORKER_ASSIGNED', 'ASSIGNED', ['VIEW_DETAILS', 'ACCEPT_ASSIGNMENT', 'DECLINE_ASSIGNMENT']],
-      ['WORKER_ASSIGNED', 'ACCEPTED', ['VIEW_DETAILS', 'OPEN_DIRECTIONS', 'MARK_EN_ROUTE', 'START_JOB']],
-      ['WORKER_ASSIGNED', 'EN_ROUTE', ['VIEW_DETAILS', 'OPEN_DIRECTIONS', 'MARK_ARRIVED', 'START_JOB']],
-      ['WORKER_ASSIGNED', 'ARRIVED', ['VIEW_DETAILS', 'OPEN_DIRECTIONS', 'START_JOB']],
+      // CANCEL_JOB now appears on the provider-cancellable states. The job card
+      // runs the real policy, and this fixture's schedule is 30 days out, so
+      // the notice window is open and it is ENABLED.
+      ['WORKER_ASSIGNED', 'ACCEPTED', ['VIEW_DETAILS', 'OPEN_DIRECTIONS', 'MARK_EN_ROUTE', 'START_JOB', 'CANCEL_JOB']],
+      ['WORKER_ASSIGNED', 'EN_ROUTE', ['VIEW_DETAILS', 'OPEN_DIRECTIONS', 'MARK_ARRIVED', 'START_JOB', 'CANCEL_JOB']],
+      ['WORKER_ASSIGNED', 'ARRIVED', ['VIEW_DETAILS', 'OPEN_DIRECTIONS', 'START_JOB', 'CANCEL_JOB']],
       ['WORKER_ASSIGNED', 'IN_PROGRESS', ['VIEW_DETAILS', 'OPEN_DIRECTIONS', 'COMPLETE_JOB']],
       ['COMPLETED', 'COMPLETED', ['VIEW_DETAILS', 'VIEW_EARNINGS']],
     ];

@@ -16,24 +16,21 @@
  *
  * ## Two things the machine alone cannot decide
  *
- * **1. Not every machine action is ADVERTISED.**
+ * **1. Some actions are CONDITIONAL on a policy, not on the state.**
  *
- * The mapping is an explicit allow-list, and an action the machine permits but
- * this list omits is recorded **by name, with a reason**, so the omission is a
- * decision somebody can find rather than an accident.
+ * `providerCancel` is permitted by the machine from ACCEPTED, EN_ROUTE and
+ * ARRIVED, but whether it is actually available depends on the 48-hour notice
+ * window — a policy the state alone cannot answer.
  *
- * `providerCancel` is the current case, and the reason is NOT that it lacks a
- * route — an earlier version of this comment said so and was wrong.
- * `POST /api/provider/bookings/:bookingId/cancel` exists, is authenticated and
- * role-guarded, runs through the executor, and ServanaWorker already calls it
- * along with its `cancellation-eligibility` companion. The transport is
- * complete on both sides.
+ * It is advertised, and the availability comes from RUNNING THE GUARD'S OWN
+ * POLICY FUNCTION, never from re-deriving the rule here. The client therefore
+ * never calculates 48 hours, and discovery cannot disagree with enforcement:
+ * both call `evaluateCancellation`.
  *
- * What is missing is a decision: whether the job card should ADVERTISE cancel
- * as a first-class action, which changes what every provider sees on every
- * accepted job. Advertising it is a product change with its own blast radius —
- * the 48-hour window means most taps would be refused — so it stays omitted
- * until that is decided, not because it cannot work.
+ * When the caller cannot supply an eligibility verdict — the legacy adapter
+ * holds a worker status and no schedule — the action is OMITTED rather than
+ * offered optimistically. Advertising it unevaluated is precisely the
+ * "button says yes, backend says no" failure the wiring exists to prevent.
  *
  * **2. Not every UI action is a transition.**
  *
@@ -56,6 +53,7 @@ export type BookingActionCode =
   | 'MARK_ARRIVED'
   | 'START_JOB'
   | 'COMPLETE_JOB'
+  | 'CANCEL_JOB'
   | 'OPEN_DIRECTIONS'
   | 'VIEW_EARNINGS';
 
@@ -65,6 +63,24 @@ export interface BookingAction {
   requiresConfirmation: boolean;
   /** A code the provider must supply — today only the job-start worker code. */
   requiresCode: boolean;
+  /**
+   * Whether the provider may invoke it RIGHT NOW.
+   *
+   * Absent means yes — additive, so a client that predates this field behaves
+   * exactly as before. Present and false means the action exists for this state
+   * but a policy currently refuses it, and `reasonCode` says which.
+   */
+  enabled?: boolean;
+  /** Why it is disabled. The same code the POST would refuse with. */
+  reasonCode?: string;
+  /**
+   * The instant after which the action stops being available, ISO-8601.
+   *
+   * Supplied so a client can say "until Thursday 09:00" WITHOUT subtracting a
+   * notice period from a schedule itself. Null when there is no usable
+   * schedule; a client must not invent one.
+   */
+  allowedUntil?: string | null;
 }
 
 const action = (
@@ -90,24 +106,55 @@ const ROUTED_ACTIONS: Record<string, BookingAction> = {
 };
 
 /**
- * Machine actions a provider may perform that are deliberately NOT offered,
- * each with the reason. Omitting silently is how a broken button ships.
+ * Machine actions whose availability depends on a POLICY the state cannot
+ * answer, mapped to the UI code that invokes them.
+ *
+ * These are advertised, but only when the caller supplies the policy verdict.
  */
-export const UNADVERTISED_PROVIDER_ACTIONS: Record<string, string> = {
-  providerCancel:
-    'ROUTED AND WORKING: POST /api/provider/bookings/:bookingId/cancel, behind '
-    + 'verifyAuth + requireProviderRole + requireActiveProvider, executing '
-    + 'PROVIDER_CANCEL through the executor with the 48-hour window guard. '
-    + 'ServanaWorker already calls it and its cancellation-eligibility '
-    + 'companion. It is omitted from the advertised action list because '
-    + 'surfacing cancel on every accepted job is a PRODUCT decision, not a '
-    + 'transport gap — most taps would hit the notice window and be refused. '
-    + 'Decide, then either add the UI code or remove the action from the '
-    + 'provider-advertisable set.',
+const CONDITIONAL_ACTIONS: Record<string, BookingActionCode> = {
+  providerCancel: 'CANCEL_JOB',
 };
 
-/** @deprecated Renamed — the omission is about advertising, not routing. */
+/**
+ * Machine actions deliberately NOT offered, each with the reason.
+ *
+ * Empty, and the guard keeps it honest: every executable provider action must
+ * have either a UI mapping or an entry here. A capability that is neither is a
+ * capability nobody can reach and nobody remembers deciding to hide, which is
+ * how this list started.
+ */
+export const UNADVERTISED_PROVIDER_ACTIONS: Record<string, string> = {};
+
+/** @deprecated Renamed — the omission was never about routing. */
 export const UNROUTED_PROVIDER_ACTIONS = UNADVERTISED_PROVIDER_ACTIONS;
+
+/**
+ * A policy verdict the action list can consume.
+ *
+ * Deliberately the shape `evaluateCancellation` already returns, so a caller
+ * passes the guard's own answer through rather than translating it — a
+ * translation layer is somewhere the two could differ.
+ */
+export interface ActionPolicyContext {
+  cancellation?: {
+    canCancel: boolean;
+    allowedUntil: string | null;
+    blockCode: string | null;
+  } | null;
+}
+
+/**
+ * Block codes to the wire codes the POST refuses with.
+ *
+ * Same mapping the executor's guard uses, so a disabled button and a refused
+ * request name the same thing.
+ */
+const CANCEL_REASON_CODES: Record<string, string> = {
+  INSIDE_NOTICE_WINDOW: 'BOOKING_PROVIDER_CANCEL_WINDOW_EXPIRED',
+  NOT_CANCELLABLE_AT_THIS_STAGE: 'BOOKING_PROVIDER_CANCEL_STAGE_INVALID',
+  SCHEDULE_UNKNOWN: 'BOOKING_PROVIDER_CANCEL_SCHEDULE_UNKNOWN',
+  INVALID_REASON: 'BOOKING_PROVIDER_CANCEL_REASON_INVALID',
+};
 
 /**
  * Non-transition actions, per canonical state.
@@ -132,15 +179,54 @@ const VIEW_ONLY_ACTIONS: Partial<Record<BookingState, BookingActionCode[]>> = {
  * action, then the transitions in whitelist order. Shipped clients render this
  * list in order, so reordering it is a visible change.
  */
-export function providerActionsForState(state: BookingState): BookingAction[] {
-  const transitions = allowedActions(state, 'assigned_provider')
+export function providerActionsForState(
+  state: BookingState,
+  policy: ActionPolicyContext = {},
+): BookingAction[] {
+  const permitted = allowedActions(state, 'assigned_provider');
+
+  const transitions = permitted
     .filter((name) => name in ROUTED_ACTIONS)
     .map((name) => ROUTED_ACTIONS[name]);
+
+  /**
+   * Conditional actions are advertised ONLY when a verdict was supplied.
+   *
+   * No verdict means the caller could not run the policy, and offering the
+   * action anyway would be guessing on the provider's behalf. Omitting is the
+   * honest answer to "I do not know whether you may do this".
+   */
+  const conditional: BookingAction[] = [];
+  for (const name of permitted) {
+    const code = CONDITIONAL_ACTIONS[name];
+    if (!code) continue;
+    if (name === 'providerCancel') {
+      const verdict = policy.cancellation;
+      if (!verdict) continue;
+      conditional.push({
+        code,
+        requiresConfirmation: true,
+        requiresCode: false,
+        enabled: verdict.canCancel,
+        ...(verdict.canCancel ? {} : {
+          reasonCode: CANCEL_REASON_CODES[verdict.blockCode ?? '']
+            ?? 'BOOKING_PROVIDER_CANCEL_REFUSED',
+        }),
+        allowedUntil: verdict.allowedUntil,
+      });
+    }
+  }
 
   const viewOnly = (VIEW_ONLY_ACTIONS[state] ?? []).map((code) => action(code));
 
   // VIEW_DETAILS is unconditional. A provider can always read a job they hold,
   // including a terminal or disputed one — read-only is the fail-closed floor,
   // not a state-specific grant.
-  return [action('VIEW_DETAILS'), ...viewOnly, ...transitions];
+  return [action('VIEW_DETAILS'), ...viewOnly, ...transitions, ...conditional];
 }
+
+/** Every machine action this module knows how to advertise. */
+export const MAPPED_PROVIDER_ACTIONS: readonly string[] = [
+  ...Object.keys(ROUTED_ACTIONS),
+  ...Object.keys(CONDITIONAL_ACTIONS),
+];

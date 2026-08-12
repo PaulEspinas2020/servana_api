@@ -1,4 +1,5 @@
 import { disclosureLevelFor } from "./providerDisclosure";
+import { evaluateCancellation } from "../services/booking/bookingPolicies";
 import { deriveCanonicalState } from "../services/booking/canonicalState";
 import { toProviderProjection } from "../services/booking/projections";
 import { providerActionsForState } from "../services/booking/providerActions";
@@ -140,6 +141,21 @@ export function formatJobCard(job: any) {
      * The old list was answering a question about the assignment row; the right
      * question is about the booking.
      */
-    availableActions: providerActionsForState(canonicalState),
+    availableActions: providerActionsForState(canonicalState, {
+      /**
+       * The guard's OWN policy function, not a re-derivation.
+       *
+       * Discovery and enforcement both call `evaluateCancellation`, so the
+       * client never calculates the 48-hour rule and a Cancel button can never
+       * disagree with the POST that follows it. A race between loading this
+       * list and tapping is still possible and still fine — the POST remains
+       * authoritative.
+       */
+      cancellation: evaluateCancellation({
+        workerStatus: job.worker_status,
+        schedule: job.schedule,
+        now: new Date(),
+      }),
+    }),
   };
 }
