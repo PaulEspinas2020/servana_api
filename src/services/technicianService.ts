@@ -1118,6 +1118,16 @@ export const getJobCardsByWorker = async (workerId: string, bookingId?: number |
       b.worker_uid,
       b.status,
       b.schedule,
+
+      -- An OPEN escalation outranks every other state, so the provider card
+      -- cannot derive a truthful canonical state without knowing about one.
+      -- Without this the card would report IN_PROGRESS for a booking Admin
+      -- shows as DISPUTED - a cross-surface disagreement introduced by the very
+      -- projection meant to remove them. The resolved_at IS NULL test matches
+      -- the predicate Admin's list and metrics already use.
+      EXISTS (SELECT 1 FROM ${dbSchema}.booking_escalations esc
+               WHERE esc.booking_id = b.id AND esc.resolved_at IS NULL) AS has_escalation,
+
       p.method AS payment_method,
       p.status AS payment_status,
 

@@ -381,7 +381,18 @@ export const SCHEMAS: Record<string, unknown> = {
     description: 'Operational history, voiced for the customer. Not the audit record (§16).',
   },
 
-  JobCard: { type: 'object', description: 'A job card as produced by controllers/jobCardView.formatJobCard.' },
+  JobCard: {
+    type: 'object',
+    description:
+      'A job card as produced by controllers/jobCardView.formatJobCard. Carries '
+      + 'the CANONICAL booking state alongside the legacy raw columns: '
+      + '`canonicalState` (one of the eleven machine states), `stateLabel`, '
+      + '`nextAction` and `terminal`. `status` and `workerStatus` are the raw '
+      + 'legacy columns, preserved for shipped clients and DEPRECATED — read '
+      + '`canonicalState` instead. `availableActions` is generated from the '
+      + 'canonical transition whitelist, so an action never appears for a state '
+      + 'the executor would refuse.',
+  },
 
   JobCardList: {
     type: 'object',

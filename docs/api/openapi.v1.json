@@ -5703,7 +5703,7 @@
       },
       "JobCard": {
         "type": "object",
-        "description": "A job card as produced by controllers/jobCardView.formatJobCard."
+        "description": "A job card as produced by controllers/jobCardView.formatJobCard. Carries the CANONICAL booking state alongside the legacy raw columns: `canonicalState` (one of the eleven machine states), `stateLabel`, `nextAction` and `terminal`. `status` and `workerStatus` are the raw legacy columns, preserved for shipped clients and DEPRECATED — read `canonicalState` instead. `availableActions` is generated from the canonical transition whitelist, so an action never appears for a state the executor would refuse."
       },
       "JobCardList": {
         "type": "object",

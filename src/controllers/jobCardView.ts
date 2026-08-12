@@ -1,4 +1,6 @@
-import { actionsForWorkerStatus } from "./bookingActions";
+import { deriveCanonicalState } from "../services/booking/canonicalState";
+import { toProviderProjection } from "../services/booking/projections";
+import { providerActionsForState } from "../services/booking/providerActions";
 import { coordinatesForAddress } from "../helpers/servanaLocationId";
 
 /// Stages customer disclosure by the provider's relationship to the booking.
@@ -97,9 +99,32 @@ export function formatJobCard(job: any) {
       ? { addressOne: null, addressTwo: null, city: null, zipCode: null, country: null, label: null, instructions: null, lat: null, lng: null }
       : { addressOne: null, addressTwo: null, city: job.post_town, zipCode: null, country: job.country, label: job.label, instructions: null, lat: null, lng: null };
 
+  /**
+   * THE state, derived once from the same machine every other surface uses.
+   *
+   * `status` and `workerStatus` below are the raw legacy columns and stay
+   * exactly as they were (§4). They are what shipped provider clients read
+   * today, so removing or changing them would break live apps. `canonicalState`
+   * travels beside them and is what the next client version reads.
+   *
+   * Deriving here rather than in the query is deliberate: this formatter is the
+   * ONE place all three provider surfaces pass through, so one derivation here
+   * reaches v1, Provider Web and legacy mobile with no chance of the three
+   * drifting apart — which is exactly how Admin's list and detail came to
+   * disagree about the same booking.
+   */
+  const canonicalState = deriveCanonicalState({
+    bookingStatus: job.status,
+    workerStatus: job.worker_status,
+    workerUid: job.worker_uid ?? null,
+    hasEscalation: job.has_escalation === true,
+  });
+  const provider = toProviderProjection(canonicalState);
+
   return {
     bookingId:    job.booking_id,
     workerId:     job.worker_uid ?? null,
+    /** @deprecated Raw `bookings.status`. Read `canonicalState`. */
     status:       job.status,
     scheduleAt:   job.schedule,
     paymentMethod: job.payment_method,
@@ -108,13 +133,32 @@ export function formatJobCard(job: any) {
     address,
     service:      { name: job.service_name, type: job.service_type },
     addOns:       job.pricing_breakdown,
+    /** @deprecated Raw `booking_workers.status`. Read `canonicalState`. */
     workerStatus: job.worker_status,
     assignedAt:   job.assigned_at,
     startedAt:    job.started_at,
     completedAt:  job.completed_at,
-    // C18 §5. Authorized actions, decided server-side. Purely additive — a
-    // client that ignores it behaves exactly as before, and one that reads it
-    // stops inferring actions from status labels (§1 forbids that).
-    availableActions: actionsForWorkerStatus(job.worker_status),
+
+    // ── Canonical state, additive ─────────────────────────────────────────
+    canonicalState,
+    /** Provider-voice label: what they do next, not what the booking is. */
+    stateLabel:   provider.label,
+    /** The single obvious next step, or null. Never one the machine refuses. */
+    nextAction:   provider.nextAction,
+    terminal:     provider.terminal,
+
+    /**
+     * Authorized actions, now GENERATED from the transition whitelist rather
+     * than switched on a raw status string.
+     *
+     * Behaviour is identical for any row whose two status columns agree. It
+     * CHANGES, deliberately, where they disagree: a booking cancelled while the
+     * assignment row still read ACCEPTED used to offer MARK_EN_ROUTE, and an
+     * assignment still reading ASSIGNED on a cancelled booking used to offer
+     * ACCEPT. Both are now read-only, because the canonical state is CANCELLED.
+     * The old list was answering a question about the assignment row; the right
+     * question is about the booking.
+     */
+    availableActions: providerActionsForState(canonicalState),
   };
 }
