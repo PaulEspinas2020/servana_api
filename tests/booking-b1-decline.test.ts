@@ -248,13 +248,37 @@ describe('BEHAVIOUR CHANGE: declining a cancelled booking is refused', () => {
     expect(error).toBeInstanceOf(BookingResponseConflict);
   });
 
-  it('and does NOT un-cancel it', async () => {
+  /**
+   * The invariant, stated as one thing rather than four.
+   *
+   * Asserting only that the status stayed CANCELLED would pass a refactor that
+   * preserved the status while still firing the downstream matching engine —
+   * which is the half that actually costs something, because it puts a new
+   * provider on a cancelled job.
+   */
+  it('TERMINAL BOOKING: no release, no worker search, no status reset', async () => {
     seed({ bookingStatus: 'CANCELLED' });
     await declineJob(BOOKING, PROVIDER).catch(() => undefined);
     await flush();
 
+    // no status reset
     expect(store.booking?.status).toBe('CANCELLED');
+    // no assignment release
     expect(store.booking?.worker_uid).toBe(PROVIDER);
+    expect(store.booking?.worker_code).toBe('123456');
+    expect(store.assignments[0].status).toBe('ASSIGNED');
+    // no replacement-provider lookup — the reassignment query never runs
     expect(store.sql.some((q) => /JOIN servana\.service_options/.test(q))).toBe(false);
+    // and nothing recorded, since nothing happened
+    expect(store.transitions).toHaveLength(0);
+    expect(store.tracking).toHaveLength(0);
+    expect(calls).toEqual([]);
+  });
+
+  it('the search assertion can actually fail (positive fixture)', () => {
+    // The lookup is detected by one regex. If it stopped matching, every
+    // "did not search" assertion above would pass vacuously.
+    const real = 'SELECT b.schedule FROM servana.bookings b JOIN servana.service_options so ON so.id = b.service_option_id';
+    expect(/JOIN servana\.service_options/.test(real)).toBe(true);
   });
 });

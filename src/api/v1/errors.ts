@@ -70,6 +70,25 @@ export const V1_ERROR_STATUS = {
   /** The six-digit code the customer reads out did not match. */
   BOOKING_WORKER_CODE_INVALID: 403,
 
+  /**
+   * Policy refusals, each naming the rule that refused.
+   *
+   * Deliberately NOT collapsed into BOOKING_TRANSITION_INVALID. The transition
+   * is perfectly valid; an operator policy declines it, and the client has to
+   * be able to say which one so the provider knows whether to wait, contact
+   * support, or pick a different action. `details.allowedUntil` carries the
+   * deadline for the time-based rule so no client recomputes the window.
+   */
+  BOOKING_POLICY_REFUSED: 409,
+  /** Inside the provider self-cancellation notice period. */
+  BOOKING_PROVIDER_CANCEL_WINDOW_EXPIRED: 409,
+  /** Cancellation attempted from a stage the policy does not allow. */
+  BOOKING_PROVIDER_CANCEL_STAGE_INVALID: 409,
+  /** No usable schedule, so the notice period cannot be proven. Fails closed. */
+  BOOKING_PROVIDER_CANCEL_SCHEDULE_UNKNOWN: 409,
+  /** Reason code outside the standardized list. */
+  BOOKING_PROVIDER_CANCEL_REASON_INVALID: 422,
+
   // ── Notifications ──────────────────────────────────────────────────────────
   NOTIFICATION_NOT_FOUND: 404,
   NOTIFICATION_NOT_ACTIONABLE: 409,

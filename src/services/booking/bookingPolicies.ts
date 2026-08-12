@@ -1,4 +1,27 @@
 /**
+ * Booking POLICY — the operator's rules, in the domain layer.
+ *
+ * Moved here from `controllers/bookingCancellationPolicy.ts`. It was correct
+ * where it was and enforced on the one path that existed, but a controller is
+ * transport: a policy living there is optional depending on which caller
+ * reaches the executor, which is exactly what centralisation is supposed to
+ * end. It is now a named guard the canonical machine runs, so no backend caller
+ * can route around it.
+ *
+ * Two consumers, ONE implementation:
+ *
+ *   transitionBooking(PROVIDER_CANCEL)      enforcement
+ *   GET /api/v1/bookings/:id/transitions    what the UI may offer
+ *
+ * That pairing is deliberate. A UI that decides button visibility from its own
+ * copy of the rule eventually shows a button the executor refuses; both now
+ * read the same function, so they cannot disagree.
+ *
+ * Clients must NOT reimplement the window. They render the backend's
+ * `allowed` / `reasonCode` / `allowedUntil`.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
  * When a provider may cancel a booking they already accepted.
  *
  * Command 18 §26. The policy is the operator's, recorded here verbatim rather
@@ -16,7 +39,17 @@
  * against acceptance.
  */
 
-export const CANCELLATION_NOTICE_HOURS = 48;
+/**
+ * The window, in one place.
+ *
+ * An operator changing the notice period edits this line and nothing else —
+ * the executor guard, the transitions endpoint and the provider controller all
+ * read it.
+ */
+export const PROVIDER_CANCEL_WINDOW_HOURS = 48;
+
+/** Historical name, kept so existing callers and tests are not churned. */
+export const CANCELLATION_NOTICE_HOURS = PROVIDER_CANCEL_WINDOW_HOURS;
 
 /** Standardized reasons (§26 requires a reason code, §28 standardizes them). */
 export const PROVIDER_CANCELLATION_REASONS = [
@@ -58,6 +91,14 @@ export interface CancellationEligibility {
   /** Whole hours until the scheduled start; negative once it has passed. */
   hoursUntilStart: number | null;
   noticeHours: number;
+  /**
+   * The instant after which self-cancellation is refused, ISO-8601.
+   *
+   * Returned so a client can say "until Thursday 09:00" without subtracting
+   * 48 hours from a schedule itself. Null when there is no usable schedule —
+   * a client must not invent one.
+   */
+  allowedUntil: string | null;
   reasons: readonly string[];
 }
 
@@ -81,11 +122,23 @@ export function evaluateCancellation(params: {
     ? Math.floor((scheduledAt!.getTime() - now.getTime()) / 3_600_000)
     : null;
 
+  /**
+   * The instant after which self-cancellation is refused.
+   *
+   * Returned on the block as well as the pass, so a provider seeing the button
+   * disabled can be told what the deadline WAS rather than being left to
+   * subtract 48 hours from a schedule themselves.
+   */
+  const allowedUntil = scheduleValid
+    ? new Date(scheduledAt!.getTime() - PROVIDER_CANCEL_WINDOW_HOURS * 3_600_000).toISOString()
+    : null;
+
   const block = (blockCode: CancellationBlockCode): CancellationEligibility => ({
     canCancel: false,
     blockCode,
     hoursUntilStart,
-    noticeHours: CANCELLATION_NOTICE_HOURS,
+    noticeHours: PROVIDER_CANCEL_WINDOW_HOURS,
+    allowedUntil,
     // No point offering reasons for a cancellation that cannot proceed.
     reasons: [],
   });
@@ -102,7 +155,7 @@ export function evaluateCancellation(params: {
     return block("SCHEDULE_UNKNOWN");
   }
 
-  if (hoursUntilStart! < CANCELLATION_NOTICE_HOURS) {
+  if (hoursUntilStart! < PROVIDER_CANCEL_WINDOW_HOURS) {
     return block("INSIDE_NOTICE_WINDOW");
   }
 
@@ -116,7 +169,8 @@ export function evaluateCancellation(params: {
     canCancel: true,
     blockCode: null,
     hoursUntilStart,
-    noticeHours: CANCELLATION_NOTICE_HOURS,
+    noticeHours: PROVIDER_CANCEL_WINDOW_HOURS,
+    allowedUntil,
     reasons: PROVIDER_CANCELLATION_REASONS,
   };
 }

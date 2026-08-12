@@ -26,6 +26,7 @@ import { Request, Response } from 'express';
 import {
   transitionBooking,
   getBookingTimeline,
+  getAvailableActions,
   TransitionError,
   type BookingAction,
   type TransitionErrorCode,
@@ -34,7 +35,8 @@ import { assertBookingAccess, BookingAccessError } from '../../../services/booki
 import { deriveCanonicalState, type BookingState } from '../../../services/booking/canonicalState';
 import { toCustomerProjection, toProviderProjection } from '../../../services/booking/projections';
 import { ok, sendCaught, readIdempotencyKey } from '../envelope';
-import { ApiError, type V1ErrorCode } from '../errors';
+import { ApiError, isV1ErrorCode, type V1ErrorCode } from '../errors';
+import { isProviderRole } from '../../../constants/providerRoles';
 import { V1Handlers } from '../types';
 
 /** Executor failures → the v1 vocabulary. One code per distinguishable outcome. */
@@ -47,11 +49,24 @@ const TRANSITION_CODE: Record<TransitionErrorCode, V1ErrorCode> = {
   GUARD_FAILED: 'VALIDATION_FAILED',
   IDEMPOTENCY_KEY_REUSED: 'IDEMPOTENCY_KEY_REUSED',
   WORKER_CODE_INVALID: 'BOOKING_WORKER_CODE_INVALID',
+  // The fallback. A guard that names its own reason overrides this below —
+  // collapsing every policy refusal into one code would tell a provider that
+  // something is not allowed without telling them which rule said so.
+  POLICY_REFUSED: 'BOOKING_POLICY_REFUSED',
 };
 
 const asApiError = (error: unknown): unknown => {
   if (error instanceof TransitionError) {
-    return new ApiError(TRANSITION_CODE[error.code], error.message, error.detail);
+    // A policy guard names the specific rule. Prefer it, but only when it is a
+    // registered v1 code: an unrecognised string would produce an ApiError with
+    // no HTTP status mapping, so an unknown reason degrades to the family code
+    // rather than to a 500.
+    const named = error.detail?.reasonCode;
+    const code =
+      error.code === 'POLICY_REFUSED' && typeof named === 'string' && isV1ErrorCode(named)
+        ? named
+        : TRANSITION_CODE[error.code];
+    return new ApiError(code, error.message, error.detail);
   }
   if (error instanceof BookingAccessError) {
     return new ApiError(
@@ -111,6 +126,9 @@ const runAction = (
       metadata: {
         ...(typeof body.reason === 'string' ? { reason: body.reason } : {}),
         ...(typeof body.workerCode === 'string' ? { workerCode: body.workerCode } : {}),
+        // Read by the cancellation policy guard, which validates it against the
+        // standardized list rather than accepting free text.
+        ...(typeof body.reasonCode === 'string' ? { reasonCode: body.reasonCode } : {}),
       },
       correlationId: String((req as any).id ?? ''),
     });
@@ -155,7 +173,24 @@ export const handlers: V1Handlers = {
         ? events[events.length - 1].toState
         : deriveCanonicalState({ bookingStatus: null, workerStatus: null });
 
-      return ok(res, req, { bookingId, currentState, events });
+      /**
+       * What this caller may do next, from the SAME guards the executor runs.
+       *
+       * This is the half that stops UI/executor drift: the button the app
+       * draws and the action the executor authorizes are now the same
+       * decision, evaluated by one implementation. A refused action carries
+       * its reason code and, for the time-based rule, `allowedUntil` — so no
+       * client reimplements a policy window.
+       */
+      const actorUid = actorUidOf(req);
+      // Roles 2 AND 4 are both providers. A `role === 2` check here would have
+      // silently shown a role-4 provider an empty action list, which is the
+      // exact mistake `constants/providerRoles` exists to prevent.
+      const actorRole: 'customer' | 'assigned_provider' =
+        isProviderRole((req as any).user?.role) ? 'assigned_provider' : 'customer';
+      const availableActions = await getAvailableActions(bookingId, actorUid, actorRole);
+
+      return ok(res, req, { bookingId, currentState, events, availableActions });
     } catch (error) {
       return sendCaught(res, req, 'bookings.transitions', asApiError(error));
     }

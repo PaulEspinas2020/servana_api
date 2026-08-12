@@ -76,7 +76,7 @@ const runQueryInner = (conn: number, sql: string, params: unknown[] = []): { row
     }
     db.locks.set(id, conn);
     const b = db.bookings.get(id);
-    return { rows: b ? [{ id, status: b.status, customer_uid: b.customer_uid, worker_uid: b.worker_uid }] : [] };
+    return { rows: b ? [{ id, status: b.status, customer_uid: b.customer_uid, worker_uid: b.worker_uid, schedule: b.schedule ?? null }] : [] };
   }
 
   if (/FROM servana\.booking_workers\s+WHERE booking_id = \$1 AND worker_uid = \$2/is.test(sql)) {
@@ -211,7 +211,14 @@ const CUSTOMER = 'customer-uid';
 const PROVIDER_A = 'provider-a';
 const PROVIDER_B = 'provider-b';
 
-const seedBooking = (opts: { status?: string; workerUid?: string | null; assignmentStatus?: string } = {}) => {
+const seedBooking = (opts: {
+  status?: string;
+  workerUid?: string | null;
+  assignmentStatus?: string;
+  /** Hours from now. Default is well outside the provider-cancel window, so a
+   *  test about something else is not silently blocked by the 48-hour policy. */
+  scheduleInHours?: number;
+} = {}) => {
   db.reset();
   __resetTransitionSchema();
   db.bookings.set(1, {
@@ -219,6 +226,7 @@ const seedBooking = (opts: { status?: string; workerUid?: string | null; assignm
     status: opts.status ?? 'CONFIRMED',
     customer_uid: CUSTOMER,
     worker_uid: opts.workerUid === undefined ? PROVIDER_A : opts.workerUid,
+    schedule: new Date(Date.now() + (opts.scheduleInHours ?? 240) * 3_600_000).toISOString(),
   });
   if (opts.assignmentStatus && opts.workerUid !== null) {
     db.assignments.push({ booking_id: 1, worker_uid: opts.workerUid ?? PROVIDER_A, status: opts.assignmentStatus });

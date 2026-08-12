@@ -278,6 +278,17 @@ jest.mock('../src/services/booking/transitionExecutor', () => {
         correlationId: 'corr-1', occurredAt: '2026-08-12T00:00:00.000Z',
       },
     ]),
+    // Evaluated by the SAME guards the executor enforces, so the transitions
+    // endpoint tells a client exactly what the executor would allow.
+    getAvailableActions: jest.fn(async () => [
+      { action: 'PROVIDER_EN_ROUTE', allowed: true },
+      {
+        action: 'PROVIDER_CANCEL',
+        allowed: false,
+        reasonCode: 'BOOKING_PROVIDER_CANCEL_WINDOW_EXPIRED',
+        detail: { allowedUntil: '2026-08-10T09:00:00.000Z', noticeHours: 48, hoursUntilStart: 3 },
+      },
+    ]),
   };
 });
 

@@ -115,7 +115,7 @@ describe('both legacy derivations delegate to the canonical machine', () => {
       'THE collapse. The one place allowed to decide between the two columns.',
     'services/booking/projections.ts':
       'Names every state to label it. Decides nothing.',
-    'controllers/bookingCancellationPolicy.ts':
+    'services/booking/bookingPolicies.ts':
       'Policy: which stages a provider may self-cancel from. Reads the state, does not derive it.',
     'controllers/bookingDisputeView.ts':
       'Presentation: orders the stages for a dispute summary.',

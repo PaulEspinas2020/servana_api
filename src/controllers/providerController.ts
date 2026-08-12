@@ -20,7 +20,10 @@ import { getProviderAggregate } from "../services/customerReviewService";
 import { BookingResponseConflict } from "../services/bookingResponseConflict";
 import { buildBookingTimeline, currentTimelineStep, mergeStoredEvents } from "./bookingTimeline";
 import { buildDisputeSummary } from "./bookingDisputeView";
-import { evaluateCancellation, CANCELLATION_NOTICE_HOURS } from "./bookingCancellationPolicy";
+import {
+  evaluateCancellation,
+  CANCELLATION_NOTICE_HOURS,
+} from "../services/booking/bookingPolicies";
 import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
 import * as serviceApplicationService from "../services/serviceApplicationService";
 import * as onboardingService from "../services/providerOnboardingService";

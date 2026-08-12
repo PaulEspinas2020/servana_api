@@ -48,8 +48,91 @@ import {
   type Actor,
 } from './canonicalState';
 import { CANONICAL_CANCELLED } from './cancellationVocabulary';
+import { evaluateCancellation } from './bookingPolicies';
 
 const s = db.schema;
+
+// ─── Guards ───────────────────────────────────────────────────────────────────
+
+/**
+ * Named policy checks the machine runs before it will perform an action.
+ *
+ * A guard is business POLICY, distinct from the transition whitelist. The
+ * whitelist answers "is this move structurally possible"; a guard answers "is
+ * the operator willing to allow it right now". Both must pass, and both live
+ * behind the executor so that no caller can route around either.
+ *
+ * The rules themselves are NOT written here. They live in `bookingPolicies.ts`
+ * with their thresholds, so an operator changing the notice period edits one
+ * named constant rather than hunting through a state machine. This layer only
+ * decides which policy applies to which action, and turns a refusal into a
+ * transport-neutral reason code.
+ */
+export type BookingGuardName = 'providerCancellationWindow';
+
+export interface GuardVerdict {
+  allowed: boolean;
+  /** A specific, client-renderable reason. Never a generic failure. */
+  reasonCode?: string;
+  message?: string;
+  /** Safe to show a provider. Deadlines, never another party's identity. */
+  detail?: Record<string, unknown>;
+}
+
+export interface GuardContext {
+  bookingStatus: string | null;
+  workerStatus: string | null;
+  schedule: unknown;
+  now: Date;
+  metadata: Record<string, unknown>;
+}
+
+/**
+ * The guards, by name.
+ *
+ * Evaluated identically by the executor (enforcement) and by
+ * `GET /api/v1/bookings/:id/transitions` (what the UI may offer). One
+ * implementation for both is the point: a UI deciding button visibility from
+ * its own copy of a rule eventually offers something the executor refuses.
+ */
+export const BOOKING_GUARDS: Record<BookingGuardName, (ctx: GuardContext) => GuardVerdict> = {
+  providerCancellationWindow: (ctx) => {
+    const verdict = evaluateCancellation({
+      workerStatus: ctx.workerStatus,
+      schedule: ctx.schedule,
+      now: ctx.now,
+      reasonCode: (ctx.metadata.reasonCode as string | undefined) ?? undefined,
+    });
+    if (verdict.canCancel) return { allowed: true };
+
+    // The block codes are already specific; they are surfaced rather than
+    // flattened, because "you cannot cancel" and "you cannot cancel THIS CLOSE
+    // to the start, the deadline was Thursday" are different answers to a
+    // provider deciding what to do next.
+    const REASONS: Record<string, string> = {
+      INSIDE_NOTICE_WINDOW: 'BOOKING_PROVIDER_CANCEL_WINDOW_EXPIRED',
+      NOT_CANCELLABLE_AT_THIS_STAGE: 'BOOKING_PROVIDER_CANCEL_STAGE_INVALID',
+      SCHEDULE_UNKNOWN: 'BOOKING_PROVIDER_CANCEL_SCHEDULE_UNKNOWN',
+      INVALID_REASON: 'BOOKING_PROVIDER_CANCEL_REASON_INVALID',
+    };
+    const reasonCode = REASONS[verdict.blockCode ?? ''] ?? 'BOOKING_PROVIDER_CANCEL_REFUSED';
+
+    return {
+      allowed: false,
+      reasonCode,
+      message:
+        verdict.blockCode === 'INSIDE_NOTICE_WINDOW'
+          ? `Self-cancellation closed ${verdict.noticeHours} hours before the scheduled start. Contact support.`
+          : 'This booking cannot be cancelled by you at this stage.',
+      detail: {
+        // What a client needs to explain the refusal WITHOUT recomputing it.
+        allowedUntil: verdict.allowedUntil,
+        noticeHours: verdict.noticeHours,
+        hoursUntilStart: verdict.hoursUntilStart,
+      },
+    };
+  },
+};
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
 
@@ -95,6 +178,7 @@ export const BOOKING_ACTIONS = {
   PROVIDER_CANCEL: {
     to: 'AWAITING_ASSIGNMENT', actor: 'assigned_provider',
     from: ['ACCEPTED', 'EN_ROUTE', 'ARRIVED'],
+    guard: 'providerCancellationWindow',
   },
   // Not PENDING_OTP: the machine has no such transition, because a booking is
   // not assignable until its OTP is confirmed.
@@ -108,7 +192,7 @@ export const BOOKING_ACTIONS = {
   SYSTEM_EXPIRE: { to: 'EXPIRED', actor: 'system' },
 } as const satisfies Record<
   string,
-  { to: BookingState; actor: Actor; from?: readonly BookingState[] }
+  { to: BookingState; actor: Actor; from?: readonly BookingState[]; guard?: BookingGuardName }
 >;
 
 export type BookingAction = keyof typeof BOOKING_ACTIONS;
@@ -141,7 +225,17 @@ export type TransitionErrorCode =
    * terminality are all already validated when this fires, so it names exactly
    * one cause. The legacy path answered "Job cannot be started" for all four.
    */
-  | 'WORKER_CODE_INVALID';
+  | 'WORKER_CODE_INVALID'
+  /**
+   * A named policy guard refused, and said which.
+   *
+   * Separate from GUARD_FAILED because a policy refusal is not a malformed
+   * request: the caller did everything right and the answer is still no. The
+   * `detail` carries the specific reason and, where the rule is time-based, the
+   * deadline — so Provider Web and ServanaWorker can explain the refusal
+   * without reimplementing the calculation.
+   */
+  | 'POLICY_REFUSED';
 
 /**
  * The rows the executor read under `FOR UPDATE`, as they were when it refused.
@@ -301,6 +395,9 @@ interface LoadedBooking {
    * 409). Null when the actor never had a row, or is not a provider.
    */
   actorAssignmentStatus: string | null;
+  /** Scheduled start, needed by time-based policy guards. */
+  schedule: unknown;
+  /** An open escalation exists. */
   hasEscalation: boolean;
 }
 
@@ -321,7 +418,7 @@ async function loadForUpdate(
   actorUid: string | null,
 ): Promise<LoadedBooking | null> {
   const booking = await client.query(
-    `SELECT id, status, user_id AS customer_uid, worker_uid
+    `SELECT id, status, user_id AS customer_uid, worker_uid, schedule
        FROM ${s}.bookings
       WHERE id = $1
       FOR UPDATE`,
@@ -373,6 +470,7 @@ async function loadForUpdate(
     workerUid: row.worker_uid ?? null,
     assignmentStatus: assignment.rows[0]?.status ?? null,
     actorAssignmentStatus,
+    schedule: row.schedule ?? null,
     hasEscalation: escalation.rows.length > 0,
   };
 }
@@ -590,11 +688,37 @@ async function applyState(
     }
 
     case 'ASSIGNED': {
-      // Assign or reassign. The incoming provider comes from metadata because
-      // it is not derivable from the booking — it is the operator's choice.
+      /**
+       * Assign and reassign are NOT interchangeable, even though both land here.
+       *
+       * `from` already separates them — ADMIN_ASSIGN only from
+       * AWAITING_ASSIGNMENT, ADMIN_REASSIGN only from a live assignment — so
+       * reaching this branch with the wrong one is impossible. What this checks
+       * is the other half: that the operation actually does what its name says.
+       *
+       * An ADMIN_ASSIGN that quietly closed an existing assignment would be a
+       * reassignment wearing the wrong label, and the timeline would record it
+       * as one. "Assigned Provider A" and "Reassigned Provider A → Provider B"
+       * are different events to anyone reading a booking's history, and the
+       * distinction cannot be recovered afterwards.
+       */
       const nextProvider = String(input.metadata?.providerUid ?? '');
       if (!nextProvider) {
         throw new TransitionError('GUARD_FAILED', 'providerUid is required to assign.', { guard: 'provider_eligible' });
+      }
+      if (input.action === 'ADMIN_ASSIGN' && providerUid) {
+        throw new TransitionError(
+          'INVALID_TRANSITION',
+          'This booking already has a provider. Use ADMIN_REASSIGN.',
+          { currentState: 'ASSIGNED', reason: 'ASSIGNMENT_ALREADY_EXISTS' },
+        );
+      }
+      if (input.action === 'ADMIN_REASSIGN' && !providerUid) {
+        throw new TransitionError(
+          'INVALID_TRANSITION',
+          'This booking has no provider to reassign. Use ADMIN_ASSIGN.',
+          { currentState: 'AWAITING_ASSIGNMENT', reason: 'NO_ASSIGNMENT_TO_REPLACE' },
+        );
       }
       if (providerUid && providerUid !== nextProvider) {
         // Close the outgoing assignment. Never overwrite it: TAB 05 depends on
@@ -881,6 +1005,34 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
       );
     }
 
+    /**
+     * Policy, last and inside the lock.
+     *
+     * After the whitelist so a structurally impossible move is reported as
+     * such rather than as a policy refusal, and before any write so a refused
+     * action leaves nothing behind. The guard reads the LOCKED rows, so the
+     * schedule it measures against cannot be edited between the check and the
+     * transition.
+     */
+    const guardName = (spec as { guard?: BookingGuardName }).guard;
+    if (guardName) {
+      const verdict = BOOKING_GUARDS[guardName]({
+        bookingStatus: loaded.status,
+        workerStatus: loaded.assignmentStatus,
+        schedule: loaded.schedule,
+        now: new Date(),
+        metadata: input.metadata ?? {},
+      });
+      if (!verdict.allowed) {
+        throw new TransitionError(
+          'POLICY_REFUSED',
+          verdict.message ?? 'This action is not permitted by policy.',
+          { guard: guardName, reasonCode: verdict.reasonCode, ...(verdict.detail ?? {}) },
+          snapshot,
+        );
+      }
+    }
+
     try {
       await applyState(client, loaded, toState, input);
       await writeLegacyTracking(client, loaded.id, input.action);
@@ -975,6 +1127,125 @@ export interface TimelineEvent {
  * EN_ROUTE leaves the full progression behind — accepted, en route, reassigned,
  * assigned — because the current state resetting must not erase what happened.
  */
+// ─── What may be done next ────────────────────────────────────────────────────
+
+export interface AvailableAction {
+  action: BookingAction;
+  allowed: boolean;
+  /** Why not. A specific rule, never a generic refusal. */
+  reasonCode?: string;
+  /** Safe context — deadlines and counts, never another party's identity. */
+  detail?: Record<string, unknown>;
+}
+
+/**
+ * The actions this actor may take on this booking, and why not for the rest.
+ *
+ * ## Why this exists rather than a client working it out
+ *
+ * A UI that decides button visibility from its own copy of the rules
+ * eventually offers a button the executor refuses — the provider taps cancel,
+ * gets a 409, and the app looks broken. The two must come from one
+ * implementation, so this runs the SAME checks in the SAME order as
+ * `transitionBooking`: the action's source restriction, the machine's
+ * whitelist, then the named policy guard.
+ *
+ * Clients render `allowed` and `reasonCode`. They must never recompute a
+ * policy — the 48-hour window in particular, which is why the guard returns
+ * `allowedUntil` rather than expecting anyone to subtract it from a schedule.
+ *
+ * ## Why it does not take a lock
+ *
+ * This is advisory: it tells a client what to draw. Enforcement is the
+ * executor's, under `FOR UPDATE`, and it re-runs every one of these checks. A
+ * booking that moves between this read and the action is exactly the case
+ * `expectedState` and the lock exist to handle.
+ */
+export async function getAvailableActions(
+  bookingId: number,
+  actorUid: string | null,
+  actorRole: Actor,
+): Promise<AvailableAction[]> {
+  const res = await dbQuery.query(
+    `SELECT b.id, b.status, b.user_id AS customer_uid, b.worker_uid, b.schedule,
+            bw.status AS worker_status,
+            EXISTS (
+              SELECT 1 FROM ${s}.booking_transitions t
+               WHERE t.booking_id = b.id AND t.to_state = 'DISPUTED'
+            ) AS has_escalation
+       FROM ${s}.bookings b
+       LEFT JOIN LATERAL (
+            SELECT status FROM ${s}.booking_workers
+             WHERE booking_id = b.id AND worker_uid = b.worker_uid
+             ORDER BY assigned_at DESC NULLS LAST, id DESC
+             LIMIT 1
+       ) bw ON TRUE
+      WHERE b.id = $1`,
+    [bookingId],
+  );
+  if (!res.rows.length) throw new TransitionError('BOOKING_NOT_FOUND', 'No such booking.');
+  const row = res.rows[0];
+
+  const fromState = deriveCanonicalState({
+    bookingStatus: row.status,
+    workerStatus: row.worker_status,
+    workerUid: row.worker_uid,
+    hasEscalation: row.has_escalation === true,
+  });
+
+  // Same authorization rule the executor applies, not a looser one.
+  const isCurrentProvider = !!actorUid && row.worker_uid === actorUid;
+  const isCustomer = !!actorUid && row.customer_uid === actorUid;
+
+  const out: AvailableAction[] = [];
+  for (const [name, raw] of Object.entries(BOOKING_ACTIONS)) {
+    const action = name as BookingAction;
+    const spec = raw as {
+      to: BookingState;
+      actor: Actor;
+      from?: readonly BookingState[];
+      guard?: BookingGuardName;
+    };
+    if (spec.actor !== actorRole) continue;
+    if (actorRole === 'assigned_provider' && !isCurrentProvider) continue;
+    if (actorRole === 'customer' && !isCustomer) continue;
+
+    if (spec.from && !spec.from.includes(fromState)) {
+      out.push({ action, allowed: false, reasonCode: 'BOOKING_TRANSITION_INVALID' });
+      continue;
+    }
+    const verdict = canTransition(fromState, spec.to, actorRole);
+    if (!verdict.allowed) {
+      out.push({
+        action,
+        allowed: false,
+        reasonCode: isTerminal(fromState) ? 'BOOKING_TERMINAL' : 'BOOKING_TRANSITION_INVALID',
+      });
+      continue;
+    }
+    if (spec.guard) {
+      const guarded = BOOKING_GUARDS[spec.guard]({
+        bookingStatus: row.status,
+        workerStatus: row.worker_status,
+        schedule: row.schedule,
+        now: new Date(),
+        metadata: {},
+      });
+      if (!guarded.allowed) {
+        out.push({
+          action,
+          allowed: false,
+          reasonCode: guarded.reasonCode,
+          detail: guarded.detail,
+        });
+        continue;
+      }
+    }
+    out.push({ action, allowed: true });
+  }
+  return out;
+}
+
 export async function getBookingTimeline(bookingId: number): Promise<TimelineEvent[]> {
   await ensureTransitionSchema();
   const res = await dbQuery.query(

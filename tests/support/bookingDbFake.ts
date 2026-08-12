@@ -88,6 +88,20 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
   if (/CREATE TABLE|CREATE INDEX|ALTER TABLE/i.test(flat)) return done([]);
 
   // ── reads ──
+  // getAvailableActions: booking + its current provider's assignment + dispute.
+  if (/SELECT b\.id, b\.status, b\.user_id AS customer_uid/i.test(flat)) {
+    if (!store.booking) return done([]);
+    const current = mine(Number(store.booking.id), store.booking.worker_uid);
+    return done([{
+      id: store.booking.id,
+      status: store.booking.status,
+      customer_uid: store.booking.user_id,
+      worker_uid: store.booking.worker_uid,
+      schedule: store.booking.schedule ?? null,
+      worker_status: current.length ? current[current.length - 1].status : null,
+      has_escalation: store.transitions.some((t) => t.to_state === 'DISPUTED'),
+    }]);
+  }
   if (/SELECT id, status, user_id AS customer_uid, worker_uid/i.test(flat)) {
     return done(store.booking ? [{ ...store.booking, customer_uid: store.booking.user_id }] : []);
   }
@@ -154,6 +168,20 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
         eta_minutes: null, eta_at: null, worker_code: null,
       });
     }
+    return done([]);
+  }
+
+  // ── assignment / reassignment ──
+  if (/UPDATE servana\.booking_workers SET status = 'REASSIGNED'/i.test(flat)) {
+    for (const a of mine(Number(params[0]), params[1])) a.status = 'REASSIGNED';
+    return done([]);
+  }
+  if (/INSERT INTO servana\.booking_workers/i.test(flat)) {
+    store.assignments.push({ booking_id: Number(params[0]), worker_uid: params[1], status: 'ASSIGNED' });
+    return done([]);
+  }
+  if (/UPDATE servana\.bookings SET worker_uid = \$2/i.test(flat)) {
+    if (store.booking && store.booking.id === Number(params[0])) store.booking.worker_uid = params[1];
     return done([]);
   }
 

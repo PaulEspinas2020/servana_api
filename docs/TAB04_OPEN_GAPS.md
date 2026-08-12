@@ -147,7 +147,85 @@ transition and leaves the assignment row untouched.
 
 ---
 
-### 3. Executor refusals carry the locked snapshot
+### 3. Two event tables, and which is which
+
+Now that `booking_tracking` is written transactionally it would be easy to
+start treating it as the event store. It is not.
+
+```
+booking_transitions   canonical evidence
+                      one row per lifecycle action, written by the executor
+                      inside the transition transaction; the thing every new
+                      surface reads and the thing an audit trusts
+
+booking_tracking      REQUIRED LEGACY PROJECTION
+                      required only while supported clients consume it
+                      written by payments, refunds and admin too, so it is
+                      not lifecycle-owned and the executor cannot claim it
+```
+
+Transactional consistency was granted because three supported surfaces read it,
+not because it was promoted. It retires when those surfaces read
+`booking_transitions`; it does not become the future event store by being
+reliable in the meantime.
+
+---
+
+### 4. Provider cancellation policy moved into the domain
+
+`controllers/bookingCancellationPolicy.ts` → `services/booking/bookingPolicies.ts`.
+
+The 48-hour rule was enforced in a controller, so it applied only to callers
+that went through that controller. It is now a named guard the executor runs:
+
+```
+Controller
+→ authenticates / parses
+→ transitionBooking(PROVIDER_CANCEL)
+→ executor loads locked canonical state
+→ guard: providerCancellationWindow
+→ transition → timeline → commit
+```
+
+- The window is **one named constant**, `PROVIDER_CANCEL_WINDOW_HOURS = 48`.
+- The action **names** its guard; the executor holds no copy of the threshold,
+  asserted by test.
+- Refusals return a **specific** code, never a flattened
+  `BOOKING_TRANSITION_INVALID`:
+  `BOOKING_PROVIDER_CANCEL_WINDOW_EXPIRED`, `…_STAGE_INVALID`,
+  `…_SCHEDULE_UNKNOWN`, `…_REASON_INVALID`, with `allowedUntil`,
+  `noticeHours` and `hoursUntilStart` in `details`.
+- `GET /api/v1/bookings/:id/transitions` returns `availableActions[]` evaluated
+  by the **same guard**, so UI visibility and executor authorization are one
+  decision. Pinned by a test that walks the window boundary
+  (−10, 0, 1, 47, 47.9, 48, 48.1, 49, 72, 500 hours) and fails if the two ever
+  disagree.
+- **Clients must never compute the window.** They render `allowed`,
+  `reasonCode` and `allowedUntil`.
+
+Interim state: `providerController` still calls `evaluateCancellation` directly,
+because `cancelAcceptedJob` has not migrated to `PROVIDER_CANCEL` yet. That is
+one implementation with two callers, not two implementations — the controller's
+call is deleted when the service migrates.
+
+---
+
+### 5. ADMIN_ASSIGN and ADMIN_REASSIGN are not interchangeable
+
+Both end at `ASSIGNED`. `from` separates them structurally — assign only from
+`AWAITING_ASSIGNMENT`, reassign only from a live assignment — and the executor
+additionally refuses an assign onto a booking that already has a provider and a
+reassign on one that does not.
+
+The timeline has to keep `Assigned Provider A` distinct from
+`Reassigned Provider A → Provider B`; that distinction cannot be reconstructed
+afterwards, and an assign that quietly closed an existing assignment would be a
+reassignment recorded under the wrong name. The outgoing assignment row is
+closed as `REASSIGNED` rather than overwritten, which TAB 05 depends on.
+
+---
+
+### 6. Executor refusals carry the locked snapshot
 
 `TransitionError.snapshot` exposes the rows as they were when the refusal was
 decided, so a caller owing its clients a richer vocabulary — provider accept and
