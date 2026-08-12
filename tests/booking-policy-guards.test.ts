@@ -609,11 +609,14 @@ describe('lock acquisition order is fixed', () => {
   });
 
   it('only the assignment actions require it', () => {
+    // All THREE assignment producers, and nothing else. The invariant is not
+    // "admin assignment is safe" but "no producer can double-book a provider",
+    // so auto-assignment participates in the same protocol with the same key.
     const declared = Object.entries(BOOKING_ACTIONS)
       .filter(([, spec]) => (spec as { advisoryLock?: unknown }).advisoryLock)
       .map(([name]) => name)
       .sort();
-    expect(declared).toEqual(['ADMIN_ASSIGN', 'ADMIN_REASSIGN']);
+    expect(declared).toEqual(['ADMIN_ASSIGN', 'ADMIN_REASSIGN', 'AUTO_ASSIGN']);
   });
 
   it('no legacy path still takes the locks the other way round', () => {

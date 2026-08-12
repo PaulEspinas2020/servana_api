@@ -367,12 +367,34 @@ export const BOOKING_ACTIONS = {
     to: 'ASSIGNED', actor: 'admin',
     from: ['AWAITING_ASSIGNMENT'],
     advisoryLock: 'PROVIDER_ASSIGNMENT',
+    targetValidation: 'FULL',
+  },
+  /**
+   * The matching engine assigns a provider it has already chosen.
+   *
+   * A DISTINCT action from ADMIN_ASSIGN, not a reuse. Same destination, but a
+   * different actor, a different provenance and different notifications — and
+   * `booking_transitions.action` is what lets operations and analytics tell
+   * "an admin chose this provider" from "the system did".
+   *
+   * Selection stays entirely outside: `assignNearestWorker` ranks by distance,
+   * applies its exclusions and hands a uid in. The executor never chooses.
+   *
+   * LEGACY_AUTO validation: the schedule conflict only. See
+   * TargetValidationProfile for the gap this preserves and why.
+   */
+  AUTO_ASSIGN: {
+    to: 'ASSIGNED', actor: 'system',
+    from: ['AWAITING_ASSIGNMENT'],
+    advisoryLock: 'PROVIDER_ASSIGNMENT',
+    targetValidation: 'LEGACY_AUTO',
   },
   ADMIN_REASSIGN: {
     to: 'ASSIGNED', actor: 'admin',
     from: ['ASSIGNED', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED'],
     advisoryLock: 'PROVIDER_ASSIGNMENT',
     sameTarget: 'IDEMPOTENT_NO_OP',
+    targetValidation: 'FULL',
   },
   /**
    * Admin records a provider's acceptance ON BEHALF of them (§23).
@@ -456,6 +478,8 @@ export const BOOKING_ACTIONS = {
     advisoryLock?: AdvisoryLockRequirement;
     /** What to do when metadata.providerUid is already the current provider. */
     sameTarget?: SameTargetBehavior;
+    /** How much the action validates its target. Default FULL. */
+    targetValidation?: TargetValidationProfile;
   }
 >;
 
@@ -525,6 +549,46 @@ export type AdvisoryLockRequirement = 'PROVIDER_ASSIGNMENT';
  * assignment the admin never intended to touch.
  */
 export type SameTargetBehavior = 'IDEMPOTENT_NO_OP';
+
+/**
+ * How much an action validates the provider it is committing.
+ *
+ * Named rather than implied, because the difference between the two profiles
+ * is a real gap and it must not look like an oversight.
+ *
+ *   FULL              existence, canonical provider role, not archived,
+ *                     qualified for the service, and no schedule conflict.
+ *                     What ADMIN_ASSIGN and ADMIN_REASSIGN do.
+ *
+ *   LEGACY_AUTO       the schedule conflict ONLY. Auto-assignment has never
+ *                     checked role, archive state or service qualification,
+ *                     and TAB 04 preserves that rather than quietly changing
+ *                     who the matching engine is allowed to pick.
+ *
+ * KNOWN ASSIGNMENT POLICY GAP — AUTO_ASSIGN does not perform the
+ * role / archive / service-qualification validation ADMIN_ASSIGN does.
+ * PRESERVED during TAB 04. To be reconciled in TAB 05, which owns eligibility.
+ * See docs/TAB04_OPEN_GAPS.md.
+ *
+ * ADMIN_ASSIGN is NOT weakened to match. The gap closes upward.
+ */
+export type TargetValidationProfile = 'FULL' | 'LEGACY_AUTO';
+
+/**
+ * Assignment-associated fields an action may write with the assignment.
+ *
+ * NOT state-machine fields — ETA and pricing have nothing to do with the
+ * lifecycle, and putting them in the generic ASSIGNED branch would drag
+ * pricing into the state machine. They travel as an action-specific payload
+ * because splitting them out of the assignment write would turn one atomic
+ * commit into two.
+ */
+export interface AssignmentPayload {
+  etaMinutes?: number | null;
+  workerCode?: string | null;
+  transpoFee?: number | null;
+  distanceKm?: number | null;
+}
 
 /** Which metadata field carries each credential, and how it is refused. */
 const CREDENTIAL_FIELD: Record<BookingCredential, { field: string; code: TransitionErrorCode; message: string }> = {
@@ -999,6 +1063,10 @@ const LEGACY_TRACKING: Partial<Record<BookingAction, { status: string; note: str
   PROVIDER_ARRIVED: { status: 'ARRIVED', note: 'Provider has arrived' },
   // adminBookingService.adminAssignProvider
   ADMIN_ASSIGN: { status: 'WORKER_ASSIGNED', note: 'Provider assigned by admin' },
+  // technicianService auto-assignment. The note is the CALLER's: it says why
+  // the search ran (first assignment, decline, provider cancellation), which
+  // only the caller knows.
+  AUTO_ASSIGN: { status: 'WORKER_ASSIGNED', note: '' },
   // adminBookingService.adminReassignProvider
   ADMIN_REASSIGN: { status: 'WORKER_ASSIGNED', note: 'Provider reassigned by admin' },
   // bookingService.confirmOtp
@@ -1115,12 +1183,15 @@ async function writeLegacyTracking(
   client: PoolClient,
   bookingId: number,
   action: BookingAction,
+  callerNote?: unknown,
 ): Promise<void> {
   const entry = LEGACY_TRACKING[action];
   if (!entry) return;
+  // An empty declared note means the CALLER supplies it.
+  const note = entry.note || String(callerNote ?? '');
   await client.query(
     `INSERT INTO ${s}.booking_tracking (booking_id, status, note) VALUES ($1, $2, $3)`,
-    [bookingId, entry.status, entry.note],
+    [bookingId, entry.status, note],
   );
 }
 
@@ -1137,6 +1208,38 @@ async function writeLegacyTracking(
  *
  * Every message is the legacy one, verbatim.
  */
+async function assertNoScheduleConflict(
+  client: PoolClient,
+  bookingId: number,
+  providerUid: string,
+): Promise<void> {
+  const booking = await client.query(
+    `SELECT schedule FROM ${s}.bookings WHERE id = $1`,
+    [bookingId],
+  );
+  const schedule = new Date(booking.rows[0]?.schedule);
+  if (Number.isNaN(schedule.getTime())) return;
+
+  const busy = await client.query(
+    `SELECT id FROM ${s}.bookings
+      WHERE worker_uid = $1 AND id <> $2
+        AND schedule BETWEEN $3 AND $4
+        AND status NOT IN ('COMPLETED','CANCELLED','CANCELED','REFUNDED','FAILED','EXPIRED')
+      LIMIT 1`,
+    [
+      providerUid, bookingId,
+      new Date(schedule.getTime() - 2 * 60 * 60 * 1000),
+      new Date(schedule.getTime() + 2 * 60 * 60 * 1000),
+    ],
+  );
+  if (busy.rowCount) {
+    throw new TransitionError(
+      'GUARD_FAILED', 'Provider has a conflicting booking within 2 hours',
+      { guard: 'provider_schedule_conflict' },
+    );
+  }
+}
+
 async function assertAssignableProvider(
   client: PoolClient,
   bookingId: number,
@@ -1192,31 +1295,15 @@ async function assertAssignableProvider(
   }
 
   /**
-   * The ±2-hour conflict check, meaningful ONLY because the provider advisory
-   * lock is held. Without it two concurrent assignments of the same provider
-   * both read "no conflict" and both commit.
+   * The +/-2-hour conflict check, meaningful ONLY because the provider
+   * advisory lock is held. Without it two concurrent assignments of the same
+   * provider both read "no conflict" and both commit.
+   *
+   * ONE implementation, shared with the LEGACY_AUTO profile: auto-assignment
+   * and admin assignment must agree about what a conflict IS, or the advisory
+   * lock serialises two different questions.
    */
-  const schedule = new Date(booking.rows[0]?.schedule);
-  if (!Number.isNaN(schedule.getTime())) {
-    const busy = await client.query(
-      `SELECT id FROM ${s}.bookings
-        WHERE worker_uid = $1 AND id <> $2
-          AND schedule BETWEEN $3 AND $4
-          AND status NOT IN ('COMPLETED','CANCELLED','CANCELED','REFUNDED','FAILED','EXPIRED')
-        LIMIT 1`,
-      [
-        providerUid, bookingId,
-        new Date(schedule.getTime() - 2 * 60 * 60 * 1000),
-        new Date(schedule.getTime() + 2 * 60 * 60 * 1000),
-      ],
-    );
-    if (busy.rowCount) {
-      throw new TransitionError(
-        'GUARD_FAILED', 'Provider has a conflicting booking within 2 hours',
-        { guard: 'provider_eligible' },
-      );
-    }
-  }
+  await assertNoScheduleConflict(client, bookingId, providerUid);
 
   return `${provider.rows[0].first_name ?? ''} ${provider.rows[0].last_name ?? ''}`.trim();
 }
@@ -1340,10 +1427,24 @@ async function applyState(
         throw new TransitionError('GUARD_FAILED', 'providerUid is required to assign.', { guard: 'provider_eligible' });
       }
 
-      // Under the booking row lock AND the provider advisory lock. Checking
-      // this before the executor was called would put the conflict query
-      // outside the lock that makes it meaningful.
-      await assertAssignableProvider(client, loaded.id, nextProvider);
+      /**
+       * Under the booking row lock AND the provider advisory lock. Checking
+       * before the executor was called would put the conflict query outside
+       * the lock that makes it meaningful.
+       *
+       * The profile is the ACTION's, declared rather than inferred.
+       * LEGACY_AUTO runs the conflict check alone, because auto-assignment has
+       * never validated role, archive state or qualification and TAB 04 is not
+       * the place to change who the matching engine may pick.
+       */
+      const profile =
+        (BOOKING_ACTIONS[input.action] as { targetValidation?: TargetValidationProfile })
+          .targetValidation ?? 'FULL';
+      if (profile === 'LEGACY_AUTO') {
+        await assertNoScheduleConflict(client, loaded.id, nextProvider);
+      } else {
+        await assertAssignableProvider(client, loaded.id, nextProvider);
+      }
       if (input.action === 'ADMIN_ASSIGN' && providerUid) {
         throw new TransitionError(
           'INVALID_TRANSITION',
@@ -1414,9 +1515,52 @@ async function applyState(
        * today, but relying on it would make the compatibility column and the
        * canonical answer disagree about why.
        */
+      /**
+       * The assignment payload rides with the pointer, in ONE statement.
+       *
+       * ETA and pricing are not lifecycle fields and the machine has no
+       * opinion about them, but auto-assignment has always written them in the
+       * same statement as the assignment. Splitting them out would turn one
+       * atomic commit into two.
+       *
+       * `worker_code = COALESCE($4, worker_code)`: an existing code is
+       * PRESERVED, never regenerated. The customer may already be holding it.
+       *
+       * Every field is a no-op when its parameter is null, so ADMIN_ASSIGN and
+       * ADMIN_REASSIGN, which pass no payload, write exactly the pointer and
+       * the status word as before.
+       */
+      const payload = (input.metadata?.assignment ?? {}) as AssignmentPayload;
       await client.query(
-        `UPDATE ${s}.bookings SET worker_uid = $2, status = 'WORKER_ASSIGNED' WHERE id = $1`,
-        [loaded.id, nextProvider],
+        `UPDATE ${s}.bookings
+            SET worker_uid = $2,
+                status = 'WORKER_ASSIGNED',
+                eta_minutes = CASE WHEN $3::int IS NULL THEN eta_minutes ELSE $3::int END,
+                eta_at = CASE
+                  WHEN $3::int IS NULL THEN eta_at
+                  ELSE NOW() + ($3::int * interval '1 minute')
+                END,
+                worker_code = COALESCE($4, worker_code),
+                transpo_fee = CASE WHEN $5::numeric IS NULL THEN transpo_fee ELSE $5::numeric END,
+                final_price = CASE
+                  WHEN $5::numeric IS NULL THEN final_price
+                  ELSE quoted_price + $5::numeric
+                END,
+                pricing_breakdown = CASE
+                  WHEN $5::numeric IS NULL THEN pricing_breakdown
+                  ELSE COALESCE(pricing_breakdown, '{}'::jsonb) || jsonb_build_object(
+                    'transpo_fee', $5::numeric,
+                    'worker_distance', $6::numeric
+                  )
+                END
+          WHERE id = $1`,
+        [
+          loaded.id, nextProvider,
+          payload.etaMinutes ?? null,
+          payload.workerCode ?? null,
+          payload.transpoFee ?? null,
+          payload.distanceKm ?? null,
+        ],
       );
       return;
     }
@@ -1910,7 +2054,7 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
 
     try {
       await applyState(client, loaded, toState, input);
-      await writeLegacyTracking(client, loaded.id, input.action);
+      await writeLegacyTracking(client, loaded.id, input.action, input.metadata?.trackingNote);
       await writeLegacyTimelineEvent(client, loaded, input);
     } catch (error) {
       throw error instanceof TransitionError

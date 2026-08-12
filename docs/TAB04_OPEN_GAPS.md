@@ -190,6 +190,59 @@ If the derivation ever changes so the two states differ, the guard is
 
 ---
 
+### ASSIGNMENT POLICY GAP — AUTO_ASSIGN validates less than ADMIN_ASSIGN
+
+**Preserved during TAB 04. To be reconciled in TAB 05, which owns eligibility.**
+
+| check | ADMIN_ASSIGN / ADMIN_REASSIGN | AUTO_ASSIGN |
+|---|---|---|
+| provider exists | yes | **no** |
+| canonical provider role (2 or 4) | yes | **no** |
+| not archived | yes | **no** |
+| qualified for the service | yes | **no** |
+| ±2-hour schedule conflict | yes | yes |
+
+Auto-assignment has never performed the first four. E2 moved its WRITE into
+the executor without changing who the matching engine may pick, because those
+are eligibility policy and mixing them into a write migration would conflate
+two questions:
+
+```
+1. who is allowed to be selected     ← TAB 05
+2. who owns the assignment write     ← TAB 04
+```
+
+Declared as `targetValidation: 'LEGACY_AUTO'` on the action rather than
+achieved by skipping a call, so the omission reads as a decision and not as an
+oversight. `ADMIN_ASSIGN` is **not** weakened to match — the gap closes upward.
+
+The ±2-hour conflict check is deliberately ONE implementation shared by both
+profiles: the two paths must agree about what a conflict is, or the provider
+advisory lock serialises two different questions.
+
+---
+
+### LEGACY_LAST_PROVIDER_PROJECTION — bookings.worker_uid on a cancelled booking
+
+Admin cancellation leaves `bookings.worker_uid` pointing at the provider who
+was on the booking. Measured, and preserved: the admin portal shows that name
+on a cancelled booking today, and clearing it would be a historical-display
+change smuggled inside a lifecycle migration.
+
+It does not mean the provider is still assigned — every active
+`booking_workers` row is closed transactionally by the same cancellation.
+
+```
+booking_workers active rows        assignment truth
+bookings.worker_uid on CANCELLED   LEGACY_LAST_PROVIDER_PROJECTION
+```
+
+Reconciliation, later: Admin should read `activeProvider` and
+`lastAssignedProvider` as separate fields rather than inferring both from one
+column.
+
+---
+
 ## DELIBERATE BEHAVIOUR CHANGES SHIPPING WITH TAB 04
 
 ### 1. Admin: a closed assignment reports `awaiting_assignment`

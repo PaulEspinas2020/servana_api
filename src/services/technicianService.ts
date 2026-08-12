@@ -74,6 +74,39 @@ type AssignmentWriteResult = {
  * same provider before either transaction becomes visible to the other.
  * Booking, assignment and tracking are committed or rolled back together.
  */
+/**
+ * ─── E2 · AUTO_ASSIGN, on the canonical executor ─────────────────────────────
+ *
+ * Commits a provider the matching engine has ALREADY chosen. Selection,
+ * ranking and exclusions stay entirely in `assignNearestWorker`; this function
+ * is now a compatibility boundary around one executor call.
+ *
+ * ## Why it had to move
+ *
+ * It was the last writer of lifecycle state outside the executor, and after D4
+ * it was actively dangerous: D4 moved admin assignment's locks into the
+ * executor and reversed their order to booking→provider, while this path still
+ * took provider→booking. Two paths acquiring the same two lock classes in
+ * opposite orders is a deadlock, and `AUTO_ASSIGN(P→A)` racing
+ * `ADMIN_ASSIGN(P→B)` could hit it. Both orders now converge on
+ * booking→provider, with the same advisory key.
+ *
+ * ## What did NOT change
+ *
+ * The validation profile is `LEGACY_AUTO`: the ±2-hour conflict check and
+ * nothing else. Auto-assignment has never checked provider role, archive state
+ * or service qualification, and adding them here would silently change who the
+ * matching engine may pick — a TAB 05 decision, recorded as a known gap rather
+ * than made by accident.
+ *
+ * The three return shapes are preserved because the search loop depends on
+ * them: `busy` is NOT an error (the loop tries the next candidate), `existing`
+ * is idempotent success, and a different provider is BOOKING_ALREADY_ASSIGNED
+ * unless `returnExistingAssignment`.
+ *
+ * `worker_code` keeps its COALESCE: an existing code is preserved, never
+ * regenerated, because the customer may already be holding it.
+ */
 const persistWorkerAssignment = async (input: {
   bookingId: number;
   workerUid: string;
@@ -81,140 +114,111 @@ const persistWorkerAssignment = async (input: {
   travel?: AssignmentTravel;
   returnExistingAssignment?: boolean;
 }): Promise<AssignmentWriteResult> => {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query(
-      "SELECT pg_advisory_xact_lock(hashtext($1))",
-      [`servana-provider-assignment:${input.workerUid}`],
-    );
-
-    const bookingRes = await client.query(
-      `SELECT id, status, worker_uid, user_id, schedule
+  const bookingRes = await dbQuery.query(
+    `SELECT id, status, worker_uid, user_id, schedule
        FROM ${dbSchema}.bookings
-       WHERE id = $1
-       FOR UPDATE`,
-      [input.bookingId],
-    );
-    if (!bookingRes.rowCount) {
-      throw new BookingAssignmentError("BOOKING_NOT_FOUND", "Booking not found");
-    }
+      WHERE id = $1`,
+    [input.bookingId],
+  );
+  if (!bookingRes.rowCount) {
+    throw new BookingAssignmentError("BOOKING_NOT_FOUND", "Booking not found");
+  }
 
-    const booking = bookingRes.rows[0];
-    const status = String(booking.status ?? "").toUpperCase();
-    const currentWorkerUid = booking.worker_uid ? String(booking.worker_uid) : null;
+  const booking = bookingRes.rows[0];
+  const status = String(booking.status ?? "").toUpperCase();
+  const currentWorkerUid = booking.worker_uid ? String(booking.worker_uid) : null;
 
-    if (currentWorkerUid) {
-      if (currentWorkerUid !== input.workerUid && !input.returnExistingAssignment) {
-        throw new BookingAssignmentError(
-          "BOOKING_ALREADY_ASSIGNED",
-          "Booking is already assigned to another provider",
-        );
-      }
-      await client.query("COMMIT");
-      return {
-        kind: "existing",
-        workerUid: currentWorkerUid,
-        bookingStatus: status,
-        customerUid: booking.user_id ?? null,
-        schedule: new Date(booking.schedule),
-      };
-    }
-
-    if (TERMINAL_BOOKING_STATUSES.has(status) || !ASSIGNABLE_BOOKING_STATUSES.has(status)) {
+  /**
+   * Already assigned: answered before the executor, exactly as before.
+   *
+   * The machine would report INVALID_TRANSITION for a booking already at
+   * ASSIGNED, and this function has always distinguished "the same provider,
+   * fine" from "somebody else, refuse".
+   */
+  if (currentWorkerUid) {
+    if (currentWorkerUid !== input.workerUid && !input.returnExistingAssignment) {
       throw new BookingAssignmentError(
-        "BOOKING_NOT_ASSIGNABLE",
-        `Booking cannot be assigned from status ${status || "UNKNOWN"}`,
+        "BOOKING_ALREADY_ASSIGNED",
+        "Booking is already assigned to another provider",
       );
     }
+    return {
+      kind: "existing",
+      workerUid: currentWorkerUid,
+      bookingStatus: status,
+      customerUid: booking.user_id ?? null,
+      schedule: new Date(booking.schedule),
+    };
+  }
 
-    const schedule = new Date(booking.schedule);
-    const windowStart = new Date(schedule.getTime() - 2 * 60 * 60 * 1000);
-    const windowEnd = new Date(schedule.getTime() + 2 * 60 * 60 * 1000);
-    const busyRes = await client.query(
-      `SELECT id
-       FROM ${dbSchema}.bookings
-       WHERE worker_uid = $1
-         AND id <> $2
-         AND schedule BETWEEN $3 AND $4
-         AND status NOT IN ('COMPLETED','CANCELED','CANCELLED','REFUNDED','FAILED','EXPIRED')
-       LIMIT 1`,
-      [input.workerUid, input.bookingId, windowStart, windowEnd],
+  if (TERMINAL_BOOKING_STATUSES.has(status) || !ASSIGNABLE_BOOKING_STATUSES.has(status)) {
+    throw new BookingAssignmentError(
+      "BOOKING_NOT_ASSIGNABLE",
+      `Booking cannot be assigned from status ${status || "UNKNOWN"}`,
     );
-    if (busyRes.rowCount) {
-      await client.query("ROLLBACK");
-      return { kind: "busy", workerUid: input.workerUid };
-    }
+  }
 
-    const travel = input.travel ?? null;
-    const updateRes = await client.query(
-      `UPDATE ${dbSchema}.bookings
-       SET worker_uid = $2,
-           status = 'WORKER_ASSIGNED',
-           eta_minutes = CASE WHEN $3::int IS NULL THEN eta_minutes ELSE $3::int END,
-           eta_at = CASE
-             WHEN $3::int IS NULL THEN eta_at
-             ELSE NOW() + ($3::int * interval '1 minute')
-           END,
-           worker_code = COALESCE($4, worker_code),
-           transpo_fee = CASE WHEN $5::numeric IS NULL THEN transpo_fee ELSE $5::numeric END,
-           final_price = CASE WHEN $5::numeric IS NULL THEN final_price ELSE quoted_price + $5::numeric END,
-           pricing_breakdown = CASE
-             WHEN $5::numeric IS NULL THEN pricing_breakdown
-             ELSE COALESCE(pricing_breakdown, '{}'::jsonb) || jsonb_build_object(
-               'transpo_fee', $5::numeric,
-               'worker_distance', $6::numeric
-             )
-           END
-       WHERE id = $1
-         AND worker_uid IS NULL
-         AND status IN ('CONFIRMED','PAID')
-       RETURNING user_id, schedule, eta_at`,
-      [
-        input.bookingId,
-        input.workerUid,
-        travel?.etaMinutes ?? null,
-        travel?.otpCode ?? null,
-        travel?.transpoFee ?? null,
-        travel ? Math.round(travel.distanceKm * 100) / 100 : null,
-      ],
-    );
-    if (!updateRes.rowCount) {
+  const travel = input.travel ?? null;
+  try {
+    await transitionBooking({
+      action: 'AUTO_ASSIGN',
+      bookingId: input.bookingId,
+      actorRole: 'system',
+      actorUid: null,
+      metadata: {
+        providerUid: input.workerUid,
+        trackingNote: input.note,
+        assignment: {
+          etaMinutes: travel?.etaMinutes ?? null,
+          workerCode: travel?.otpCode ?? null,
+          transpoFee: travel?.transpoFee ?? null,
+          distanceKm: travel ? Math.round(travel.distanceKm * 100) / 100 : null,
+        },
+      },
+    });
+  } catch (error) {
+    if (error instanceof TransitionError) {
+      /**
+       * A schedule conflict is NOT an error to this caller.
+       *
+       * `assignNearestWorker` walks a ranked candidate list and moves to the
+       * next one on `busy`. Throwing here would end the search at the first
+       * provider who happens to be occupied.
+       */
+      if (error.detail?.guard === 'provider_schedule_conflict') {
+        return { kind: "busy", workerUid: input.workerUid };
+      }
       throw new BookingAssignmentError(
         "BOOKING_ALREADY_ASSIGNED",
         "Booking assignment changed concurrently",
       );
     }
-
-    const assignmentRes = await client.query(
-      `INSERT INTO ${dbSchema}.booking_workers
-         (booking_id, worker_uid, status, assigned_at)
-       VALUES ($1,$2,'ASSIGNED',NOW())
-       RETURNING *`,
-      [input.bookingId, input.workerUid],
-    );
-    await client.query(
-      `INSERT INTO ${dbSchema}.booking_tracking (booking_id,status,note)
-       VALUES ($1,'WORKER_ASSIGNED',$2)`,
-      [input.bookingId, input.note],
-    );
-
-    await client.query("COMMIT");
-    return {
-      kind: "created",
-      workerUid: input.workerUid,
-      bookingStatus: "WORKER_ASSIGNED",
-      customerUid: updateRes.rows[0]?.user_id ?? null,
-      schedule: new Date(updateRes.rows[0]?.schedule ?? booking.schedule),
-      etaAt: updateRes.rows[0]?.eta_at ? new Date(updateRes.rows[0].eta_at) : null,
-      assignment: assignmentRes.rows[0],
-    };
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => {});
     throw error;
-  } finally {
-    client.release();
   }
+
+  const [after, assignmentRow] = await Promise.all([
+    dbQuery.query(
+      `SELECT user_id, schedule, eta_at FROM ${dbSchema}.bookings WHERE id = $1`,
+      [input.bookingId],
+    ),
+    dbQuery.query(
+      `SELECT * FROM ${dbSchema}.booking_workers
+        WHERE booking_id = $1 AND worker_uid = $2
+        ORDER BY assigned_at DESC NULLS LAST, id DESC
+        LIMIT 1`,
+      [input.bookingId, input.workerUid],
+    ),
+  ]);
+
+  return {
+    kind: "created",
+    workerUid: input.workerUid,
+    bookingStatus: "WORKER_ASSIGNED",
+    customerUid: after.rows[0]?.user_id ?? null,
+    schedule: new Date(after.rows[0]?.schedule ?? booking.schedule),
+    etaAt: after.rows[0]?.eta_at ? new Date(after.rows[0].eta_at) : null,
+    assignment: assignmentRow.rows[0],
+  };
 };
 
 const publishWorkerAssignment = (input: {
@@ -1594,39 +1598,6 @@ export const cancelAcceptedJob = async (
 };
 
 /**
- * Returns the booking row to the pool and records it on the customer timeline.
- *
- * Split out of `releaseBookingAndReassign` by B1.2. `declineJob` no longer
- * calls it — the executor performs the identical release inside the transition
- * transaction — but `cancelAcceptedJob` still does, and will until
- * PROVIDER_CANCEL migrates. Keeping one implementation means the two cannot
- * drift apart in the meantime.
- */
-const releaseBookingRow = async (bookingId: number, trackingNote: string) => {
-  // 3. Reset booking to CONFIRMED and clear the worker
-  await dbQuery.query(
-    `
-    UPDATE ${dbSchema}.bookings
-    SET worker_uid  = NULL,
-        status      = 'CONFIRMED',
-        eta_minutes = NULL,
-        eta_at      = NULL,
-        worker_code = NULL
-    WHERE id = $1
-    `,
-    [bookingId]
-  );
-
-  await dbQuery.query(
-    `
-    INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note)
-    VALUES ($1, 'CONFIRMED', $2)
-    `,
-    [bookingId, trackingNote]
-  );
-};
-
-/**
  * Finds the next nearest qualified provider and tells the customer.
  *
  * The half of the release that is NOT a lifecycle transition. TAB 05 owns who
@@ -1699,18 +1670,6 @@ export const findAndAssignNextProvider = async (
   })();
 
   return reassignment;
-};
-
-/** The two halves, still available as one call for the unmigrated caller. */
-export const releaseBookingAndReassign = async (
-  bookingId: number,
-  workerUid: string,
-  trackingNote: string,
-  eventKind: "provider_declined" | "provider_cancelled",
-  customerMessage: string
-) => {
-  await releaseBookingRow(bookingId, trackingNote);
-  return findAndAssignNextProvider(bookingId, workerUid, eventKind, customerMessage);
 };
 
 /**

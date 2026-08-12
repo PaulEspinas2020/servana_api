@@ -8,28 +8,65 @@ const read = (relative: string) => fs.readFileSync(
   'utf8',
 ).replace(/\r\n/g, '\n');
 
+/**
+ * E2 moved auto-assignment's write into the canonical executor, so none of
+ * these properties are enforced in `technicianService` any more. Every one of
+ * them still holds; the assertions follow them.
+ *
+ * The lock ORDER changed with the move and that is the point of the exercise:
+ * auto-assignment took provider-then-booking while the executor takes
+ * booking-then-provider, and two paths acquiring the same two lock classes in
+ * opposite orders is a deadlock. Asserting the old order here would have
+ * pinned the bug.
+ */
 describe('canonical provider assignment transaction', () => {
   const source = read('src/services/technicianService.ts');
+  const executor = read('src/services/booking/transitionExecutor.ts');
   const start = source.indexOf('const persistWorkerAssignment');
   const body = source.slice(start, source.indexOf('const publishWorkerAssignment', start));
 
-  it('serializes by provider and locks the booking before its CAS', () => {
-    expect(body).toContain('pg_advisory_xact_lock');
-    expect(body).toContain('FOR UPDATE');
-    expect(body).toContain("AND worker_uid IS NULL");
-    expect(body).toContain("AND status IN ('CONFIRMED','PAID')");
+  it('serializes by provider, and locks the booking FIRST', () => {
+    expect(executor).toContain('pg_advisory_xact_lock');
+    expect(executor).toContain('FOR UPDATE');
+    // Booking row, then provider — one order for every assignment producer.
+    const stripped = executor
+      .replace(/\r\n/g, '\n')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+    expect(stripped.indexOf('await loadForUpdate(client, input.bookingId'))
+      .toBeLessThan(stripped.indexOf('pg_advisory_xact_lock'));
+
+    // The service takes neither lock any more.
+    expect(body).not.toContain('pg_advisory_xact_lock');
+    expect(body).not.toContain('FOR UPDATE');
+    expect(body).toContain("action: 'AUTO_ASSIGN'");
   });
 
   it('commits booking, assignment and tracking as one unit', () => {
-    expect(body).toContain('await client.query("BEGIN")');
-    expect(body).toContain('INSERT INTO ${dbSchema}.booking_workers');
-    expect(body).toContain('INSERT INTO ${dbSchema}.booking_tracking');
-    expect(body).toContain('await client.query("COMMIT")');
-    expect(body).toContain('await client.query("ROLLBACK")');
+    expect(executor).toContain('INSERT INTO ${s}.booking_workers');
+    expect(executor).toContain('INSERT INTO ${s}.booking_tracking');
+    expect(executor).toContain("await client.query('COMMIT')");
+    expect(executor).toContain("await client.query('ROLLBACK')");
+    expect(executor).toContain("AUTO_ASSIGN: { status: 'WORKER_ASSIGNED'");
+    // And the service opens no transaction of its own.
+    expect(body).not.toContain('BEGIN');
   });
 
   it('treats both cancellation spellings and terminal payment states as non-busy', () => {
-    expect(body).toContain("'COMPLETED','CANCELED','CANCELLED','REFUNDED','FAILED','EXPIRED'");
+    expect(executor).toContain("'COMPLETED','CANCELLED','CANCELED','REFUNDED','FAILED','EXPIRED'");
+  });
+
+  it('a schedule conflict is still NON-throwing to the search loop', () => {
+    // `assignNearestWorker` walks a ranked candidate list and moves on when a
+    // provider is busy. Throwing would end the search at the first occupied
+    // candidate rather than trying the next.
+    expect(body).toContain("guard === 'provider_schedule_conflict'");
+    expect(body).toContain('kind: "busy"');
+  });
+
+  it('worker_code is PRESERVED, never regenerated', () => {
+    // The customer may already be holding the code.
+    expect(executor).toContain('worker_code = COALESCE($4, worker_code)');
   });
 
   it('never returns the worker verification code from auto assignment', () => {

@@ -20,10 +20,21 @@
  * When the count reaches zero the allow-list is deleted and the rule becomes
  * simply: no raw status writes outside the executor.
  *
- * A file that reaches zero is REMOVED from the ledger rather than left with a
- * zero entry, so the list always reads as outstanding work. `bookingService`
- * went first, in Phase C; `adminBookingService` followed at the end of Phase
- * D. One legacy writer remains.
+ * ## The count is now ZERO
+ *
+ * `bookingService` went first (Phase C), `adminBookingService` at the end of
+ * Phase D, `technicianService` in E2. Every one was removed from the ledger on
+ * reaching zero rather than left with a zero entry, so the list only ever read
+ * as outstanding work.
+ *
+ * The allow-list now holds ONE entry, and it is the executor itself. The rule
+ * has become what it was always meant to be:
+ *
+ *     NO RAW STATUS WRITES OUTSIDE THE EXECUTOR.
+ *
+ * Read freely. Choose a provider however the matching engine likes. But the
+ * only code permitted to MUTATE booking or assignment lifecycle state is
+ * `transitionBooking`.
  *
  * ## What counts as a raw write
  *
@@ -124,18 +135,6 @@ const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason
       + 'transition. None of them moves the outstanding count, which counts '
       + 'writers OUTSIDE the executor.',
   },
-  'services/technicianService.ts': {
-    count: 2,
-    phase: 'E2 — auto-assignment write ownership',
-    reason:
-      'THE LAST LEGACY WRITER. Every provider and admin action goes through '
-      + 'the executor; PROVIDER_CANCEL (E1) took the 48-hour policy with it, so '
-      + 'no controller evaluates that rule any more. Two sites remain, both in '
-      + 'assignWorker — auto-assignment. Its SELECTION logic belongs to '
-      + 'TAB 05; its WRITE does not, and E2 moves it. The gate stays 0: an '
-      + 'assignment engine may choose a provider, never mutate lifecycle '
-      + 'state.',
-  },
 };
 
 describe('raw status writes are inventoried and shrinking', () => {
@@ -185,7 +184,21 @@ describe('raw status writes are inventoried and shrinking', () => {
    *
    * TAB 04 does not certify until it reads 0.
    */
-  const APPROVED_BASELINE = 21;
+  const APPROVED_BASELINE = 0;
+
+  it('THE GATE: no raw status writes outside the executor', () => {
+    // The terminal condition. This was 21 when the guard was written; every
+    // phase lowered it and none was allowed to raise it. It is now a hard
+    // zero, and the assertion below is no longer a ratchet but an invariant.
+    const outstanding = Object.entries(RAW_WRITE_ALLOWLIST)
+      .filter(([file]) => file !== 'services/booking/transitionExecutor.ts')
+      .reduce((n, [, e]) => n + e.count, 0);
+    expect(outstanding).toBe(0);
+
+    const scanned = Object.entries(byFile)
+      .filter(([file]) => file !== 'services/booking/transitionExecutor.ts');
+    expect(scanned).toEqual([]);
+  });
 
   it('the outstanding count has not increased — no phase may add a raw write', () => {
     const outstanding = Object.entries(RAW_WRITE_ALLOWLIST)
