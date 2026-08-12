@@ -230,3 +230,95 @@ describe('booking-fact visibility follows the pointer, not the assignment', () =
     expect(service).toContain('bw.worker_uid');
   });
 });
+
+/**
+ * The bounded-historical-read matrix, for the parts that do NOT depend on the
+ * missing upper bound.
+ *
+ * T3/T4/T9/T10 need a persisted assignment-close timestamp, which does not
+ * exist on the reassignment path — see BOUNDED_HISTORICAL_READ_BLOCKER.md.
+ * They are named here as blocked rather than omitted, so the gap is visible in
+ * the suite and not only in a document.
+ */
+describe('bounded historical read — the unblocked matrix', () => {
+  const service = codeOf('chat/chat.service.ts');
+
+  it('T1: the window starts at the provider OWN assigned_at', () => {
+    expect(service).toContain('visibleAfter = access.assignedAt');
+    expect(codeOf('chat/chat.repository.ts')).toContain('getProviderAssignmentWindow');
+  });
+
+  it('T2: a missing chat_participant resolves the SAME as T1, never full history', () => {
+    // The floor is read from the assignment, so the projection's absence
+    // contributes nothing rather than removing the bound.
+    expect(service).not.toContain('participant?.joined_at ?? null');
+    expect(service).toContain("throw httpError(403, 'Message history is not available for this assignment')");
+  });
+
+  it('T5: reconciler failure widens NOBODY', () => {
+    /**
+     * The security outcome must hold even if reconciliation fails forever.
+     *
+     * Asserted structurally because it is a property of WHERE the decision is
+     * made: the reconciler writes only chat_participants, and nothing in the
+     * read path consults chat_participants for the window or for send.
+     */
+    const reconciler = codeOf('chat/chat.reconciler.ts');
+    // It touches the projection only.
+    expect(reconciler).toContain('upsertParticipant');
+    expect(reconciler).toContain('removeParticipant');
+    expect(reconciler).not.toContain('booking_workers SET');
+    expect(reconciler).not.toContain('UPDATE');
+
+    // And the read path does not depend on it.
+    expect(service).toContain('visibleAfter = access.assignedAt');
+    expect(service).toContain('const canSend = base.canSend &&');
+  });
+
+  it('T6: the customer keeps the full conversation', () => {
+    expect(service).toContain("access.role === 'admin' || access.role === 'client'");
+  });
+
+  it('T7: admin keeps the full conversation', () => {
+    expect(service).toContain("access.role === 'admin'");
+  });
+
+  it('T8: attachments follow the parent message exactly', () => {
+    // Hydrated from rows listMessages already windowed, and no route addresses
+    // an attachment independently.
+    expect(service).toContain('repo.listAttachments(row.id)');
+    expect(codeOf('chat/chat.routes.ts')).not.toContain('attachments/:attachmentId');
+  });
+
+  it('COMPLETED providers keep normal access, unchanged by this work', () => {
+    // Measured earlier and preserved deliberately: ACTIVE_WORKER_STATUSES
+    // includes COMPLETED, so a provider who finished a job stays an active chat
+    // member. Reassignment is the target here, not completion.
+    const repo = codeOf('chat/chat.repository.ts');
+    const idx = repo.indexOf('ACTIVE_WORKER_STATUSES');
+    expect(repo.slice(idx, idx + 200)).toContain('COMPLETED');
+  });
+
+  it('T3/T4/T9/T10 are BLOCKED, and the blocker is recorded', () => {
+    /**
+     * Not silently omitted. A matrix that quietly drops the rows it cannot
+     * satisfy reads as a complete matrix.
+     *
+     * T3 departed-provider window, T4 bounded retainRead, T9 A->B->C intervals
+     * and T10 same-provider-reassigned-back all need a persisted
+     * assignment-close timestamp. ADMIN_REASSIGN writes status only.
+     */
+    const blocker = fs.readFileSync(
+      path.join(__dirname, '..', 'docs', 'booking', 'BOUNDED_HISTORICAL_READ_BLOCKER.md'),
+      'utf8',
+    );
+    expect(blocker).toContain('no persisted upper bound');
+    expect(blocker).toContain('declined_at');
+
+    // The safe fallback is in force meanwhile: a departed provider reads
+    // nothing, which is the safe END of the range this policy would widen.
+    const repo = codeOf('chat/chat.repository.ts');
+    expect(repo).toContain('can_read = $3');
+    expect(codeOf('chat/chat.reconciler.ts')).not.toContain('retainRead: true');
+  });
+});
