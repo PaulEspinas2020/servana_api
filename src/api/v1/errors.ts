@@ -73,6 +73,8 @@ export const V1_ERROR_STATUS = {
   BOOKING_OTP_INVALID: 403,
   /** Verification already happened, or the booking has moved past it. */
   BOOKING_ALREADY_CONFIRMED: 409,
+  /** Too late for the customer to self-cancel; the provider is already on the way. */
+  BOOKING_NOT_CANCELLABLE_AT_THIS_STAGE: 409,
 
   /**
    * Policy refusals, each naming the rule that refused.

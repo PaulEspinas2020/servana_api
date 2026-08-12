@@ -849,11 +849,9 @@ export const formatBookings = (rows: any[]): Record<string, unknown>[] =>
 
 // ─── Customer Self-Cancel (BACKEND_GAP-C15-001 implementation) ────────────────
 
-const NON_CANCELLABLE_STATUSES = new Set([
-  'CANCELLED', 'CANCELED', 'COMPLETED', 'IN_PROGRESS',
-  'EN_ROUTE', 'ARRIVED', 'AWAITING_COMPLETION',
-  'REVIEWED', 'REFUNDED', 'EXPIRED', 'FAILED',
-]);
+// The stage list moved to `booking/bookingPolicies.CUSTOMER_NON_CANCELLABLE_STATUSES`
+// when CUSTOMER_CANCEL migrated to the executor. Deleted rather than left here
+// unused: two copies of a policy list is how they drift.
 
 /**
  * Allows a customer to cancel their own booking.
@@ -900,31 +898,47 @@ export const customerCancelBooking = async (
     throw Object.assign(new Error('Access denied'), { statusCode: 403 });
   }
 
-  if (NON_CANCELLABLE_STATUSES.has((prevStatus ?? '').toUpperCase())) {
-    throw new Error(`Cannot cancel booking with status: ${prevStatus}`);
+  /**
+   * ─── PHASE C · CUSTOMER_CANCEL, on the canonical executor ──────────────────
+   *
+   * The stage check, both status writes and the timeline event are now one
+   * transaction inside `transitionBooking`. Previously they were four separate
+   * autocommit statements, so a failure between any two left a cancelled
+   * booking with a live assignment row, or with no entry in the customer's own
+   * timeline.
+   *
+   * The stage rule itself moved to `bookingPolicies.customerMayCancel` and is
+   * enforced as the named guard `customerCancellationStage` — implementing
+   * `requires: ['cancellation_eligible']`, which the transition table has
+   * declared on the customer-cancel rules since it was written and which
+   * nothing enforced. Without it this migration would have WIDENED what a
+   * customer can cancel, because the machine permits cancelling from EN_ROUTE
+   * and ARRIVED and the platform does not.
+   *
+   * The two checks above are untouched: `assertBookingAccess` still fails
+   * closed on guest bookings, and a provider still cannot cancel on the
+   * customer's behalf. The executor additionally refuses a customer who does
+   * not own the booking, which is the check no internal caller can bypass.
+   */
+  try {
+    await transitionBooking({
+      action: 'CUSTOMER_CANCEL',
+      bookingId,
+      actorRole: 'customer',
+      actorUid: customerUid,
+      metadata: { reason, ...(reasonCode ? { reasonCode } : {}) },
+    });
+  } catch (error) {
+    // The legacy messages, verbatim — both callers surface `e.message`.
+    // Every refusal reachable here reads the same way, and did before: not
+    // found and access denied are already thrown above, so what remains is the
+    // stage guard and a terminal booking — which the legacy list also reported
+    // with this sentence.
+    if (error instanceof TransitionError) {
+      throw new Error(`Cannot cancel booking with status: ${prevStatus}`);
+    }
+    throw error;
   }
-
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET status = 'CANCELLED', cancelled_at = NOW() WHERE id = $1`,
-    [bookingId],
-  );
-
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.booking_workers SET status = 'CANCELLED'
-     WHERE booking_id = $1 AND status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED')`,
-    [bookingId],
-  );
-
-  await dbQuery.query(
-    `INSERT INTO ${dbSchema}.booking_timeline_events
-       (booking_id, event_type, title, description, actor_type, actor_uid, metadata)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [
-      bookingId, 'booking_cancelled', 'Booking cancelled by customer',
-      reason, 'customer', customerUid ?? null,
-      reasonCode ? JSON.stringify({ reasonCode }) : null,
-    ],
-  );
 
   // Close the conversation on the customer-cancelled path too. Both cancel
   // routes must behave identically or a cancelled booking stays a live private

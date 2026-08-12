@@ -197,10 +197,15 @@ describe('cancelled spelling normalisation', () => {
   test('nothing WRITES the single-L spelling to booking_workers any more', () => {
     // Two spellings of one state is how getWorkerDashboard came to report zero
     // cancellations forever. 'CANCELLED' is canonical, matching bookings.status.
-    for (const src of [bookingSvc, adminSvc]) {
+    const executorSrc = flat(code(read('services/booking/transitionExecutor.ts')));
+    for (const src of [bookingSvc, adminSvc, executorSrc]) {
       expect(src).not.toMatch(/booking_workers SET status = 'CANCELED'/);
     }
-    expect(bookingSvc).toMatch(/booking_workers SET status = 'CANCELLED'/);
+    // The write lives in the executor now. Asserting it against bookingService
+    // would pass only until that file stopped writing status at all - which it
+    // has, as of Phase C.
+    expect(executorSrc).toMatch(/booking_workers SET status = \$2/);
+    expect(executorSrc).toContain('CANONICAL_CANCELLED');
   });
 
   test('READS still accept both, for rows written before normalisation', () => {
@@ -271,7 +276,17 @@ describe('arrival stages — EN_ROUTE and ARRIVED', () => {
     // The cancel path matched ASSIGNED/ACCEPTED only. Adding stages after
     // ACCEPTED without widening this would leave the assignment live on a
     // cancelled booking, with the provider still driving to the address.
-    expect(booking).toMatch(/'ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED'/);
+    //
+    // Phase C moved the write into the executor's CANCELLED branch, so the
+    // assertion follows it. The property is unchanged and still enforced;
+    // pointing it at bookingService would fail a migration that kept it.
+    expect(executor).toMatch(/'ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED'/);
+    // And it is the CANCELLED write that carries it, not some other statement.
+    const cancelBranch = executor.slice(
+      executor.indexOf("case 'CANCELLED': {"),
+      executor.indexOf("case 'EXPIRED':"),
+    );
+    expect(cancelBranch).toMatch(/'ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED'/);
   });
 
   test('both routes are authenticated', () => {

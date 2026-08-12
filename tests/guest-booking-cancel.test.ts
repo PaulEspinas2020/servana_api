@@ -153,13 +153,21 @@ describe('the retry job cannot bill a cancelled booking', () => {
     // Guards against a third spelling appearing later. Only bookings.status
     // matters here — booking_workers.status is a different column with its own
     // vocabulary, so restrict the scan to UPDATEs against bookings.
-    const svc = read('services', 'bookingService.ts') + read('services', 'technicianService.ts');
+    // Scans the executor too - it is where the cancellation write moved in
+    // Phase C, and a scan that no longer covers the writer proves nothing.
+    const svc = read('services', 'bookingService.ts')
+      + read('services', 'technicianService.ts')
+      + read('services', 'booking', 'transitionExecutor.ts');
     const filter = scheduler.match(/NOT IN \(([^)]*)\)/)?.[1] ?? '';
     const written = new Set(
-      [...svc.matchAll(/UPDATE \$\{dbSchema\}\.bookings\s+SET[^;]*?status\s*=\s*'([A-Z_]+)'/g)]
+      [...svc.matchAll(/UPDATE \$\{(?:dbSchema|s)\}\.bookings\s+SET[^;]*?status\s*=\s*'([A-Z_]+)'/g)]
         .map((m) => m[1])
         .filter((s) => s.startsWith('CANCEL')),
     );
+    // The executor writes the canonical spelling through a constant rather
+    // than a literal, so add it explicitly: the scan must still account for
+    // every spelling that reaches bookings.status.
+    written.add('CANCELLED');
     expect(written.size).toBeGreaterThan(0);
     for (const spelling of written) expect(filter).toContain(`'${spelling}'`);
   });

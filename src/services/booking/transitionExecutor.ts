@@ -48,7 +48,7 @@ import {
   type Actor,
 } from './canonicalState';
 import { CANONICAL_CANCELLED } from './cancellationVocabulary';
-import { evaluateCancellation } from './bookingPolicies';
+import { evaluateCancellation, customerMayCancel } from './bookingPolicies';
 
 const s = db.schema;
 
@@ -71,7 +71,8 @@ const s = db.schema;
 export type BookingGuardName =
   | 'providerCancellationWindow'
   | 'cashPaymentSettledBeforeCompletion'
-  | 'bookingAwaitsOtpConfirmation';
+  | 'bookingAwaitsOtpConfirmation'
+  | 'customerCancellationStage';
 
 export interface GuardVerdict {
   allowed: boolean;
@@ -255,6 +256,30 @@ export const BOOKING_GUARDS: Record<BookingGuardName, (ctx: GuardContext) => Gua
       message: 'This booking is not awaiting verification.',
     };
   },
+
+  /**
+   * The stage a customer may still self-cancel from.
+   *
+   * Implements `requires: ['cancellation_eligible']`, which the transition
+   * table has declared on the customer-cancel rules since it was written and
+   * which nothing enforced. The machine permits customer cancellation from
+   * ACCEPTED, EN_ROUTE and ARRIVED; the platform does not, once the provider
+   * is travelling. Without this the migration would silently widen what a
+   * customer can cancel.
+   *
+   * Reads the RAW status deliberately — see the list's own docblock. Two of
+   * its entries are not canonical states, and deriving first would make them
+   * cancellable.
+   */
+  customerCancellationStage: (ctx) => {
+    if (customerMayCancel(ctx.bookingStatus)) return { allowed: true };
+    return {
+      allowed: false,
+      reasonCode: 'BOOKING_NOT_CANCELLABLE_AT_THIS_STAGE',
+      // The legacy message, verbatim: both callers surface it directly.
+      message: `Cannot cancel booking with status: ${ctx.bookingStatus}`,
+    };
+  },
 };
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
@@ -300,7 +325,10 @@ export const BOOKING_ACTIONS = {
     requires: 'BOOKING_OTP',
     guard: 'bookingAwaitsOtpConfirmation',
   },
-  CUSTOMER_CANCEL: { to: 'CANCELLED', actor: 'customer' },
+  CUSTOMER_CANCEL: {
+    to: 'CANCELLED', actor: 'customer',
+    guard: 'customerCancellationStage',
+  },
   PROVIDER_ACCEPT: { to: 'ACCEPTED', actor: 'assigned_provider' },
   /** Answering an offer. Only ever from an unanswered assignment. */
   PROVIDER_DECLINE: {
@@ -806,6 +834,56 @@ const LEGACY_TRACKING: Partial<Record<BookingAction, { status: string; note: str
   CUSTOMER_CONFIRM_OTP: { status: 'CONFIRMED', note: 'OTP verified' },
 };
 
+/**
+ * ─── LEGACY_TIMELINE_EVENT_PROJECTION ────────────────────────────────────────
+ *
+ * `booking_timeline_events` is a THIRD event table, older than
+ * `booking_transitions` and narrower than `booking_tracking`. Customer
+ * cancellation is the only lifecycle action that writes it today.
+ *
+ * Same reasoning as the tracking projection: it is read by a live surface, so
+ * an action that stops writing it loses a row from a customer's timeline, and
+ * legacy wrote it as a bare statement after the status write — a failure there
+ * threw AFTER the cancellation had already committed. Inside the transaction
+ * it either happens or the cancellation does not.
+ *
+ * Not canonical. `booking_transitions` remains the evidence; this retires when
+ * the surfaces reading it move over.
+ */
+const LEGACY_TIMELINE_EVENT: Partial<Record<BookingAction, {
+  eventType: string; title: string; actorType: string;
+}>> = {
+  CUSTOMER_CANCEL: {
+    eventType: 'booking_cancelled',
+    title: 'Booking cancelled by customer',
+    actorType: 'customer',
+  },
+};
+
+async function writeLegacyTimelineEvent(
+  client: PoolClient,
+  loaded: LoadedBooking,
+  input: TransitionInput,
+): Promise<void> {
+  const entry = LEGACY_TIMELINE_EVENT[input.action];
+  if (!entry) return;
+  const reasonCode = input.metadata?.reasonCode;
+  await client.query(
+    `INSERT INTO ${s}.booking_timeline_events
+       (booking_id, event_type, title, description, actor_type, actor_uid, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [
+      loaded.id,
+      entry.eventType,
+      entry.title,
+      input.metadata?.reason ? String(input.metadata.reason) : null,
+      entry.actorType,
+      input.actorUid ?? null,
+      reasonCode ? JSON.stringify({ reasonCode }) : null,
+    ],
+  );
+}
+
 async function writeLegacyTracking(
   client: PoolClient,
   bookingId: number,
@@ -1061,19 +1139,28 @@ async function applyState(
       }
       return;
 
-    case 'CANCELLED':
+    case 'CANCELLED': {
       // The canonical spelling, always. The deprecated one is read-only.
       await client.query(
         `UPDATE ${s}.bookings SET status = $2, cancelled_at = NOW() WHERE id = $1`,
         [loaded.id, CANONICAL_CANCELLED],
       );
-      if (providerUid) {
-        await client.query(
-          `UPDATE ${s}.booking_workers SET status = $3 WHERE booking_id = $1 AND worker_uid = $2`,
-          [loaded.id, providerUid, CANONICAL_CANCELLED],
-        );
-      }
+      /**
+       * Every LIVE assignment row, not only the current provider's.
+       *
+       * The legacy customer-cancel closed any row in an active status; scoping
+       * to `worker_uid` alone would leave a stale live assignment on a
+       * cancelled booking if the pointer had already been cleared. Closed rows
+       * — DECLINED, REASSIGNED, COMPLETED — are history and are left alone.
+       */
+      await client.query(
+        `UPDATE ${s}.booking_workers SET status = $2
+          WHERE booking_id = $1
+            AND status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED')`,
+        [loaded.id, CANONICAL_CANCELLED],
+      );
       return;
+    }
 
     case 'EXPIRED':
       await client.query(`UPDATE ${s}.bookings SET status = 'EXPIRED' WHERE id = $1`, [loaded.id]);
@@ -1280,6 +1367,7 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
     try {
       await applyState(client, loaded, toState, input);
       await writeLegacyTracking(client, loaded.id, input.action);
+      await writeLegacyTimelineEvent(client, loaded, input);
     } catch (error) {
       throw error instanceof TransitionError
         ? new TransitionError(error.code, error.message, error.detail, snapshot)

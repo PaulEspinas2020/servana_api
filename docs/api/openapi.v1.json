@@ -4920,6 +4920,7 @@
                   "AUDIENCE_MISMATCH",
                   "BOOKING_ACCESS_DENIED",
                   "BOOKING_ALREADY_CONFIRMED",
+                  "BOOKING_NOT_CANCELLABLE_AT_THIS_STAGE",
                   "BOOKING_NOT_FOUND",
                   "BOOKING_OTP_INVALID",
                   "BOOKING_POLICY_REFUSED",

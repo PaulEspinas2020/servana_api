@@ -20,6 +20,10 @@
  * When the count reaches zero the allow-list is deleted and the rule becomes
  * simply: no raw status writes outside the executor.
  *
+ * A file that reaches zero is REMOVED from the ledger rather than left with a
+ * zero entry, so the list always reads as outstanding work. `bookingService`
+ * was the first to go, in Phase C.
+ *
  * ## What counts as a raw write
  *
  * An `UPDATE` against either table whose `SET` touches `status`. Reads are
@@ -102,14 +106,6 @@ const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason
       + 'the pool and clears worker_code in the same transaction as the '
       + 'transition. None of them moves the outstanding count, which counts '
       + 'writers OUTSIDE the executor.',
-  },
-  'services/bookingService.ts': {
-    count: 2,
-    phase: 'C — customer cancellation',
-    reason:
-      'Customer cancellation still writes directly. OTP confirmation is done: '
-      + 'it goes through the executor, with the credential compared inside the '
-      + 'write exactly as the legacy compare-and-swap had it.',
   },
   'services/technicianService.ts': {
     count: 3,

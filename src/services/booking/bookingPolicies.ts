@@ -174,3 +174,32 @@ export function evaluateCancellation(params: {
     reasons: PROVIDER_CANCELLATION_REASONS,
   };
 }
+
+
+// ─── Customer self-cancellation ───────────────────────────────────────────────
+
+/**
+ * Booking statuses a customer may NOT self-cancel from.
+ *
+ * Moved here from `bookingService` when CUSTOMER_CANCEL migrated to the
+ * executor. The list is unchanged, including the entries that are not
+ * canonical states — `AWAITING_COMPLETION`, `REVIEWED`, `REFUNDED`, `FAILED`.
+ *
+ * That last point is the reason this reads the RAW status rather than the
+ * canonical one. `deriveCanonicalState` maps an unrecognised status to
+ * AWAITING_ASSIGNMENT, and cancelling from AWAITING_ASSIGNMENT is permitted —
+ * so deriving first would make a booking at AWAITING_COMPLETION or REVIEWED
+ * newly cancellable by its customer. Preserving the legacy list exactly is the
+ * point; widening it by accident is not a refactor.
+ *
+ * The transition table has always declared `requires: ['cancellation_eligible']`
+ * on the customer-cancel rules and nothing implemented it. This is that guard.
+ */
+export const CUSTOMER_NON_CANCELLABLE_STATUSES: ReadonlySet<string> = new Set([
+  'CANCELLED', 'CANCELED', 'COMPLETED', 'IN_PROGRESS',
+  'EN_ROUTE', 'ARRIVED', 'AWAITING_COMPLETION',
+  'REVIEWED', 'REFUNDED', 'EXPIRED', 'FAILED',
+]);
+
+export const customerMayCancel = (bookingStatus: unknown): boolean =>
+  !CUSTOMER_NON_CANCELLABLE_STATUSES.has(String(bookingStatus ?? '').toUpperCase());
