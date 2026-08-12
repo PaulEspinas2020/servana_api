@@ -205,6 +205,7 @@ import { handlers as notificationHandlers } from './domains/notifications';
 import { handlers as reviewHandlers } from './domains/reviews';
 import { handlers as settingsHandlers } from './domains/settings';
 import { handlers as authHandlers } from './domains/auth';
+import { handlers as bookingActionHandlers } from './domains/bookingActions';
 import {
   perAccountLoginLimiter,
   perIpLoginLimiter,
@@ -222,6 +223,7 @@ export const V1_HANDLERS: V1Handlers = {
   ...reviewHandlers,
   ...settingsHandlers,
   ...authHandlers,
+  ...bookingActionHandlers,
 };
 
 /**

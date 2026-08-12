@@ -143,14 +143,37 @@ describe('raw status writes are inventoried and shrinking', () => {
     }
   });
 
-  it('reports the outstanding count, so the gate is visible in the run', () => {
+  /**
+   * The ratchet.
+   *
+   * A migration that is only ever measured at the end is a migration that
+   * quietly goes backwards in the middle. This is the baseline: no phase may
+   * raise it, every phase may lower it, and lowering it means editing this
+   * number in the same commit that changes the code.
+   *
+   * TAB 04 does not certify until it reads 0.
+   */
+  const APPROVED_BASELINE = 21;
+
+  it('the outstanding count has not increased — no phase may add a raw write', () => {
     const outstanding = Object.entries(RAW_WRITE_ALLOWLIST)
       .filter(([file]) => file !== 'services/booking/transitionExecutor.ts')
       .reduce((n, [, e]) => n + e.count, 0);
 
-    // TAB 04 does not certify until this is 0. It is asserted rather than
-    // logged so the number cannot drift upward unnoticed.
-    expect(outstanding).toBe(21);
+    expect(outstanding).toBeLessThanOrEqual(APPROVED_BASELINE);
+  });
+
+  it('the ledger and the code agree on the outstanding count', () => {
+    // Belt and braces against the ledger being lowered without the code
+    // changing: the ledger's per-file numbers are already checked against the
+    // scan above, so this catches an arithmetic slip in the baseline itself.
+    const fromLedger = Object.entries(RAW_WRITE_ALLOWLIST)
+      .filter(([file]) => file !== 'services/booking/transitionExecutor.ts')
+      .reduce((n, [, e]) => n + e.count, 0);
+    const fromScan = Object.entries(byFile)
+      .filter(([file]) => file !== 'services/booking/transitionExecutor.ts')
+      .reduce((n, [, count]) => n + count, 0);
+    expect(fromLedger).toBe(fromScan);
   });
 
   it('the detector finds writes at all (positive fixture)', () => {

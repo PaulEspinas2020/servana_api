@@ -1218,6 +1218,307 @@ export const V1_CONTRACT: ContractEntry[] = [
       'documented as 48h in copy and 72h in reality, and a second read path before that is ' +
       'settled would give two answers to "when am I paid".',
   },
+  // ───────────────────────────────────────────────────────────────────────────
+  // Booking lifecycle actions — Phase A.
+  //
+  // Every one of these calls `transitionBooking` and NOTHING else. They are the
+  // canonical path, built and proven before any legacy write is migrated onto
+  // the executor, so the executor is exercised by real traffic shapes before it
+  // becomes load-bearing for the field.
+  //
+  // Discrete actions, never a PATCH of a status field: a caller that names a
+  // destination can pick any state the machine happens to allow and bypass the
+  // rule that was supposed to get it there.
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: 'bookings.cancel',
+    domain: 'bookings',
+    method: 'post',
+    path: '/bookings/:bookingId/cancel',
+    summary: "Cancels the caller's own booking.",
+    auth: 'authenticated',
+    idempotent: false,
+    replayGuard:
+      'An Idempotency-Key replays the original result. Without one, a second ' +
+      'cancel finds the booking already terminal and is refused, so a retry ' +
+      'cannot cancel twice or produce a second timeline entry.',
+    requestSchema: 'BookingActionRequest',
+    responseSchema: 'BookingTransitionResult',
+    errors: [
+      'VALIDATION_FAILED', 'BOOKING_NOT_FOUND', 'BOOKING_ACCESS_DENIED',
+      'BOOKING_STATE_CONFLICT', 'BOOKING_TRANSITION_INVALID', 'BOOKING_TERMINAL',
+      'IDEMPOTENCY_KEY_INVALID', 'IDEMPOTENCY_KEY_REUSED',
+    ],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/booking/transitionExecutor.transitionBooking (CUSTOMER_CANCEL)',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/bookings/:id/cancel',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'The live customer cancel. It still writes status directly and is Phase C ' +
+          'of the executor migration — deliberately after the provider lifecycle, ' +
+          'because cancellation touches fees, refunds and provider compensation and ' +
+          'is the worst first test of whether the executor architecture works.',
+      },
+    ],
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'n/a', providerWeb: 'n/a', admin: 'n/a' },
+    observability: 'bookings',
+  },
+  {
+    id: 'bookings.transitions',
+    domain: 'bookings',
+    method: 'get',
+    path: '/bookings/:bookingId/transitions',
+    summary: 'The canonical transition history: one event per state change, oldest first.',
+    auth: 'authenticated',
+    idempotent: true,
+    responseSchema: 'BookingTransitionList',
+    errors: ['VALIDATION_FAILED', 'BOOKING_NOT_FOUND', 'BOOKING_ACCESS_DENIED'],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/booking/transitionExecutor.getBookingTimeline',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/:id/timeline',
+        disposition: 'KEEP',
+        note:
+          'NOT a duplicate. The legacy timeline is a re-voiced operational narrative ' +
+          'built from per-stage timestamps for the customer to read. This is the ' +
+          'append-only event log the executor writes inside each transaction — the ' +
+          'evidence, not the story. Admin, Customer and Provider all read THIS to ' +
+          'agree on what happened.',
+      },
+    ],
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    observability: 'bookings',
+    notes:
+      'Preserves a reassigned provider\'s full progression — accepted, en route, ' +
+      'reassigned — because the current state resetting must not erase history.',
+  },
+  {
+    id: 'provider.jobs.accept',
+    domain: 'provider-jobs',
+    method: 'post',
+    path: '/provider/jobs/:bookingId/accept',
+    summary: 'Accepts the assignment.',
+    auth: 'provider',
+    idempotent: false,
+    replayGuard:
+      'An Idempotency-Key replays the original result. Without one, the machine ' +
+      'refuses the repeat because the booking has already left ASSIGNED.',
+    requestSchema: 'BookingActionRequest',
+    responseSchema: 'BookingTransitionResult',
+    errors: [
+      'VALIDATION_FAILED', 'BOOKING_NOT_FOUND', 'BOOKING_ACCESS_DENIED',
+      'BOOKING_STATE_CONFLICT', 'BOOKING_TRANSITION_INVALID', 'BOOKING_TERMINAL',
+      'PROVIDER_ROLE_REQUIRED',
+      'IDEMPOTENCY_KEY_INVALID', 'IDEMPOTENCY_KEY_REUSED',
+    ],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/booking/transitionExecutor.transitionBooking (PROVIDER_ACCEPT)',
+    legacy: [
+      {
+        method: 'put',
+        path: '/api/worker/bookings/:bookingId/accept',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'The live provider action. Still writes status directly via technicianService; ' +
+          'Phase B of the executor migration. Authorization is equivalent — both resolve ' +
+          'the provider from the token and check the CURRENT assignment.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'provider-jobs',
+  },
+  {
+    id: 'provider.jobs.decline',
+    domain: 'provider-jobs',
+    method: 'post',
+    path: '/provider/jobs/:bookingId/decline',
+    summary: 'Declines the assignment, returning the booking to the pool.',
+    auth: 'provider',
+    idempotent: false,
+    replayGuard:
+      'An Idempotency-Key replays the original result. Without one, the machine ' +
+      'refuses the repeat because the booking has already left ASSIGNED.',
+    requestSchema: 'BookingActionRequest',
+    responseSchema: 'BookingTransitionResult',
+    errors: [
+      'VALIDATION_FAILED', 'BOOKING_NOT_FOUND', 'BOOKING_ACCESS_DENIED',
+      'BOOKING_STATE_CONFLICT', 'BOOKING_TRANSITION_INVALID', 'BOOKING_TERMINAL',
+      'PROVIDER_ROLE_REQUIRED',
+      'IDEMPOTENCY_KEY_INVALID', 'IDEMPOTENCY_KEY_REUSED',
+    ],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/booking/transitionExecutor.transitionBooking (PROVIDER_DECLINE)',
+    legacy: [
+      {
+        method: 'put',
+        path: '/api/worker/bookings/:bookingId/decline',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'The live provider action. Still writes status directly via technicianService; ' +
+          'Phase B of the executor migration. Authorization is equivalent — both resolve ' +
+          'the provider from the token and check the CURRENT assignment.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'provider-jobs',
+  },
+  {
+    id: 'provider.jobs.enroute',
+    domain: 'provider-jobs',
+    method: 'post',
+    path: '/provider/jobs/:bookingId/en-route',
+    summary: 'Marks the provider on the way.',
+    auth: 'provider',
+    idempotent: false,
+    replayGuard:
+      'An Idempotency-Key replays the original result. Without one, the machine ' +
+      'refuses the repeat because the booking has already left ACCEPTED.',
+    requestSchema: 'BookingActionRequest',
+    responseSchema: 'BookingTransitionResult',
+    errors: [
+      'VALIDATION_FAILED', 'BOOKING_NOT_FOUND', 'BOOKING_ACCESS_DENIED',
+      'BOOKING_STATE_CONFLICT', 'BOOKING_TRANSITION_INVALID', 'BOOKING_TERMINAL',
+      'PROVIDER_ROLE_REQUIRED',
+      'IDEMPOTENCY_KEY_INVALID', 'IDEMPOTENCY_KEY_REUSED',
+    ],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/booking/transitionExecutor.transitionBooking (PROVIDER_EN_ROUTE)',
+    legacy: [
+      {
+        method: 'put',
+        path: '/api/worker/bookings/:bookingId/en-route',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'The live provider action. Still writes status directly via technicianService; ' +
+          'Phase B of the executor migration. Authorization is equivalent — both resolve ' +
+          'the provider from the token and check the CURRENT assignment.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'provider-jobs',
+  },
+  {
+    id: 'provider.jobs.arrived',
+    domain: 'provider-jobs',
+    method: 'post',
+    path: '/provider/jobs/:bookingId/arrived',
+    summary: 'Marks the provider at the address.',
+    auth: 'provider',
+    idempotent: false,
+    replayGuard:
+      'An Idempotency-Key replays the original result. Without one, the machine ' +
+      'refuses the repeat because the booking has already left EN_ROUTE.',
+    requestSchema: 'BookingActionRequest',
+    responseSchema: 'BookingTransitionResult',
+    errors: [
+      'VALIDATION_FAILED', 'BOOKING_NOT_FOUND', 'BOOKING_ACCESS_DENIED',
+      'BOOKING_STATE_CONFLICT', 'BOOKING_TRANSITION_INVALID', 'BOOKING_TERMINAL',
+      'PROVIDER_ROLE_REQUIRED',
+      'IDEMPOTENCY_KEY_INVALID', 'IDEMPOTENCY_KEY_REUSED',
+    ],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/booking/transitionExecutor.transitionBooking (PROVIDER_ARRIVED)',
+    legacy: [
+      {
+        method: 'put',
+        path: '/api/worker/bookings/:bookingId/arrived',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'The live provider action. Still writes status directly via technicianService; ' +
+          'Phase B of the executor migration. Authorization is equivalent — both resolve ' +
+          'the provider from the token and check the CURRENT assignment.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'provider-jobs',
+  },
+  {
+    id: 'provider.jobs.start',
+    domain: 'provider-jobs',
+    method: 'post',
+    path: '/provider/jobs/:bookingId/start',
+    summary: 'Starts the job. Requires the customer worker code.',
+    auth: 'provider',
+    idempotent: false,
+    replayGuard:
+      'An Idempotency-Key replays the original result. Without one, the machine ' +
+      'refuses the repeat because the booking has already left ARRIVED.',
+    requestSchema: 'BookingActionRequest',
+    responseSchema: 'BookingTransitionResult',
+    errors: [
+      'VALIDATION_FAILED', 'BOOKING_NOT_FOUND', 'BOOKING_ACCESS_DENIED',
+      'BOOKING_STATE_CONFLICT', 'BOOKING_TRANSITION_INVALID', 'BOOKING_TERMINAL',
+      'BOOKING_WORKER_CODE_INVALID', 'PROVIDER_ROLE_REQUIRED',
+      'IDEMPOTENCY_KEY_INVALID', 'IDEMPOTENCY_KEY_REUSED',
+    ],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/booking/transitionExecutor.transitionBooking (PROVIDER_START)',
+    legacy: [
+      {
+        method: 'put',
+        path: '/api/worker/bookings/:bookingId/start',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'The live provider action. Still writes status directly via technicianService; ' +
+          'Phase B of the executor migration. Authorization is equivalent — both resolve ' +
+          'the provider from the token and check the CURRENT assignment.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'provider-jobs',
+    notes:
+      'The worker code is the six-digit secret the CUSTOMER reads out. It is the only '
+      + 'gate on starting a chargeable job, so it is rate-limited per provider and is '
+      + 'redacted before the timeline records the transition.',
+  },
+  {
+    id: 'provider.jobs.complete',
+    domain: 'provider-jobs',
+    method: 'post',
+    path: '/provider/jobs/:bookingId/complete',
+    summary: 'Completes the job.',
+    auth: 'provider',
+    idempotent: false,
+    replayGuard:
+      'An Idempotency-Key replays the original result. Without one, the machine ' +
+      'refuses the repeat because the booking has already left IN_PROGRESS.',
+    requestSchema: 'BookingActionRequest',
+    responseSchema: 'BookingTransitionResult',
+    errors: [
+      'VALIDATION_FAILED', 'BOOKING_NOT_FOUND', 'BOOKING_ACCESS_DENIED',
+      'BOOKING_STATE_CONFLICT', 'BOOKING_TRANSITION_INVALID', 'BOOKING_TERMINAL',
+      'PROVIDER_ROLE_REQUIRED',
+      'IDEMPOTENCY_KEY_INVALID', 'IDEMPOTENCY_KEY_REUSED',
+    ],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/booking/transitionExecutor.transitionBooking (PROVIDER_COMPLETE)',
+    legacy: [
+      {
+        method: 'put',
+        path: '/api/worker/bookings/:bookingId/complete',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'The live provider action. Still writes status directly via technicianService; ' +
+          'Phase B of the executor migration. Authorization is equivalent — both resolve ' +
+          'the provider from the token and check the CURRENT assignment.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'provider-jobs',
+  },
   {
     id: 'admin.bookings.list',
     domain: 'admin-bookings',

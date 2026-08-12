@@ -59,6 +59,16 @@ export const V1_ERROR_STATUS = {
   // ── Bookings ───────────────────────────────────────────────────────────────
   BOOKING_NOT_FOUND: 404,
   BOOKING_ACCESS_DENIED: 403,
+  /** The booking moved since the caller read it. Reload and decide again. */
+  BOOKING_STATE_CONFLICT: 409,
+  /** The state machine has no such transition from where the booking is. */
+  BOOKING_TRANSITION_INVALID: 409,
+  /** Already completed, cancelled or expired. Distinguished from a plain
+   *  invalid transition so a client can stop offering actions rather than
+   *  suggesting the caller try something else. */
+  BOOKING_TERMINAL: 409,
+  /** The six-digit code the customer reads out did not match. */
+  BOOKING_WORKER_CODE_INVALID: 403,
 
   // ── Notifications ──────────────────────────────────────────────────────────
   NOTIFICATION_NOT_FOUND: 404,

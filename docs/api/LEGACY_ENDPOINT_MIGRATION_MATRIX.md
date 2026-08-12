@@ -7,11 +7,11 @@ Every route the app mounts outside `/api/v1`: **520**.
 
 | Disposition | Count | Meaning |
 |---|---:|---|
-| `ALIAS_TEMPORARILY` | 35 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
+| `ALIAS_TEMPORARILY` | 42 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
 | `CANONICALIZE` | 6 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
 | `ROLE_SPECIFIC` | 4 | Legitimately separate: different auth, action or payload — same domain service. |
 | `RETIRE` | 0 | No caller and no successor. Delete once telemetry confirms zero traffic. |
-| `KEEP` | 475 | Not a duplicate of anything canonical. Untouched by this command. |
+| `KEEP` | 468 | Not a duplicate of anything canonical. Untouched by this command. |
 
 ## Retirement criteria
 
@@ -27,7 +27,7 @@ build knows how to call.
 
 Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 
-## ALIAS_TEMPORARILY (35)
+## ALIAS_TEMPORARILY (42)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
@@ -54,6 +54,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `GET` | `/api/catalog/services` | `/api/v1/catalog/services` | Same router, superseded by this route. |
 | `GET` | `/api/catalog/services/:serviceId` | `/api/v1/catalog/services/:serviceId` | Same router, superseded by this route. |
 | `GET` | `/api/users/:userId/bookings` | `/api/v1/bookings` | Takes the customer uid from the PATH and then asserts it equals the token subject — so the parameter is decoration that has already caused one real BOLA. v1 drops it. ServanaClient and the customer web portal both still call the legacy form. |
+| `POST` | `/api/bookings/:id/cancel` | `/api/v1/bookings/:bookingId/cancel` | The live customer cancel. It still writes status directly and is Phase C of the executor migration — deliberately after the provider lifecycle, because cancellation touches fees, refunds and provider compensation and is the worst first test of whether the executor architecture works. |
 | `GET` | `/api/:id` | `/api/v1/bookings/:bookingId` | A single-segment wildcard at the API root. It is the reason no unknown one-segment GET can 404, and it swallowed GET /api/catalog. It is a live protected-client contract (§5) so it cannot be moved, but every new client must use the v1 form. Retirement is gated on telemetry showing zero non-numeric ids and zero legacy callers. |
 | `GET` | `/api/:id/timeline` | `/api/v1/bookings/:bookingId/timeline` | Same handler chain; v1 is the unambiguous path. |
 | `GET` | `/api/workers/:workerId/job-cards` | `/api/v1/provider/jobs` | ServanaWorker calls this. Takes the provider uid from the PATH; it is now behind verifyAuth + verifyOwnership, but the parameter remains a BOLA shape that v1 removes. Retirement gated on a ServanaWorker release. |
@@ -64,6 +65,12 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `PUT` | `/api/provider/notification-preferences` | `/api/v1/settings/notification-preferences` | Provider Web. Same service. |
 | `GET` | `/api/worker/job-cards/:bookingId` | `/api/v1/provider/jobs/:bookingId` | Provider Web. Same service and view function. |
 | `GET` | `/api/worker/job-cards` | `/api/v1/provider/jobs` | Provider Web calls this today. Same service, same view function, legacy envelope (a bare array). |
+| `PUT` | `/api/worker/bookings/:bookingId/accept` | `/api/v1/provider/jobs/:bookingId/accept` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
+| `PUT` | `/api/worker/bookings/:bookingId/decline` | `/api/v1/provider/jobs/:bookingId/decline` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
+| `PUT` | `/api/worker/bookings/:bookingId/en-route` | `/api/v1/provider/jobs/:bookingId/en-route` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
+| `PUT` | `/api/worker/bookings/:bookingId/arrived` | `/api/v1/provider/jobs/:bookingId/arrived` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
+| `PUT` | `/api/worker/bookings/:bookingId/start` | `/api/v1/provider/jobs/:bookingId/start` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
+| `PUT` | `/api/worker/bookings/:bookingId/complete` | `/api/v1/provider/jobs/:bookingId/complete` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
 | `GET` | `/api/providers/:providerUid/reviews` | `/api/v1/reviews/providers/:providerUid` | Same service. The legacy form does not clamp limit/offset; v1 does (BE-10). |
 | `GET` | `/api/providers/:providerUid/rating` | `/api/v1/reviews/providers/:providerUid/rating` | Same service. Kept because it sits beside the reviews list that a future customer client may already be calling; retiring one without the other would be half a change. |
 
@@ -87,7 +94,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `GET` | `/api/user/profile` | `/api/v1/me` | Not a duplicate: returns the CUSTOMER profile aggregate (addresses, preferences), not the identity record. Retained; a v1 successor belongs in the customer-profile domain command, not here. |
 | `GET` | `/api/provider/bookings/:bookingId/timeline` | `/api/v1/bookings/:bookingId/timeline` | Genuinely role-specific: the shared builder is written from the provider's seat, where "YOU" means the provider. Same domain service, different voicing. Documented rather than merged. |
 
-## KEEP (475)
+## KEEP (468)
 
 Mounted, not superseded, not a duplicate. Listed so the inventory is complete and so a
 later domain command starts from a route list rather than from a grep.
@@ -125,7 +132,6 @@ later domain command starts from a route list rather than from a grep.
 | `GET` | `/api/bookings/all` | `src/routes/booking.routes.ts:12` |
 | `GET` | `/api/dashboard/summary` | `src/routes/booking.routes.ts:13` |
 | `POST` | `/api/bookings` | `src/routes/booking.routes.ts:24` |
-| `POST` | `/api/bookings/:id/cancel` | `src/routes/booking.routes.ts:30` |
 | `POST` | `/api/:id/confirm-otp` | `src/routes/booking.routes.ts:36` |
 | `POST` | `/api/:bookingId/resend-otp` | `src/routes/booking.routes.ts:43` |
 | `GET` | `/api/:id/tracking` | `src/routes/booking.routes.ts:45` |
@@ -285,12 +291,6 @@ later domain command starts from a route list rather than from a grep.
 | `DELETE` | `/api/provider/bookings/:bookingId/evidence/:evidenceId` | `src/routes/provider.routes.ts:233` |
 | `GET` | `/api/provider/bookings/:bookingId/cancellation-eligibility` | `src/routes/provider.routes.ts:235` |
 | `POST` | `/api/provider/bookings/:bookingId/cancel` | `src/routes/provider.routes.ts:236` |
-| `PUT` | `/api/worker/bookings/:bookingId/accept` | `src/routes/provider.routes.ts:242` |
-| `PUT` | `/api/worker/bookings/:bookingId/decline` | `src/routes/provider.routes.ts:243` |
-| `PUT` | `/api/worker/bookings/:bookingId/en-route` | `src/routes/provider.routes.ts:244` |
-| `PUT` | `/api/worker/bookings/:bookingId/arrived` | `src/routes/provider.routes.ts:245` |
-| `PUT` | `/api/worker/bookings/:bookingId/start` | `src/routes/provider.routes.ts:246` |
-| `PUT` | `/api/worker/bookings/:bookingId/complete` | `src/routes/provider.routes.ts:247` |
 | `POST` | `/api/worker/location` | `src/routes/provider.routes.ts:250` |
 | `GET` | `/api/worker/services` | `src/routes/provider.routes.ts:253` |
 | `DELETE` | `/api/worker/services/:serviceId` | `src/routes/provider.routes.ts:254` |

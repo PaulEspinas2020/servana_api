@@ -288,6 +288,69 @@ export const SCHEMAS: Record<string, unknown> = {
       'return the same Services with the same ids.',
   },
 
+  BookingActionRequest: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      expectedState: {
+        type: 'string',
+        description:
+          'Optimistic concurrency. Send the state you last read and get a clean ' +
+          'BOOKING_STATE_CONFLICT instead of silently acting on a stale view.',
+      },
+      reason: { type: 'string', description: 'Required by cancellation and reassignment guards.' },
+      workerCode: {
+        type: 'string',
+        description: 'Six digits the CUSTOMER reads out. Required to start a job. Redacted before the timeline.',
+      },
+    },
+    description: 'Send Idempotency-Key as a HEADER; a retry replays the original result.',
+  },
+
+  BookingTransitionResult: {
+    type: 'object',
+    required: ['bookingId', 'action', 'fromState', 'toState'],
+    properties: {
+      bookingId: { type: 'integer' },
+      action: { type: 'string' },
+      fromState: { type: 'string' },
+      toState: { type: 'string' },
+      idempotentReplay: { type: 'boolean', description: 'True when an identical request had already been applied.' },
+      correlationId: { type: 'string' },
+      timelineEventId: { type: ['integer', 'null'] },
+      state: { type: 'object', description: 'The caller-appropriate projection of the new state.' },
+    },
+  },
+
+  BookingTransitionList: {
+    type: 'object',
+    required: ['bookingId', 'events'],
+    properties: {
+      bookingId: { type: 'integer' },
+      currentState: { type: 'string' },
+      events: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'integer' },
+            action: { type: 'string' },
+            fromState: { type: 'string' },
+            toState: { type: 'string' },
+            actorRole: { type: 'string' },
+            providerUid: { type: ['string', 'null'] },
+            reason: { type: ['string', 'null'] },
+            correlationId: { type: ['string', 'null'] },
+            occurredAt: { type: 'string', format: 'date-time' },
+          },
+        },
+      },
+    },
+    description:
+      'Append-only. A reassigned provider keeps their progression — the current state ' +
+      'resetting must not erase what happened.',
+  },
+
   Identity: {
     type: 'object',
     required: ['uid'],

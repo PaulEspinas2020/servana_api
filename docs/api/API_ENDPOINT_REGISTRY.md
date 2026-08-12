@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**34 implemented** · **4 planned** · 38 total.
+**42 implemented** · **4 planned** · 46 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -165,6 +165,8 @@ The authenticated caller, whatever their role.
 | `GET` | `/api/v1/bookings` | **live** | any signed-in | — | `BookingList` | yes | bookings |
 | `GET` | `/api/v1/bookings/:bookingId` | **live** | any signed-in | — | `Booking` | yes | bookings |
 | `GET` | `/api/v1/bookings/:bookingId/timeline` | **live** | any signed-in | — | `BookingTimeline` | yes | bookings |
+| `POST` | `/api/v1/bookings/:bookingId/cancel` | **live** | any signed-in | `BookingActionRequest` | `BookingTransitionResult` | no | bookings |
+| `GET` | `/api/v1/bookings/:bookingId/transitions` | **live** | any signed-in | — | `BookingTransitionList` | yes | bookings |
 
 ### `GET /api/v1/bookings`
 
@@ -202,12 +204,42 @@ A booking's operational history, voiced for the customer.
   - `GET /api/:id/timeline` — **ALIAS_TEMPORARILY** — Same handler chain; v1 is the unambiguous path.
   - `GET /api/provider/bookings/:bookingId/timeline` — **ROLE_SPECIFIC** — Genuinely role-specific: the shared builder is written from the provider's seat, where "YOU" means the provider. Same domain service, different voicing. Documented rather than merged.
 
+### `POST /api/v1/bookings/:bookingId/cancel`
+
+Cancels the caller's own booking.
+
+- **Domain service** — `services/booking/transitionExecutor.transitionBooking (CUSTOMER_CANCEL)`
+- **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `bookingId` (integer) bookings.id
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile — · Prov Web — · Admin —
+- **Legacy it replaces**
+  - `POST /api/bookings/:id/cancel` — **ALIAS_TEMPORARILY** — The live customer cancel. It still writes status directly and is Phase C of the executor migration — deliberately after the provider lifecycle, because cancellation touches fees, refunds and provider compensation and is the worst first test of whether the executor architecture works.
+
+### `GET /api/v1/bookings/:bookingId/transitions`
+
+The canonical transition history: one event per state change, oldest first.
+
+> Preserves a reassigned provider's full progression — accepted, en route, reassigned — because the current state resetting must not erase history.
+
+- **Domain service** — `services/booking/transitionExecutor.getBookingTimeline`
+- **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `bookingId` (integer) bookings.id
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin ·
+- **Legacy it replaces**
+  - `GET /api/:id/timeline` — **KEEP** — NOT a duplicate. The legacy timeline is a re-voiced operational narrative built from per-stage timestamps for the customer to read. This is the append-only event log the executor writes inside each transaction — the evidence, not the story. Admin, Customer and Provider all read THIS to agree on what happened.
+
 ## provider-jobs
 
 | Method | Path | Status | Auth | Request | Response | Idem | Owner |
 |---|---|---|---|---|---|---|---|
 | `GET` | `/api/v1/provider/jobs` | **live** | provider (role 2/4) | — | `JobCardList` | yes | provider-jobs |
 | `GET` | `/api/v1/provider/jobs/:bookingId` | **live** | provider (role 2/4) | — | `JobCard` | yes | provider-jobs |
+| `POST` | `/api/v1/provider/jobs/:bookingId/accept` | **live** | provider (role 2/4) | `BookingActionRequest` | `BookingTransitionResult` | no | provider-jobs |
+| `POST` | `/api/v1/provider/jobs/:bookingId/decline` | **live** | provider (role 2/4) | `BookingActionRequest` | `BookingTransitionResult` | no | provider-jobs |
+| `POST` | `/api/v1/provider/jobs/:bookingId/en-route` | **live** | provider (role 2/4) | `BookingActionRequest` | `BookingTransitionResult` | no | provider-jobs |
+| `POST` | `/api/v1/provider/jobs/:bookingId/arrived` | **live** | provider (role 2/4) | `BookingActionRequest` | `BookingTransitionResult` | no | provider-jobs |
+| `POST` | `/api/v1/provider/jobs/:bookingId/start` | **live** | provider (role 2/4) | `BookingActionRequest` | `BookingTransitionResult` | no | provider-jobs |
+| `POST` | `/api/v1/provider/jobs/:bookingId/complete` | **live** | provider (role 2/4) | `BookingActionRequest` | `BookingTransitionResult` | no | provider-jobs |
 
 ### `GET /api/v1/provider/jobs`
 
@@ -233,6 +265,74 @@ One job card, scoped to the authenticated provider's own assignment.
 - **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
 - **Legacy it replaces**
   - `GET /api/worker/job-cards/:bookingId` — **ALIAS_TEMPORARILY** — Provider Web. Same service and view function.
+
+### `POST /api/v1/provider/jobs/:bookingId/accept`
+
+Accepts the assignment.
+
+- **Domain service** — `services/booking/transitionExecutor.transitionBooking (PROVIDER_ACCEPT)`
+- **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `bookingId` (integer) bookings.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `PUT /api/worker/bookings/:bookingId/accept` — **ALIAS_TEMPORARILY** — The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment.
+
+### `POST /api/v1/provider/jobs/:bookingId/decline`
+
+Declines the assignment, returning the booking to the pool.
+
+- **Domain service** — `services/booking/transitionExecutor.transitionBooking (PROVIDER_DECLINE)`
+- **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `bookingId` (integer) bookings.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `PUT /api/worker/bookings/:bookingId/decline` — **ALIAS_TEMPORARILY** — The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment.
+
+### `POST /api/v1/provider/jobs/:bookingId/en-route`
+
+Marks the provider on the way.
+
+- **Domain service** — `services/booking/transitionExecutor.transitionBooking (PROVIDER_EN_ROUTE)`
+- **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `bookingId` (integer) bookings.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `PUT /api/worker/bookings/:bookingId/en-route` — **ALIAS_TEMPORARILY** — The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment.
+
+### `POST /api/v1/provider/jobs/:bookingId/arrived`
+
+Marks the provider at the address.
+
+- **Domain service** — `services/booking/transitionExecutor.transitionBooking (PROVIDER_ARRIVED)`
+- **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `bookingId` (integer) bookings.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `PUT /api/worker/bookings/:bookingId/arrived` — **ALIAS_TEMPORARILY** — The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment.
+
+### `POST /api/v1/provider/jobs/:bookingId/start`
+
+Starts the job. Requires the customer worker code.
+
+> The worker code is the six-digit secret the CUSTOMER reads out. It is the only gate on starting a chargeable job, so it is rate-limited per provider and is redacted before the timeline records the transition.
+
+- **Domain service** — `services/booking/transitionExecutor.transitionBooking (PROVIDER_START)`
+- **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `BOOKING_WORKER_CODE_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `bookingId` (integer) bookings.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `PUT /api/worker/bookings/:bookingId/start` — **ALIAS_TEMPORARILY** — The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment.
+
+### `POST /api/v1/provider/jobs/:bookingId/complete`
+
+Completes the job.
+
+- **Domain service** — `services/booking/transitionExecutor.transitionBooking (PROVIDER_COMPLETE)`
+- **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `bookingId` (integer) bookings.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `PUT /api/worker/bookings/:bookingId/complete` — **ALIAS_TEMPORARILY** — The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment.
 
 ## notifications
 
@@ -593,4 +693,12 @@ Admin booking operations list.
 | `GET /api/v1/home` | · | · | — | — | — |
 | `GET /api/v1/conversations` | ⏳ | ⏳ | ⏳ | ⏳ | — |
 | `GET /api/v1/provider/earnings` | — | — | · | ⏳ | — |
+| `POST /api/v1/bookings/:bookingId/cancel` | ⏳ | ⏳ | — | — | — |
+| `GET /api/v1/bookings/:bookingId/transitions` | · | · | · | · | · |
+| `POST /api/v1/provider/jobs/:bookingId/accept` | — | — | ⏳ | ⏳ | — |
+| `POST /api/v1/provider/jobs/:bookingId/decline` | — | — | ⏳ | ⏳ | — |
+| `POST /api/v1/provider/jobs/:bookingId/en-route` | — | — | ⏳ | ⏳ | — |
+| `POST /api/v1/provider/jobs/:bookingId/arrived` | — | — | ⏳ | ⏳ | — |
+| `POST /api/v1/provider/jobs/:bookingId/start` | — | — | ⏳ | ⏳ | — |
+| `POST /api/v1/provider/jobs/:bookingId/complete` | — | — | ⏳ | ⏳ | — |
 | `GET /api/v1/admin/bookings` | — | — | — | — | ⏳ |

@@ -256,6 +256,31 @@ jest.mock('../src/constants/platformContinueUrls', () => ({
   assertContinueUrlsAreUsable: () => {},
 }));
 
+jest.mock('../src/services/booking/transitionExecutor', () => {
+  class TransitionError extends Error {
+    constructor(readonly code: string, message: string, readonly detail?: unknown) { super(message); }
+  }
+  return {
+    TransitionError,
+    transitionBooking: jest.fn(async (input: any) => ({
+      bookingId: input.bookingId,
+      action: input.action,
+      fromState: 'ASSIGNED',
+      toState: 'ACCEPTED',
+      idempotentReplay: false,
+      correlationId: 'corr-1',
+      timelineEventId: 1,
+    })),
+    getBookingTimeline: jest.fn(async (bookingId: number) => [
+      {
+        id: 1, bookingId, action: 'PROVIDER_ACCEPT', fromState: 'ASSIGNED', toState: 'ACCEPTED',
+        actorRole: 'assigned_provider', providerUid: 'p1', reason: null,
+        correlationId: 'corr-1', occurredAt: '2026-08-12T00:00:00.000Z',
+      },
+    ]),
+  };
+});
+
 import v1Router from '../src/api/v1/register';
 import { IMPLEMENTED, PLANNED, fullPath } from '../src/api/v1/contract';
 
@@ -363,6 +388,15 @@ describe('every implemented contract entry is reachable at its declared path', (
       call('GET', '/api/v1/catalog/subcategories/7/services', { auth: false }),
     'search.query': () => call('GET', '/api/v1/search?q=facial', { auth: false }),
     'catalog.search': () => call('GET', '/api/v1/catalog/search?q=facial', { auth: false }),
+    'bookings.cancel': () => call('POST', '/api/v1/bookings/7/cancel', { body: {} }),
+    'bookings.transitions': () => call('GET', '/api/v1/bookings/7/transitions'),
+    'provider.jobs.accept': () => call('POST', '/api/v1/provider/jobs/7/accept', { role: 'provider', body: {} }),
+    'provider.jobs.decline': () => call('POST', '/api/v1/provider/jobs/7/decline', { role: 'provider', body: {} }),
+    'provider.jobs.enroute': () => call('POST', '/api/v1/provider/jobs/7/en-route', { role: 'provider', body: {} }),
+    'provider.jobs.arrived': () => call('POST', '/api/v1/provider/jobs/7/arrived', { role: 'provider', body: {} }),
+    'provider.jobs.start': () =>
+      call('POST', '/api/v1/provider/jobs/7/start', { role: 'provider', body: { workerCode: '123456' } }),
+    'provider.jobs.complete': () => call('POST', '/api/v1/provider/jobs/7/complete', { role: 'provider', body: {} }),
   };
 
   it('has a live request case for every implemented entry, and no more', () => {
@@ -573,6 +607,106 @@ describe('the catalog hierarchy resolves to the right level', () => {
     expect(cats.body.data.categories.every((c: any) => /^category:\d+$/.test(c.ref))).toBe(true);
     expect(subs.body.data.subcategories.every((x: any) => /^subcategory:\d+$/.test(x.ref))).toBe(true);
     expect(svcs.body.data.services.every((x: any) => /^service:\d+$/.test(x.ref))).toBe(true);
+  });
+});
+
+describe('booking lifecycle actions route to the executor', () => {
+  const executor = () => require('../src/services/booking/transitionExecutor');
+
+  beforeEach(() => executor().transitionBooking.mockClear());
+
+  it('each action endpoint names its OWN action, never a destination state', async () => {
+    const expected: Array<[string, string]> = [
+      ['/api/v1/provider/jobs/7/accept', 'PROVIDER_ACCEPT'],
+      ['/api/v1/provider/jobs/7/decline', 'PROVIDER_DECLINE'],
+      ['/api/v1/provider/jobs/7/en-route', 'PROVIDER_EN_ROUTE'],
+      ['/api/v1/provider/jobs/7/arrived', 'PROVIDER_ARRIVED'],
+      ['/api/v1/provider/jobs/7/complete', 'PROVIDER_COMPLETE'],
+    ];
+    for (const [path, action] of expected) {
+      executor().transitionBooking.mockClear();
+      await call('POST', path, { role: 'provider', body: {} });
+      expect(executor().transitionBooking).toHaveBeenCalledWith(
+        expect.objectContaining({ action, bookingId: 7 }),
+      );
+    }
+  });
+
+  it('takes the actor from the TOKEN, never from the body', async () => {
+    await call('POST', '/api/v1/provider/jobs/7/accept', {
+      role: 'provider',
+      body: { actorUid: 'someone-else', workerUid: 'someone-else', providerUid: 'someone-else' },
+    });
+    const arg = executor().transitionBooking.mock.calls[0][0];
+    expect(arg.actorUid).toBe('uid-under-test');
+    expect(arg.metadata).not.toHaveProperty('workerUid');
+    expect(arg.metadata).not.toHaveProperty('providerUid');
+  });
+
+  it('passes expectedState through for optimistic concurrency', async () => {
+    await call('POST', '/api/v1/provider/jobs/7/en-route', {
+      role: 'provider',
+      body: { expectedState: 'accepted' },
+    });
+    expect(executor().transitionBooking.mock.calls[0][0].expectedState).toBe('ACCEPTED');
+  });
+
+  it('reads the Idempotency-Key from the HEADER', async () => {
+    const res = await fetch(`${base}/api/v1/provider/jobs/7/accept`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer test',
+        'x-test-role': 'provider',
+        'content-type': 'application/json',
+        'idempotency-key': 'abcdefgh1234',
+      },
+      body: '{}',
+    });
+    expect(res.status).toBe(200);
+    expect(executor().transitionBooking.mock.calls[0][0].idempotencyKey).toBe('abcdefgh1234');
+  });
+
+  it('rejects a malformed Idempotency-Key rather than ignoring it', async () => {
+    // Silently ignoring it is worse than refusing: the caller believes the
+    // retry is protected and it is not.
+    const res = await fetch(`${base}/api/v1/provider/jobs/7/accept`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer test',
+        'x-test-role': 'provider',
+        'content-type': 'application/json',
+        'idempotency-key': 'short',
+      },
+      body: '{}',
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json() as any).error.code).toBe('IDEMPOTENCY_KEY_INVALID');
+  });
+
+  it('returns the caller-appropriate projection alongside the result', async () => {
+    const provider = await call('POST', '/api/v1/provider/jobs/7/accept', { role: 'provider', body: {} });
+    expect(provider.body.data.state.canonicalState).toBe('ACCEPTED');
+    expect(provider.body.data.state.nextAction).toBe('markEnRoute');
+
+    const customer = await call('POST', '/api/v1/bookings/7/cancel', { body: {} });
+    expect(customer.body.data.state.label).toBe('Confirmed');
+  });
+
+  it('the transitions endpoint returns the canonical event log', async () => {
+    const res = await call('GET', '/api/v1/bookings/7/transitions');
+    expect(res.status).toBe(200);
+    expect(res.body.data.currentState).toBe('ACCEPTED');
+    expect(res.body.data.events[0].action).toBe('PROVIDER_ACCEPT');
+  });
+
+  it('a provider action refuses a signed-in non-provider', async () => {
+    const res = await call('POST', '/api/v1/provider/jobs/7/accept', { body: {} });
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects a non-numeric bookingId', async () => {
+    const res = await call('POST', '/api/v1/provider/jobs/abc/accept', { role: 'provider', body: {} });
+    expect(res.body.error.code).toBe('VALIDATION_FAILED');
   });
 });
 
