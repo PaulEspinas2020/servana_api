@@ -67,6 +67,8 @@ const store = {
   /** Statements issued between BEGIN and COMMIT on the executor's connection. */
   inTransaction: [] as string[],
   open: false,
+  /** Makes the legacy tracking insert fail, to prove the rollback. */
+  trackingFails: false,
 };
 
 const reset = () => {
@@ -78,8 +80,13 @@ const reset = () => {
   store.sql = [];
   store.inTransaction = [];
   store.open = false;
+  store.trackingFails = false;
+  snapshot = null;
   calls.length = 0;
 };
+
+/** The pre-transaction image, held between BEGIN and COMMIT/ROLLBACK. */
+let snapshot: string | null = null;
 
 const mine = (bookingId: number, uid: unknown) =>
   store.assignments.filter((a) => a.booking_id === bookingId && a.worker_uid === uid);
@@ -91,8 +98,29 @@ const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCount: numb
 
   const done = (rows: Row[]) => ({ rows, rowCount: rows.length });
 
-  if (/^BEGIN/i.test(flat)) { store.open = true; return done([]); }
-  if (/^(COMMIT|ROLLBACK)/i.test(flat)) { store.open = false; return done([]); }
+  /**
+   * Real transaction semantics, because a rollback test against a fake that
+   * cannot roll back proves nothing. BEGIN snapshots every mutable table;
+   * ROLLBACK restores it; COMMIT drops the snapshot.
+   */
+  if (/^BEGIN/i.test(flat)) {
+    store.open = true;
+    snapshot = JSON.stringify({
+      booking: store.booking,
+      assignments: store.assignments,
+      transitions: store.transitions,
+      idempotency: store.idempotency,
+      tracking: store.tracking,
+    });
+    return done([]);
+  }
+  if (/^ROLLBACK/i.test(flat)) {
+    store.open = false;
+    if (snapshot) Object.assign(store, JSON.parse(snapshot));
+    snapshot = null;
+    return done([]);
+  }
+  if (/^COMMIT/i.test(flat)) { store.open = false; snapshot = null; return done([]); }
   if (/CREATE TABLE|CREATE INDEX|ALTER TABLE/i.test(flat)) return done([]);
 
   if (/SELECT id, status, user_id AS customer_uid, worker_uid/i.test(flat)) {
@@ -141,6 +169,7 @@ const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCount: numb
     return done([]);
   }
   if (/INSERT INTO servana\.booking_tracking/i.test(flat)) {
+    if (store.trackingFails) throw new Error('relation "booking_tracking" is locked');
     store.tracking.push({ booking_id: Number(params[0]), status: params[1], note: params[2] });
     return done([]);
   }
@@ -241,6 +270,58 @@ describe('the accept succeeds through the executor', () => {
     seedAssigned();
     await acceptJob(BOOKING, PROVIDER);
     expect(store.booking?.status).toBe('WORKER_ASSIGNED');
+  });
+});
+
+/**
+ * LEGACY_TRACKING_PROJECTION failure semantics: REQUIRED.
+ *
+ * Decided deliberately rather than inherited. `acceptJob` already wrote the
+ * tracking row unguarded inside its transaction, so ACCEPT's semantics are
+ * unchanged by the migration — but the arrival stages wrapped theirs in a
+ * try/catch, and this is the policy the whole projection now follows. See
+ * docs/TAB04_OPEN_GAPS.md.
+ *
+ * The rows back three supported timelines. A missing one is silent and
+ * unrecoverable without a backfill, so a transition that cannot record itself
+ * does not happen.
+ */
+describe('a failed tracking insert rolls the whole transition back', () => {
+  it('leaves the assignment, the timeline and the tracking table untouched', async () => {
+    seedAssigned();
+    store.trackingFails = true;
+
+    await expect(acceptJob(BOOKING, PROVIDER)).rejects.toThrow(/booking_tracking/);
+    await flush();
+
+    expect(store.assignments[0].status).toBe('ASSIGNED');
+    expect(store.transitions).toHaveLength(0);
+    expect(store.tracking).toHaveLength(0);
+    expect(store.sql).toContain('ROLLBACK');
+    expect(store.sql).not.toContain('COMMIT');
+  });
+
+  it('sends no notifications for a transition that did not happen', async () => {
+    seedAssigned();
+    store.trackingFails = true;
+    await acceptJob(BOOKING, PROVIDER).catch(() => undefined);
+    await flush();
+
+    expect(calls).toEqual([]);
+  });
+
+  it('records no idempotency row, so a retry is a real attempt', async () => {
+    // Persisting the key on a rolled-back transition would answer the retry
+    // with a success that never happened.
+    seedAssigned();
+    store.trackingFails = true;
+    await acceptJob(BOOKING, PROVIDER, { idempotencyKey: 'k-9' }).catch(() => undefined);
+    expect(store.idempotency).toHaveLength(0);
+
+    store.trackingFails = false;
+    const retry = await acceptJob(BOOKING, PROVIDER, { idempotencyKey: 'k-9' });
+    expect(retry.idempotent).toBe(false);
+    expect(store.assignments[0].status).toBe('ACCEPTED');
   });
 });
 

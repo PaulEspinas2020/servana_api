@@ -350,6 +350,28 @@ describe('an ended assignment does not read as ASSIGNED', () => {
     expect(mapOperationsStatus('WORKER_ASSIGNED', 'DECLINED', null)).toBe('awaiting_assignment');
     expect(mapOperationsStatus('WORKER_ASSIGNED', 'ASSIGNED', 'p1')).toBe('assigned');
   });
+
+  /**
+   * TAB 04 SMOKE GATE — shipping with the backend, not waiting for the portal
+   * `canonicalState` patch. See docs/TAB04_OPEN_GAPS.md.
+   *
+   * Stated end to end in one assertion so the shipped behaviour is legible as
+   * one fact rather than assembled from four.
+   */
+  it('SMOKE GATE: closed assignment + no worker + WORKER_ASSIGNED', () => {
+    const raw = { bookingStatus: 'WORKER_ASSIGNED', workerStatus: 'DECLINED', workerUid: null };
+
+    const canonical = deriveCanonicalState(raw);
+    expect(canonical).toBe('AWAITING_ASSIGNMENT');
+    expect(toAdminProjection(canonical).operationsStatus).toBe('awaiting_assignment');
+    expect(mapOperationsStatus(raw.bookingStatus, raw.workerStatus, raw.workerUid))
+      .toBe('awaiting_assignment');
+
+    // And the value the live portal receives is one it already renders — this
+    // is what makes it safe to ship ahead of the portal patch, unlike the
+    // EN_ROUTE / ARRIVED collapse.
+    expect(toAdminProjection(canonical).stateIsCollapsedInLegacyField).toBe(false);
+  });
 });
 
 describe('one spelling of cancelled', () => {
