@@ -15,6 +15,7 @@
 
 import dbQuery from "../db/dbQuery";
 import { db } from "../config";
+import { excludeSyntheticSql } from "./booking/syntheticBookings";
 
 const s = db.schema;
 
@@ -78,13 +79,16 @@ export const getProviderPerformance = async (
          )                                                                    AS on_time
        FROM ${s}.booking_workers bw
        JOIN ${s}.bookings b ON b.id = bw.booking_id
-       WHERE bw.worker_uid = $1`,
+       -- A release smoke must not move a real provider's acceptance, decline,
+       -- completion or on-time record.
+       WHERE bw.worker_uid = $1 AND ${excludeSyntheticSql('b')}`,
       [workerUid, ON_TIME_GRACE_MINUTES]
     ),
     dbQuery.query(
       `SELECT COUNT(*) AS cancelled
-         FROM ${s}.bookings
-        WHERE worker_uid = $1 AND status = ANY($2::text[])`,
+         FROM ${s}.bookings b
+        WHERE b.worker_uid = $1 AND b.status = ANY($2::text[])
+          AND ${excludeSyntheticSql('b')}`,
       [workerUid, CANCELLED_STATUSES]
     ),
     // Aggregate table may hold no row for a provider with no reviews yet —

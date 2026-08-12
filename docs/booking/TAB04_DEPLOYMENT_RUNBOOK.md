@@ -97,20 +97,21 @@ npm ci && npm run verify
 echo "exit: $?"        # must be 0
 ```
 
-### 4 — Apply migration 027 **[HUMAN]**
+### 4 — Apply migrations 027 and 028 **[HUMAN]**
 
 Plan first. The runner defaults to plan mode and only writes with `--apply`:
 
 ```bash
 npx ts-node scripts/run-migrations.ts
-# expect: {"mode":"plan", ..., "pending":["027-booking-lifecycle-timestamps.sql"]}
+# expect pending: 027-booking-lifecycle-timestamps.sql
+#                 028-booking-synthetic-marker.sql
 ```
 
 Then apply:
 
 ```bash
 npx ts-node scripts/run-migrations.ts --apply
-# expect: applied 027-booking-lifecycle-timestamps.sql
+# expect: applied 027-... then applied 028-...
 ```
 
 027 carries no `BEGIN`/`COMMIT` of its own — the runner wraps each migration in
@@ -175,8 +176,16 @@ pm2 restart servana-prod && pm2 logs servana-prod --lines 50
 
 PM2 process is `servana-prod` on **port 8000**, not 3000.
 
-### 9 — Authenticated production booking smoke **[DECISION]** — see §7
-### 10 — Lifecycle preservation / integrity checks **[DECISION]** — see §7
+### 9 — Authenticated production booking smoke **[HUMAN]**
+Create **ONE** booking marked `is_synthetic = true`, then run the full
+lifecycle through the canonical executor: ASSIGN → ACCEPT → EN_ROUTE →
+ARRIVED → START → COMPLETE, plus admin reassign / cancel / approve and one
+auto-assignment. Same executor, same code path — see §7.
+
+### 10 — Lifecycle preservation / integrity checks **[HUMAN]**
+Checklist in §6, plus: confirm the synthetic booking is absent from the
+dashboard KPIs, revenue, provider performance and supply analytics, and
+present on the admin board.
 
 ### 11 — Deploy Admin portal **[HUMAN]**
 Only after the backend is verified. Deploying the portal first is safe by
@@ -256,39 +265,100 @@ that reads zero.
 
 ---
 
-## 7. ⚠ The production smoke needs a decision before it runs
+## 7. The synthetic marker — DECIDED (option A), IMPLEMENTED
 
-The required smoke is a **write** lifecycle: ACCEPT → EN_ROUTE → ARRIVED →
-START → COMPLETE, plus admin assign / reassign / cancel / approve and one
-auto-assignment. Three facts collide:
+The required smoke is a write lifecycle through to COMPLETE. Production carries
+109 bookings and has never recorded a completion, so an unmarked smoke would
+create the platform's **first completion** — synthetic, indistinguishable from
+real, and the first data point for completion rate and provider acceptance rate.
 
-1. **The E2E canary is read-only against production by rule** — never used for
-   a write path there. The customer-web `assertNotProduction()` guard refuses
-   `api.servana.com.ph` deliberately, and was not weakened.
-2. **There is no synthetic-account exclusion anywhere in the backend.** I
-   grepped: no `is_test`, no exclusion in `adminBookingService`, nothing. A
-   smoke booking lands in every metric with no way to filter it out afterwards.
-3. **Production has 109 bookings and zero completions, ever.** A smoke that
-   reaches COMPLETE creates the platform's first completion — synthetic,
-   unmarked and permanent. It would also be the first data point for completion
-   rate, provider acceptance rate, and anything downstream of them.
+Option A was chosen: an explicit, server-controlled classification, added
+*before* the smoke rather than cleaned up after.
 
-So running the full lifecycle against production is not a neutral act, and it
-is not mine to decide. The options:
+### What it is
 
-| | Approach | Cost |
-|---|---|---|
-| **A** | Full lifecycle on production with a synthetic-exclusion marker added first | needs a schema/filter change before the smoke — more scope, but the only option that leaves metrics trustworthy |
-| **B** | Read-only verification on production; write lifecycle against a non-production API | needs the non-production API that has been the standing blocker |
-| **C** | Full lifecycle on production, unmarked, and accept the metric pollution | cheapest now; permanently corrupts the first-completion data point |
+`bookings.is_synthetic BOOLEAN NOT NULL DEFAULT false` (migration **028**).
 
-**My recommendation: A**, and add the exclusion marker as its own small change
-*before* the smoke rather than cleaning up after. The marker is useful
-regardless — it is the same thing that would let the canary ever be used for a
-write path — and "we will remember which booking was fake" is not a control.
+Explicit, never inferred. Nothing deduces synthetic status from an email
+address, a customer or provider name, or an id range — every one of those is a
+heuristic a real customer eventually collides with, and the failure is silent:
+real revenue quietly dropped from a report.
 
-Steps 9 and 10 stay blocked until this is chosen. Everything before them is
-unaffected.
+Server-controlled. No request body is read into the column, enforced by a
+detector over the whole `src/` tree with a negative fixture.
+
+### The principle
+
+> The marker changes accounting, reporting and external-risk treatment.
+> It changes **nothing** about lifecycle semantics.
+
+A synthetic booking runs the same canonical executor, takes the same locks and
+produces the same `booking_workers` mutations, `booking_transitions`,
+`booking_tracking` projections and `canonicalState`. There is **no separate
+test-transition path** — one would exercise code that never runs in anger.
+Asserted directly: the executor, the canonical derivation, the SQL generators
+and the projections all contain no reference to the marker.
+
+### Excluded from (REPORTING)
+
+| Surface | Why |
+|---|---|
+| `adminDashboardService#bookingAggregations` | total bookings, completion rate, cancellation rate |
+| `adminFinanceService#revenue` | revenue / GMV |
+| `providerPerformanceService#providerStats` | acceptance, decline, completion, on-time |
+| `providerSupplyHealthService#demand` | unassigned-demand analytics that steer supply |
+
+### Deliberately NOT excluded from (OPERATIONAL)
+
+| Surface | Why |
+|---|---|
+| `adminBookingService#getAdminBookings` | an admin must SEE the smoke and watch it move |
+| `adminBookingService#getAdminBookingDetail` | the audit trail of what the release exercised |
+| `adminBookingService#getAdminBookingMetrics` | tab counts index the board; they must sum to the list |
+
+The classification is a declared inventory in
+`src/services/booking/syntheticBookings.ts`, not scattered `AND is_synthetic =
+false` copies. A new query that is not classified fails the suite, which forces
+somebody to decide rather than defaulting to the wrong answer — a KPI that is
+slightly wrong looks exactly like one that is right.
+
+### Money
+
+`createDisbursement` throws `SyntheticFinancialRefusal` before any PayMongo
+call. Exactly one financial check, at the one function that moves funds — not a
+general test mode, because a broad financial bypass is a larger risk than the
+one it prevents. It **throws** rather than returning null: the neighbouring
+guards (no provider, no price) are ordinary business conditions, while this one
+means a synthetic booking reached a money path.
+
+Narrowness is enforced: a test walks `src/` and asserts exactly one consumer.
+
+### Verified before the smoke
+
+```
+REAL BOOKING              counted in normal metrics
+SYNTHETIC BOOKING         not counted in business metrics
+ADMIN EXPLICIT QUERY      can retrieve it
+CANONICAL STATE           unchanged by the flag
+TRANSITION EXECUTOR       same code path
+PROVIDER PERFORMANCE      synthetic accept/decline does not move real metrics
+COMPLETION METRICS        synthetic completion is not the first real one
+```
+
+26 assertions, with negative fixtures on the body-read detector and on the
+reporting-filter guard — removing a filter from a reporting surface fails the
+suite, verified by temporarily removing one.
+
+### Migration order
+
+028 is independent of 027 and equally additive, but apply **both** before
+cutover. Neither needs reverting: both leave unused columns if the app rolls
+back, which is the property that makes them safe to apply first.
+
+### Retention
+
+Do not delete the smoke booking to make production look clean. Once marked and
+excluded, keeping it is the audit trail of exactly what the release exercised.
 
 ---
 

@@ -9,6 +9,7 @@
 
 import dbQuery from '../db/dbQuery';
 import { db } from '../config';
+import { excludeSyntheticSql } from "./booking/syntheticBookings";
 
 const s = db.schema;
 
@@ -311,6 +312,10 @@ export const getOperationsDashboard = async (): Promise<AdminDashboardOperations
         LEFT JOIN lw  ON lw.booking_id  = b.id
         LEFT JOIN lp  ON lp.booking_id  = b.id
         LEFT JOIN esc ON esc.booking_id = b.id
+        -- Executive KPIs: total bookings, completion rate, cancellation rate.
+        -- A release-smoke booking is not demand and its completion is not the
+        -- platform's. See services/booking/syntheticBookings.ts.
+        WHERE ${excludeSyntheticSql('b')}
       ),
 
       -- Booking aggregations

@@ -236,16 +236,22 @@ export async function getFinanceSummary(): Promise<{
   const [pToday, rev, gcash, payouts, refunds, exceptions, totalPaid, released] =
     await Promise.all([
       dbQuery.query(
-        `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount,0)),0) AS v
-         FROM ${s}.payments
-         WHERE UPPER(status)='PAID'
-           AND (paid_at AT TIME ZONE 'Asia/Manila') >= DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Manila')`
+        // Revenue: joined to bookings ONLY to exclude synthetic ones. A smoke
+        // booking carrying a price would report as money never taken.
+        `SELECT COALESCE(SUM(p.amount - COALESCE(p.refunded_amount,0)),0) AS v
+         FROM ${s}.payments p
+         LEFT JOIN ${s}.bookings b ON b.id = p.booking_id
+         WHERE UPPER(p.status)='PAID'
+           AND (p.paid_at AT TIME ZONE 'Asia/Manila') >= DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Manila')
+           AND COALESCE(b.is_synthetic, false) = false`
       ),
       dbQuery.query(
-        `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount,0)),0) AS v
-         FROM ${s}.payments
-         WHERE UPPER(status)='PAID'
-           AND (paid_at AT TIME ZONE 'Asia/Manila') >= DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Manila')`
+        `SELECT COALESCE(SUM(p.amount - COALESCE(p.refunded_amount,0)),0) AS v
+         FROM ${s}.payments p
+         LEFT JOIN ${s}.bookings b ON b.id = p.booking_id
+         WHERE UPPER(p.status)='PAID'
+           AND (p.paid_at AT TIME ZONE 'Asia/Manila') >= DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Manila')
+           AND COALESCE(b.is_synthetic, false) = false`
       ),
       dbQuery.query(
         `SELECT COUNT(*) AS v FROM ${s}.payments WHERE method='GCASH' AND status='PENDING'`
@@ -260,8 +266,11 @@ export async function getFinanceSummary(): Promise<{
         `SELECT COUNT(*) AS v FROM ${s}.finance_reconciliation_exceptions WHERE status='open'`
       ),
       dbQuery.query(
-        `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount,0)),0) AS v
-         FROM ${s}.payments WHERE UPPER(status)='PAID'`
+        `SELECT COALESCE(SUM(p.amount - COALESCE(p.refunded_amount,0)),0) AS v
+         FROM ${s}.payments p
+         LEFT JOIN ${s}.bookings b ON b.id = p.booking_id
+         WHERE UPPER(p.status)='PAID'
+           AND COALESCE(b.is_synthetic, false) = false`
       ),
       dbQuery.query(
         `SELECT COUNT(*) AS v FROM ${s}.disbursements WHERE status='RELEASED'`

@@ -5,6 +5,7 @@ import { PROVIDER_RELEASE_HOURS } from './payoutStatus';
 import dbQuery from "../db/dbQuery";
 import axios from "axios";
 import { getWorkerBankAccount } from "./technicianService";
+import { SyntheticFinancialRefusal } from "./booking/syntheticBookings";
 
 const dbSchema = db.schema;
 
@@ -87,6 +88,7 @@ export const createDisbursement = async (bookingId: number) => {
     // payment row is the only evidence money arrived.
     `SELECT b.final_price,
             b.worker_uid,
+            b.is_synthetic,
             ${paidAdditionalWorkSql(dbSchema)} AS additional_paid
      FROM ${dbSchema}.bookings b
      WHERE b.id = $1`,
@@ -95,7 +97,25 @@ export const createDisbursement = async (bookingId: number) => {
 
   if (!r.rowCount) throw new Error("Booking not found");
 
-  const { final_price, worker_uid, additional_paid } = r.rows[0];
+  const { final_price, worker_uid, additional_paid, is_synthetic } = r.rows[0];
+
+  /**
+   * A release smoke must never send real money.
+   *
+   * This is the ONE financial check the synthetic marker earns, placed at the
+   * one function that actually moves funds — everything below this line ends in
+   * a live PayMongo call. It is deliberately not a general "test mode": a broad
+   * financial bypass is a larger risk than the one it prevents, and it would
+   * also stop the smoke exercising the real completion path.
+   *
+   * It THROWS rather than returning null. The two `return null` guards below
+   * are ordinary business conditions — no provider, no price — and are expected
+   * to happen. This one means a synthetic booking reached a money path, which
+   * is a release-safety failure and must be impossible to miss in a log.
+   */
+  if (is_synthetic === true) {
+    throw new SyntheticFinancialRefusal(bookingId);
+  }
 
   if (!worker_uid) {
     console.warn(`createDisbursement: booking ${bookingId} has no worker — skipping`);
