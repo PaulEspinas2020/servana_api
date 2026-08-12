@@ -13,12 +13,30 @@ const isPositiveId = (value: number): boolean =>
 
 export const listBookings = async (req: Request, res: Response) => {
   try {
-    const { search, operationsStatus, paymentMethod, paymentStatus,
+    const { search, canonicalState, operationsStatus, paymentMethod, paymentStatus,
             serviceId, fromDate, toDate, page, limit,
             isUnassigned, isLate, hasDispute, needsAdminAction } = req.query as any;
 
+    /**
+     * An unrecognised canonical state is REFUSED, not ignored.
+     *
+     * A filter that silently matches nothing reads to an operator as "there are
+     * no such bookings", which is a different and worse answer than "you asked
+     * the wrong question". `operationsStatus` keeps its existing lenient
+     * behaviour: it is a compatibility path carrying live deep-links, and
+     * tightening it would break bookmarks rather than protect anyone.
+     */
+    if (canonicalState && !svc.isBookingState(canonicalState)) {
+      return res.status(400).json({
+        status: 'error',
+        message: `Unknown booking state "${canonicalState}"`,
+        code: 'INVALID_BOOKING_STATE',
+      });
+    }
+
     const result = await svc.getAdminBookings({
       search,
+      canonicalState,
       operationsStatus,
       paymentMethod,
       paymentStatus,

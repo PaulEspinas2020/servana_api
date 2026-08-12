@@ -24,12 +24,17 @@
 
 import {
   evaluateAdminOpsStatus,
+  evaluateAdminCanonicalState,
   adminOpsStatusSql,
+  adminCanonicalStateSql,
   normaliseProviderUid,
+  isBookingState,
+  legacyOpsFor,
   OPS_STATUS_BRANCH_COUNT,
   OPS_STATUS_VALUES,
+  CANONICAL_STATE_VALUES,
 } from '../src/services/booking/adminOpsStatusSql';
-import { deriveCanonicalState } from '../src/services/booking/canonicalState';
+import { deriveCanonicalState, BOOKING_STATES } from '../src/services/booking/canonicalState';
 import { toAdminProjection } from '../src/services/booking/projections';
 
 /** Every legacy value the platform produces, plus one it does not recognise. */
@@ -195,7 +200,18 @@ describe('the emitted SQL', () => {
   });
 
   it('carries the branches the four defect classes depend on', () => {
-    expect(sql).toContain("la.worker_status IN ('ARRIVED','EN_ROUTE','ACCEPTED')");
+    /**
+     * ARRIVED, EN_ROUTE and ACCEPTED now have SEPARATE branches and the
+     * collapse happens downstream, in `legacyOpsFor`. Sharing one branch was
+     * what made two of them unfilterable, so the assertion follows the property
+     * rather than the shape it used to have: three distinct predicates, all
+     * three still projecting to `accepted` in this legacy expression.
+     */
+    expect(sql).toContain("la.worker_status = 'ARRIVED'");
+    expect(sql).toContain("la.worker_status = 'EN_ROUTE'");
+    expect(sql).toContain("la.worker_status = 'ACCEPTED'");
+    expect((sql.match(/THEN 'accepted'/g) ?? []).length).toBe(3);
+
     expect(sql).toContain("la.worker_status IN ('DECLINED','REASSIGNED','CANCELLED','CANCELED')");
     expect(sql).toContain("b.status IN ('REFUNDED','FAILED')");
     expect(sql).toContain("b.status = 'EXPIRED'");
@@ -221,5 +237,189 @@ describe('the emitted SQL', () => {
       'accepted', 'assigned', 'awaiting_assignment', 'cancelled',
       'completed', 'disputed', 'in_progress', 'new',
     ]);
+  });
+});
+
+/**
+ * THE CROSS-SURFACE GATE.
+ *
+ * Four surfaces now answer "what state is this booking in": the list's display
+ * value, the list's FILTER column, the tab counts, and the detail page. They
+ * are only trustworthy together if they agree, and they previously did not —
+ * the list and the detail disagreed on 107 of 440 combinations.
+ *
+ * This measures all four against `deriveCanonicalState` over the same
+ * cross-product, in one place, so a future edit cannot fix one and drift
+ * another.
+ */
+describe('CROSS-SURFACE PARITY: zero disagreements', () => {
+  const canonicalOf = (c: Combination) => deriveCanonicalState({
+    bookingStatus: c.bookingStatus,
+    workerStatus: c.workerStatus,
+    workerUid: c.workerUid,
+    hasEscalation: c.hasUnresolvedEscalation,
+  });
+
+  const surfaces = {
+    /** What the list badge shows, from the SQL-computed canonical column. */
+    display: (c: Combination) => evaluateAdminCanonicalState(c),
+    /** What the canonical filter matches on. Same column, same expression. */
+    filter: (c: Combination) => evaluateAdminCanonicalState(c),
+    /** What the tab counts count. Metrics derive in JS from the machine. */
+    metric: canonicalOf,
+    /** What the detail endpoint reports. */
+    detail: canonicalOf,
+  };
+
+  it('all four surfaces agree on EVERY combination', () => {
+    const combinations = everyCombination();
+    const disagreements: string[] = [];
+
+    for (const c of combinations) {
+      const answers = Object.entries(surfaces).map(([name, fn]) => [name, fn(c)] as const);
+      const distinct = new Set(answers.map(([, v]) => v));
+      if (distinct.size > 1) {
+        disagreements.push(
+          `  status=${c.bookingStatus} worker=${c.workerStatus} `
+          + `uid=${c.workerUid ? 'set' : 'null'} esc=${c.hasUnresolvedEscalation} -> `
+          + answers.map(([n, v]) => `${n}=${v}`).join(' '),
+        );
+      }
+    }
+
+    expect(
+      disagreements.length
+        ? `${disagreements.length} disagreements:\n${disagreements.slice(0, 25).join('\n')}`
+        : 'CROSS-SURFACE DISAGREEMENTS: 0',
+    ).toBe('CROSS-SURFACE DISAGREEMENTS: 0');
+  });
+
+  it('the display value collapses to the legacy field, and only there', () => {
+    // operationsStatus is COMPATIBILITY ONLY: it must still be derivable from
+    // the canonical answer, and it must never be what another surface reads.
+    for (const c of everyCombination()) {
+      expect(evaluateAdminOpsStatus(c)).toBe(legacyOpsFor(evaluateAdminCanonicalState(c)));
+    }
+  });
+
+  it('the parity check can fail — a broken surface is detected', () => {
+    // Negative fixture. Four functions compared to each other would report
+    // agreement forever if they were all the same function by accident.
+    const broken = (c: Combination) =>
+      (c.bookingStatus === 'COMPLETED' ? 'ASSIGNED' : evaluateAdminCanonicalState(c));
+    const found = everyCombination().filter((c) => broken(c) !== surfaces.detail(c));
+    expect(found.length).toBeGreaterThan(0);
+  });
+});
+
+describe('CANONICAL FILTERING reaches the states the board shows', () => {
+  /** Rows the canonical filter would match for a given state. */
+  const matching = (state: string) =>
+    everyCombination().filter((c) => evaluateAdminCanonicalState(c) === state);
+
+  it('EN_ROUTE and ARRIVED are filterable, not merely visible', () => {
+    // The whole point. Under the legacy filter both were unreachable: they
+    // collapsed into `accepted` and could not be asked for.
+    expect(matching('EN_ROUTE').length).toBeGreaterThan(0);
+    expect(matching('ARRIVED').length).toBeGreaterThan(0);
+
+    // And they are DISTINCT sets — a filter returning the same rows for both
+    // would be the collapse wearing a canonical name.
+    const enRoute = new Set(matching('EN_ROUTE').map((c) => JSON.stringify(c)));
+    const arrived = matching('ARRIVED').map((c) => JSON.stringify(c));
+    expect(arrived.some((k) => enRoute.has(k))).toBe(false);
+  });
+
+  it('a closed assignment is filterable as AWAITING_ASSIGNMENT', () => {
+    // The operational case: these bookings need a provider NOW, and they were
+    // previously filed under `assigned` where nobody was looking.
+    for (const closed of ['DECLINED', 'REASSIGNED', 'CANCELLED', 'CANCELED']) {
+      for (const booking of ['WORKER_ASSIGNED', 'CONFIRMED', 'PAID']) {
+        expect(evaluateAdminCanonicalState({
+          bookingStatus: booking, workerStatus: closed,
+          workerUid: 'provider-1', hasUnresolvedEscalation: false,
+        })).toBe('AWAITING_ASSIGNMENT');
+      }
+    }
+    expect(matching('AWAITING_ASSIGNMENT').length).toBeGreaterThan(0);
+  });
+
+  it('REFUNDED, FAILED and EXPIRED are filterable as closed, not as new', () => {
+    for (const dead of ['REFUNDED', 'FAILED']) {
+      expect(evaluateAdminCanonicalState({
+        bookingStatus: dead, workerStatus: null, workerUid: null, hasUnresolvedEscalation: false,
+      })).toBe('CANCELLED');
+    }
+    // EXPIRED keeps its own canonical identity and is separately filterable,
+    // even though it DISPLAYS as cancelled — Admin has no badge for it.
+    expect(evaluateAdminCanonicalState({
+      bookingStatus: 'EXPIRED', workerStatus: null, workerUid: null, hasUnresolvedEscalation: false,
+    })).toBe('EXPIRED');
+    expect(legacyOpsFor('EXPIRED')).toBe('cancelled');
+  });
+
+  it('every filterable state is one the machine knows', () => {
+    for (const state of CANONICAL_STATE_VALUES) {
+      expect(isBookingState(state)).toBe(true);
+    }
+  });
+
+  it('rejects a state the machine does not know', () => {
+    // The boundary check the controller uses. A silently-empty board reads as
+    // "no such bookings" rather than "wrong question".
+    for (const bad of ['ACCEPTED_MAYBE', 'accepted', '', null, undefined, 42]) {
+      expect(isBookingState(bad)).toBe(false);
+    }
+  });
+});
+
+describe('the emitted CANONICAL SQL', () => {
+  const sql = adminCanonicalStateSql({ schema: 'servana', bookingAlias: 'b', assignmentAlias: 'la' });
+
+  it('emits one WHEN per declared branch, like its legacy sibling', () => {
+    expect((sql.match(/\n\s+WHEN /g) ?? []).length).toBe(OPS_STATUS_BRANCH_COUNT);
+  });
+
+  it('gives EN_ROUTE and ARRIVED separate branches', () => {
+    // Sharing one branch is what made them unfilterable. The legacy collapse
+    // now happens once, downstream, where it is declared.
+    expect(sql).toContain("la.worker_status = 'ARRIVED'");
+    expect(sql).toContain("la.worker_status = 'EN_ROUTE'");
+    expect(sql).toContain("THEN 'EN_ROUTE'");
+    expect(sql).toContain("THEN 'ARRIVED'");
+  });
+
+  it('emits canonical states, never legacy values', () => {
+    for (const legacy of OPS_STATUS_VALUES) {
+      expect(sql).not.toContain(`THEN '${legacy}'`);
+    }
+  });
+
+  it('is generated from the SAME branches as the legacy expression', () => {
+    /**
+     * Same predicates, different projection. If the two ever diverge in shape,
+     * somebody has hand-written a fourth source of truth — which is exactly how
+     * the third one arrived.
+     *
+     * Compared by blanking every projected literal rather than by extracting
+     * predicates with a regex: the WORKER_ASSIGNED branch emits a NESTED CASE,
+     * and a lazy `WHEN ... THEN` match runs straight into it. Structure is the
+     * property here, so normalise the values away and compare everything else.
+     */
+    const legacySql = adminOpsStatusSql({ schema: 'servana', bookingAlias: 'b', assignmentAlias: 'la' });
+    const skeleton = (t: string) => t.replace(/THEN '[a-zA-Z_]+'/g, "THEN 'X'")
+      .replace(/ELSE '[a-zA-Z_]+'/g, "ELSE 'X'");
+
+    expect(skeleton(sql)).toBe(skeleton(legacySql));
+    // And the two really do differ before normalisation, or this proves nothing.
+    expect(sql).not.toBe(legacySql);
+  });
+
+  it('every state it can emit is a real canonical state', () => {
+    const emitted = [...sql.matchAll(/THEN '([A-Z_]+)'/g)].map((m) => m[1]);
+    expect(emitted.length).toBeGreaterThan(0);
+    for (const state of emitted) {
+      expect(BOOKING_STATES as readonly string[]).toContain(state);
+    }
   });
 });

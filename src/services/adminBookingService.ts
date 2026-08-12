@@ -10,9 +10,18 @@ import {
 } from "../chat/chat.service";
 import { createCustomerNotification, createNotification } from "./notification.service";
 import { emitToProvider } from "../provider.realtime";
-import { deriveCanonicalState } from "./booking/canonicalState";
+import { deriveCanonicalState, BOOKING_STATES } from "./booking/canonicalState";
 import { toAdminProjection } from "./booking/projections";
-import { adminOpsStatusSql, normaliseProviderUid } from "./booking/adminOpsStatusSql";
+import {
+  adminOpsStatusSql,
+  adminCanonicalStateSql,
+  normaliseProviderUid,
+  isBookingState,
+} from "./booking/adminOpsStatusSql";
+import type { BookingState } from "./booking/canonicalState";
+
+/** Re-exported so the controller can reject an unknown filter value at the edge. */
+export { isBookingState } from "./booking/adminOpsStatusSql";
 import {
   transitionBooking,
   TransitionError,
@@ -45,6 +54,19 @@ interface AuditEvent {
 
 export interface BookingListFilter {
   search?: string;
+  /**
+   * The canonical filter. Prefer this: it can express EN_ROUTE and ARRIVED,
+   * which `operationsStatus` cannot, so an operator can filter to the states
+   * the board now shows them.
+   */
+  canonicalState?: BookingState | '';
+  /**
+   * @deprecated Compatibility only. Kept because live deep-links and saved
+   * dashboard tiles carry `?operationsStatus=`, and breaking a bookmarked URL
+   * is a real regression for an operator mid-shift. It filters on the collapsed
+   * value, so `accepted` still matches EN_ROUTE and ARRIVED — which is the
+   * behaviour those links already had.
+   */
   operationsStatus?: OperationsStatus | '';
   paymentMethod?: string;
   paymentStatus?: string;
@@ -384,11 +406,26 @@ export const getAdminBookings = async (
 
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
-  // ops_status is a computed field — add it to the SQL so COUNT + LIMIT apply to the filtered set
-  if (filter.operationsStatus) {
+  /**
+   * Both filters are applied to the COMPUTED columns, not re-derived here, so
+   * COUNT and LIMIT see the same rows the operator does.
+   *
+   * Canonical wins when both are supplied. They are not equivalent — `accepted`
+   * matches three canonical states — so silently ANDing them would let a stale
+   * dashboard tile narrow a canonical request without saying so.
+   */
+  const canonical = filter.canonicalState && isBookingState(filter.canonicalState)
+    ? filter.canonicalState
+    : '';
+  const stateFilters: string[] = [];
+  if (canonical) {
+    params.push(canonical);
+    stateFilters.push(`AND canonical_state = $${pi++}`);
+  } else if (filter.operationsStatus) {
     params.push(filter.operationsStatus);
+    stateFilters.push(`AND ops_status = $${pi++}`);
   }
-  const opsFilter = filter.operationsStatus ? `AND ops_status = $${pi++}` : '';
+  const opsFilter = stateFilters.join(' ');
 
   const baseSQL = `
     WITH latest_assignment AS (
@@ -435,6 +472,7 @@ export const getAdminBookings = async (
         br.city                                      AS branch_city,
 EXISTS (SELECT 1 FROM ${dbSchema}.booking_escalations esc2
                  WHERE esc2.booking_id = b.id AND esc2.resolved_at IS NULL) AS has_escalation,
+${adminCanonicalStateSql({ schema: dbSchema, bookingAlias: 'b', assignmentAlias: 'la' })} AS canonical_state,
 ${adminOpsStatusSql({ schema: dbSchema, bookingAlias: 'b', assignmentAlias: 'la' })} AS ops_status
       FROM ${dbSchema}.bookings b
       LEFT JOIN ${dbSchema}.user_credentials cu  ON cu.uid  = b.user_id
@@ -479,12 +517,24 @@ ${adminOpsStatusSql({ schema: dbSchema, bookingAlias: 'b', assignmentAlias: 'la'
      * the new portal reads `canonicalState`, the old one keeps working, and the
      * legacy field retires on telemetry rather than on optimism.
      */
-    const canonical = bookingCanonicalStateFor(
-      row.raw_status,
-      row.worker_status,
-      normaliseProviderUid(row.worker_uid),
-      !!row.has_escalation,
-    );
+    /**
+     * Read from the COMPUTED column, not re-derived here.
+     *
+     * Re-deriving would give the right answer today and be a second opinion
+     * tomorrow — and, worse, a row could then DISPLAY one state while having
+     * been FILTERED on another, which is the exact class of bug this whole
+     * exercise removed. The projection still supplies the label and the
+     * available actions, which are presentation over the same state.
+     */
+    const state = isBookingState(row.canonical_state)
+      ? row.canonical_state
+      : deriveCanonicalState({
+        bookingStatus: row.raw_status,
+        workerStatus: row.worker_status,
+        workerUid: normaliseProviderUid(row.worker_uid),
+        hasEscalation: !!row.has_escalation,
+      });
+    const canonical = toAdminProjection(state);
 
     return {
       bookingId: row.booking_id,
@@ -556,16 +606,37 @@ export const getAdminBookingMetrics = async (): Promise<any> => {
     completed: 0, cancelled: 0, disputed: 0,
   };
 
+  /**
+   * Counted CANONICALLY, then collapsed for the legacy fields.
+   *
+   * The tabs are the operator's index into the board, so a tab that cannot say
+   * EN_ROUTE leaves two states reachable only by scrolling. Counting canonically
+   * and deriving the legacy totals from the same pass means the two can never
+   * disagree about how many bookings exist.
+   */
+  const canonicalCounts: Record<string, number> = {};
+  for (const state of BOOKING_STATES) canonicalCounts[state] = 0;
+
   for (const row of res.rows) {
     counts['total']++;
-    const s = mapOperationsStatus(
-      row.status, row.worker_status, normaliseProviderUid(row.worker_uid), !!row.has_escalation,
-    );
+    const state = deriveCanonicalState({
+      bookingStatus: row.status,
+      workerStatus: row.worker_status,
+      workerUid: normaliseProviderUid(row.worker_uid),
+      hasEscalation: !!row.has_escalation,
+    });
+    canonicalCounts[state] = (canonicalCounts[state] ?? 0) + 1;
+    const s = toAdminProjection(state).operationsStatus;
     counts[s] = (counts[s] ?? 0) + 1;
   }
 
   return {
     total: counts['total'],
+    /**
+     * Canonical counts, keyed by state. Additive — every legacy field below is
+     * unchanged, so a portal that has not migrated reads exactly what it did.
+     */
+    byCanonicalState: canonicalCounts,
     new: counts['new'],
     awaitingAssignment: counts['awaiting_assignment'],
     assigned: counts['assigned'],
