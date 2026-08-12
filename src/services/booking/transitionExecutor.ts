@@ -368,7 +368,24 @@ export const BOOKING_ACTIONS = {
     to: 'ACCEPTED', actor: 'admin',
     from: ['ASSIGNED'],
   },
-  ADMIN_CANCEL: { to: 'CANCELLED', actor: 'admin' },
+  /**
+   * Admin cancellation. Its OWN authority, deliberately.
+   *
+   * It shares a destination with CUSTOMER_CANCEL and PROVIDER_CANCEL and
+   * NEITHER of their guards: not the customer stage list, not the provider
+   * 48-hour window. An admin cancelling a job that is already under way is
+   * exactly the support case those rules exist to escalate TO.
+   *
+   * `from` states what legacy allowed: anything that is not already finished.
+   * Terminality is refused by the machine before this is consulted, so the
+   * list is about IN_PROGRESS being permitted for an admin and for nobody
+   * else.
+   */
+  ADMIN_CANCEL: {
+    to: 'CANCELLED', actor: 'admin',
+    from: ['PENDING_OTP', 'AWAITING_ASSIGNMENT', 'ASSIGNED', 'ACCEPTED',
+           'EN_ROUTE', 'ARRIVED', 'IN_PROGRESS', 'DISPUTED'],
+  },
   ADMIN_COMPLETE: { to: 'COMPLETED', actor: 'admin' },
   SYSTEM_EXPIRE: { to: 'EXPIRED', actor: 'system' },
 } as const satisfies Record<
@@ -864,12 +881,38 @@ const LEGACY_TRACKING: Partial<Record<BookingAction, { status: string; note: str
  * the surfaces reading it move over.
  */
 const LEGACY_TIMELINE_EVENT: Partial<Record<BookingAction, {
-  eventType: string; title: string; actorType: string;
+  eventType: string;
+  title: string;
+  actorType: string;
+  /**
+   * Metadata keys this action carries through, in the order legacy wrote them.
+   *
+   * Named per action rather than passing the whole metadata bag: the bag also
+   * holds credentials, and a timeline row is read by support.
+   */
+  metadataKeys?: readonly string[];
 }>> = {
   CUSTOMER_CANCEL: {
     eventType: 'booking_cancelled',
     title: 'Booking cancelled by customer',
     actorType: 'customer',
+    metadataKeys: ['reasonCode'],
+  },
+  /**
+   * Admin provenance lives HERE and nowhere else.
+   *
+   * There is no `cancellation_source` column on `bookings` — measured, not
+   * assumed. The only thing distinguishing an admin cancellation from a
+   * customer's is this row's `actor_type` and title, so it is not decoration:
+   * losing it makes the two indistinguishable in every support and audit view.
+   * That is why it is written inside the transition transaction rather than
+   * after it.
+   */
+  ADMIN_CANCEL: {
+    eventType: 'booking_cancelled',
+    title: 'Booking cancelled by admin',
+    actorType: 'admin',
+    metadataKeys: ['reasonCode', 'refundAction'],
   },
 };
 
@@ -880,7 +923,15 @@ async function writeLegacyTimelineEvent(
 ): Promise<void> {
   const entry = LEGACY_TIMELINE_EVENT[input.action];
   if (!entry) return;
-  const reasonCode = input.metadata?.reasonCode;
+
+  // Only the keys this action declares, so a credential in the metadata bag
+  // can never reach a row support reads.
+  const carried: Record<string, unknown> = {};
+  for (const key of entry.metadataKeys ?? []) {
+    if (input.metadata?.[key] !== undefined) carried[key] = input.metadata[key];
+  }
+  const hasMetadata = Object.keys(carried).length > 0;
+
   await client.query(
     `INSERT INTO ${s}.booking_timeline_events
        (booking_id, event_type, title, description, actor_type, actor_uid, metadata)
@@ -892,7 +943,7 @@ async function writeLegacyTimelineEvent(
       input.metadata?.reason ? String(input.metadata.reason) : null,
       entry.actorType,
       input.actorUid ?? null,
-      reasonCode ? JSON.stringify({ reasonCode }) : null,
+      hasMetadata ? JSON.stringify(carried) : null,
     ],
   );
 }

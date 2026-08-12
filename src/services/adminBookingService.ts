@@ -1230,23 +1230,55 @@ export const adminCancelBooking = async (
     throw new Error(`Cannot cancel booking with status: ${prevStatus}`);
   }
 
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET status = 'CANCELLED', cancelled_at = NOW() WHERE id = $1`,
-    [bookingId]
-  );
-
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.booking_workers SET status = 'CANCELLED'
-     WHERE booking_id = $1 AND status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED')`,
-    [bookingId]
-  );
-
-  await addTimelineEvent(
-    bookingId, 'booking_cancelled',
-    'Booking cancelled by admin',
-    reason, 'admin', adminUid,
-    { reasonCode, refundAction }
-  );
+  /**
+   * ─── D2 · ADMIN_CANCEL, on the canonical executor ─────────────────────────
+   *
+   * Three statements become one transaction: the booking write, the closing of
+   * every live assignment row, and the timeline event that is the ONLY record
+   * of who cancelled.
+   *
+   * ## Admin cancellation has its own authority
+   *
+   * It shares a destination with CUSTOMER_CANCEL and PROVIDER_CANCEL and
+   * neither of their guards — not the customer stage list, not the 48-hour
+   * provider window. An admin cancelling a job already under way is precisely
+   * the support case those rules exist to escalate TO.
+   *
+   * ## The timeline event is provenance, not decoration
+   *
+   * There is no `cancellation_source` column on `bookings` — measured, not
+   * assumed. `actor_type = 'admin'` and the title on this row are the only
+   * things distinguishing an admin cancellation from a customer's in every
+   * support and audit view, which is why the write moved INSIDE the
+   * transaction rather than staying after it.
+   *
+   * ## What was deliberately NOT changed
+   *
+   * `bookings.worker_uid` is left pointing at the cancelled assignment,
+   * exactly as before. Clearing it would change what the admin portal shows
+   * for a cancelled booking — provider name present today, absent after — and
+   * that is a display change, not a lifecycle one. Recorded rather than
+   * quietly made.
+   */
+  try {
+    await transitionBooking({
+      action: 'ADMIN_CANCEL',
+      bookingId,
+      actorRole: 'admin',
+      actorUid: adminUid,
+      metadata: {
+        reason,
+        ...(reasonCode ? { reasonCode } : {}),
+        ...(refundAction ? { refundAction } : {}),
+      },
+    });
+  } catch (error) {
+    // The legacy message, verbatim.
+    if (error instanceof TransitionError) {
+      throw new Error(`Cannot cancel booking with status: ${prevStatus}`);
+    }
+    throw error;
+  }
 
   // Close the booking conversation so a cancelled job cannot become an
   // open-ended private channel between customer and provider. The transcript

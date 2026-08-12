@@ -28,6 +28,7 @@ export const store = {
   transitions: [] as Row[],
   idempotency: [] as Row[],
   tracking: [] as Row[],
+  timelineEvents: [] as Row[],
   payments: [] as Row[],
   /** Every statement issued, flattened. */
   sql: [] as string[],
@@ -36,6 +37,8 @@ export const store = {
   open: false,
   /** Makes the legacy tracking insert fail, to prove the rollback. */
   trackingFails: false,
+  /** Makes the legacy timeline-event insert fail, to prove the rollback. */
+  timelineEventFails: false,
   /**
    * Opt IN to an address the assignment lookup can use.
    *
@@ -59,11 +62,13 @@ export const reset = (): void => {
   store.transitions = [];
   store.idempotency = [];
   store.tracking = [];
+  store.timelineEvents = [];
   store.payments = [];
   store.sql = [];
   store.inTransaction = [];
   store.open = false;
   store.trackingFails = false;
+  store.timelineEventFails = false;
   store.withLocation = false;
   snapshot = null;
   calls.length = 0;
@@ -87,6 +92,7 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
       transitions: store.transitions,
       idempotency: store.idempotency,
       tracking: store.tracking,
+      timelineEvents: store.timelineEvents,
       payments: store.payments,
     });
     return done([]);
@@ -164,6 +170,13 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
     if (String(store.booking.otp_code ?? '') !== String(params[1])) return done([]);
     store.booking.status = 'CONFIRMED';
     return done([{ id: store.booking.id }]);
+  }
+  if (/UPDATE servana\.bookings SET status = \$2, cancelled_at = NOW\(\)/i.test(flat)) {
+    if (store.booking && store.booking.id === Number(params[0])) {
+      store.booking.status = params[1];
+      store.booking.cancelled_at = '2026-08-12T00:00:00.000Z';
+    }
+    return done([]);
   }
   if (/UPDATE servana\.bookings SET status = 'COMPLETED'/i.test(flat)) {
     if (store.booking && store.booking.id === Number(params[0])) store.booking.status = 'COMPLETED';
@@ -281,6 +294,24 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
     return done([]);
   }
 
+  if (/INSERT INTO servana\.booking_timeline_events/i.test(flat)) {
+    if (store.timelineEventFails) throw new Error('relation "booking_timeline_events" is locked');
+    store.timelineEvents.push({
+      booking_id: Number(params[0]), event_type: params[1], title: params[2],
+      description: params[3], actor_type: params[4], actor_uid: params[5], metadata: params[6],
+    });
+    return done([]);
+  }
+  // Cancellation closes EVERY live assignment row, not only the pointer's.
+  if (/UPDATE servana\.booking_workers SET status = \$2[\s\S]*?status IN \('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED'\)/i.test(flat)) {
+    for (const a of store.assignments) {
+      if (a.booking_id !== Number(params[0])) continue;
+      if (['ASSIGNED', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED'].includes(String(a.status))) {
+        a.status = params[1];
+      }
+    }
+    return done([]);
+  }
   if (/INSERT INTO servana\.booking_tracking/i.test(flat)) {
     if (store.trackingFails) throw new Error('relation "booking_tracking" is locked');
     store.tracking.push({ booking_id: Number(params[0]), status: params[1], note: params[2] });
