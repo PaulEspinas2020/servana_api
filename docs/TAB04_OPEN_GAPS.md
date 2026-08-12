@@ -118,15 +118,89 @@ Any reduction requires an explicit explanation in the commit that causes it.
 
 ---
 
-### POSTGRESQL LOCKING INTEGRATION — NOT YET PROVEN
+### POSTGRESQL LOCKING INTEGRATION — BLOCKED_BY_TEST_DATABASE
 
 `EXECUTOR RACE LOGIC: PASS` — the executor asks for the lock before deciding,
 derives from the locked rows, and refuses the loser. Proven against a fake
 database that serialises `FOR UPDATE`.
 
-`POSTGRESQL LOCKING INTEGRATION: NOT YET PROVEN` — that real PostgreSQL honours
-it under two concurrent accepts needs a real database. Required before TAB 04
-certifies.
+`POSTGRESQL LOCKING INTEGRATION: BLOCKED_BY_TEST_DATABASE` — **not PASS, and not
+FAIL.** The suite exists and is complete; it has never been executed, because
+there is nothing safe to execute it against.
+
+**The suite.** `tests/booking-postgres-races.test.ts`, seven races plus three
+controls, each repeated `PG_RACE_ROUNDS` (default 25) times:
+
+| # | Race | What it would catch |
+|---|------|---------------------|
+| 1 | REASSIGN vs PROVIDER_EN_ROUTE | displaced provider keeps live authority |
+| 2 | REASSIGN vs PROVIDER_START | same, past the point of no return |
+| 3 | REASSIGN vs CUSTOMER_CANCEL | live assignment on a cancelled booking |
+| 4 | REASSIGN vs REASSIGN | two providers on one booking |
+| 5 | ADMIN_ASSIGN vs ADMIN_ASSIGN, overlapping | advisory lock does not serialise |
+| 6 | AUTO_ASSIGN vs ADMIN_ASSIGN, overlapping | **the D4 lock-order regression** |
+| 7 | AUTO_ASSIGN vs AUTO_ASSIGN, overlapping | dispatcher double-books a provider |
+
+The three controls are the non-overlapping variants of 5–7. Without them, a
+build whose advisory lock refused *all* second assignments would pass every
+overlapping case for entirely the wrong reason and read as green.
+
+Race 6 is the one with history: auto-assignment took provider-then-booking while
+the executor takes booking-then-provider. Two paths acquiring the same two lock
+classes in opposite orders is a deadlock, and no fake can show it.
+
+**A deadlock is a FAILURE.** `40P01` means the ordering was violated and
+PostgreSQL recovered from it — not that the transition serialised correctly.
+`isDeadlock()` exists to fail the race rather than count it as a win.
+
+**What is checked after every race**, not per-scenario: at most one active
+`booking_workers` row; `bookings.worker_uid` naming the live provider and not a
+displaced one; no closed status on a live row; canonical transitions only for
+committed outcomes; and a required `booking_tracking` projection wherever state
+changed.
+
+**Why it cannot run.**
+
+1. *No production access will be taken to unblock it.* The three refusals in
+   `tests/support/raceDatabase.ts` are dedicated `PG_RACE_TEST_*` variables with
+   **no `DB_*` fallback**; `ALLOW_POSTGRES_RACE_TESTS=true`; and a database-name
+   check that requires a disposable name (`servana_race_test`,
+   `servana_concurrency_ci`) and rejects a production-looking one outright.
+2. *The schema cannot be built from this repository.* There is no
+   `CREATE TABLE bookings` anywhere in it — the table is created outside the
+   repo. `tests/support/raceFixtures.ts` populates only the columns the executor
+   reads and leaves the rest to the schema's own defaults, so against a
+   production-compatible snapshot it works and against a blank instance it fails
+   naming exactly what is missing. A hand-written approximation would run and
+   would certify nothing, which is worse than an open gap.
+
+**To unblock, two things are needed and neither can be self-served:**
+
+- a **schema-only** production-compatible snapshot (`pg_dump --schema-only`),
+  restored into a disposably-named database — no data required;
+- **production's PostgreSQL major version**, to confirm equivalence. The suite
+  logs the version it actually ran against, so a pass names what it proved.
+
+Then:
+
+```
+PG_RACE_TEST_HOST=127.0.0.1 PG_RACE_TEST_PORT=5432 \
+PG_RACE_TEST_DATABASE=servana_race_test \
+PG_RACE_TEST_USER=... PG_RACE_TEST_PASSWORD=... PG_RACE_TEST_SCHEMA=servana \
+ALLOW_POSTGRES_RACE_TESTS=true npx jest tests/booking-postgres-races.test.ts
+```
+
+Until that runs, TAB 04 certification carries `BLOCKED_BY_TEST_DATABASE`.
+
+---
+
+### JEST WORKER TEARDOWN WARNING — pre-existing, not TAB 04
+
+`npx jest` ends with *"A worker process has failed to exit gracefully"*. Measured
+against a tree with the race suite removed: the warning appears identically, so
+it predates this work and is not caused by it. All 187 suites and 3,771 tests
+pass. Left open rather than silently absorbed — an unexplained teardown leak can
+mask a real open handle later.
 
 ---
 
