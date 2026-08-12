@@ -3,16 +3,17 @@
  * cleanup promise.
  *
  * `transitionBooking` is meant to be the only writer of `bookings.status` and
- * `booking_workers.status`. It is not yet: 21 legacy sites still write
- * directly, across three services. Converting them all in one commit would
- * combine new transition infrastructure, behaviour changes on live paths and
- * every caller's migration into a single blast radius.
+ * `booking_workers.status`. It is not yet: legacy sites still write directly,
+ * across three services — 21 of them when this guard was added. Converting them
+ * all in one commit would combine new transition infrastructure, behaviour
+ * changes on live paths and every caller's migration into a single blast
+ * radius.
  *
  * So the count is a tracked gate instead. Every site is listed below with the
  * business operation it belongs to and the phase that will convert it. The
  * guard fails when:
  *
- *   - a 22nd raw mutation appears anywhere;
+ *   - a raw mutation appears in a file the ledger does not list;
  *   - a file that was migrated starts writing directly again;
  *   - the count for an allow-listed file changes without the list changing.
  *
@@ -106,12 +107,13 @@ const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason
     reason: 'Customer cancel and confirm-OTP still write directly.',
   },
   'services/technicianService.ts': {
-    count: 10,
-    phase: 'C — provider accept / decline / start / complete',
+    count: 9,
+    phase: 'B1/B2 — provider decline / arrival stages / start / complete',
     reason:
-      'The provider lifecycle writer. Ten sites covering accept, decline, arrival ' +
-      'stages, start and complete. Highest-traffic family, migrated after the ' +
-      'executor is proven under race and retry.',
+      'The provider lifecycle writer, mid-migration. ACCEPT is done (B1.1) and ' +
+      'now goes through the executor. Nine sites remain, covering decline, the ' +
+      'arrival stages, start and complete — one commit each, lowest-risk first, ' +
+      'so complete lands last.',
   },
   'services/adminBookingService.ts': {
     count: 8,
@@ -129,7 +131,7 @@ describe('raw status writes are inventoried and shrinking', () => {
   }, {});
 
   it('no file writes lifecycle status unless it is on the ledger', () => {
-    // The 22nd-mutation check. A new direct write anywhere fails here, which is
+    // The unlisted-writer check. A new direct write anywhere fails here, which is
     // the whole point of adding the guard before the migration rather than after.
     const unlisted = Object.keys(byFile).filter((f) => !(f in RAW_WRITE_ALLOWLIST));
     expect(unlisted).toEqual([]);

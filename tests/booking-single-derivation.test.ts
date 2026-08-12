@@ -297,6 +297,61 @@ describe('the two projections never disagree, over every input combination', () 
   });
 });
 
+/**
+ * A closed assignment row is not an assignment.
+ *
+ * `declineJob` clears `bookings.worker_uid` and closes the `booking_workers`
+ * row, but it never rewrites `bookings.status` — the booking stays at
+ * WORKER_ASSIGNED. The derivation read only that column, so it answered
+ * ASSIGNED for a booking with no provider on it. Two consequences, both live:
+ * the machine allowed the provider who had just declined to accept the same
+ * job, and the admin list labelled the row Assigned while nobody was.
+ *
+ * These assertions pin the corrected answers on both sides of the change, so a
+ * future edit that restores the old reading fails here rather than in
+ * production.
+ */
+describe('an ended assignment does not read as ASSIGNED', () => {
+  it.each(['DECLINED', 'REASSIGNED', 'CANCELLED', 'CANCELED'])(
+    'a %s assignment row leaves the booking AWAITING_ASSIGNMENT',
+    (workerStatus) => {
+      expect(deriveCanonicalState({ bookingStatus: 'WORKER_ASSIGNED', workerStatus }))
+        .toBe('AWAITING_ASSIGNMENT');
+    },
+  );
+
+  it('WORKER_ASSIGNED with worker_uid NULL is awaiting, not assigned', () => {
+    expect(deriveCanonicalState({ bookingStatus: 'WORKER_ASSIGNED', workerStatus: null, workerUid: null }))
+      .toBe('AWAITING_ASSIGNMENT');
+  });
+
+  it('WORKER_ASSIGNED with a provider is still ASSIGNED', () => {
+    expect(deriveCanonicalState({ bookingStatus: 'WORKER_ASSIGNED', workerStatus: 'ASSIGNED', workerUid: 'p1' }))
+      .toBe('ASSIGNED');
+  });
+
+  it('a caller that did NOT supply worker_uid keeps the old answer', () => {
+    // `undefined` is "I did not look", not "there is nobody". Guessing from a
+    // field the two-argument caller never supplies would change a wire value
+    // on the strength of missing data.
+    expect(deriveCanonicalState({ bookingStatus: 'WORKER_ASSIGNED', workerStatus: null }))
+      .toBe('ASSIGNED');
+  });
+
+  it('the customer/provider wire value is unchanged either way', () => {
+    // ASSIGNED and AWAITING_ASSIGNMENT both project to the raw booking status,
+    // so no client sees a different string because of this correction.
+    expect(deriveEffectiveBookingStatus('WORKER_ASSIGNED', 'DECLINED')).toBe('WORKER_ASSIGNED');
+    expect(deriveEffectiveBookingStatus('WORKER_ASSIGNED', 'ASSIGNED')).toBe('WORKER_ASSIGNED');
+  });
+
+  it('Admin DOES change, from assigned to awaiting_assignment', () => {
+    // The one visible change, pinned deliberately rather than discovered later.
+    expect(mapOperationsStatus('WORKER_ASSIGNED', 'DECLINED', null)).toBe('awaiting_assignment');
+    expect(mapOperationsStatus('WORKER_ASSIGNED', 'ASSIGNED', 'p1')).toBe('assigned');
+  });
+});
+
 describe('one spelling of cancelled', () => {
   it('reads both spellings as cancelled', () => {
     for (const spelling of [CANONICAL_CANCELLED, DEPRECATED_CANCELLED, 'cancelled', 'canceled']) {

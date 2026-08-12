@@ -112,11 +112,30 @@ export type TransitionErrorCode =
    */
   | 'WORKER_CODE_INVALID';
 
+/**
+ * The rows the executor read under `FOR UPDATE`, as they were when it refused.
+ *
+ * Attached to every refusal raised after the lock is held. Callers that owe
+ * their clients a richer vocabulary than the executor's eight codes — the
+ * provider accept/decline path owes six of its own — can classify from this
+ * instead of issuing a second, unlocked read. A snapshot taken outside the
+ * transaction can disagree with the one the decision was actually made on, and
+ * an error message that contradicts the refusal is worse than a vague one.
+ */
+export interface LockedSnapshot {
+  bookingStatus: string | null;
+  bookingWorkerUid: string | null;
+  assignmentStatus: string | null;
+  canonicalState: BookingState;
+}
+
 export class TransitionError extends Error {
   constructor(
     readonly code: TransitionErrorCode,
     message: string,
     readonly detail?: Record<string, unknown>,
+    /** Present on refusals raised after the row lock was taken. */
+    readonly snapshot?: LockedSnapshot,
   ) {
     super(message);
     this.name = 'TransitionError';
@@ -395,6 +414,57 @@ async function writeLegacyStatusProjection(
   );
 }
 
+/**
+ * ─── LEGACY_TRACKING_PROJECTION ──────────────────────────────────────────────
+ *
+ * Appends the row `booking_tracking` has always carried for this action.
+ *
+ * ## Why this is not the timeline
+ *
+ * `booking_transitions` is the canonical lifecycle history and every new
+ * surface reads it. `booking_tracking` is older and wider: payments, refunds
+ * and admin operations write to it too, so it is not a lifecycle-owned table
+ * and the executor cannot claim it. But three live surfaces read it —
+ *
+ *   controllers/providerController.ts:3241   the provider job history
+ *   services/adminBookingService.ts:723      the admin booking timeline
+ *   services/bookingService.ts:666           the customer booking timeline
+ *
+ * — so a migrated action that stops writing it silently loses a row from three
+ * timelines at once. That is a regression, not a cleanup.
+ *
+ * ## Why it is in the transaction
+ *
+ * It always was. Legacy wrote the tracking row between the status UPDATE and
+ * the COMMIT; writing it after the commit instead would open the window where
+ * a booking has advanced with no entry in the timeline the customer is looking
+ * at.
+ *
+ * ## Why the map is incomplete
+ *
+ * One entry per migrated action, added by the phase that migrates it, with the
+ * note text copied verbatim from the legacy site. An action absent from this
+ * map has not been migrated yet, and the legacy service is still writing its
+ * own row — adding a speculative entry now would double-write it.
+ */
+const LEGACY_TRACKING: Partial<Record<BookingAction, { status: string; note: string }>> = {
+  // technicianService.acceptJob
+  PROVIDER_ACCEPT: { status: 'ACCEPTED', note: 'Provider accepted the booking' },
+};
+
+async function writeLegacyTracking(
+  client: PoolClient,
+  bookingId: number,
+  action: BookingAction,
+): Promise<void> {
+  const entry = LEGACY_TRACKING[action];
+  if (!entry) return;
+  await client.query(
+    `INSERT INTO ${s}.booking_tracking (booking_id, status, note) VALUES ($1, $2, $3)`,
+    [bookingId, entry.status, entry.note],
+  );
+}
+
 /** The physical writes a canonical destination implies. */
 async function applyState(
   client: PoolClient,
@@ -450,8 +520,12 @@ async function applyState(
     }
 
     case 'ACCEPTED':
+      // `accepted_at` is what the provider app renders as "accepted at" and what
+      // `emitToProvider` echoes back on the socket. It is a timestamp, not a
+      // state — but it must land in the same statement as the state, or a crash
+      // between them leaves an ACCEPTED row that never records when.
       await client.query(
-        `UPDATE ${s}.booking_workers SET status = $3
+        `UPDATE ${s}.booking_workers SET status = $3, accepted_at = NOW()
           WHERE booking_id = $1 AND worker_uid = $2`,
         [loaded.id, providerUid, to],
       );
@@ -633,16 +707,34 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
       hasEscalation: loaded.hasEscalation,
     });
 
+    // What the locked rows said at the moment of the decision. Every refusal
+    // below carries it, so a caller's own error vocabulary is derived from the
+    // same read the refusal was — not from a second one taken after the
+    // transaction ended, which can disagree.
+    const snapshot: LockedSnapshot = {
+      bookingStatus: loaded.status,
+      bookingWorkerUid: loaded.workerUid,
+      assignmentStatus: loaded.assignmentStatus,
+      canonicalState: fromState,
+    };
+
     // ── Optimistic concurrency, INSIDE the lock ──────────────────────────────
     if (input.expectedState && input.expectedState !== fromState) {
       throw new TransitionError(
         'BOOKING_STATE_CONFLICT',
         `Booking is ${fromState}, not ${input.expectedState}. Reload and try again.`,
         { currentState: fromState, expectedState: input.expectedState },
+        snapshot,
       );
     }
 
-    authorize(loaded, input);
+    try {
+      authorize(loaded, input);
+    } catch (error) {
+      throw error instanceof TransitionError
+        ? new TransitionError(error.code, error.message, error.detail, snapshot)
+        : error;
+    }
 
     const toState = spec.to as BookingState;
     const verdict = canTransition(fromState, toState, input.actorRole);
@@ -663,14 +755,22 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
         ? `Booking is already ${fromState}.`
         : `Cannot ${input.action} from ${fromState}.`;
 
-      throw new TransitionError(code, message, {
-        currentState: fromState,
-        attempted: toState,
-        reason: verdict.reason,
-      });
+      throw new TransitionError(
+        code,
+        message,
+        { currentState: fromState, attempted: toState, reason: verdict.reason },
+        snapshot,
+      );
     }
 
-    await applyState(client, loaded, toState, input);
+    try {
+      await applyState(client, loaded, toState, input);
+      await writeLegacyTracking(client, loaded.id, input.action);
+    } catch (error) {
+      throw error instanceof TransitionError
+        ? new TransitionError(error.code, error.message, error.detail, snapshot)
+        : error;
+    }
 
     // ── Timeline, in the SAME transaction ────────────────────────────────────
     const timeline = await client.query(

@@ -14,6 +14,11 @@ import { createDisbursement } from "./disbursement.service";
 import { getOrCreateConversation, postSystemMessageOnce } from "../chat/chat.service";
 import { findExistingConversationByBookingId } from "../chat/chat.repository";
 import { emitToProvider } from "../provider.realtime";
+import {
+  transitionBooking,
+  TransitionError,
+  type TransitionResult,
+} from "./booking/transitionExecutor";
 
 const dbSchema = db.schema;
 
@@ -1252,71 +1257,129 @@ export const getJobCardByWorker = async (workerId: string, bookingId: number) =>
   return rows[0] ?? null;
 };
 
-export const acceptJob = async (bookingId: number, workerUid: string) => {
-  // accepted_at is added by this lazy DDL; the UPDATE below writes it.
+/**
+ * Re-expresses an executor refusal in the vocabulary the provider clients know.
+ *
+ * The executor answers in eight codes about lifecycle legality. Provider
+ * acceptance answers in six about *this provider's* relationship to *this*
+ * assignment, and one of them — `ALREADY_ACCEPTED_BY_YOU` — is a 200. That
+ * distinction is the reason the classifier exists, so it survives the
+ * migration unchanged rather than being approximated.
+ *
+ * It runs on `error.snapshot`: the rows the executor read while holding the
+ * lock it refused under. Re-reading here instead would classify against a
+ * later state and could explain the refusal with a reason that was not the
+ * reason.
+ *
+ * A refusal the snapshot cannot explain is re-thrown as-is. DISPUTED is the
+ * live example: the rows look perfectly acceptable and the machine still says
+ * no, because a dispute is not visible in either status column. Inventing a
+ * conflict code for it would be a guess, and the executor's own message is the
+ * honest answer.
+ */
+const asAcceptanceConflict = (error: unknown, workerUid: string): unknown => {
+  if (!(error instanceof TransitionError)) return error;
+
+  // BOOKING_NOT_FOUND carries no snapshot; all-null is exactly what the legacy
+  // classifier saw when its own SELECT returned nothing, and it answered
+  // NO_LONGER_ASSIGNED — §12 forbids confirming whether the booking exists.
+  const conflict = acceptanceConflictForSnapshot({
+    bookingStatus: error.snapshot?.bookingStatus ?? null,
+    bookingWorkerUid: error.snapshot?.bookingWorkerUid ?? null,
+    assignmentStatus: error.snapshot?.assignmentStatus ?? null,
+    workerUid,
+  });
+
+  return conflict ?? error;
+};
+
+/**
+ * ─── B1.1 · PROVIDER_ACCEPT, on the canonical executor ───────────────────────
+ *
+ * This function used to own the transition: it took both row locks, validated
+ * the snapshot itself, ran its own compare-and-swap and wrote the tracking row.
+ * All of that now lives in `transitionBooking`, so acceptance is decided by the
+ * same machine that decides every other lifecycle move.
+ *
+ * ## What did NOT change, deliberately
+ *
+ * The six-code `BookingResponseConflict` contract. Five clients branch on those
+ * codes, and `ALREADY_ACCEPTED_BY_YOU` is the one that answers 200 rather than
+ * 409, so collapsing them into the executor's coarser vocabulary would turn a
+ * provider's double-tap into an error dialog. The classifier is unchanged and
+ * still reads `acceptanceConflictForSnapshot` — but it now runs on the snapshot
+ * the executor captured under `FOR UPDATE`, rather than on a snapshot this
+ * function took itself. Same data, same lock, one authority for the decision.
+ *
+ * The side effects keep their exact shape and order: admin notification,
+ * customer notification, provider socket emit, acceptance email, group chat.
+ * Cleaning them up in the same commit as the transition migration would make a
+ * behaviour change indistinguishable from a refactor in the diff.
+ *
+ * ## What did change
+ *
+ * The legacy CAS carried `WHERE id = $1 AND status = 'ASSIGNED'` and threw a
+ * bare `Error("Booking acceptance changed concurrently")` on a miss. That miss
+ * was already unreachable — the booking row was locked before the snapshot was
+ * read, so nothing could move between validating and writing — and the machine
+ * now refuses a non-ASSIGNED source state before any write happens. The bare
+ * Error is gone with it; every refusal is a typed conflict.
+ *
+ * `ensureArrivalColumns()` stays here. It is lazy DDL, and a booking transition
+ * must not be able to alter schema.
+ */
+export const acceptJob = async (
+  bookingId: number,
+  workerUid: string,
+  options: { idempotencyKey?: string; correlationId?: string } = {},
+) => {
+  // accepted_at is added by this lazy DDL; the executor's ACCEPTED write fills it.
   await ensureArrivalColumns();
 
-  const client = await pool.connect();
-  let accepted: any;
-  let customerUid: string | null = null;
+  let result: TransitionResult;
   try {
-    await client.query("BEGIN");
-
-    // Lock the booking first so cancellation/reassignment cannot cross the
-    // acceptance boundary between validation and the assignment CAS.
-    const bookingRes = await client.query(
-      `SELECT id, status, worker_uid, user_id
-       FROM ${dbSchema}.bookings
-       WHERE id = $1
-       FOR UPDATE`,
-      [bookingId],
-    );
-    const booking = bookingRes.rows[0] ?? null;
-
-    const assignmentRes = await client.query(
-      `SELECT id, status
-       FROM ${dbSchema}.booking_workers
-       WHERE booking_id = $1 AND worker_uid = $2
-       ORDER BY assigned_at DESC NULLS LAST, id DESC
-       LIMIT 1
-       FOR UPDATE`,
-      [bookingId, workerUid],
-    );
-    const assignment = assignmentRes.rows[0] ?? null;
-
-    const conflict = acceptanceConflictForSnapshot({
-      bookingStatus: booking?.status ?? null,
-      bookingWorkerUid: booking?.worker_uid ?? null,
-      assignmentStatus: assignment?.status ?? null,
-      workerUid,
+    result = await transitionBooking({
+      action: 'PROVIDER_ACCEPT',
+      bookingId,
+      actorRole: 'assigned_provider',
+      actorUid: workerUid,
+      idempotencyKey: options.idempotencyKey,
+      correlationId: options.correlationId,
     });
-    if (conflict) throw conflict;
-
-    const updateRes = await client.query(
-      `UPDATE ${dbSchema}.booking_workers
-       SET status = 'ACCEPTED', accepted_at = NOW()
-       WHERE id = $1 AND status = 'ASSIGNED'
-       RETURNING *`,
-      [assignment.id],
-    );
-    if (!updateRes.rowCount) {
-      throw new Error("Booking acceptance changed concurrently");
-    }
-
-    await client.query(
-      `INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note)
-       VALUES ($1, 'ACCEPTED', 'Provider accepted the booking')`,
-      [bookingId],
-    );
-
-    accepted = updateRes.rows[0];
-    customerUid = booking.user_id ?? null;
-    await client.query("COMMIT");
   } catch (error) {
-    await client.query("ROLLBACK").catch(() => {});
-    throw error;
-  } finally {
-    client.release();
+    throw asAcceptanceConflict(error, workerUid);
+  }
+
+  // The assignment row as it now stands. Legacy returned it from `RETURNING *`
+  // inside the transaction; the executor does not hand its rows back, so this
+  // is a read after commit. A reassignment landing in that window would return
+  // the newer row — which is the truer answer, and the provider's next poll
+  // would show it anyway.
+  const acceptedRes = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.booking_workers
+      WHERE booking_id = $1 AND worker_uid = $2
+      ORDER BY assigned_at DESC NULLS LAST, id DESC
+      LIMIT 1`,
+    [bookingId, workerUid],
+  );
+  const accepted: any = acceptedRes.rows[0] ?? {};
+
+  const customerRes = await dbQuery.query(
+    `SELECT user_id FROM ${dbSchema}.bookings WHERE id = $1`,
+    [bookingId],
+  );
+  const customerUid: string | null = customerRes.rows[0]?.user_id ?? null;
+
+  /**
+   * A replayed key returns the original outcome and sends nothing.
+   *
+   * The transition is already committed and its notifications already went out.
+   * Re-running them would email the customer twice and post the group-chat
+   * message again for what the client intended as one action — §17: a retry is
+   * the same request, not a second one.
+   */
+  if (result.idempotentReplay) {
+    return { ...accepted, effectiveStatus: "ACCEPTED", idempotent: true };
   }
 
   notifyAdminsSafely({

@@ -265,7 +265,7 @@ const publishAdminAssignment = (input: {
  * version reads. Once the portal consumes those, this function can be retired
  * on telemetry.
  *
- * ## Two behaviour changes, both deliberate
+ * ## Three behaviour changes, all deliberate
  *
  * 1. An open escalation now outranks a terminal booking rather than being
  *    checked before cancellation only — the transition table already allows
@@ -276,6 +276,14 @@ const publishAdminAssignment = (input: {
  *    `awaiting_assignment` instead of `new`. An unrecognised status is by
  *    definition not new, and surfacing it as needing a provider puts it in
  *    front of an admin rather than mislabelling it.
+ * 3. A booking whose assignment row is DECLINED, REASSIGNED or CANCELLED now
+ *    reports `awaiting_assignment` instead of `assigned`, as does one still at
+ *    `WORKER_ASSIGNED` with `worker_uid` NULL. `declineJob` does not rewrite
+ *    `bookings.status`, so those rows sat in the admin list labelled Assigned
+ *    with nobody on them — the queue that most needs an operator's attention
+ *    was the one hidden from it. Both values are already in the portal's closed
+ *    union, so no badge goes blank. Found by the B1.1 accept tests, which
+ *    caught the same gap letting a provider re-accept a job they had declined.
  */
 export const mapOperationsStatus = (
   bookingStatus: string | null,

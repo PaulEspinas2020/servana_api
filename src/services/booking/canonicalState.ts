@@ -468,7 +468,40 @@ export function deriveCanonicalState(raw: RawBookingState): BookingState {
   if (ws === 'ARRIVED') return 'ARRIVED';
   if (ws === 'EN_ROUTE') return 'EN_ROUTE';
   if (ws === 'ACCEPTED') return 'ACCEPTED';
-  if (ws === 'ASSIGNED' || bs === 'WORKER_ASSIGNED') return 'ASSIGNED';
+
+  /**
+   * An assignment that ENDED is not an assignment.
+   *
+   * Found by the B1.1 accept tests. `bookings.status` is not rewritten when a
+   * provider declines — `declineJob` clears `worker_uid` and closes the
+   * assignment row, leaving the booking at WORKER_ASSIGNED. Reading only
+   * `bs === 'WORKER_ASSIGNED'` therefore reported ASSIGNED for a booking with
+   * no provider on it, and the machine allowed the provider who had just
+   * declined to accept the same job.
+   *
+   * The three statuses below all mean the row is closed: the provider declined
+   * it, an admin moved it elsewhere, or it was cancelled at assignment level.
+   * None of them is a live assignment.
+   */
+  if (['DECLINED', 'REASSIGNED', 'CANCELLED', 'CANCELED'].includes(ws)) {
+    return 'AWAITING_ASSIGNMENT';
+  }
+
+  if (ws === 'ASSIGNED') return 'ASSIGNED';
+
+  /**
+   * WORKER_ASSIGNED with nobody assigned.
+   *
+   * `workerUid` is optional, and the distinction matters: `null` is a caller
+   * that looked and found no provider, `undefined` is a caller that did not
+   * look. `deriveEffectiveBookingStatus` takes two columns and cannot know, so
+   * it must keep the old answer; Admin passes the column explicitly and gets
+   * the accurate one. Guessing AWAITING_ASSIGNMENT for the two-argument caller
+   * would change a wire value on the strength of a field it never supplied.
+   */
+  if (bs === 'WORKER_ASSIGNED') {
+    return raw.workerUid === null ? 'AWAITING_ASSIGNMENT' : 'ASSIGNED';
+  }
 
   if (bs === 'PENDING_OTP') return 'PENDING_OTP';
 
