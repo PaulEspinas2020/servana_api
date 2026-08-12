@@ -360,6 +360,7 @@ export const BOOKING_ACTIONS = {
     to: 'ASSIGNED', actor: 'admin',
     from: ['ASSIGNED', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED'],
     advisoryLock: 'PROVIDER_ASSIGNMENT',
+    sameTarget: 'IDEMPOTENT_NO_OP',
   },
   /**
    * Admin records a provider's acceptance ON BEHALF of them (§23).
@@ -441,6 +442,8 @@ export const BOOKING_ACTIONS = {
     eventOnly?: { from: readonly BookingState[] };
     /** Extra lock, key derived server-side. Allow-listed by test. */
     advisoryLock?: AdvisoryLockRequirement;
+    /** What to do when metadata.providerUid is already the current provider. */
+    sameTarget?: SameTargetBehavior;
   }
 >;
 
@@ -494,6 +497,22 @@ export type EventOnlyAction = 'ADMIN_APPROVE_COMPLETION';
  * `loadForUpdate` first, advisory second, everywhere.
  */
 export type AdvisoryLockRequirement = 'PROVIDER_ASSIGNMENT';
+
+/**
+ * What an action does when its target is already the current one.
+ *
+ * Declared per action, never a generic `from === to` shortcut. Reassigning a
+ * booking to the provider it already has is measured, deliberate legacy
+ * behaviour: it succeeds and writes absolutely nothing.
+ *
+ * Writing nothing is the SAFE answer, and the reason it must stay declared
+ * rather than fall out of a generic rule. Treating it as an ordinary
+ * reassignment would close and recreate the same provider's row — fabricating
+ * decline history that the matching exclusion and the provider's acceptance
+ * rate both read, resetting an EN_ROUTE progression, and rewriting an
+ * assignment the admin never intended to touch.
+ */
+export type SameTargetBehavior = 'IDEMPOTENT_NO_OP';
 
 /** Which metadata field carries each credential, and how it is refused. */
 const CREDENTIAL_FIELD: Record<BookingCredential, { field: string; code: TransitionErrorCode; message: string }> = {
@@ -604,6 +623,13 @@ export interface TransitionResult {
    * a state it was already in?
    */
   stateChanged: boolean;
+  /**
+   * Nothing happened at all — not a transition, not an event.
+   *
+   * Distinct from `stateChanged: false`, which an event-only action also
+   * returns while genuinely recording evidence. A no-op writes nothing.
+   */
+  noOp: boolean;
   /** Correlation id, echoed into the timeline row. */
   correlationId: string;
   timelineEventId: number | null;
@@ -959,6 +985,8 @@ const LEGACY_TRACKING: Partial<Record<BookingAction, { status: string; note: str
   PROVIDER_ARRIVED: { status: 'ARRIVED', note: 'Provider has arrived' },
   // adminBookingService.adminAssignProvider
   ADMIN_ASSIGN: { status: 'WORKER_ASSIGNED', note: 'Provider assigned by admin' },
+  // adminBookingService.adminReassignProvider
+  ADMIN_REASSIGN: { status: 'WORKER_ASSIGNED', note: 'Provider reassigned by admin' },
   // bookingService.confirmOtp
   CUSTOMER_CONFIRM_OTP: { status: 'CONFIRMED', note: 'OTP verified' },
 };
@@ -981,7 +1009,8 @@ const LEGACY_TRACKING: Partial<Record<BookingAction, { status: string; note: str
  */
 const LEGACY_TIMELINE_EVENT: Partial<Record<BookingAction, {
   eventType: string;
-  title: string;
+  /** A function when the legacy title interpolated something. */
+  title: string | ((metadata: Record<string, unknown>) => string);
   actorType: string;
   /**
    * Metadata keys this action carries through, in the order legacy wrote them.
@@ -1022,6 +1051,13 @@ const LEGACY_TIMELINE_EVENT: Partial<Record<BookingAction, {
     actorType: 'admin',
     metadataKeys: ['providerUid', 'providerName'],
   },
+  ADMIN_REASSIGN: {
+    eventType: 'provider_reassigned',
+    // Legacy interpolated the incoming provider's name into the title.
+    title: (m) => `Provider reassigned to ${String(m.providerName ?? '').trim()}`,
+    actorType: 'admin',
+    metadataKeys: ['fromProviderUid', 'toProviderUid', 'providerName'],
+  },
   ADMIN_APPROVE_COMPLETION: {
     eventType: 'completion_approved',
     title: 'Completion approved by admin',
@@ -1052,7 +1088,7 @@ async function writeLegacyTimelineEvent(
     [
       loaded.id,
       entry.eventType,
-      entry.title,
+      typeof entry.title === 'function' ? entry.title(input.metadata ?? {}) : entry.title,
       input.metadata?.reason ? String(input.metadata.reason) : null,
       entry.actorType,
       input.actorUid ?? null,
@@ -1594,32 +1630,6 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
     const loaded = await loadForUpdate(client, input.bookingId, input.actorUid ?? null);
     if (!loaded) throw new TransitionError('BOOKING_NOT_FOUND', 'No such booking.');
 
-    /**
-     * The provider advisory lock, AFTER the booking row lock — always this
-     * order, everywhere.
-     *
-     * Legacy took them the other way round. Two paths acquiring the same two
-     * locks in opposite orders deadlock, so the order is fixed here and
-     * asserted by test rather than left to whoever writes the next assignment
-     * path.
-     *
-     * The key is built from the validated target provider, never from a
-     * caller-supplied string: `advisoryLock` names a REQUIREMENT, and the
-     * executor decides what that requirement locks.
-     */
-    const lockRequirement = (spec as { advisoryLock?: AdvisoryLockRequirement }).advisoryLock;
-    if (lockRequirement === 'PROVIDER_ASSIGNMENT') {
-      const target = String(input.metadata?.providerUid ?? '').trim();
-      if (!target) {
-        throw new TransitionError(
-          'GUARD_FAILED', 'providerUid is required to assign.',
-          { guard: 'provider_eligible' },
-        );
-      }
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
-        `servana-provider-assignment:${target}`,
-      ]);
-    }
 
     const fromState = deriveCanonicalState({
       bookingStatus: loaded.status,
@@ -1661,6 +1671,38 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
     const toState = spec.to as BookingState;
 
     /**
+     * SAME TARGET: the booking already has the provider being "reassigned" to.
+     *
+     * Checked BEFORE the source restriction, before the whitelist and before
+     * the advisory lock, because legacy checked it before any of them —
+     * including before the terminal-status guard, so a same-provider reassign
+     * of a COMPLETED or CANCELLED booking answers success. That looks odd and
+     * is harmless: nothing is written on this path at all.
+     *
+     * Declared per action rather than inferred from `from === to`. Treating it
+     * as an ordinary reassignment would close and recreate the same provider's
+     * row, fabricating decline history that the matching exclusion and the
+     * provider's acceptance rate both read.
+     */
+    const sameTarget = (spec as { sameTarget?: SameTargetBehavior }).sameTarget;
+    if (sameTarget === 'IDEMPOTENT_NO_OP'
+        && loaded.workerUid
+        && String(input.metadata?.providerUid ?? '') === loaded.workerUid) {
+      await client.query('COMMIT');
+      return {
+        bookingId: loaded.id,
+        action: input.action,
+        fromState,
+        toState: fromState,
+        stateChanged: false,
+        noOp: true,
+        idempotentReplay: false,
+        correlationId,
+        timelineEventId: null,
+      };
+    }
+
+    /**
      * EVENT-ONLY: an administrative record against a state the booking is
      * already in.
      *
@@ -1697,6 +1739,7 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
         fromState,
         toState: fromState,
         stateChanged: false,
+        noOp: false,
         idempotentReplay: false,
         correlationId,
         timelineEventId: Number(record.rows[0]?.id ?? 0) || null,
@@ -1768,6 +1811,33 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
      * schedule it measures against cannot be edited between the check and the
      * transition.
      */
+    /**
+     * The provider advisory lock — booking row FIRST, provider second, always.
+     *
+     * Legacy took them the other way round. Two paths acquiring the same pair
+     * in opposite orders deadlock, so the order is fixed here and asserted by
+     * test rather than left to whoever writes the next assignment path.
+     *
+     * Taken after the source-state checks so a refusal never acquires a lock
+     * it does not need, and before any write so the conflict check inside
+     * `applyState` is made under it. The key is built from the target
+     * provider, never from a caller-supplied string: `advisoryLock` names a
+     * REQUIREMENT and the executor decides what that requirement locks.
+     */
+    const lockRequirement = (spec as { advisoryLock?: AdvisoryLockRequirement }).advisoryLock;
+    if (lockRequirement === 'PROVIDER_ASSIGNMENT') {
+      const target = String(input.metadata?.providerUid ?? '').trim();
+      if (!target) {
+        throw new TransitionError(
+          'GUARD_FAILED', 'providerUid is required to assign.',
+          { guard: 'provider_eligible' },
+        );
+      }
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+        `servana-provider-assignment:${target}`,
+      ]);
+    }
+
     /**
      * The credential must be PRESENT before anything is written.
      *
@@ -1847,6 +1917,7 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
       fromState,
       toState,
       stateChanged: true,
+      noOp: false,
       idempotentReplay: false,
       correlationId,
       timelineEventId: Number(timeline.rows[0]?.id ?? 0) || null,

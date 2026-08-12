@@ -22,7 +22,8 @@
  *
  * A file that reaches zero is REMOVED from the ledger rather than left with a
  * zero entry, so the list always reads as outstanding work. `bookingService`
- * was the first to go, in Phase C.
+ * went first, in Phase C; `adminBookingService` followed at the end of Phase
+ * D. One legacy writer remains.
  *
  * ## What counts as a raw write
  *
@@ -134,15 +135,6 @@ const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason
       'lifecycle fragment: the shared release still used by cancelAcceptedJob ' +
       'until PROVIDER_CANCEL migrates, and assignWorker, which belongs to ' +
       'TAB 05.',
-  },
-  'services/adminBookingService.ts': {
-    count: 2,
-    phase: 'D5 — admin reassign',
-    reason:
-      'One admin action left. Confirm-on-behalf (D1), cancel (D2), '
-      + 'approve-completion (D3) and assign (D4) go through the executor. The '
-      + 'two remaining are both in adminReassignProvider: closing the outgoing '
-      + 'assignment and repointing the booking.',
   },
 };
 
@@ -284,8 +276,11 @@ describe('the executor is the intended sole writer', () => {
   });
 
   it('appends the timeline in the SAME transaction as the status write', () => {
+    // lastIndexOf for the COMMIT: the same-target no-op and the event-only
+    // branch each commit earlier in the FILE, and indexOf would compare
+    // against one of those rather than the transition path's.
     const insert = executor.indexOf('INSERT INTO ${s}.booking_transitions');
-    const commit = executor.indexOf("client.query('COMMIT')");
+    const commit = executor.lastIndexOf("client.query('COMMIT')");
     expect(insert).toBeGreaterThan(-1);
     expect(commit).toBeGreaterThan(insert);
   });

@@ -125,13 +125,35 @@ describe('admin assignment writes are transactional', () => {
     expect(body).toContain("action: 'ADMIN_ASSIGN'");
   });
 
-  it('adminReassignProvider locks and commits its timeline', () => {
-    const start = source.indexOf('export const adminReassignProvider');
-    const body = source.slice(start, source.indexOf('export const adminRescheduleBooking', start + 20));
-    expect(body).toContain("await client.query('BEGIN')");
-    expect(body).toContain('FOR UPDATE');
-    expect(body).toContain("await client.query('COMMIT')");
-    expect(body).toContain("await client.query('ROLLBACK')");
-    expect(body).toContain('booking_tracking');
+  /**
+   * D5 moved ADMIN_REASSIGN into the executor as well, so neither admin
+   * assignment path opens a transaction of its own any more. The property is
+   * unchanged and the assertion follows it.
+   */
+  it('adminReassignProvider commits through the executor transaction', () => {
+    const executor = read('src/services/booking/transitionExecutor.ts');
+    expect(executor).toContain("await client.query('BEGIN')");
+    expect(executor).toContain('FOR UPDATE');
+    expect(executor).toContain("await client.query('COMMIT')");
+    expect(executor).toContain("await client.query('ROLLBACK')");
+    expect(executor).toContain("ADMIN_REASSIGN: { status: 'WORKER_ASSIGNED'");
+
+    const body = source.slice(
+      source.indexOf('export const adminReassignProvider'),
+      source.indexOf('export const adminRescheduleBooking'),
+    );
+    expect(body).not.toContain("await client.query('BEGIN')");
+    expect(body).toContain("action: 'ADMIN_REASSIGN'");
+  });
+
+  it('neither admin assignment path takes a lock of its own any more', () => {
+    // Both locks are the executor's, in one fixed order. A second acquisition
+    // site is a second chance to get that order wrong.
+    for (const name of ['adminAssignProvider', 'adminReassignProvider']) {
+      const start = source.indexOf(`export const ${name}`);
+      const body = source.slice(start, start + 4000);
+      expect(body).not.toContain('pg_advisory_xact_lock');
+      expect(body).not.toContain('FOR UPDATE');
+    }
   });
 });

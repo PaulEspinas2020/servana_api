@@ -12,7 +12,11 @@ import { createCustomerNotification, createNotification } from "./notification.s
 import { emitToProvider } from "../provider.realtime";
 import { deriveCanonicalState } from "./booking/canonicalState";
 import { toAdminProjection } from "./booking/projections";
-import { transitionBooking, TransitionError } from './booking/transitionExecutor';
+import {
+  transitionBooking,
+  TransitionError,
+  type TransitionResult,
+} from './booking/transitionExecutor';
 const dbSchema = db.schema;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -961,6 +965,50 @@ export const adminAssignProvider = async (
 
 // ─── Admin Reassign Provider ──────────────────────────────────────────────────
 
+/**
+ * ─── D5 · ADMIN_REASSIGN, on the canonical executor ──────────────────────────
+ *
+ * The last admin lifecycle writer. Everything now happens in one transaction
+ * holding the booking row lock and — only for the INCOMING provider — the
+ * provider advisory lock, in that order.
+ *
+ * ## The same-provider no-op is preserved exactly
+ *
+ * Reassigning to the provider a booking already has succeeds and writes
+ * nothing: no closed row, no new row, no pointer change, no worker-code
+ * change, no canonical event, no timeline, no notification. It is declared on
+ * the action as `sameTarget: IDEMPOTENT_NO_OP` rather than falling out of a
+ * generic `from === to` rule, because writing nothing is the SAFE answer and
+ * the unsafe one is easy to reach by accident: closing and recreating the same
+ * provider's row would fabricate decline history that both the matching
+ * exclusion and the provider's acceptance rate read.
+ *
+ * Its precedence is preserved too. Legacy checked it before the terminal-status
+ * guard, so a same-provider reassign of a COMPLETED or CANCELLED booking
+ * answers success. Odd-looking, harmless, and measured.
+ *
+ * ## BEHAVIOUR CORRECTION: role-4 providers accepted
+ *
+ * The incoming-provider lookup was `role::int = 2`, so a role-4 target failed
+ * as "New provider not found" — the same defect D4 fixed on the assign path,
+ * in the same file. The canonical predicate is used now.
+ *
+ * ## The IN_PROGRESS refusal moved, not copied
+ *
+ * Legacy read the assignment row and refused IN_PROGRESS / COMPLETED itself.
+ * The machine already expresses that: `from` omits IN_PROGRESS, and COMPLETED
+ * is terminal. So the check is NOT reimplemented here — the refusal comes from
+ * the machine and is translated back into the legacy sentence at this
+ * boundary, which is a compatibility translation rather than a second source
+ * of truth.
+ *
+ * ## Outgoing row and canonical evidence are atomic
+ *
+ * The outgoing assignment closes as DECLINED — a compatibility value two live
+ * consumers read — and `booking_transitions` records ADMIN_REASSIGN as what
+ * actually happened. Both in one transaction: matching exclusion must never
+ * change without the canonical explanation of why, and vice versa.
+ */
 export const adminReassignProvider = async (
   bookingId: number,
   toProviderUid: string,
@@ -968,126 +1016,63 @@ export const adminReassignProvider = async (
   reason: string
 ): Promise<any> => {
   if (!reason?.trim()) throw new Error('Reason is required for reassignment');
-  const client = await pool.connect();
-  let fromProviderUid: string | null = null;
-  let customerUid: string | null = null;
-  let providerName = '';
-  try {
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
-      `servana-provider-assignment:${toProviderUid}`,
-    ]);
-    const bkRes = await client.query(
-      `SELECT b.worker_uid, b.status, b.user_id, b.schedule, so.service_id
+
+  const before = await dbQuery.query(
+    `SELECT b.worker_uid, b.status, b.user_id,
+            uc.first_name, uc.last_name
        FROM ${dbSchema}.bookings b
-       JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-       WHERE b.id = $1
-       FOR UPDATE OF b`,
-      [bookingId],
-    );
-    if (!bkRes.rowCount) throw new Error('Booking not found');
-    const booking = bkRes.rows[0];
-    fromProviderUid = booking.worker_uid ? String(booking.worker_uid) : null;
-    customerUid = booking.user_id ?? null;
-    if (!fromProviderUid) throw new Error('Booking has no provider to reassign');
-    if (fromProviderUid === toProviderUid) {
-      await client.query('COMMIT');
-      return { bookingId, fromProviderUid, toProviderUid, idempotent: true };
-    }
-    if (['COMPLETED','CANCELLED','CANCELED','REFUNDED','FAILED','EXPIRED'].includes(
-      String(booking.status ?? '').toUpperCase(),
-    )) {
-      throw new Error(`Booking cannot be reassigned from status ${booking.status}`);
-    }
+       LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = $2
+      WHERE b.id = $1`,
+    [bookingId, toProviderUid],
+  );
+  if (!before.rowCount) throw new Error('Booking not found');
 
-    const currentAssignment = await client.query(
-      `SELECT status FROM ${dbSchema}.booking_workers
-       WHERE booking_id = $1 AND worker_uid = $2
-       ORDER BY assigned_at DESC NULLS LAST, id DESC
-       LIMIT 1
-       FOR UPDATE`,
-      [bookingId, fromProviderUid],
-    );
-    const currentWorkerStatus = String(currentAssignment.rows[0]?.status ?? '').toUpperCase();
-    if (['IN_PROGRESS','COMPLETED'].includes(currentWorkerStatus)) {
-      throw new Error(`Booking cannot be reassigned while provider status is ${currentWorkerStatus}`);
-    }
+  const fromProviderUid: string | null = before.rows[0].worker_uid
+    ? String(before.rows[0].worker_uid)
+    : null;
+  const customerUid: string | null = before.rows[0].user_id ?? null;
+  const providerName =
+    (`${before.rows[0].first_name ?? ''} ${before.rows[0].last_name ?? ''}`).trim();
 
-    const provRes = await client.query(
-      `SELECT uid, first_name, last_name, is_archive FROM ${dbSchema}.user_credentials
-       WHERE uid = $1 AND role::int = 2`,
-      [toProviderUid],
-    );
-    if (!provRes.rowCount) throw new Error('New provider not found');
-    if (provRes.rows[0].is_archive) throw new Error('New provider is archived');
-    providerName = (`${provRes.rows[0].first_name ?? ''} ${provRes.rows[0].last_name ?? ''}`).trim();
+  if (!fromProviderUid) throw new Error('Booking has no provider to reassign');
 
-    const eligible = await client.query(
-      `SELECT 1 FROM ${dbSchema}.employee_services
-       WHERE employee_uid = $1 AND service_id = $2
-       UNION ALL
-       SELECT 1 FROM ${dbSchema}.worker_service_applications
-       WHERE worker_uid = $1 AND service_id = $2 AND status = 'approved'
-       LIMIT 1`,
-      [toProviderUid, booking.service_id],
-    );
-    if (!eligible.rowCount) throw new Error('New provider is not qualified for this booking service');
-
-    const schedule = new Date(booking.schedule);
-    const busy = await client.query(
-      `SELECT id FROM ${dbSchema}.bookings
-       WHERE worker_uid = $1 AND id <> $2
-         AND schedule BETWEEN $3 AND $4
-         AND status NOT IN ('COMPLETED','CANCELLED','CANCELED','REFUNDED','FAILED','EXPIRED')
-       LIMIT 1`,
-      [
-        toProviderUid,
-        bookingId,
-        new Date(schedule.getTime() - 2 * 60 * 60 * 1000),
-        new Date(schedule.getTime() + 2 * 60 * 60 * 1000),
-      ],
-    );
-    if (busy.rowCount) throw new Error('New provider has a conflicting booking within 2 hours');
-
-    await client.query(
-      `UPDATE ${dbSchema}.booking_workers SET status = 'DECLINED'
-       WHERE booking_id = $1 AND worker_uid = $2
-         AND status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED')`,
-      [bookingId, fromProviderUid],
-    );
-    await client.query(
-      `INSERT INTO ${dbSchema}.booking_workers (worker_uid, booking_id, status, assigned_at)
-       VALUES ($1, $2, 'ASSIGNED', NOW())`,
-      [toProviderUid, bookingId],
-    );
-    const updated = await client.query(
-      `UPDATE ${dbSchema}.bookings
-       SET worker_uid = $1, status = 'WORKER_ASSIGNED'
-       WHERE id = $2 AND worker_uid = $3
-       RETURNING id`,
-      [toProviderUid, bookingId, fromProviderUid],
-    );
-    if (!updated.rowCount) throw new Error('Booking reassignment changed concurrently');
-    await client.query(
-      `INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note)
-       VALUES ($1, 'WORKER_ASSIGNED', 'Provider reassigned by admin')`,
-      [bookingId],
-    );
-    await addTimelineEvent(
-      bookingId, 'provider_reassigned', `Provider reassigned to ${providerName}`,
-      reason, 'admin', adminUid, { fromProviderUid, toProviderUid, providerName }, client,
-    );
-    await logBookingAudit({
-      bookingId, actorUid: adminUid, actorRole: 'admin', action: 'booking_reassigned',
-      before: { workerUid: fromProviderUid }, after: { workerUid: toProviderUid }, reason,
-    }, client);
-    await client.query('COMMIT');
+  let result: TransitionResult;
+  try {
+    result = await transitionBooking({
+      action: 'ADMIN_REASSIGN',
+      bookingId,
+      actorRole: 'admin',
+      actorUid: adminUid,
+      metadata: { providerUid: toProviderUid, fromProviderUid, toProviderUid, providerName, reason },
+    });
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
+    if (error instanceof TransitionError) {
+      // Compatibility translation, not a second source of truth. The machine
+      // decided; these are the sentences this endpoint has always produced.
+      if (error.code === 'GUARD_FAILED') {
+        // Target-validation messages, already the legacy wording apart from
+        // the "New provider" prefix this endpoint uses.
+        throw new Error(error.message.replace(/^Provider /, 'New provider '));
+      }
+      if (error.code === 'TERMINAL_STATE') {
+        throw new Error(`Booking cannot be reassigned from status ${before.rows[0].status}`);
+      }
+      // The only remaining refusal from these source states is a provider who
+      // has already started work.
+      throw new Error('Booking cannot be reassigned while provider status is IN_PROGRESS');
+    }
     throw error;
-  } finally {
-    client.release();
   }
+
+  // The same-provider case wrote nothing, and said nothing to anybody.
+  if (result.noOp) {
+    return { bookingId, fromProviderUid, toProviderUid, idempotent: true };
+  }
+
+  await logBookingAudit({
+    bookingId, actorUid: adminUid, actorRole: 'admin', action: 'booking_reassigned',
+    before: { workerUid: fromProviderUid }, after: { workerUid: toProviderUid }, reason,
+  });
 
   publishAdminAssignment({
     bookingId,
@@ -1095,14 +1080,12 @@ export const adminReassignProvider = async (
     customerUid,
     reassigned: true,
   });
-  if (fromProviderUid) {
-    createNotification(fromProviderUid, {
-      notificationKey: `assignment_removed_${bookingId}_${fromProviderUid}`,
-      type: 'assignment_removed', severity: 'warning', title: 'Booking reassigned',
-      safeBody: `Booking SVN-${String(bookingId).padStart(6, '0')} is no longer assigned to you.`,
-      route: null, canOpenDetail: false,
-    }).catch((e) => console.error('[reassign] previous provider notification failed', e));
-  }
+  createNotification(fromProviderUid, {
+    notificationKey: `assignment_removed_${bookingId}_${fromProviderUid}`,
+    type: 'assignment_removed', severity: 'warning', title: 'Booking reassigned',
+    safeBody: `Booking SVN-${String(bookingId).padStart(6, '0')} is no longer assigned to you.`,
+    route: null, canOpenDetail: false,
+  }).catch((e) => console.error('[reassign] previous provider notification failed', e));
 
   // Move the booking conversation across with the assignment. The old provider
   // is marked left (can_send false), the new one admitted, and a system event
@@ -1118,8 +1101,6 @@ export const adminReassignProvider = async (
 
   return { bookingId, fromProviderUid, toProviderUid, providerName };
 };
-
-// ─── Admin Reschedule ─────────────────────────────────────────────────────────
 
 export const adminRescheduleBooking = async (
   bookingId: number,
