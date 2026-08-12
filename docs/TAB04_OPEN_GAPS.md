@@ -225,7 +225,64 @@ closed as `REASSIGNED` rather than overwritten, which TAB 05 depends on.
 
 ---
 
-### 6. Executor refusals carry the locked snapshot
+### 6. Migration 027 is DEPLOYMENT-CRITICAL — the release order changes
+
+`scripts/migrations/027-booking-lifecycle-timestamps.sql` makes
+`accepted_at`, `en_route_at`, `arrived_at` and `declined_at` real columns.
+
+They are currently created by lazy DDL in
+`technicianService.ensureArrivalColumns()`. That was sufficient while
+technicianService was the only writer, because every entry point awaited it.
+The canonical executor now writes them and performs **no schema repair**, and
+`POST /api/v1/provider/jobs/:id/{accept,en-route,arrived}` reaches the executor
+without ever calling the lazy DDL.
+
+**Do not restart the application onto code that depends on these columns before
+027 has applied.** Required sequence for this release:
+
+```
+1. deploy artifact
+2. npm run migrations:apply   (MIGRATION_REMOTE_ACK=<host>/<database>)
+3. verify 027 recorded in servana.schema_migrations
+4. verify the four columns exist, and the runtime role can write them
+5. start / restart the application on the new code
+6. authenticated v1 smoke: ACCEPT → EN_ROUTE → ARRIVED
+```
+
+If the current pipeline starts the application before migrations run, **change
+the sequence for this release** rather than accepting a window where the v1
+executor can hit a missing column.
+
+Gates, and where each is proven:
+
+| gate | status | proven by |
+|---|---|---|
+| idempotent (`ADD COLUMN IF NOT EXISTS` ×4) | PASS | `tests/migration-027-arrival-columns.test.ts` |
+| column types match the lazy DDL | PASS | same, compared against the source of the lazy DDL |
+| nullability / default semantics unchanged | PASS | no `NOT NULL`, no `DEFAULT` |
+| no embedded BEGIN/COMMIT | PASS | same |
+| one table, additive only | PASS | no DROP / RENAME / UPDATE / DELETE |
+| OWNER / permissions compatible with the runtime role | **NOT TESTABLE HERE** | manual step 4 above |
+| applies against the CURRENT production schema | **NOT TESTABLE HERE** | `migrations:plan` against production, then step 2 |
+
+The last two are deliberately not claimed as covered. `ALTER TABLE` requires
+table ownership, and this repository cannot read production's `pg_class`
+ownership or its applied-migration ledger.
+
+**`ensureArrivalColumns()` stays until all three hold:**
+
+```
+027 applied in production
++ authenticated arrival smoke passes
++ no rollback to a pre-027 schema is possible
+```
+
+Then it is removed in a **separate cleanup commit** — never combined with a
+behaviour change, so a rollback of the cleanup cannot take a migration with it.
+
+---
+
+### 7. Executor refusals carry the locked snapshot
 
 `TransitionError.snapshot` exposes the rows as they were when the refusal was
 decided, so a caller owing its clients a richer vocabulary — provider accept and

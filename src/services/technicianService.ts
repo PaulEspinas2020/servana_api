@@ -1822,60 +1822,6 @@ const ensureArrivalColumns = (): Promise<void> => {
   return arrivalColumnsReady;
 };
 
-const advanceArrivalStage = async (
-  bookingId: number,
-  workerUid: string,
-  from: string,
-  to: string,
-  timestampColumn: string,
-  trackingNote: string
-) => {
-  await ensureArrivalColumns();
-
-  const res = await dbQuery.query(
-    `
-    UPDATE ${dbSchema}.booking_workers
-    SET status = $4,
-        ${timestampColumn} = NOW()
-    WHERE booking_id = $1
-      AND worker_uid = $2
-      AND status = $3
-    RETURNING *
-    `,
-    [bookingId, workerUid, from, to]
-  );
-
-  if (!res.rowCount) {
-    throw new Error(`Job cannot move to ${to}`);
-  }
-
-  // Cascade so the customer's booking view reflects it. Scoped to this worker's
-  // booking and to the statuses this transition can legally follow, so a
-  // concurrent admin action cannot be clobbered.
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings
-     SET status = $2
-     WHERE id = $1 AND worker_uid = $3`,
-    [bookingId, to, workerUid]
-  );
-
-  // Customer-facing timeline. booking_tracking previously carried only four
-  // event kinds and nothing between assignment and completion.
-  try {
-    await dbQuery.query(
-      `INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note)
-       VALUES ($1, $2, $3)`,
-      [bookingId, to, trackingNote]
-    );
-  } catch (e: any) {
-    // A timeline row is not worth failing the transition over — the state
-    // change is already committed and is the thing that matters.
-    console.warn(`[arrival] tracking insert failed for booking ${bookingId}: ${e.message}`);
-  }
-
-  return res.rows[0];
-};
-
 /**
  * ─── B1.3 · PROVIDER_EN_ROUTE, on the canonical executor ─────────────────────
  *
@@ -1965,16 +1911,24 @@ const runArrivalTransition = async (
   return res.rows[0];
 };
 
-/** The provider has reached the address and has not yet started work. */
-export const markArrived = (bookingId: number, workerUid: string) =>
-  advanceArrivalStage(
-    bookingId,
-    workerUid,
-    "EN_ROUTE",
-    "ARRIVED",
-    "arrived_at",
-    "Provider has arrived"
-  );
+/**
+ * ─── B1.4 · PROVIDER_ARRIVED, on the canonical executor ──────────────────────
+ *
+ * The provider has reached the address and has not yet started work.
+ *
+ * This completes the arrival family and retires `advanceArrivalStage`, which
+ * was the last shared writer of the provider lifecycle outside the executor.
+ * A repo-wide search found no remaining callers before it was deleted; the
+ * only references left are comments describing what it used to do.
+ */
+export const markArrived = async (
+  bookingId: number,
+  workerUid: string,
+  options: { idempotencyKey?: string; correlationId?: string } = {},
+) => {
+  await ensureArrivalColumns();
+  return runArrivalTransition(bookingId, workerUid, 'PROVIDER_ARRIVED', 'ARRIVED', options);
+};
 
 export const startJob = async (
   bookingId: number,

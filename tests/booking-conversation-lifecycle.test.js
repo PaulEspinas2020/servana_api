@@ -93,13 +93,20 @@ describe('chat.repository — active worker statuses', function () {
   });
 
   it('covers every status the arrival lifecycle can write', function () {
-    var tech = readCode('services', 'technicianService.ts');
+    // Reads the EXECUTOR, not technicianService. The arrival writes moved there
+    // in B1.3/B1.4, and this check used to be conditional on finding the
+    // double-quoted literals "EN_ROUTE"/"ARRIVED" in technicianService — which
+    // the migration removed. The guard would have gone silently vacuous:
+    // still green, asserting nothing, on exactly the day the source of truth
+    // moved. It now reads the file that actually writes those statuses.
+    var executor = readCode('services', 'booking', 'transitionExecutor.ts');
     var block = code.match(/ACTIVE_WORKER_STATUSES\s*=\s*\[[\s\S]*?\]/)[0];
-    // advanceArrivalStage(..., FROM, TO, ...) — every TO must be authorized.
+
     ['EN_ROUTE', 'ARRIVED'].forEach(function (s) {
-      if (new RegExp('"' + s + '"').test(tech)) {
-        expect(block).toMatch(new RegExp("'" + s + "'"));
-      }
+      // Positive fixture: the executor MUST name it, or the loop below proves
+      // nothing. This is the assertion the old conditional was missing.
+      expect(executor).toMatch(new RegExp("'" + s + "'"));
+      expect(block).toMatch(new RegExp("'" + s + "'"));
     });
   });
 });

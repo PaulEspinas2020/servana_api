@@ -11,7 +11,17 @@
  *   bookings.status AUTHORIZES?      no
  *   booking_tracking AS TIMELINE?    no
  *
- * B1.4 extends this file to ARRIVED and deletes `advanceArrivalStage`.
+ * B1.4 extends it to ARRIVED and retires `advanceArrivalStage`.
+ *
+ * ## Parity is checked, and is not sufficient on its own
+ *
+ * Comparing the legacy and v1 rows for equality proves the two paths AGREE. It
+ * does not prove either is right — two paths producing the same wrong rows
+ * pass an equality check perfectly. So the canonical invariants are pinned
+ * independently, field by field, and parity is asserted on top:
+ *
+ *   V1 == LEGACY          the paths cannot diverge
+ *   RESULT == EXPECTED    and what they agree on is correct
  */
 
 jest.mock('../src/config', () => ({ db: { schema: 'servana' } }));
@@ -32,7 +42,8 @@ jest.mock('../src/services/disbursement.service', () => ({ createDisbursement: j
 import fs from 'fs';
 import path from 'path';
 import { store, reset, flush } from './support/bookingDbFake';
-import { markEnRoute } from '../src/services/technicianService';
+import { markEnRoute, markArrived } from '../src/services/technicianService';
+import { deriveCanonicalState } from '../src/services/booking/canonicalState';
 import { transitionBooking, __resetTransitionSchema } from '../src/services/booking/transitionExecutor';
 
 const PROVIDER = 'provider-a';
@@ -223,6 +234,135 @@ describe('booking_tracking is NOT the canonical timeline', () => {
  * Both now go through one executor, so parity is structural — but asserting it
  * is what keeps it structural.
  */
+/**
+ * The canonical expectation, stated field by field for each stage.
+ *
+ * This is the half parity cannot supply. Every one of these would still hold
+ * if the v1 path did not exist.
+ */
+describe('RESULT == CANONICAL EXPECTATION', () => {
+  it('PROVIDER_EN_ROUTE leaves exactly the expected rows', async () => {
+    seed('ACCEPTED');
+    store.assignments[0].accepted_at = '2026-08-11T00:00:00.000Z';
+    await markEnRoute(BOOKING, PROVIDER);
+
+    const assignment = store.assignments[0];
+    expect(assignment.status).toBe('EN_ROUTE');
+    expect(assignment.en_route_at).toBe('2026-08-12T00:00:00.000Z');
+    expect(assignment.arrived_at).toBeNull();
+    // The earlier stage's timestamp is history and must survive.
+    expect(assignment.accepted_at).toBe('2026-08-11T00:00:00.000Z');
+
+    // Legacy projection ONLY. bookings.status is not canonical here.
+    expect(store.booking?.status).toBe('EN_ROUTE');
+    expect(deriveCanonicalState({
+      bookingStatus: store.booking?.status,
+      workerStatus: assignment.status,
+      workerUid: store.booking?.worker_uid,
+    })).toBe('EN_ROUTE');
+
+    // Exactly one of each, not "at least one".
+    expect(store.transitions).toHaveLength(1);
+    expect(store.tracking).toHaveLength(1);
+  });
+
+  it('PROVIDER_ARRIVED leaves exactly the expected rows', async () => {
+    seed('EN_ROUTE');
+    store.assignments[0].accepted_at = '2026-08-11T00:00:00.000Z';
+    store.assignments[0].en_route_at = '2026-08-11T12:00:00.000Z';
+    await markArrived(BOOKING, PROVIDER);
+
+    const assignment = store.assignments[0];
+    expect(assignment.status).toBe('ARRIVED');
+    expect(assignment.arrived_at).toBe('2026-08-12T00:00:00.000Z');
+    // Both earlier stamps preserved - the journey is a history, not a cursor.
+    expect(assignment.accepted_at).toBe('2026-08-11T00:00:00.000Z');
+    expect(assignment.en_route_at).toBe('2026-08-11T12:00:00.000Z');
+
+    expect(store.booking?.status).toBe('ARRIVED');
+    expect(deriveCanonicalState({
+      bookingStatus: store.booking?.status,
+      workerStatus: assignment.status,
+      workerUid: store.booking?.worker_uid,
+    })).toBe('ARRIVED');
+
+    expect(store.transitions).toHaveLength(1);
+    expect(store.transitions[0]).toMatchObject({
+      action: 'PROVIDER_ARRIVED', from_state: 'EN_ROUTE', to_state: 'ARRIVED',
+    });
+    expect(store.tracking).toEqual([
+      { booking_id: BOOKING, status: 'ARRIVED', note: 'Provider has arrived' },
+    ]);
+  });
+
+  it('the full journey accumulates one transition per stage', async () => {
+    seed('ACCEPTED');
+    await markEnRoute(BOOKING, PROVIDER);
+    await markArrived(BOOKING, PROVIDER);
+
+    expect(store.transitions.map((t) => t.to_state)).toEqual(['EN_ROUTE', 'ARRIVED']);
+    expect(store.tracking.map((t) => t.status)).toEqual(['EN_ROUTE', 'ARRIVED']);
+    expect(store.assignments[0].en_route_at).toBeTruthy();
+    expect(store.assignments[0].arrived_at).toBeTruthy();
+  });
+});
+
+describe('ARRIVED legality and stale-projection guards', () => {
+  it('refuses ARRIVED from ACCEPTED - the provider never set out', async () => {
+    seed('ACCEPTED');
+    await expect(markArrived(BOOKING, PROVIDER)).rejects.toThrow(/cannot move to ARRIVED/);
+    expect(store.assignments[0].status).toBe('ACCEPTED');
+  });
+
+  it('refuses a repeat once already ARRIVED', async () => {
+    seed('ARRIVED');
+    await expect(markArrived(BOOKING, PROVIDER)).rejects.toThrow(/cannot move to ARRIVED/);
+  });
+
+  it('a stale bookings.status = ARRIVED does not authorize the move', async () => {
+    seed('ACCEPTED', 'ARRIVED');
+    await expect(markArrived(BOOKING, PROVIDER)).rejects.toThrow(/cannot move to/);
+    expect(store.transitions).toHaveLength(0);
+  });
+
+  it('a stale bookings.status = CONFIRMED does not block the move', async () => {
+    seed('EN_ROUTE', 'CONFIRMED');
+    await markArrived(BOOKING, PROVIDER);
+    expect(store.assignments[0].status).toBe('ARRIVED');
+  });
+
+  it('a failed tracking insert rolls ARRIVED back too', async () => {
+    seed('EN_ROUTE');
+    store.trackingFails = true;
+    await expect(markArrived(BOOKING, PROVIDER)).rejects.toThrow();
+    expect(store.assignments[0].status).toBe('EN_ROUTE');
+    expect(store.booking?.status).toBe('WORKER_ASSIGNED');
+    expect(store.sql).not.toContain('COMMIT');
+  });
+});
+
+describe('advanceArrivalStage is gone', () => {
+  const service = fs.readFileSync(
+    path.resolve(__dirname, '../src/services/technicianService.ts'), 'utf8',
+  );
+
+  it('the helper no longer exists', () => {
+    expect(service).not.toMatch(/const advanceArrivalStage\s*=/);
+  });
+
+  it('neither arrival stage writes status directly any more', () => {
+    const code = service
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+    const enRoute = code.slice(
+      code.indexOf('export const markEnRoute'),
+      code.indexOf('const runArrivalTransition'),
+    );
+    expect(enRoute).not.toMatch(/UPDATE \$\{dbSchema\}\.booking_workers/);
+    expect(enRoute).toContain("'PROVIDER_EN_ROUTE'");
+  });
+});
+
 describe('V1 / LEGACY ARRIVAL PARITY', () => {
   const snapshotOf = () => ({
     assignment: { ...store.assignments[0] },
@@ -231,21 +371,45 @@ describe('V1 / LEGACY ARRIVAL PARITY', () => {
     transitions: store.transitions.map((t) => ({ ...t })),
   });
 
-  it('V1_EN_ROUTE_BOOKING_STATUS_PARITY: both paths leave identical rows', async () => {
-    seed();
-    await markEnRoute(BOOKING, PROVIDER);
+  const bothPaths = async (
+    from: string,
+    legacy: (b: number, w: string) => Promise<unknown>,
+    action: 'PROVIDER_EN_ROUTE' | 'PROVIDER_ARRIVED',
+  ) => {
+    seed(from);
+    await legacy(BOOKING, PROVIDER);
     const viaLegacy = snapshotOf();
 
     reset();
     __resetTransitionSchema();
-    seed();
+    seed(from);
     await transitionBooking({
-      action: 'PROVIDER_EN_ROUTE', bookingId: BOOKING,
-      actorRole: 'assigned_provider', actorUid: PROVIDER,
+      action, bookingId: BOOKING, actorRole: 'assigned_provider', actorUid: PROVIDER,
     });
-    const viaV1 = snapshotOf();
+    return { viaLegacy, viaV1: snapshotOf() };
+  };
 
+  it('V1_EN_ROUTE_BOOKING_STATUS_PARITY: both paths leave identical rows', async () => {
+    const { viaLegacy, viaV1 } = await bothPaths('ACCEPTED', markEnRoute, 'PROVIDER_EN_ROUTE');
     expect(viaV1).toEqual(viaLegacy);
+    // Anchored to the canonical expectation, so agreement on a wrong value
+    // cannot pass.
     expect(viaV1.bookingStatus).toBe('EN_ROUTE');
+    expect(viaV1.assignment.status).toBe('EN_ROUTE');
+  });
+
+  it('V1_ARRIVED_BOOKING_STATUS_PARITY: both paths leave identical rows', async () => {
+    const { viaLegacy, viaV1 } = await bothPaths('EN_ROUTE', markArrived, 'PROVIDER_ARRIVED');
+    expect(viaV1).toEqual(viaLegacy);
+    expect(viaV1.bookingStatus).toBe('ARRIVED');
+    expect(viaV1.assignment.status).toBe('ARRIVED');
+  });
+
+  it('the parity check can actually fail (positive fixture)', () => {
+    // Equality between two snapshots is only meaningful if a difference would
+    // be detected. A shallow compare over nested objects would not.
+    const a = { assignment: { status: 'ARRIVED' }, tracking: [{ status: 'ARRIVED' }] };
+    const b = { assignment: { status: 'EN_ROUTE' }, tracking: [{ status: 'ARRIVED' }] };
+    expect(a).not.toEqual(b);
   });
 });

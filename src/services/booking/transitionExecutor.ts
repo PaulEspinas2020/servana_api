@@ -619,6 +619,8 @@ const LEGACY_TRACKING: Partial<Record<BookingAction, { status: string; note: str
   // technicianService.markEnRoute. Here the tracking status IS the canonical
   // state, because the legacy path cascaded it onto `bookings.status` too.
   PROVIDER_EN_ROUTE: { status: 'EN_ROUTE', note: 'Provider is on the way' },
+  // technicianService.markArrived.
+  PROVIDER_ARRIVED: { status: 'ARRIVED', note: 'Provider has arrived' },
 };
 
 async function writeLegacyTracking(
