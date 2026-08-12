@@ -1930,38 +1930,77 @@ export const markArrived = async (
   return runArrivalTransition(bookingId, workerUid, 'PROVIDER_ARRIVED', 'ARRIVED', options);
 };
 
+/**
+ * ─── B1.5 · PROVIDER_START, on the canonical executor ────────────────────────
+ *
+ * The last of the B1 family, and the one that was already half-migrated: the
+ * atomic worker-code predicate moved into the executor during Phase A, so this
+ * commit removes the duplicate rather than inventing anything.
+ *
+ * ## The predicate stayed atomic, and lost its state machine
+ *
+ * The legacy statement carried both the credential check and
+ * `bw.status IN ('ACCEPTED','EN_ROUTE','ARRIVED')` — a second copy of the
+ * transition table, written in SQL and maintained separately from the real
+ * one. The executor keeps the credential check in the same statement as the
+ * write, because a check-then-write leaves a window on the one gate that
+ * protects a chargeable job; it does NOT reproduce the state list, because the
+ * canonical machine has already decided the move is legal from this state,
+ * under the row lock, before that line runs.
+ *
+ * Which is what makes a zero-row result mean exactly one thing. State,
+ * assignment and terminality are all validated by then, so the only remaining
+ * explanation is the code — and the caller gets
+ * BOOKING_WORKER_CODE_INVALID rather than the legacy "Job cannot be started",
+ * which conflated a wrong code, a wrong state, a wrong provider and a finished
+ * booking into one unactionable sentence.
+ *
+ * ## The legacy message is preserved anyway
+ *
+ * Both legacy controllers answer 500 for any error from this function. Their
+ * clients cannot distinguish the causes today and this migration is not the
+ * place to change that, so the thrown message stays byte-identical. The
+ * specific codes are available on `/api/v1/provider/jobs/:id/start`.
+ */
 export const startJob = async (
   bookingId: number,
   workerUid: string,
-  workerCode?: string
+  workerCode?: string,
+  options: { idempotencyKey?: string; correlationId?: string } = {},
 ) => {
   if (!workerCode) {
     throw new Error("worker_code is required to start job");
   }
 
-  const res = await dbQuery.query(
-    `
-    UPDATE ${dbSchema}.booking_workers bw
-    SET status = 'IN_PROGRESS',
-        started_at = NOW()
-    FROM ${dbSchema}.bookings b
-    WHERE bw.booking_id = $1
-      AND bw.worker_uid = $2
-      -- ACCEPTED plus the two optional arrival stages. Requiring ACCEPTED
-      -- alone would mean a provider who tapped "on my way" could never start
-      -- the job — the arrival stages advance the status, so demanding the
-      -- pre-arrival value would strand them one tap from the work.
-      AND bw.status IN ('ACCEPTED', 'EN_ROUTE', 'ARRIVED')
-      AND bw.booking_id = b.id
-      AND b.worker_code = $3
-    RETURNING bw.*
-    `,
-    [bookingId, workerUid, workerCode]
-  );
-
-  if (!res.rowCount) {
-    throw new Error("Job cannot be started");
+  let result: TransitionResult;
+  try {
+    result = await transitionBooking({
+      action: 'PROVIDER_START',
+      bookingId,
+      actorRole: 'assigned_provider',
+      actorUid: workerUid,
+      idempotencyKey: options.idempotencyKey,
+      correlationId: options.correlationId,
+      metadata: { workerCode },
+    });
+  } catch (error) {
+    // Byte-identical to the legacy refusal, whatever the executor's reason.
+    if (error instanceof TransitionError) throw new Error("Job cannot be started");
+    throw error;
   }
+
+  const startedRes = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.booking_workers
+      WHERE booking_id = $1 AND worker_uid = $2
+      ORDER BY assigned_at DESC NULLS LAST, id DESC
+      LIMIT 1`,
+    [bookingId, workerUid],
+  );
+  const started = startedRes.rows[0];
+
+  // A replay already sent these. Re-running them would email the customer a
+  // second time and post the group-chat message again for one tap.
+  if (result.idempotentReplay) return started;
 
   // Notify customer that the service has begun
   try {
@@ -2004,7 +2043,7 @@ export const startJob = async (
     }
   })();
 
-  return res.rows[0];
+  return started;
 };
 
 export class UnpaidCashBookingError extends Error {

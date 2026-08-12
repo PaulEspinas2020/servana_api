@@ -186,6 +186,24 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
     return done([]);
   }
 
+  /**
+   * The atomic start: matches ONLY when the booking's worker_code equals $3.
+   *
+   * Modelled faithfully because the whole point of the statement is that the
+   * credential check and the write are one operation. A fake that checked the
+   * code separately would pass a implementation that had split them.
+   */
+  if (/UPDATE servana\.booking_workers bw[\s\S]*worker_code = \$3/i.test(flat)) {
+    const [bookingId, workerUid, code] = params;
+    if (!store.booking || store.booking.worker_code !== code) return done([]);
+    const rows = mine(Number(bookingId), workerUid);
+    for (const a of rows) {
+      a.status = 'IN_PROGRESS';
+      a.started_at = '2026-08-12T00:00:00.000Z';
+    }
+    return done(rows.length ? [{ booking_id: Number(bookingId) }] : []);
+  }
+
   // ── assignment / reassignment ──
   if (/UPDATE servana\.booking_workers SET status = 'REASSIGNED'/i.test(flat)) {
     for (const a of mine(Number(params[0]), params[1])) a.status = 'REASSIGNED';

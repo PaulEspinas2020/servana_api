@@ -219,23 +219,52 @@ describe('cancelled spelling normalisation', () => {
 });
 
 describe('arrival stages — EN_ROUTE and ARRIVED', () => {
-  const tech = flat(code(read('services/technicianService.ts')));
   const booking = flat(code(read('services/bookingService.ts')));
   const routes = flat(code(read('routes/provider.routes.ts')));
 
+  /**
+   * These two properties moved, they did not disappear.
+   *
+   * B1.3/B1.4/B1.5 took the arrival stages and the start off
+   * `technicianService`'s own SQL guards and onto the canonical machine, so
+   * assertions written against `AND status = $3` and
+   * `bw.status IN ('ACCEPTED','EN_ROUTE','ARRIVED')` now describe code that no
+   * longer exists. Deleting them would drop a real guarantee; leaving them
+   * pointed at the old file would fail a migration that kept every guarantee
+   * intact. They follow the property to the transition table instead.
+   */
+  const machine = flat(code(read('services/booking/canonicalState.ts')));
+  const executor = flat(code(read('services/booking/transitionExecutor.ts')));
+
   test('the transitions are guarded, not blind writes', () => {
-    // Every other lifecycle transition carries its expected current status, so
-    // an out-of-order call changes nothing rather than corrupting state. These
-    // must match that standard or they become the weak link.
-    expect(tech).toMatch(/ACCEPTED["'],\s*["']EN_ROUTE/);
-    expect(tech).toMatch(/EN_ROUTE["'],\s*["']ARRIVED/);
-    expect(tech).toMatch(/AND status = \$3/);
+    // The guard is now the whitelist, checked under the row lock before any
+    // write, rather than an expected-status clause bolted onto each UPDATE.
+    expect(machine).toMatch(/from: 'ACCEPTED',\s*to: 'EN_ROUTE'/);
+    expect(machine).toMatch(/from: 'EN_ROUTE',\s*to: 'ARRIVED'/);
+    expect(executor).toMatch(/canTransition\(fromState, toState, input\.actorRole\)/);
+    expect(executor).toMatch(/FOR UPDATE/);
   });
 
   test('startJob still accepts a provider who skipped both stages', () => {
     // Requiring ACCEPTED alone would strand a provider who tapped "on my way"
     // one tap short of starting the job, because the stage advanced the status.
-    expect(tech).toMatch(/bw\.status IN \('ACCEPTED', 'EN_ROUTE', 'ARRIVED'\)/);
+    // The SQL list that used to encode this is gone; the machine carries it.
+    expect(machine).toMatch(/from: 'ACCEPTED', to: 'IN_PROGRESS'/);
+    expect(machine).toMatch(/from: 'EN_ROUTE', to: 'IN_PROGRESS'/);
+    expect(machine).toMatch(/from: 'ARRIVED', to: 'IN_PROGRESS'/);
+    // And the second copy really is gone, not merely unused.
+    //
+    // Block comments have to come off for this one. `code()` strips `--` and
+    // `//` only, and the executor's docblock explains at length that the
+    // predicate does NOT carry a state list — so the prose describing its
+    // absence would fail the check for its absence.
+    const noBlocks = (src: string) => flat(code(src.replace(/\/\*[\s\S]*?\*\//g, '')));
+    const tech = noBlocks(read('services/technicianService.ts'));
+    const executorCode = noBlocks(read('services/booking/transitionExecutor.ts'));
+    expect(tech).not.toMatch(/bw\.status IN \('ACCEPTED', 'EN_ROUTE', 'ARRIVED'\)/);
+    expect(executorCode).not.toMatch(/bw\.status IN \(/);
+    // Positive fixture: the statement itself is still there to be checked.
+    expect(executorCode).toMatch(/UPDATE \$\{s\}\.booking_workers bw/);
   });
 
   test('cancelling reaches a provider who is already travelling', () => {
@@ -252,8 +281,15 @@ describe('arrival stages — EN_ROUTE and ARRIVED', () => {
 
   test('the columns are added additively', () => {
     // Nullable and IF NOT EXISTS, so every existing row and every shipped
-    // client is unaffected.
-    expect(tech).toMatch(/ADD COLUMN IF NOT EXISTS en_route_at/);
-    expect(tech).toMatch(/ADD COLUMN IF NOT EXISTS arrived_at/);
+    // client is unaffected. Now asserted in BOTH places that create them:
+    // migration 027, which is the real definition, and the lazy DDL that
+    // remains as a compatibility bridge until 027 is applied in production.
+    const migration = read('../scripts/migrations/027-booking-lifecycle-timestamps.sql');
+    const tech = flat(code(read('services/technicianService.ts')));
+
+    for (const column of ['en_route_at', 'arrived_at']) {
+      expect(migration).toMatch(new RegExp(`ADD COLUMN IF NOT EXISTS ${column}`));
+      expect(tech).toMatch(new RegExp(`ADD COLUMN IF NOT EXISTS ${column}`));
+    }
   });
 });
