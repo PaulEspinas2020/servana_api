@@ -101,7 +101,16 @@ export type TransitionErrorCode =
   /** A named guard was not satisfied. */
   | 'GUARD_FAILED'
   /** Same key, different request. */
-  | 'IDEMPOTENCY_KEY_REUSED';
+  | 'IDEMPOTENCY_KEY_REUSED'
+  /**
+   * The customer's six-digit code did not match.
+   *
+   * Distinct from GUARD_FAILED because it is the ONE precondition checked
+   * atomically with the write rather than before it — state, assignment and
+   * terminality are all already validated when this fires, so it names exactly
+   * one cause. The legacy path answered "Job cannot be started" for all four.
+   */
+  | 'WORKER_CODE_INVALID';
 
 export class TransitionError extends Error {
   constructor(
@@ -374,13 +383,75 @@ async function applyState(
     case 'ACCEPTED':
     case 'EN_ROUTE':
     case 'ARRIVED':
-    case 'IN_PROGRESS':
       await client.query(
         `UPDATE ${s}.booking_workers SET status = $3
           WHERE booking_id = $1 AND worker_uid = $2`,
         [loaded.id, providerUid, to],
       );
       return;
+
+    case 'IN_PROGRESS': {
+      /**
+       * The worker code is checked ATOMICALLY, in the same statement as the
+       * write.
+       *
+       * `technicianService.startJob` has always done this, and it is the right
+       * shape: the six-digit code the customer reads out is the only gate on
+       * starting a chargeable job, and a check-then-write leaves a window
+       * between the two. Moving the transition into the executor must not
+       * downgrade that to a lock-plus-check that is only equivalent if the lock
+       * behaves as expected.
+       *
+       * ## What this predicate does NOT do
+       *
+       * The legacy statement also carried
+       * `bw.status IN ('ACCEPTED','EN_ROUTE','ARRIVED')` — a second, separately
+       * maintained copy of the transition table living in SQL. It is not
+       * reproduced here. The canonical machine already decided that this
+       * transition is legal from this state, under the row lock, before we
+       * reach this line. One authority for the lifecycle; the predicate is only
+       * for the credential.
+       *
+       * ## Which is why a zero-row result means one thing
+       *
+       * State, assignment and terminality were all validated above. The only
+       * remaining reason this statement matches nothing is the code, so the
+       * caller gets BOOKING_WORKER_CODE_INVALID rather than the legacy
+       * "Job cannot be started", which conflated a wrong code, a wrong state
+       * and a wrong provider into one unactionable sentence.
+       *
+       * The code is NOT consumed. It is cleared only when the provider is
+       * unassigned (`technicianService` sets `worker_code = NULL` on reset), so
+       * reassignment already invalidates it for the outgoing provider. No
+       * one-time behaviour is introduced here, because none exists today.
+       */
+      const workerCode = input.metadata?.workerCode;
+      if (typeof workerCode !== 'string' || !workerCode.trim()) {
+        throw new TransitionError('GUARD_FAILED', 'A worker code is required to start this job.', {
+          guard: 'worker_code',
+        });
+      }
+
+      const started = await client.query(
+        `UPDATE ${s}.booking_workers bw
+            SET status = 'IN_PROGRESS', started_at = NOW()
+           FROM ${s}.bookings b
+          WHERE bw.booking_id = $1
+            AND bw.worker_uid = $2
+            AND bw.booking_id = b.id
+            AND b.worker_code = $3
+          RETURNING bw.booking_id`,
+        [loaded.id, providerUid, workerCode.trim()],
+      );
+
+      if (!started.rowCount) {
+        throw new TransitionError(
+          'WORKER_CODE_INVALID',
+          'That code does not match this booking. Ask the customer to read it again.',
+        );
+      }
+      return;
+    }
 
     case 'COMPLETED':
       await client.query(`UPDATE ${s}.bookings SET status = 'COMPLETED' WHERE id = $1`, [loaded.id]);

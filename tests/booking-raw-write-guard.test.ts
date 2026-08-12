@@ -82,9 +82,12 @@ function findRawWrites(): RawWrite[] {
  */
 const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason: string }> = {
   'services/booking/transitionExecutor.ts': {
-    count: 9,
+    count: 10,
     phase: 'EXECUTOR',
-    reason: 'THE executor. The one place permitted to write lifecycle state.',
+    reason:
+      'THE executor. The one place permitted to write lifecycle state. The tenth '
+      + 'write is the atomic PROVIDER_START, which carries the worker-code '
+      + 'predicate in the same statement rather than checking it separately.',
   },
   'services/bookingService.ts': {
     count: 3,

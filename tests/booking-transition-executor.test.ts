@@ -44,7 +44,18 @@ class FakeDb {
 const db = new FakeDb();
 let connSeq = 0;
 
-const runQuery = (conn: number, sql: string, params: unknown[] = []): { rows: Row[] } => {
+/**
+ * Real pg always returns `rowCount`. The first version of this fake returned
+ * only `rows`, so the executor's `if (!started.rowCount)` treated a successful
+ * atomic start as a wrong code — a fake that is missing a field the code reads
+ * fails in the direction that looks like a product bug.
+ */
+const runQuery = (conn: number, sql: string, params: unknown[] = []): { rows: Row[]; rowCount: number } => {
+  const result = runQueryInner(conn, sql, params);
+  return { rows: result.rows, rowCount: result.rows.length };
+};
+
+const runQueryInner = (conn: number, sql: string, params: unknown[] = []): { rows: Row[] } => {
   db.log.push({ conn, sql: sql.replace(/\s+/g, ' ').trim() });
 
   if (/^\s*(BEGIN|COMMIT|ROLLBACK)/i.test(sql)) {
@@ -114,6 +125,21 @@ const runQuery = (conn: number, sql: string, params: unknown[] = []): { rows: Ro
   if (/INSERT INTO servana\.booking_workers/i.test(sql)) {
     db.assignments.push({ booking_id: Number(params[0]), worker_uid: params[1], status: 'ASSIGNED' });
     return { rows: [] };
+  }
+
+  // The atomic start: matches only when the booking's worker_code equals $3.
+  if (/UPDATE servana\.booking_workers bw[\s\S]*worker_code = \$3/i.test(sql)) {
+    const [bookingId, workerUid, code] = params;
+    const booking = db.bookings.get(Number(bookingId));
+    if (!booking || booking.worker_code !== code) return { rows: [] };
+    let matched = false;
+    for (const a of db.assignments) {
+      if (a.booking_id === Number(bookingId) && a.worker_uid === workerUid) {
+        a.status = 'IN_PROGRESS';
+        matched = true;
+      }
+    }
+    return { rows: matched ? [{ booking_id: Number(bookingId) }] : [] };
   }
 
   if (/UPDATE servana\.booking_workers SET status = \$3/i.test(sql)) {
@@ -529,7 +555,11 @@ describe('the timeline holds no secrets', () => {
   });
 
   it('a start-job transition records no code', async () => {
+    // The booking must carry a MATCHING code: since the atomic predicate
+    // landed, a start with no worker_code on the booking is correctly refused.
+    // This fixture was written before that check existed.
     seedBooking({ assignmentStatus: 'ARRIVED' });
+    db.bookings.get(1)!.worker_code = '424242';
     await transitionBooking({
       bookingId: 1, action: 'PROVIDER_START', actorUid: PROVIDER_A, actorRole: 'assigned_provider',
       metadata: { workerCode: '424242' },
@@ -552,5 +582,164 @@ describe('the executor writes one spelling of cancelled', () => {
     await expect(
       transitionBooking({ bookingId: 1, action: 'PROVIDER_EN_ROUTE', actorUid: PROVIDER_A, actorRole: 'assigned_provider' }),
     ).rejects.toMatchObject({ code: 'TERMINAL_STATE' });
+  });
+});
+
+
+// ─── The atomic worker-code precondition ──────────────────────────────────────
+
+describe('PROVIDER_START checks the worker code atomically', () => {
+  const seedWithCode = (code: string | null, assignmentStatus = 'ARRIVED') => {
+    seedBooking({ assignmentStatus });
+    db.bookings.get(1)!.worker_code = code;
+  };
+
+  it('starts the job when the code matches', async () => {
+    seedWithCode('424242');
+    const result = await transitionBooking({
+      bookingId: 1, action: 'PROVIDER_START', actorUid: PROVIDER_A, actorRole: 'assigned_provider',
+      metadata: { workerCode: '424242' },
+    });
+    expect(result.toState).toBe('IN_PROGRESS');
+    expect(db.assignments[0].status).toBe('IN_PROGRESS');
+    expect(db.transitions).toHaveLength(1);
+  });
+
+  it('a WRONG code writes nothing and records nothing', async () => {
+    // Correct assignment, valid state, wrong code: no status mutation, no
+    // timeline event, transaction rolled back. A check-then-write would leave a
+    // window between the two.
+    seedWithCode('424242');
+    await expect(
+      transitionBooking({
+        bookingId: 1, action: 'PROVIDER_START', actorUid: PROVIDER_A, actorRole: 'assigned_provider',
+        metadata: { workerCode: '999999' },
+      }),
+    ).rejects.toMatchObject({ code: 'WORKER_CODE_INVALID' });
+
+    expect(db.assignments[0].status).toBe('ARRIVED');
+    expect(db.transitions).toHaveLength(0);
+    expect(db.log.some((l) => /^ROLLBACK/i.test(l.sql))).toBe(true);
+  });
+
+  it('the status change and the timeline entry are atomic on success', async () => {
+    seedWithCode('424242');
+    await transitionBooking({
+      bookingId: 1, action: 'PROVIDER_START', actorUid: PROVIDER_A, actorRole: 'assigned_provider',
+      metadata: { workerCode: '424242' },
+    });
+    const txn = db.log.filter((l) => l.conn > 0).map((l) => l.sql);
+    const write = txn.findIndex((q) => /SET status = 'IN_PROGRESS'/i.test(q));
+    const timeline = txn.findIndex((q) => /INSERT INTO servana\.booking_transitions/i.test(q));
+    const commit = txn.findIndex((q) => /^COMMIT/i.test(q));
+    expect(write).toBeGreaterThan(-1);
+    expect(timeline).toBeGreaterThan(write);
+    expect(commit).toBeGreaterThan(timeline);
+  });
+
+  it('a missing code is refused as a guard failure', async () => {
+    seedWithCode('424242');
+    await expect(
+      transitionBooking({
+        bookingId: 1, action: 'PROVIDER_START', actorUid: PROVIDER_A, actorRole: 'assigned_provider',
+      }),
+    ).rejects.toMatchObject({ code: 'GUARD_FAILED' });
+    expect(db.assignments[0].status).toBe('ARRIVED');
+  });
+
+  it('the SQL predicate does NOT re-encode the transition table', async () => {
+    // The legacy statement carried bw.status IN ('ACCEPTED','EN_ROUTE','ARRIVED')
+    // — a second copy of the lifecycle living in SQL. The machine owns that now;
+    // the predicate is only the credential.
+    seedWithCode('424242');
+    await transitionBooking({
+      bookingId: 1, action: 'PROVIDER_START', actorUid: PROVIDER_A, actorRole: 'assigned_provider',
+      metadata: { workerCode: '424242' },
+    });
+    const startSql = db.log.find((l) => /SET status = 'IN_PROGRESS'/i.test(l.sql))!.sql;
+    expect(startSql).toContain('worker_code = $3');
+    expect(startSql).not.toMatch(/bw\.status IN/i);
+  });
+
+  it('a wrong CODE and a wrong STATE are distinguishable', async () => {
+    // The legacy path answered "Job cannot be started" for both, which tells a
+    // provider standing in a driveway nothing about what to do next.
+    seedWithCode('424242', 'ASSIGNED');
+    await expect(
+      transitionBooking({
+        bookingId: 1, action: 'PROVIDER_START', actorUid: PROVIDER_A, actorRole: 'assigned_provider',
+        metadata: { workerCode: '424242' },
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_TRANSITION' });
+  });
+
+  it('an unassigned provider cannot start, whatever code they hold', async () => {
+    seedWithCode('424242');
+    await expect(
+      transitionBooking({
+        bookingId: 1, action: 'PROVIDER_START', actorUid: PROVIDER_B, actorRole: 'assigned_provider',
+        metadata: { workerCode: '424242' },
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_AUTHORIZED' });
+    expect(db.transitions).toHaveLength(0);
+  });
+
+  it("a code from ANOTHER booking does not work here", async () => {
+    seedWithCode('424242');
+    db.bookings.set(2, {
+      id: 2, status: 'CONFIRMED', customer_uid: CUSTOMER, worker_uid: PROVIDER_A, worker_code: '111111',
+    });
+    db.assignments.push({ booking_id: 2, worker_uid: PROVIDER_A, status: 'ARRIVED' });
+
+    await expect(
+      transitionBooking({
+        bookingId: 1, action: 'PROVIDER_START', actorUid: PROVIDER_A, actorRole: 'assigned_provider',
+        metadata: { workerCode: '111111' },
+      }),
+    ).rejects.toMatchObject({ code: 'WORKER_CODE_INVALID' });
+  });
+
+  it('START loses to a REASSIGN that committed first — never a mixed outcome', async () => {
+    // The dangerous interleaving: a new provider assigned while the old one is
+    // starting. There must never be a booking assigned to provider B whose
+    // state is IN_PROGRESS under provider A.
+    seedWithCode('424242');
+    await transitionBooking({
+      bookingId: 1, action: 'ADMIN_REASSIGN', actorUid: 'admin-1', actorRole: 'admin',
+      metadata: { providerUid: PROVIDER_B, reason: 'unreachable' },
+    });
+
+    await expect(
+      transitionBooking({
+        bookingId: 1, action: 'PROVIDER_START', actorUid: PROVIDER_A, actorRole: 'assigned_provider',
+        metadata: { workerCode: '424242' },
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_AUTHORIZED' });
+
+    expect(db.bookings.get(1)?.worker_uid).toBe(PROVIDER_B);
+    expect(db.assignments.find((a) => a.worker_uid === PROVIDER_A)?.status).toBe('REASSIGNED');
+    expect(db.assignments.every((a) => a.status !== 'IN_PROGRESS')).toBe(true);
+  });
+
+  it('the code is NOT consumed — Servana does not treat it as one-time', async () => {
+    // Verified rather than redesigned: worker_code is cleared only when the
+    // provider is unassigned. Introducing consumption would be a behaviour
+    // change nobody asked for.
+    seedWithCode('424242');
+    await transitionBooking({
+      bookingId: 1, action: 'PROVIDER_START', actorUid: PROVIDER_A, actorRole: 'assigned_provider',
+      metadata: { workerCode: '424242' },
+    });
+    expect(db.bookings.get(1)?.worker_code).toBe('424242');
+  });
+
+  it('the code never reaches the timeline', async () => {
+    seedWithCode('424242');
+    await transitionBooking({
+      bookingId: 1, action: 'PROVIDER_START', actorUid: PROVIDER_A, actorRole: 'assigned_provider',
+      metadata: { workerCode: '424242' },
+    });
+    expect(JSON.stringify(db.transitions)).not.toContain('424242');
+    expect(JSON.stringify(db.transitions)).toContain('[redacted]');
   });
 });
