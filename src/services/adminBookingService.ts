@@ -10,6 +10,8 @@ import {
 } from "../chat/chat.service";
 import { createCustomerNotification, createNotification } from "./notification.service";
 import { emitToProvider } from "../provider.realtime";
+import { deriveCanonicalState } from "./booking/canonicalState";
+import { toAdminProjection } from "./booking/projections";
 const dbSchema = db.schema;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -236,26 +238,66 @@ const publishAdminAssignment = (input: {
 
 // ─── Operations Status Mapping ────────────────────────────────────────────────
 
+/**
+ * Admin operations status — now a PROJECTION of the canonical machine.
+ *
+ * ## What this used to be
+ *
+ * A second, independent collapse of `bookings.status` + `booking_workers.status`,
+ * with its own rules and its own vocabulary. It disagreed with the
+ * customer/provider derivation in ways that mattered: it reported a provider
+ * who was EN_ROUTE or ARRIVED as merely `accepted`, and it alone knew about
+ * disputes. One booking, three surfaces, three answers.
+ *
+ * It now derives the canonical state and asks the Admin projection to name it.
+ * Both are shared with Customer and Provider, so the three cannot diverge.
+ *
+ * ## It still collapses EN_ROUTE and ARRIVED, and that is deliberate
+ *
+ * The Admin portal types this value as a closed union and looks its label and
+ * colour up in `Record<AdminBookingOperationsStatus, …>` maps. An unknown key
+ * returns `undefined`, so emitting `en_route` today renders a blank badge on a
+ * live platform.
+ *
+ * The collapse is therefore COMPATIBILITY DEBT rather than canonical truth. The
+ * full state travels beside it in `canonicalState` / `stateGroup` (see
+ * `bookingCanonicalStateFor`), which the current portal ignores and the next
+ * version reads. Once the portal consumes those, this function can be retired
+ * on telemetry.
+ *
+ * ## Two behaviour changes, both deliberate
+ *
+ * 1. An open escalation now outranks a terminal booking rather than being
+ *    checked before cancellation only — the transition table already allows
+ *    COMPLETED → DISPUTED, and a dispute ABOUT a cancellation is exactly the
+ *    case somebody escalates. Admin's visible behaviour is unchanged: it showed
+ *    `disputed` first before, and still does.
+ * 2. A status this platform does not recognise now reports
+ *    `awaiting_assignment` instead of `new`. An unrecognised status is by
+ *    definition not new, and surfacing it as needing a provider puts it in
+ *    front of an admin rather than mislabelling it.
+ */
 export const mapOperationsStatus = (
   bookingStatus: string | null,
   workerStatus: string | null,
   workerUid: string | null,
   hasEscalation: boolean = false
 ): OperationsStatus => {
-  if (hasEscalation) return 'disputed';
-  const bs = (bookingStatus ?? '').toUpperCase();
-  const ws = (workerStatus  ?? '').toUpperCase();
-
-  if (['CANCELLED', 'CANCELED'].includes(bs)) return 'cancelled';
-  if (ws === 'COMPLETED' || bs === 'COMPLETED') return 'completed';
-  if (ws === 'IN_PROGRESS') return 'in_progress';
-  if (ws === 'ACCEPTED') return 'accepted';
-  if (ws === 'ASSIGNED' || bs === 'WORKER_ASSIGNED') return 'assigned';
-  if (bs === 'PENDING_OTP') return 'new';
-  if (['CONFIRMED', 'PAID'].includes(bs) && !workerUid) return 'awaiting_assignment';
-  if (['CONFIRMED', 'PAID'].includes(bs) && workerUid)  return 'assigned';
-  return 'new';
+  const canonical = deriveCanonicalState({ bookingStatus, workerStatus, workerUid, hasEscalation });
+  return toAdminProjection(canonical).operationsStatus as OperationsStatus;
 };
+
+/**
+ * The full canonical state for a booking row, for the fields the portal will
+ * read once migrated. Additive — nothing today consumes it, and it is what
+ * makes the collapse above survivable rather than lossy.
+ */
+export const bookingCanonicalStateFor = (
+  bookingStatus: string | null,
+  workerStatus: string | null,
+  workerUid: string | null,
+  hasEscalation: boolean = false
+) => toAdminProjection(deriveCanonicalState({ bookingStatus, workerStatus, workerUid, hasEscalation }));
 
 // ─── Admin Booking List ───────────────────────────────────────────────────────
 

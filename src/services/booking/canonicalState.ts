@@ -446,11 +446,22 @@ export function deriveCanonicalState(raw: RawBookingState): BookingState {
   const bs = upper(raw.bookingStatus);
   const ws = upper(raw.workerStatus);
 
+  // An open escalation outranks EVERYTHING, including a terminal state.
+  //
+  // Corrected while wiring `mapOperationsStatus`. My first ordering put
+  // cancellation above escalation and escalation above completion, which is
+  // inconsistent two ways: the transition table already allows
+  // COMPLETED → DISPUTED, and a dispute ABOUT a cancellation is exactly the
+  // case somebody escalates. It also silently changed Admin's behaviour, which
+  // has always shown `disputed` first.
+  //
+  // A dispute does not undo the terminal state — the timeline keeps it — it is
+  // the live thing needing attention, so it is what every surface reports.
+  if (raw.hasEscalation) return 'DISPUTED';
+
   if (['CANCELLED', 'CANCELED'].includes(bs)) return 'CANCELLED';
   if (bs === 'EXPIRED') return 'EXPIRED';
   if (bs === 'REFUNDED' || bs === 'FAILED') return 'CANCELLED';
-
-  if (raw.hasEscalation) return 'DISPUTED';
 
   if (ws === 'COMPLETED' || bs === 'COMPLETED') return 'COMPLETED';
   if (ws === 'IN_PROGRESS') return 'IN_PROGRESS';

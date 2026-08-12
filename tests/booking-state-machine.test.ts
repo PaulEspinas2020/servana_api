@@ -401,9 +401,24 @@ describe('deriving one state from two columns', () => {
     expect(deriveCanonicalState({ bookingStatus: 'CANCELED', workerStatus: null })).toBe('CANCELLED');
   });
 
-  it('a dispute outranks the provider lifecycle but not a terminal booking', () => {
+  it('an open dispute outranks EVERYTHING, including a terminal booking', () => {
+    // Corrected while wiring `mapOperationsStatus`. My first ordering put
+    // cancellation above escalation and escalation above completion, which is
+    // inconsistent two ways: the transition table already allows
+    // COMPLETED → DISPUTED, and a dispute ABOUT a cancellation is exactly the
+    // case somebody escalates. Admin has always shown `disputed` first, so this
+    // also stops the wiring silently changing what admins see.
     expect(deriveCanonicalState({ bookingStatus: 'CONFIRMED', workerStatus: 'IN_PROGRESS', hasEscalation: true })).toBe('DISPUTED');
-    expect(deriveCanonicalState({ bookingStatus: 'CANCELLED', workerStatus: 'IN_PROGRESS', hasEscalation: true })).toBe('CANCELLED');
+    expect(deriveCanonicalState({ bookingStatus: 'CANCELLED', workerStatus: 'IN_PROGRESS', hasEscalation: true })).toBe('DISPUTED');
+    expect(deriveCanonicalState({ bookingStatus: 'COMPLETED', workerStatus: 'COMPLETED', hasEscalation: true })).toBe('DISPUTED');
+  });
+
+  it('a dispute does not erase the terminal state it sits on top of', () => {
+    // The same row without the escalation still reads terminal, so nothing was
+    // overwritten — the dispute is an exception beside the state, not instead
+    // of it, and the timeline keeps both.
+    expect(deriveCanonicalState({ bookingStatus: 'CANCELLED', workerStatus: 'IN_PROGRESS' })).toBe('CANCELLED');
+    expect(deriveCanonicalState({ bookingStatus: 'COMPLETED', workerStatus: 'COMPLETED' })).toBe('COMPLETED');
   });
 
   it('distinguishes assigned from awaiting by the presence of a provider', () => {
