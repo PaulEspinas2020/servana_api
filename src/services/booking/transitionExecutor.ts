@@ -50,6 +50,11 @@ import {
 import { CANONICAL_CANCELLED } from './cancellationVocabulary';
 import { evaluateCancellation, customerMayCancel } from './bookingPolicies';
 import { providerRoleSqlPredicate } from '../../constants/providerRoles';
+import {
+  PROVIDER_CAPABILITY_SQL,
+  CONFLICTING_BOOKING_SQL,
+  conflictWindowFor,
+} from './eligibilityPipeline';
 
 const s = db.schema;
 
@@ -1220,17 +1225,13 @@ async function assertNoScheduleConflict(
   const schedule = new Date(booking.rows[0]?.schedule);
   if (Number.isNaN(schedule.getTime())) return;
 
+  // Stage 7, from the shared pipeline. The +/-2h window is UNCHANGED; only its
+  // definition moved, so candidate generation and this commit-time recheck ask
+  // the same question.
+  const window = conflictWindowFor(schedule);
   const busy = await client.query(
-    `SELECT id FROM ${s}.bookings
-      WHERE worker_uid = $1 AND id <> $2
-        AND schedule BETWEEN $3 AND $4
-        AND status NOT IN ('COMPLETED','CANCELLED','CANCELED','REFUNDED','FAILED','EXPIRED')
-      LIMIT 1`,
-    [
-      providerUid, bookingId,
-      new Date(schedule.getTime() - 2 * 60 * 60 * 1000),
-      new Date(schedule.getTime() + 2 * 60 * 60 * 1000),
-    ],
+    CONFLICTING_BOOKING_SQL(s),
+    [providerUid, bookingId, window.from, window.to],
   );
   if (busy.rowCount) {
     throw new TransitionError(
@@ -1278,13 +1279,10 @@ async function assertAssignableProvider(
   );
   const serviceId = booking.rows[0]?.service_id ?? null;
 
+  // Stage 4, from the shared pipeline. Same SQL it always was, now in one place
+  // so the preview and the committer cannot answer differently.
   const qualified = await client.query(
-    `SELECT 1 FROM ${s}.employee_services
-      WHERE employee_uid = $1 AND service_id = $2
-      UNION ALL
-     SELECT 1 FROM ${s}.worker_service_applications
-      WHERE worker_uid = $1 AND service_id = $2 AND status = 'approved'
-      LIMIT 1`,
+    PROVIDER_CAPABILITY_SQL(s),
     [providerUid, serviceId],
   );
   if (!qualified.rowCount) {

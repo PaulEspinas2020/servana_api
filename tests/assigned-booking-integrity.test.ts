@@ -2,6 +2,10 @@ import fs from 'fs';
 import path from 'path';
 
 import { formatJobCard } from '../src/controllers/jobCardView';
+import {
+  NON_OCCUPYING_STATUSES,
+  CONFLICT_WINDOW_HOURS,
+} from '../src/services/booking/eligibilityPipeline';
 
 const read = (relative: string) => fs.readFileSync(
   path.join(__dirname, '..', relative),
@@ -52,8 +56,29 @@ describe('canonical provider assignment transaction', () => {
     expect(body).not.toContain('BEGIN');
   });
 
+  /**
+   * The conflict predicate moved into the shared eligibility pipeline, so
+   * candidate generation and the executor's commit-time recheck ask the same
+   * question. The property is unchanged and the assertion follows it — and it
+   * now checks the VALUE SET rather than a literal string in one file, so it
+   * cannot be broken by reformatting and cannot pass while the executor uses a
+   * different list.
+   */
   it('treats both cancellation spellings and terminal payment states as non-busy', () => {
-    expect(executor).toContain("'COMPLETED','CANCELLED','CANCELED','REFUNDED','FAILED','EXPIRED'");
+    expect([...NON_OCCUPYING_STATUSES].sort()).toEqual(
+      ['CANCELED', 'CANCELLED', 'COMPLETED', 'EXPIRED', 'FAILED', 'REFUNDED'],
+    );
+    // And the executor really does use the shared predicate rather than a copy.
+    expect(executor).toContain('CONFLICTING_BOOKING_SQL');
+    expect(executor).not.toContain("status NOT IN ('COMPLETED'");
+  });
+
+  it('the +/-2h conflict window is preserved, not redesigned', () => {
+    // Centralised in this slice; the policy change is a separate product
+    // decision after TAB 05 certifies. Changing eligibility and centralising it
+    // together would make any supply drop impossible to attribute.
+    expect(CONFLICT_WINDOW_HOURS).toBe(2);
+    expect(executor).toContain('conflictWindowFor');
   });
 
   it('a schedule conflict is still NON-throwing to the search loop', () => {
