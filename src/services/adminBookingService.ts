@@ -12,6 +12,7 @@ import { createCustomerNotification, createNotification } from "./notification.s
 import { emitToProvider } from "../provider.realtime";
 import { deriveCanonicalState } from "./booking/canonicalState";
 import { toAdminProjection } from "./booking/projections";
+import { adminOpsStatusSql, normaliseProviderUid } from "./booking/adminOpsStatusSql";
 import {
   transitionBooking,
   TransitionError,
@@ -432,21 +433,9 @@ export const getAdminBookings = async (
         br.id                                        AS branch_id,
         br.name                                      AS branch_name,
         br.city                                      AS branch_city,
-        CASE
-          WHEN EXISTS (SELECT 1 FROM ${dbSchema}.booking_escalations esc
-                       WHERE esc.booking_id = b.id AND esc.resolved_at IS NULL) THEN 'disputed'
-          WHEN b.status IN ('CANCELLED','CANCELED')                             THEN 'cancelled'
-          WHEN b.status = 'COMPLETED' OR la.worker_status = 'COMPLETED'        THEN 'completed'
-          WHEN la.worker_status = 'IN_PROGRESS'                                 THEN 'in_progress'
-          WHEN la.worker_status = 'ACCEPTED'                                    THEN 'accepted'
-          WHEN la.worker_status = 'ASSIGNED' OR b.status = 'WORKER_ASSIGNED'   THEN 'assigned'
-          WHEN b.status = 'PENDING_OTP'                                         THEN 'new'
-          WHEN b.status IN ('CONFIRMED','PAID')
-            AND (b.worker_uid IS NULL OR b.worker_uid = '')                     THEN 'awaiting_assignment'
-          WHEN b.status IN ('CONFIRMED','PAID') AND b.worker_uid IS NOT NULL
-            AND b.worker_uid != ''                                               THEN 'assigned'
-          ELSE 'new'
-        END AS ops_status
+EXISTS (SELECT 1 FROM ${dbSchema}.booking_escalations esc2
+                 WHERE esc2.booking_id = b.id AND esc2.resolved_at IS NULL) AS has_escalation,
+${adminOpsStatusSql({ schema: dbSchema, bookingAlias: 'b', assignmentAlias: 'la' })} AS ops_status
       FROM ${dbSchema}.bookings b
       LEFT JOIN ${dbSchema}.user_credentials cu  ON cu.uid  = b.user_id
       LEFT JOIN ${dbSchema}.guest_customers  gc  ON gc.guest_customer_id = b.guest_customer_id
@@ -475,16 +464,37 @@ export const getAdminBookings = async (
     const opStatus = (row.ops_status as string) ?? mapOperationsStatus(
       row.raw_status,
       row.worker_status,
-      row.worker_uid
+      normaliseProviderUid(row.worker_uid),
     );
     const isLate = !!row.scheduled_at &&
       new Date(row.scheduled_at) < new Date() &&
       !['completed', 'cancelled'].includes(opStatus);
 
+    /**
+     * The canonical state travels BESIDE the legacy field, never instead of it.
+     *
+     * `operationsStatus` cannot express EN_ROUTE or ARRIVED and reports both as
+     * `accepted`; the portal's badge maps are keyed on the legacy union, so
+     * removing it would blank a badge on a live platform. Additive per §4:
+     * the new portal reads `canonicalState`, the old one keeps working, and the
+     * legacy field retires on telemetry rather than on optimism.
+     */
+    const canonical = bookingCanonicalStateFor(
+      row.raw_status,
+      row.worker_status,
+      normaliseProviderUid(row.worker_uid),
+      !!row.has_escalation,
+    );
+
     return {
       bookingId: row.booking_id,
       rawStatus: row.raw_status,
       operationsStatus: opStatus,
+      canonicalState: canonical.canonicalState,
+      stateGroup: canonical.stateGroup,
+      stateLabel: canonical.label,
+      stateIsCollapsedInLegacyField: canonical.stateIsCollapsedInLegacyField,
+      terminal: canonical.terminal,
       customerType: (row.customer_type as 'guest' | 'client') ?? 'client',
       customerUid: row.customer_uid ?? null,
       guestCustomerId: row.guest_customer_id ?? null,
@@ -548,7 +558,9 @@ export const getAdminBookingMetrics = async (): Promise<any> => {
 
   for (const row of res.rows) {
     counts['total']++;
-    const s = mapOperationsStatus(row.status, row.worker_status, row.worker_uid, !!row.has_escalation);
+    const s = mapOperationsStatus(
+      row.status, row.worker_status, normaliseProviderUid(row.worker_uid), !!row.has_escalation,
+    );
     counts[s] = (counts[s] ?? 0) + 1;
   }
 
@@ -646,13 +658,45 @@ export const getAdminBookingDetail = async (bookingId: number): Promise<any | nu
   ]);
 
   const assignment = bwRes.rows[0] ?? null;
-  const hasEscalation = (escalationRes.rowCount ?? 0) > 0;
-  const opStatus = mapOperationsStatus(bk.status, assignment?.status ?? null, bk.worker_uid, hasEscalation);
+  /**
+   * Only an UNRESOLVED escalation makes a booking disputed.
+   *
+   * This counted every escalation row, so a settled dispute pinned the booking
+   * at `disputed` permanently — while the list and the metrics query, which
+   * both filter on `resolved_at IS NULL`, moved on. Two of the three call sites
+   * already agreed; this was the one that did not.
+   */
+  const hasEscalation = escalationRes.rows.some((e: any) => e.resolved_at === null);
+  const opStatus = mapOperationsStatus(
+    bk.status,
+    assignment?.status ?? null,
+    normaliseProviderUid(bk.worker_uid),
+    hasEscalation,
+  );
+
+  const canonical = bookingCanonicalStateFor(
+    bk.status,
+    assignment?.status ?? null,
+    normaliseProviderUid(bk.worker_uid),
+    hasEscalation,
+  );
 
   return {
     bookingId: bk.id,
     rawStatus: bk.status,
     operationsStatus: opStatus,
+    canonicalState: canonical.canonicalState,
+    stateGroup: canonical.stateGroup,
+    stateLabel: canonical.label,
+    stateIsCollapsedInLegacyField: canonical.stateIsCollapsedInLegacyField,
+    terminal: canonical.terminal,
+    /**
+     * What an admin may actually do from here, from the SAME transition
+     * whitelist the executor enforces. The portal previously hard-coded these
+     * as string arrays against `operationsStatus`, which is how a button stays
+     * enabled for a state that has since stopped accepting it.
+     */
+    availableActions: canonical.availableActions,
     customer: {
       uid: bk.customer_uid ?? null,
       name: (bk.customer_name ?? '').trim() || null,

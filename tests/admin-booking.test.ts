@@ -219,6 +219,7 @@ describe('adminEscalateBooking', () => {
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { adminOpsStatusSql, evaluateAdminOpsStatus } from '../src/services/booking/adminOpsStatusSql';
 
 const svcSrc  = fs.readFileSync(path.join(__dirname, '../src/services/adminBookingService.ts'), 'utf-8').replace(/\r\n/g, '\n');
 const ctrlSrc = fs.readFileSync(path.join(__dirname, '../src/controllers/adminBookingController.ts'), 'utf-8').replace(/\r\n/g, '\n');
@@ -269,11 +270,37 @@ describe('Admin booking list query contracts', () => {
     expect(listFn).not.toContain('rows = rows.filter');
   });
 
+  /**
+   * The CASE moved out of this function into `adminOpsStatusSql`, which
+   * generates it from a declared branch list. The property is unchanged and the
+   * assertion follows it — and it is now checked as EXECUTION SEMANTICS rather
+   * than as the position of one substring inside another.
+   *
+   * The old form compared source offsets in a template literal. It would have
+   * gone green for a CASE that ordered its branches correctly and classified
+   * everything wrongly, which is roughly what was happening: the expression it
+   * was guarding disagreed with the canonical derivation on 107 of 440
+   * combinations while passing this test.
+   */
   it('classifies cancellation before historical worker assignment states', () => {
-    const cancelled = listFn.indexOf("WHEN b.status IN ('CANCELLED','CANCELED')");
-    const assigned = listFn.indexOf("WHEN la.worker_status = 'ASSIGNED'");
+    const cancelledWithStaleAssignment = evaluateAdminOpsStatus({
+      bookingStatus: 'CANCELLED', workerStatus: 'ASSIGNED',
+      workerUid: 'provider-1', hasUnresolvedEscalation: false,
+    });
+    expect(cancelledWithStaleAssignment).toBe('cancelled');
+
+    // And in the emitted SQL, the branch order that makes it so.
+    const sql = adminOpsStatusSql({ schema: 'servana', bookingAlias: 'b', assignmentAlias: 'la' });
+    const cancelled = sql.indexOf("b.status IN ('CANCELLED','CANCELED')");
+    const assigned = sql.indexOf("la.worker_status = 'ASSIGNED'");
     expect(cancelled).toBeGreaterThan(-1);
     expect(cancelled).toBeLessThan(assigned);
+  });
+
+  it('no longer carries a state derivation of its own', () => {
+    // The whole point of the move: one derivation, generated, proven equivalent.
+    expect(listFn).not.toContain("WHEN b.status = 'PENDING_OTP'");
+    expect(listFn).toContain('adminOpsStatusSql({');
   });
 
   it('returns guestCustomerId on unified guest booking rows', () => {

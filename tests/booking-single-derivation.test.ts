@@ -133,6 +133,13 @@ describe('both legacy derivations delegate to the canonical machine', () => {
       'Detects an accept/decline arriving after the assignment already moved on.',
     'chat/chat.repository.ts':
       'Chat lifecycle gating. Reads the provider lifecycle to decide who may still post.',
+    'services/booking/adminOpsStatusSql.ts':
+      'A derivation, and named as one. The admin LIST must classify in SQL so the ' +
+      'status filter and COUNT apply to the filtered set; deriving afterwards in ' +
+      'TypeScript would paginate the wrong rows. It is permitted ONLY because it is ' +
+      'GENERATED from one branch list and proven equal to deriveCanonicalState over ' +
+      'the full cross-product by tests/admin-ops-status-sql.test.ts. That proof is ' +
+      'asserted to exist below, so the permission cannot outlive it.',
     'controllers/bookingActions.ts':
       'Provider ACTION metadata (confirmation and code flags). Holds transition ' +
       'knowledge too, which is pinned to the machine by the agreement test below ' +
@@ -157,6 +164,25 @@ describe('both legacy derivations delegate to the canonical machine', () => {
     };
     walk(SRC);
     expect(unreviewed).toEqual([]);
+  });
+
+  /**
+   * The one permitted derivation is permitted BY ITS PROOF, not by its name.
+   *
+   * Without this, deleting the equivalence suite would silently convert a
+   * conditional permission into a permanent one, and the "no third derivation"
+   * guard would be waving through exactly what it exists to catch.
+   */
+  it('the permitted SQL derivation still has its equivalence proof', () => {
+    const proof = path.join(__dirname, 'admin-ops-status-sql.test.ts');
+    expect(fs.existsSync(proof)).toBe(true);
+    const body = fs.readFileSync(proof, 'utf8');
+    expect(body).toContain('evaluateAdminOpsStatus');
+    expect(body).toContain('deriveCanonicalState');
+    // It must compare the two over a real cross-product, not on a handful of
+    // hand-picked rows.
+    expect(body).toContain('disagreements');
+    expect(body).toMatch(/toBeGreaterThanOrEqual\(4\d\d\)/);
   });
 
   it('every permitted consumer still exists — the list cannot rot', () => {
