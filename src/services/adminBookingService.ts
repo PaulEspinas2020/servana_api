@@ -1372,23 +1372,53 @@ export const adminApproveCompletion = async (
 
   const prevStatus = bkRes.rows[0].status;
 
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET status = 'COMPLETED' WHERE id = $1`,
-    [bookingId]
-  );
-
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.booking_workers
-     SET status = 'COMPLETED', completed_at = NOW()
-     WHERE booking_id = $1 AND status IN ('IN_PROGRESS','ACCEPTED','ASSIGNED')`,
-    [bookingId]
-  );
-
-  await addTimelineEvent(
-    bookingId, 'completion_approved',
-    'Completion approved by admin',
-    reason ?? null, 'admin', adminUid
-  );
+  /**
+   * ─── D3 · ADMIN_APPROVE_COMPLETION, on the canonical executor ────────────
+   *
+   * Measured before migrating, because the name does not say which it is: this
+   * is a FORCE COMPLETION, not an approval of something already finished. It
+   * had no status precondition at all — it read `bookings.status` only to fill
+   * the audit `before` field and then wrote COMPLETED unconditionally.
+   *
+   * ## Two branches, and the difference is recorded
+   *
+   * ASSIGNED / ACCEPTED / IN_PROGRESS  the booking moves to COMPLETED
+   * already COMPLETED                  an approval EVENT is recorded, and the
+   *                                    booking does not transition again
+   *
+   * Legacy recorded a second approval on the repeat, and that record is
+   * meaningful — an admin signing off on a finished job is a real act. What it
+   * is not is a second completion, so the evidence row carries
+   * `state_changed = false`. Two COMPLETED rows must never read as a booking
+   * that completed twice.
+   *
+   * ## A defect fixed by migrating
+   *
+   * With no precondition, approving a CANCELLED booking revived it — the mirror
+   * of the decline-on-cancelled defect from B1.2. The machine refuses a
+   * terminal source, so that is now impossible. Declared, not incidental.
+   *
+   * ## What is deliberately NOT inherited
+   *
+   * No `cashPaymentSettledBeforeCompletion`, no disbursement, no receipt email,
+   * no review trigger. Measured: this path has never done any of them — the
+   * money workflow belongs to `technicianService.completeJob`. Whether admin
+   * approval SHOULD move money is a finance decision, not a state-machine one.
+   */
+  try {
+    await transitionBooking({
+      action: 'ADMIN_APPROVE_COMPLETION',
+      bookingId,
+      actorRole: 'admin',
+      actorUid: adminUid,
+      metadata: reason ? { reason } : {},
+    });
+  } catch (error) {
+    if (error instanceof TransitionError) {
+      throw new Error(`Cannot approve completion for booking with status: ${prevStatus}`);
+    }
+    throw error;
+  }
 
   logBookingAudit({
     bookingId, actorUid: adminUid, actorRole: 'admin',

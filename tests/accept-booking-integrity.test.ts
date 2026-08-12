@@ -83,8 +83,10 @@ describe('transaction and notification contract', () => {
     const tracking = executor.indexOf("PROVIDER_ACCEPT: { status: 'ACCEPTED', note: 'Provider accepted the booking' }");
     expect(tracking).toBeGreaterThan(-1);
     // Written by the executor, inside the transaction, before COMMIT.
+    // lastIndexOf: the event-only branch has its own earlier COMMIT, and this
+    // assertion is about the transition path's ordering.
     expect(executor.indexOf('await writeLegacyTracking(client'))
-      .toBeLessThan(executor.indexOf("client.query('COMMIT')"));
+      .toBeLessThan(executor.lastIndexOf("client.query('COMMIT')"));
     // And no longer written twice.
     expect(body).not.toContain('booking_tracking');
   });

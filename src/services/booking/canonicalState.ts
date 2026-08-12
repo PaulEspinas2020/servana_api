@@ -315,6 +315,29 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     actors: ['assigned_provider', 'admin'],
     requires: ['current_assignment'],
   },
+  /**
+   * ADMIN force-completion from before work started.
+   *
+   * Measured, not invented: `adminApproveCompletion`'s assignment update has
+   * always targeted ASSIGNED, ACCEPTED and IN_PROGRESS, so an admin has always
+   * been able to close out a job the provider never started — a no-show
+   * settled by support, most often.
+   *
+   * ADMIN ONLY. A provider reaching COMPLETED without ever starting would skip
+   * the worker code, which is the customer's only proof the provider was
+   * there.
+   */
+  ...(['ASSIGNED', 'ACCEPTED'] as const).map((from) => ({
+    from,
+    to: 'COMPLETED' as const,
+    action: 'approveCompletion',
+    actors: ['admin'] as const,
+    requires: ['reason'] as const,
+    note:
+      'Admin closes out a job that never reached IN_PROGRESS. Preserved from '
+      + 'the legacy admin path, which updated assignments in ASSIGNED, ACCEPTED '
+      + 'and IN_PROGRESS alike.',
+  })),
   {
     from: 'IN_PROGRESS',
     to: 'CANCELLED',

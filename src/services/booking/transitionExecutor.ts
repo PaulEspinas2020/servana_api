@@ -386,7 +386,42 @@ export const BOOKING_ACTIONS = {
     from: ['PENDING_OTP', 'AWAITING_ASSIGNMENT', 'ASSIGNED', 'ACCEPTED',
            'EN_ROUTE', 'ARRIVED', 'IN_PROGRESS', 'DISPUTED'],
   },
-  ADMIN_COMPLETE: { to: 'COMPLETED', actor: 'admin' },
+  /**
+   * ADMIN_COMPLETE was removed here.
+   *
+   * It had no caller anywhere in the repository — a speculative action added
+   * before the admin path was measured. Once ADMIN_APPROVE_COMPLETION exists
+   * the two collide on (COMPLETED, admin), and the unused one carried no
+   * source restriction and no timeline projection. Leaving it would let a
+   * future caller reach COMPLETED from any state, with no administrative
+   * record, by picking the wrong name from an autocomplete list.
+   *
+   * Admin approves completion — which measured behaviour shows is a FORCE
+   * COMPLETION, not an approval of something already finished.
+   *
+   * The legacy implementation had no status precondition at all: it wrote
+   * COMPLETED unconditionally, which meant approving a CANCELLED booking
+   * revived it. The machine refuses a terminal source, so that is fixed by
+   * migrating — declared, not incidental.
+   *
+   * `from` encodes the scope legacy MEANINGFULLY supported (its assignment
+   * update targeted ASSIGNED / ACCEPTED / IN_PROGRESS) rather than the
+   * unconditional SQL, which would have made every non-terminal state valid.
+   *
+   * `eventOnly` covers approving a booking that is already COMPLETED. Legacy
+   * recorded a second approval, and that record is meaningful: an admin
+   * signing off on a finished job is a real administrative act. What it is NOT
+   * is a second completion.
+   *
+   * Deliberately carries NO provider guards. Measured: it never applied the
+   * unpaid-cash rule and never triggered disbursement. Whether it should is a
+   * finance decision, not a state-machine one.
+   */
+  ADMIN_APPROVE_COMPLETION: {
+    to: 'COMPLETED', actor: 'admin',
+    from: ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'],
+    eventOnly: { from: ['COMPLETED'] as const },
+  },
   SYSTEM_EXPIRE: { to: 'EXPIRED', actor: 'system' },
 } as const satisfies Record<
   string,
@@ -396,6 +431,8 @@ export const BOOKING_ACTIONS = {
     from?: readonly BookingState[];
     guard?: BookingGuardName;
     requires?: BookingCredential;
+    /** Only an EventOnlyAction may declare this. Asserted by test. */
+    eventOnly?: { from: readonly BookingState[] };
   }
 >;
 
@@ -411,6 +448,19 @@ export const BOOKING_ACTIONS = {
  * receives, and both are compared inside the UPDATE rather than before it.
  */
 export type BookingCredential = 'BOOKING_OTP' | 'WORKER_CODE';
+
+/**
+ * Actions permitted to record an administrative event WITHOUT transitioning.
+ *
+ * A closed union, not a boolean, so the capability cannot be switched on by
+ * anyone who has not been added here in a diff. That matters: without the
+ * restriction someone eventually writes `CUSTOMER_CANCEL` as event-only from
+ * COMPLETED and quietly bypasses terminal-state protection.
+ *
+ * Event-only recording is an explicit ACTION capability. It is never an
+ * executor fallback, and it never substitutes for a refusal.
+ */
+export type EventOnlyAction = 'ADMIN_APPROVE_COMPLETION';
 
 /** Which metadata field carries each credential, and how it is refused. */
 const CREDENTIAL_FIELD: Record<BookingCredential, { field: string; code: TransitionErrorCode; message: string }> = {
@@ -516,6 +566,11 @@ export interface TransitionResult {
   toState: BookingState;
   /** True when this call did nothing because an identical one already had. */
   idempotentReplay: boolean;
+  /**
+   * Did the booking MOVE, or was this an administrative event recorded against
+   * a state it was already in?
+   */
+  stateChanged: boolean;
   /** Correlation id, echoed into the timeline row. */
   correlationId: string;
   timelineEventId: number | null;
@@ -563,6 +618,15 @@ export async function ensureTransitionSchema(): Promise<void> {
            reason        TEXT,
            metadata      JSONB       NOT NULL DEFAULT '{}'::jsonb,
            correlation_id TEXT,
+           /**
+            * Did the booking actually MOVE?
+            *
+            * False for an event-only action, where from_state and to_state are
+            * the same by design. Without it, two COMPLETED rows read as a
+            * booking that completed twice, and an analyst or a future query
+            * would be right to conclude that. The evidence says which happened.
+            */
+           state_changed BOOLEAN     NOT NULL DEFAULT TRUE,
            occurred_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
          )`,
         [],
@@ -913,6 +977,14 @@ const LEGACY_TIMELINE_EVENT: Partial<Record<BookingAction, {
     title: 'Booking cancelled by admin',
     actorType: 'admin',
     metadataKeys: ['reasonCode', 'refundAction'],
+  },
+  // Written on BOTH branches: forcing completion and approving an already
+  // completed job are each a real administrative act, and legacy recorded
+  // both. Only the canonical evidence distinguishes them, via state_changed.
+  ADMIN_APPROVE_COMPLETION: {
+    eventType: 'completion_approved',
+    title: 'Completion approved by admin',
+    actorType: 'admin',
   },
 };
 
@@ -1406,6 +1478,60 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
     const toState = spec.to as BookingState;
 
     /**
+     * EVENT-ONLY: an administrative record against a state the booking is
+     * already in.
+     *
+     * Checked before the source restriction and before the whitelist, because
+     * it is a different question: not "may this booking move" but "may this
+     * actor record having reviewed it where it stands". It cannot substitute
+     * for a refusal — only the states an action explicitly lists are eligible,
+     * and a state that is neither in `from` nor in `eventOnly.from` still
+     * falls through to the ordinary refusal below.
+     *
+     * No `applyState`. Nothing is written but the evidence row.
+     */
+    const eventOnly = (spec as { eventOnly?: { from: readonly BookingState[] } }).eventOnly;
+    if (eventOnly?.from.includes(fromState)) {
+      const record = await client.query(
+        `INSERT INTO ${s}.booking_transitions
+           (booking_id, action, from_state, to_state, actor_role, actor_uid,
+            provider_uid, reason, metadata, correlation_id, state_changed)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,FALSE)
+         RETURNING id`,
+        [
+          loaded.id, input.action, fromState, fromState,
+          input.actorRole, input.actorUid, loaded.workerUid,
+          input.metadata?.reason ? String(input.metadata.reason) : null,
+          JSON.stringify(redactMetadata(input.metadata ?? {})),
+          correlationId,
+        ],
+      );
+      await writeLegacyTimelineEvent(client, loaded, input);
+
+      const eventResult: TransitionResult = {
+        bookingId: loaded.id,
+        action: input.action,
+        fromState,
+        toState: fromState,
+        stateChanged: false,
+        idempotentReplay: false,
+        correlationId,
+        timelineEventId: Number(record.rows[0]?.id ?? 0) || null,
+      };
+      if (idemKey) {
+        await client.query(
+          `INSERT INTO ${s}.booking_transition_idempotency
+             (actor_uid, booking_id, action, idempotency_key, request_digest, result)
+           VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+           ON CONFLICT DO NOTHING`,
+          [idemActor, loaded.id, input.action, idemKey, digest, JSON.stringify(eventResult)],
+        );
+      }
+      await client.query('COMMIT');
+      return eventResult;
+    }
+
+    /**
      * The action's own source restriction, checked BEFORE the whitelist.
      *
      * Where two actions share a destination and an actor, this is the only
@@ -1513,8 +1639,8 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
     const timeline = await client.query(
       `INSERT INTO ${s}.booking_transitions
          (booking_id, action, from_state, to_state, actor_role, actor_uid,
-          provider_uid, reason, metadata, correlation_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)
+          provider_uid, reason, metadata, correlation_id, state_changed)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,TRUE)
        RETURNING id`,
       [
         loaded.id,
@@ -1537,6 +1663,7 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
       action: input.action,
       fromState,
       toState,
+      stateChanged: true,
       idempotentReplay: false,
       correlationId,
       timelineEventId: Number(timeline.rows[0]?.id ?? 0) || null,

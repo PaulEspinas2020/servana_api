@@ -120,14 +120,14 @@ const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason
       'TAB 05.',
   },
   'services/adminBookingService.ts': {
-    count: 5,
-    phase: 'D — admin approve-completion / assign / reassign',
+    count: 3,
+    phase: 'D4/D5 — admin assign / reassign',
     reason:
-      'Admin operational actions, mid-migration. D1 (confirm on behalf) and D2 '
-      + '(cancel) go through the executor. Five sites remain: approve '
-      + 'completion, assign and reassign — the last two carrying the race '
-      + 'surface, which is why they are migrated once the pattern is proven on '
-      + 'the simpler ones.',
+      'Admin operational actions, nearly done. Confirm-on-behalf (D1), cancel '
+      + '(D2) and approve-completion (D3) go through the executor. Three sites '
+      + 'remain, all assignment: one in assign and two in reassign. They carry '
+      + 'the race surface, which is why they are last — the pattern is proven '
+      + 'on the simpler actions first.',
   },
 };
 

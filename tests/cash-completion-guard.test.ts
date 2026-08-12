@@ -53,7 +53,10 @@ describe("cash completion guard", () => {
     // would answer UnpaidCashBookingError for a booking already COMPLETED.
     const guardCall = executor.indexOf("await BOOKING_GUARDS[guardName]");
     const applyCall = executor.indexOf("await applyState(client, loaded, toState, input)");
-    const commit = executor.indexOf("client.query('COMMIT')");
+    // lastIndexOf: the event-only branch commits earlier in the FILE, and
+    // indexOf would find that one. This assertion is about the transition
+    // path's ordering, whose COMMIT is the last.
+    const commit = executor.lastIndexOf("client.query('COMMIT')");
 
     expect(guardCall).toBeGreaterThan(-1);
     expect(guardCall).toBeLessThan(applyCall);

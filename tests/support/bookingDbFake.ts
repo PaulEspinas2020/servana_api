@@ -189,6 +189,17 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
     }
     return done([]);
   }
+  // Admin force-completion closes whichever assignment row is still open.
+  if (/UPDATE servana\.booking_workers[\s\S]*?status IN \('IN_PROGRESS','ACCEPTED','ASSIGNED'\)/i.test(flat)) {
+    for (const a of store.assignments) {
+      if (a.booking_id !== Number(params[0])) continue;
+      if (['IN_PROGRESS', 'ACCEPTED', 'ASSIGNED'].includes(String(a.status))) {
+        a.status = 'COMPLETED';
+        a.completed_at = '2026-08-12T00:00:00.000Z';
+      }
+    }
+    return done([]);
+  }
 
   if (/SELECT \* FROM servana\.booking_workers/i.test(flat)) {
     const rows = mine(Number(params[0]), params[1]);
@@ -319,7 +330,13 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
   }
   if (/INSERT INTO servana\.booking_transitions/i.test(flat)) {
     const id = store.transitions.length + 1;
-    store.transitions.push({ id, from_state: params[2], to_state: params[3], action: params[1] });
+    store.transitions.push({
+      id, action: params[1], from_state: params[2], to_state: params[3],
+      actor_role: params[4], actor_uid: params[5],
+      // TRUE / FALSE are literals in the statement, not parameters, so the
+      // fake reads them from the SQL exactly as Postgres would.
+      state_changed: !/,\s*FALSE\s*\)/i.test(flat),
+    });
     return done([{ id }]);
   }
 
