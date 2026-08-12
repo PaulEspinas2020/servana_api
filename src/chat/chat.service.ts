@@ -25,6 +25,16 @@ export interface AccessResult {
   canSend: boolean;
   /** Was on this booking and is no longer (reassigned, declined, cancelled). */
   wasParticipant: boolean;
+  /**
+   * When this provider's assignment began — the earliest message they may read.
+   *
+   * From `booking_workers`, the same row that granted access, so the floor
+   * cannot disagree with the authorization. Null for admin and the customer,
+   * who read the whole thread, and null for a denial.
+   */
+  assignedAt?: string | null;
+  /** Their assignment is CURRENTLY active. Governs send, never read. */
+  assignmentActive?: boolean;
 }
 
 const deny = (wasParticipant = false): AccessResult => ({
@@ -57,7 +67,26 @@ export const resolveAccessForBooking = async (
   }
   const workerUids = await repo.getBookingWorkerUids(bookingId);
   if (workerUids.includes(actor.uid)) {
-    return { allowed: true, role: "coworker", canRead: true, canSend: true, wasParticipant: false };
+    /**
+     * The window travels WITH the authorization, from the same table.
+     *
+     * Previously access came from `booking_workers` and the message floor came
+     * from `chat_participants`, so the two could disagree — and when they did,
+     * the disagreement resolved towards more access: a provider with no
+     * participant row read the entire transcript, including the previous
+     * provider's messages. Reading both from one row makes that unreachable.
+     */
+    const window = await repo.getProviderAssignmentWindow(bookingId, actor.uid);
+    return {
+      allowed: true, role: "coworker", canRead: true,
+      // Send is the ACTIVE assignment, not a participant flag. A stale
+      // `can_send = true` left behind by a failed membership update must not
+      // let a departed provider keep messaging the customer.
+      canSend: window?.active === true,
+      wasParticipant: false,
+      assignedAt: window?.assignedAt ?? null,
+      assignmentActive: window?.active === true,
+    };
   }
   // Distinguish "was removed from this booking" from "never had anything to do
   // with it". Both are denied, but only the former is a candidate for
@@ -105,6 +134,16 @@ export const resolveAccessForConversation = async (
   if (base.role === "admin") return { access: base, conversation };
 
   const row = await repo.findParticipant(conversationId, actor.uid);
+  /**
+   * `chat_participants` is a PROJECTION. It may narrow access and may never
+   * widen it.
+   *
+   * A missing row therefore contributes nothing rather than defaulting to
+   * permissive — the booking has already granted whatever is granted. The old
+   * `row ? row.can_x !== false : true` said the opposite: no row meant full
+   * capability, which is precisely the fail-open a dropped membership update
+   * produced.
+   */
   const rowCanRead = row ? row.can_read !== false : true;
   const rowCanSend = row ? row.can_send !== false : true;
   const stillPresent = row ? row.left_at == null : true;
@@ -115,12 +154,25 @@ export const resolveAccessForConversation = async (
   const writable = statusWritable && conversation.is_closed !== true;
 
   const canRead = rowCanRead;
-  const canSend = canRead && stillPresent && rowCanSend && writable;
+  /**
+   * Both sources must agree before a provider may send.
+   *
+   * `base.canSend` is the booking's answer — an ACTIVE assignment. The
+   * participant row can only take that away. So a departed provider whose
+   * stale row still reads `can_send = true` is refused by the booking side,
+   * and a provider whose row is missing entirely is still governed by the
+   * assignment.
+   */
+  const canSend = base.canSend && canRead && stillPresent && rowCanSend && writable;
 
   if (!canRead) return { access: deny(true), conversation };
 
   return {
-    access: { allowed: true, role: base.role, canRead, canSend, wasParticipant: false },
+    access: {
+      allowed: true, role: base.role, canRead, canSend, wasParticipant: false,
+      assignedAt: base.assignedAt ?? null,
+      assignmentActive: base.assignmentActive === true,
+    },
     conversation,
   };
 };
@@ -738,8 +790,26 @@ export const getMessages = async (
   if (before !== undefined && (!Number.isSafeInteger(before) || before <= 0)) {
     throw httpError(422, 'before must be a positive message id');
   }
-  const participant = access.role === 'admin' ? null : await repo.findParticipant(conversationId, actor.uid);
-  const visibleAfter = participant?.joined_at ?? null;
+  /**
+   * The read floor, derived from the ASSIGNMENT.
+   *
+   * Admin and the customer read the whole thread: the audit trail is the point
+   * for one, and it is their own conversation for the other.
+   *
+   * A provider reads from their `assigned_at` onward. If the assignment carries
+   * no usable timestamp, this FAILS CLOSED — a null floor used to mean "no
+   * floor", which is how a provider with no participant row came to read the
+   * previous provider's entire conversation. Denying is the safe answer to
+   * "I cannot tell where your access starts".
+   */
+  const unbounded = access.role === 'admin' || access.role === 'client';
+  let visibleAfter: string | null = null;
+  if (!unbounded) {
+    visibleAfter = access.assignedAt ?? null;
+    if (!visibleAfter) {
+      throw httpError(403, 'Message history is not available for this assignment');
+    }
+  }
   const boundedLimit = Math.min(limit, 100);
   const rows = await repo.listMessages(conversationId, boundedLimit, before, visibleAfter);
   const messages = await Promise.all(rows.map(hydrateMessage));

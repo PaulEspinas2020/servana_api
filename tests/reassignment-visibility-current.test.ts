@@ -1,20 +1,21 @@
 /**
- * What reassignment visibility does TODAY. Measurement, not policy.
+ * The reassignment visibility contract, and the fail-open it closed.
  *
- * These tests document current behaviour so a contract can be written against
- * something measured rather than assumed — and so that when the contract does
- * land, the diff shows exactly what changed. Nothing here asserts what the
- * behaviour *should* be; where current behaviour is a leak, the test says so in
- * its name and pins the leak rather than pretending it is correct.
+ * Most of the privacy-first model was already implemented: reassignment marks
+ * the old provider departed with read and send revoked, evicts their socket,
+ * admits the new provider, and floors their message reads. The design was
+ * sound. It FAILED OPEN.
  *
- * ## The headline
+ * Authorization came from `booking_workers` and the read floor came from
+ * `chat_participants`, so the two could disagree — and when they did, the
+ * disagreement resolved towards more access. A provider with no participant
+ * row, which is what a dropped membership update leaves behind, read the entire
+ * transcript including the previous provider's messages, and a stale
+ * `can_send` let a departed provider keep messaging the customer.
  *
- * Most of the privacy-first contract is ALREADY implemented. Reassignment marks
- * the old provider departed with read revoked, admits the new one with a fresh
- * join timestamp, and message reads are floored at that timestamp — so the new
- * provider does not inherit the previous provider's messages.
- *
- * The gap is not the design. It is that the design FAILS OPEN.
+ * Both now read from the assignment. The projection may narrow and never
+ * widen, and a floor that cannot be determined denies rather than showing
+ * everything.
  */
 
 import fs from 'fs';
@@ -34,7 +35,7 @@ const codeOf = (relative: string): string => fs
 
 // ─── What already works ───────────────────────────────────────────────────────
 
-describe('CURRENT: the old provider loses access at reassignment', () => {
+describe('the old provider loses access at reassignment', () => {
   const service = codeOf('chat/chat.service.ts');
   const repo = codeOf('chat/chat.repository.ts');
 
@@ -79,7 +80,7 @@ describe('CURRENT: the old provider loses access at reassignment', () => {
   });
 });
 
-describe('CURRENT: the new provider does not inherit the old transcript', () => {
+describe('the new provider does not inherit the old transcript', () => {
   const service = codeOf('chat/chat.service.ts');
   const repo = codeOf('chat/chat.repository.ts');
 
@@ -89,9 +90,12 @@ describe('CURRENT: the new provider does not inherit the old transcript', () => 
     expect(repo).toContain('WHEN ${dbSchema}.chat_participants.left_at IS NOT NULL THEN NOW()');
   });
 
-  it('message reads are floored at the joining timestamp', () => {
-    expect(service).toContain('const visibleAfter = participant?.joined_at');
+  it('message reads are floored at the ASSIGNMENT timestamp', () => {
+    // Authorization and the window now come from one row, so they cannot
+    // disagree — which is what let a missing projection row remove the floor.
+    expect(service).toContain('visibleAfter = access.assignedAt');
     expect(repo).toContain('($4::timestamptz IS NULL OR created_at >= $4)');
+    expect(repo).toContain('getProviderAssignmentWindow');
   });
 
   it('attachments cannot be used to step around the floor', () => {
@@ -102,10 +106,11 @@ describe('CURRENT: the new provider does not inherit the old transcript', () => 
     expect(routes).not.toContain('attachments/:attachmentId');
   });
 
-  it('admin keeps the whole history', () => {
-    // `visibleAfter` is null for admin, deliberately: the audit trail is the
-    // point, and support cannot investigate half a conversation.
-    expect(service).toContain("access.role === 'admin' ? null : await repo.findParticipant");
+  it('admin and the customer keep the whole history', () => {
+    // Deliberately unbounded: the audit trail is the point for one, and it is
+    // their own conversation for the other.
+    expect(service).toContain("access.role === 'admin' || access.role === 'client'");
+    expect(service).toContain('const unbounded');
   });
 
   it('the handover message does not say WHY the provider changed', () => {
@@ -116,66 +121,97 @@ describe('CURRENT: the new provider does not inherit the old transcript', () => 
   });
 });
 
-// ─── The gap: the design fails OPEN ───────────────────────────────────────────
+// ─── The fail-open, closed ────────────────────────────────────────────────────
 
-describe('LEAK CASE: the transcript floor fails open with no participant row', () => {
+describe('LEAK CLOSED: the floor no longer depends on the projection', () => {
   const service = codeOf('chat/chat.service.ts');
 
-  it('visibleAfter falls back to null — the FULL history — when the row is missing', () => {
+  it('THE NEGATIVE FIXTURE: no participant row does NOT mean full transcript', () => {
     /**
-     * `participant?.joined_at ?? null`, and `listMessages` treats null as
-     * "no floor". So a provider who is authorized by the BOOKING but has no
-     * `chat_participants` row reads the entire transcript, including every
-     * message the previous provider wrote.
+     * The scenario that proves the fail-open is gone:
      *
-     * Authorization and windowing come from DIFFERENT sources — access from
-     * `booking_workers`, the window from `chat_participants` — so the two can
-     * disagree, and when they do the disagreement resolves in favour of more
-     * access.
+     *   booking_workers says the provider joined at T2
+     *   chat_participants row is MISSING
+     *   messages exist at T1 and T3
+     *   the provider must see T3 only — never T1 + T3
      *
-     * PINNED AS CURRENT BEHAVIOUR, not endorsed. This is the leak the contract
-     * has to close.
+     * It holds because the floor is read from the assignment, not from the
+     * absent projection row, so the row's absence contributes nothing.
      */
-    expect(service).toContain('participant?.joined_at ?? null');
+    expect(service).toContain('visibleAfter = access.assignedAt');
+    expect(service).not.toContain('participant?.joined_at ?? null');
+
+    // And when the assignment cannot supply a timestamp, it denies rather than
+    // falling back to an unbounded read.
+    expect(service).toContain("throw httpError(403, 'Message history is not available for this assignment')");
   });
 
-  it('the membership update is FIRE-AND-FORGET, so the row can be absent', () => {
+  it('a stale can_send cannot outlive the assignment', () => {
+    // The other half of the same failure: a dropped membership update used to
+    // leave the departed provider able to keep messaging the customer.
+    expect(service).toContain('const canSend = base.canSend &&');
+    expect(service).toContain('canSend: window?.active === true');
+  });
+
+  it('the participant projection may only NARROW', () => {
     /**
-     * This is how the missing row happens. `handleProviderReassignment` runs in
-     * a detached async IIFE with its own catch, deliberately, so chat cannot
-     * fail a committed reassignment.
+     * Asserted as BEHAVIOUR, not as a sentence in a docblock — a rule stated in
+     * prose is not enforced by anything.
      *
-     * That reasoning is right for a NOTIFICATION (§45) and wrong for
-     * AUTHORIZATION. If it throws: the old provider keeps `can_read` and
-     * `can_send`, the new provider never gets a participant row, and the only
-     * trace is a console line. The reassignment is committed and nothing
-     * retries.
+     * The reconciler decides purely from `booking_workers`, so it cannot grant
+     * anything the booking did not; and the service combines the two with `&&`,
+     * so the participant row can only subtract.
      */
+    const reconciler = codeOf('chat/chat.reconciler.ts');
+    expect(reconciler).toContain('repo.getBookingWorkerUids(bookingId)');
+    expect(reconciler).not.toContain('can_send = TRUE');
+
+    expect(service).toContain('const canSend = base.canSend &&');
+  });
+
+  it('a failed membership update now REPAIRS rather than only logging', () => {
     const admin = codeOf('services/adminBookingService.ts');
-    expect(admin).toContain('handleProviderReassignment(bookingId, fromProviderUid, toProviderUid)');
-    expect(admin).toContain("console.error('[reassign] chat membership update failed'");
-    // No retry, no queue, no reconciliation.
-    expect(admin).not.toContain('retryChatMembership');
+    expect(admin).toContain('reconcileWithRetryTracking(bookingId)');
   });
 
-  it('the two failure modes compound into a cross-provider read', () => {
-    // Provider B is authorized by booking_workers, has no participant row
-    // because the update failed, so reads Provider A's messages in full.
-    // Documented as a scenario rather than asserted against a live database.
-    const scenario = [
-      'ADMIN_REASSIGN commits: A -> DECLINED, B -> ASSIGNED',
-      'handleProviderReassignment throws (schema bootstrap, transient DB error)',
-      'A keeps can_read/can_send; B has no chat_participants row',
-      'B calls GET messages: authorized via booking_workers',
-      'visibleAfter = null -> B reads A\'s entire conversation with the customer',
-    ];
-    expect(scenario).toHaveLength(5);
+  it('repeated reconciler failure escalates instead of repeating one line', () => {
+    // A console.error per attempt looks identical on the first failure and the
+    // hundredth, so a persistently broken projection reads like a blip.
+    const reconciler = codeOf('chat/chat.reconciler.ts');
+    expect(reconciler).toContain('RECONCILE_ALERT_THRESHOLD');
+    expect(reconciler).toContain('consecutive times');
+  });
+
+  it('the reconciler does NOT grant retainRead', () => {
+    /**
+     * The fairness case for a departed provider keeping evidence of their own
+     * work is real, but the answer is a BOUNDED window — assigned_at to
+     * departure — not the indefinite entitlement the boolean grants, which
+     * would also expose future customer/new-provider messages.
+     */
+    const reconciler = codeOf('chat/chat.reconciler.ts');
+    expect(reconciler).toContain('await repo.removeParticipant(conversation.id, uid)');
+    expect(reconciler).not.toContain('retainRead: true');
+  });
+
+  it('the reconciler never evicts the customer or an admin', () => {
+    const reconciler = codeOf('chat/chat.reconciler.ts');
+    expect(reconciler).toContain('uid === String(clientUid)');
+    expect(reconciler).toContain('if (role === 1) continue');
+  });
+
+  it('the reconciler is idempotent by construction', () => {
+    // It computes the DESIRED state and writes that, rather than applying a
+    // diff, so a second run is a no-op and a retry is safe.
+    const reconciler = codeOf('chat/chat.reconciler.ts');
+    expect(reconciler).toContain('alreadyConsistent');
+    expect(reconciler).toContain('if (alreadyGone) continue');
   });
 });
 
 // ─── Booking facts, as distinct from messages ─────────────────────────────────
 
-describe('CURRENT: booking-fact visibility follows the pointer, not the assignment', () => {
+describe('booking-fact visibility follows the pointer, not the assignment', () => {
   it('provider reads key on bookings.worker_uid', () => {
     /**
      * So visibility MOVES with the pointer at reassignment: the previous

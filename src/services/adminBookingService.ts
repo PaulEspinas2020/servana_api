@@ -22,6 +22,7 @@ import type { BookingState } from "./booking/canonicalState";
 
 /** Re-exported so the controller can reject an unknown filter value at the edge. */
 export { isBookingState } from "./booking/adminOpsStatusSql";
+import { reconcileWithRetryTracking } from "../chat/chat.reconciler";
 import {
   transitionBooking,
   TransitionError,
@@ -1211,6 +1212,17 @@ export const adminReassignProvider = async (
       await handleProviderReassignment(bookingId, fromProviderUid, toProviderUid);
     } catch (err) {
       console.error('[reassign] chat membership update failed', bookingId, err);
+      /**
+       * Repair, rather than only logging.
+       *
+       * A failure here no longer widens anyone's access — `booking_workers`
+       * governs both authorization and the read floor, and `chat_participants`
+       * may only narrow. But realtime membership and unread counts are still
+       * wrong, so the projection is reconciled from the booking. Idempotent, so
+       * a redundant run costs nothing, and it escalates if it keeps failing
+       * instead of emitting the same line forever.
+       */
+      await reconcileWithRetryTracking(bookingId);
     }
   })();
 

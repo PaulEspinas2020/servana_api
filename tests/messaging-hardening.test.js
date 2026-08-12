@@ -18,11 +18,30 @@ describe('messaging privacy and integrity hardening', () => {
     expect(service).toMatch(/if \(updated\) \{[\s\S]*?"message:read"/);
   });
 
-  it('limits replacement providers to messages created after their current join point', () => {
-    expect(repository).toMatch(/joined_at = CASE[\s\S]*?left_at IS NOT NULL THEN NOW\(\)/);
-    expect(service).toMatch(/const visibleAfter = participant\?\.joined_at/);
+  it('limits replacement providers to messages created after their assignment began', () => {
+    /**
+     * The floor moved SOURCE, not meaning. It used to come from
+     * `chat_participants.joined_at`; it now comes from
+     * `booking_workers.assigned_at` — the same row that grants access.
+     *
+     * The old arrangement could disagree with itself: authorization from the
+     * booking, the window from the participant projection, and a missing
+     * projection row meant no window at all. Reading both from one row makes
+     * that unreachable.
+     */
+    expect(service).toMatch(/visibleAfter = access\.assignedAt/);
+    expect(repository).toMatch(/getProviderAssignmentWindow/);
     expect(repository).toMatch(/created_at >= \$4/);
-    expect(repository).toMatch(/m\.created_at >= p\.joined_at/);
+    // The participant projection still resets joined_at on re-admission, which
+    // keeps unread counts honest even though it no longer gates reads.
+    expect(repository).toMatch(/joined_at = CASE[\s\S]*?left_at IS NOT NULL THEN NOW\(\)/);
+  });
+
+  it('FAILS CLOSED when the assignment carries no usable timestamp', () => {
+    // A null floor used to mean "no floor". It now means deny: the safe answer
+    // to "I cannot tell where your access starts" is not "show everything".
+    expect(service).toMatch(/Message history is not available for this assignment/);
+    expect(service).not.toMatch(/visibleAfter = participant\?\.joined_at/);
   });
 
   it('removes reassigned providers from live rooms and ordinary participant views', () => {

@@ -118,6 +118,38 @@ export const getFormerBookingWorkerUids = async (bookingId: number): Promise<str
   return r.rows.map((row: any) => row.worker_uid).filter(Boolean);
 };
 
+/**
+ * The acting provider's ASSIGNMENT window, straight from `booking_workers`.
+ *
+ * This is the authorization source of record. `chat_participants` is a
+ * projection of it — repairable, and never permitted to widen what this says.
+ *
+ * Returns the LATEST active assignment. A reassignment can leave a provider
+ * with two rows on one booking (production booking 75 has exactly that), and
+ * the current grant is the newest active one, not the first.
+ */
+export const getProviderAssignmentWindow = async (
+  bookingId: number,
+  providerUid: string,
+): Promise<{ assignedAt: string | null; active: boolean } | null> => {
+  const r = await dbQuery.query(
+    `SELECT assigned_at, status
+       FROM ${dbSchema}.booking_workers
+      WHERE booking_id = $1 AND worker_uid = $2
+      ORDER BY (status = ANY($3::text[])) DESC, assigned_at DESC NULLS LAST, id DESC
+      LIMIT 1`,
+    [bookingId, providerUid, ACTIVE_WORKER_STATUSES as unknown as string[]],
+  );
+  if (!r.rows.length) return null;
+  const row = r.rows[0];
+  return {
+    // Timestamps come back as strings (see the pg type parsers), which is what
+    // listMessages wants for its ::timestamptz bind.
+    assignedAt: row.assigned_at ?? null,
+    active: (ACTIVE_WORKER_STATUSES as readonly string[]).includes(String(row.status)),
+  };
+};
+
 /** Numeric role for a user, cast to int (role column is stored as text/num). */
 export const getUserRole = async (uid: string): Promise<number | null> => {
   const r = await dbQuery.query(
