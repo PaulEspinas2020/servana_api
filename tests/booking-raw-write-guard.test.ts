@@ -94,7 +94,7 @@ function findRawWrites(): RawWrite[] {
  */
 const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason: string }> = {
   'services/booking/transitionExecutor.ts': {
-    count: 13,
+    count: 14,
     phase: 'EXECUTOR',
     reason:
       'THE executor. The one place permitted to write lifecycle state. One write '
@@ -120,9 +120,12 @@ const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason
       'TAB 05.',
   },
   'services/adminBookingService.ts': {
-    count: 8,
-    phase: 'D — admin assign / reassign / cancel / complete',
-    reason: 'Admin operational actions, including the reassignment write.',
+    count: 7,
+    phase: 'D — admin cancel / approve-completion / assign / reassign',
+    reason:
+      'Admin operational actions, mid-migration. D1 is done: confirming a '
+      + 'provider assignment on behalf (§23) now goes through the executor, with '
+      + 'the whole consent trail written in the same statement as the status.',
   },
 };
 

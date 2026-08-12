@@ -355,6 +355,19 @@ export const BOOKING_ACTIONS = {
     to: 'ASSIGNED', actor: 'admin',
     from: ['ASSIGNED', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED'],
   },
+  /**
+   * Admin records a provider's acceptance ON BEHALF of them (§23).
+   *
+   * Acknowledgement only. It never creates or replaces provider identity — the
+   * provider it confirms must already BE the current assignment, which is why
+   * it is separate from ADMIN_ASSIGN despite both involving a provider and an
+   * admin. Same destination as PROVIDER_ACCEPT, different actor, so the two do
+   * not collide.
+   */
+  ADMIN_CONFIRM_ASSIGNMENT: {
+    to: 'ACCEPTED', actor: 'admin',
+    from: ['ASSIGNED'],
+  },
   ADMIN_CANCEL: { to: 'CANCELLED', actor: 'admin' },
   ADMIN_COMPLETE: { to: 'COMPLETED', actor: 'admin' },
   SYSTEM_EXPIRE: { to: 'EXPIRED', actor: 'system' },
@@ -1063,7 +1076,47 @@ async function applyState(
       return;
     }
 
-    case 'ACCEPTED':
+    case 'ACCEPTED': {
+      if (input.action === 'ADMIN_CONFIRM_ASSIGNMENT') {
+        /**
+         * On-behalf confirmation, recorded as such (§23).
+         *
+         * The consent trail is written in the SAME statement as the status.
+         * An ACCEPTED row whose `confirmation_source` did not land would be
+         * indistinguishable from a provider tapping Accept themselves, which
+         * is the one thing this action exists to keep distinguishable.
+         */
+        const named = String(input.metadata?.providerUid ?? '');
+        if (!named || named !== providerUid) {
+          // Legacy message preserved: the admin named a provider who is not
+          // the one currently on the booking.
+          throw new TransitionError(
+            'GUARD_FAILED',
+            'providerUid does not match the currently assigned provider',
+            { guard: 'current_assignment' },
+          );
+        }
+        await client.query(
+          `UPDATE ${s}.booking_workers
+              SET status              = 'ACCEPTED',
+                  accepted_at         = NOW(),
+                  confirmation_source = 'admin_on_behalf_of_provider',
+                  admin_actor_uid     = $3,
+                  consent_method      = $4,
+                  consent_reference   = $5,
+                  confirmation_reason = $6,
+                  confirmed_at        = NOW()
+            WHERE booking_id = $1 AND worker_uid = $2`,
+          [
+            loaded.id, providerUid, input.actorUid,
+            String(input.metadata?.consentMethod ?? ''),
+            input.metadata?.consentReference ?? null,
+            input.metadata?.reason ? String(input.metadata.reason) : null,
+          ],
+        );
+        return;
+      }
+
       // `accepted_at` is what the provider app renders as "accepted at" and what
       // `emitToProvider` echoes back on the socket. It is a timestamp, not a
       // state — but it must land in the same statement as the state, or a crash
@@ -1074,6 +1127,7 @@ async function applyState(
         [loaded.id, providerUid, to],
       );
       return;
+    }
 
     case 'EN_ROUTE':
     case 'ARRIVED': {

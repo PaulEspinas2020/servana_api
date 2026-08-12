@@ -12,6 +12,7 @@ import { createCustomerNotification, createNotification } from "./notification.s
 import { emitToProvider } from "../provider.realtime";
 import { deriveCanonicalState } from "./booking/canonicalState";
 import { toAdminProjection } from "./booking/projections";
+import { transitionBooking, TransitionError } from './booking/transitionExecutor';
 const dbSchema = db.schema;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1418,24 +1419,44 @@ export const adminConfirmProviderAssignment = async (
     throw new Error(`Assignment cannot be confirmed — current status is ${bw.status}`);
   }
 
-  const updateRes = await dbQuery.query(
-    `UPDATE ${dbSchema}.booking_workers
-     SET status              = 'ACCEPTED',
-         confirmation_source = 'admin_on_behalf_of_provider',
-         admin_actor_uid     = $1,
-         consent_method      = $2,
-         consent_reference   = $3,
-         confirmation_reason = $4,
-         confirmed_at        = NOW()
-     WHERE booking_id = $5
-       AND worker_uid = $6
-       AND status     = 'ASSIGNED'
-     RETURNING confirmed_at`,
-    [adminUid, consentMethod, consentReference ?? null, reason, bookingId, providerUid]
-  );
-
-  if (!updateRes.rowCount) {
-    throw new Error('Confirmation failed — assignment may have changed concurrently');
+  /**
+   * ─── D1 · ADMIN_CONFIRM_ASSIGNMENT, on the canonical executor ──────────────
+   *
+   * Acknowledgement only. This never creates or replaces provider identity —
+   * the provider it confirms must already BE the current assignment — which is
+   * why it is a distinct action from ADMIN_ASSIGN despite both involving an
+   * admin and a provider.
+   *
+   * The whole consent trail (§23) is written in the SAME statement as the
+   * status, inside the transition transaction. An ACCEPTED row whose
+   * `confirmation_source` failed to land would be indistinguishable from the
+   * provider tapping Accept themselves, which is the one distinction this
+   * action exists to preserve.
+   *
+   * The three validations above are unchanged and still run first, so their
+   * messages reach clients exactly as before. The executor re-checks the
+   * provider match independently, because a caller that never touched this
+   * function must not be able to confirm on behalf of the wrong provider.
+   */
+  try {
+    await transitionBooking({
+      action: 'ADMIN_CONFIRM_ASSIGNMENT',
+      bookingId,
+      actorRole: 'admin',
+      actorUid: adminUid,
+      metadata: {
+        providerUid,
+        consentMethod,
+        consentReference: consentReference ?? null,
+        reason,
+      },
+    });
+  } catch (error) {
+    // The legacy message for a concurrent change, verbatim.
+    if (error instanceof TransitionError) {
+      throw new Error('Confirmation failed — assignment may have changed concurrently');
+    }
+    throw error;
   }
 
   await addTimelineEvent(
@@ -1493,11 +1514,20 @@ export const adminConfirmProviderAssignment = async (
     }
   })();
 
+  // `confirmed_at` came back from the UPDATE's RETURNING clause. The executor
+  // does not hand its rows back, so it is read after the commit — the row is
+  // this provider's and has just been written, so the value is the same one.
+  const confirmedRes = await dbQuery.query(
+    `SELECT confirmed_at FROM ${dbSchema}.booking_workers
+      WHERE booking_id = $1 AND worker_uid = $2`,
+    [bookingId, providerUid],
+  );
+
   return {
     bookingId,
     providerUid,
     confirmationSource: 'admin_on_behalf_of_provider',
-    confirmedAt: updateRes.rows[0].confirmed_at,
+    confirmedAt: confirmedRes.rows[0]?.confirmed_at ?? null,
     consentMethod,
   };
 };
