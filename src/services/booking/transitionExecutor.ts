@@ -1014,11 +1014,41 @@ async function applyState(
         );
       }
       if (providerUid && providerUid !== nextProvider) {
-        // Close the outgoing assignment. Never overwrite it: TAB 05 depends on
-        // an assignment row being terminal rather than mutated, and the old
-        // provider's progression has to stay readable.
+        /**
+         * Close the outgoing assignment. Never overwrite it: the old
+         * provider's progression has to stay readable, and TAB 05 depends on
+         * an assignment row being terminal rather than mutated.
+         *
+         * ## Why DECLINED and not REASSIGNED
+         *
+         * REASSIGNED is the semantically accurate word, and it is NOT used,
+         * because `DECLINED` is load-bearing for two live consumers:
+         *
+         *   technicianService.ts:917       auto-assignment EXCLUDES providers
+         *                                  whose row on this booking says
+         *                                  DECLINED, so they are not offered
+         *                                  it again
+         *   providerPerformanceService:70  counts DECLINED as the provider's
+         *                                  declined metric
+         *
+         * The first is the one that decides this. Writing REASSIGNED would
+         * make the provider an admin has just removed immediately eligible for
+         * auto-assignment back onto the same booking — the booking bouncing
+         * straight back to the person it was taken from.
+         *
+         * So the legacy value is preserved verbatim. The distinction the
+         * timeline needs is not lost by doing so: `booking_transitions`
+         * records ADMIN_REASSIGN as its own action, which is the canonical
+         * evidence that this was a reassignment and not a refusal.
+         *
+         * KNOWN DISTORTION, deferred to the assignment work: a provider's
+         * acceptance rate is damaged by an admin's decision. Fixing it means
+         * either a distinct status plus the matching exclusion updated to read
+         * both, or a metric that reads `booking_transitions` instead. Both are
+         * assignment-policy changes, not state-machine ones.
+         */
         await client.query(
-          `UPDATE ${s}.booking_workers SET status = 'REASSIGNED'
+          `UPDATE ${s}.booking_workers SET status = 'DECLINED'
             WHERE booking_id = $1 AND worker_uid = $2`,
           [loaded.id, providerUid],
         );

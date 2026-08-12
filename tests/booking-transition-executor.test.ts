@@ -165,9 +165,13 @@ const runQueryInner = (conn: number, sql: string, params: unknown[] = []): { row
     }
     return { rows: [] };
   }
-  if (/UPDATE servana\.booking_workers SET status = 'REASSIGNED'/i.test(sql)) {
+  // Reassignment closes the outgoing row as DECLINED. See the executor's
+  // ASSIGNED branch: auto-assignment excludes providers whose row on this
+  // booking says DECLINED, so the semantically accurate REASSIGNED would make
+  // the provider an admin just removed eligible to be assigned straight back.
+  if (/UPDATE servana\.booking_workers SET status = 'DECLINED'[\s\S]*?worker_uid = \$2/i.test(sql)) {
     for (const a of db.assignments) {
-      if (a.booking_id === Number(params[0]) && a.worker_uid === params[1]) a.status = 'REASSIGNED';
+      if (a.booking_id === Number(params[0]) && a.worker_uid === params[1]) a.status = 'DECLINED';
     }
     return { rows: [] };
   }
@@ -508,7 +512,10 @@ describe('reassignment resets state without erasing history', () => {
 
     const old = db.assignments.find((a) => a.worker_uid === PROVIDER_A);
     const fresh = db.assignments.find((a) => a.worker_uid === PROVIDER_B);
-    expect(old?.status).toBe('REASSIGNED');
+    // Terminal, and specifically DECLINED — the value the matching engine's
+    // exclusion reads. The reassignment itself is recorded canonically by the
+    // ADMIN_REASSIGN transition row.
+    expect(old?.status).toBe('DECLINED');
     expect(fresh?.status).toBe('ASSIGNED');
   });
 
@@ -747,7 +754,7 @@ describe('PROVIDER_START checks the worker code atomically', () => {
     ).rejects.toMatchObject({ code: 'NOT_AUTHORIZED' });
 
     expect(db.bookings.get(1)?.worker_uid).toBe(PROVIDER_B);
-    expect(db.assignments.find((a) => a.worker_uid === PROVIDER_A)?.status).toBe('REASSIGNED');
+    expect(db.assignments.find((a) => a.worker_uid === PROVIDER_A)?.status).toBe('DECLINED');
     expect(db.assignments.every((a) => a.status !== 'IN_PROGRESS')).toBe(true);
   });
 

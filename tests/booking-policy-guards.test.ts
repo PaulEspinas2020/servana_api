@@ -337,8 +337,13 @@ describe('assign and reassign are not interchangeable', () => {
 
     // The old provider's row survives as history; TAB 05 depends on an
     // assignment row being terminal rather than mutated.
+    //
+    // DECLINED, not REASSIGNED, and deliberately: auto-assignment excludes
+    // providers whose row on this booking says DECLINED, so the accurate word
+    // would make the provider an admin just removed eligible to be assigned
+    // straight back. The distinction lives in the transition row instead.
     const outgoing = store.assignments.find((a) => a.worker_uid === PROVIDER);
-    expect(outgoing?.status).toBe('REASSIGNED');
+    expect(outgoing?.status).toBe('DECLINED');
     expect(store.booking?.worker_uid).toBe('provider-b');
     expect(store.transitions[0]).toMatchObject({ action: 'ADMIN_REASSIGN' });
   });
@@ -420,5 +425,95 @@ describe('no v1 handler infers provider-ness from a role literal', () => {
   it('the transitions handler uses the shared predicate', () => {
     const handler = codeOf(path.join(V1, 'domains/bookingActions.ts'));
     expect(handler).toContain('isProviderRole(');
+  });
+});
+
+/**
+ * ─── RAW bookings.status READS ARE ALLOW-LISTED ──────────────────────────────
+ *
+ * A guard reading `ctx.bookingStatus` is reading the raw column, not the
+ * canonical state. Two do, both for the same narrow reason: the canonical
+ * derivation does not faithfully represent the distinction they need.
+ *
+ * The risk is drift. If guards may casually consult the raw status, the
+ * canonical machine slowly regains a second source of truth — which is the
+ * condition this entire command existed to remove. So the list is closed, and
+ * every entry carries the reason it cannot use the canonical state.
+ */
+describe('raw bookings.status reads are allow-listed', () => {
+  const RAW_STATUS_READERS: Record<string, string> = {
+    bookingAwaitsOtpConfirmation:
+      'PAID-unconfirmed and CONFIRMED both derive to AWAITING_ASSIGNMENT, so the '
+      + 'canonical state cannot say whether confirmation is still open.',
+    customerCancellationStage:
+      'AWAITING_COMPLETION and REVIEWED are not canonical states; deriving first '
+      + 'maps them to AWAITING_ASSIGNMENT, from which cancelling IS permitted — '
+      + 'which would newly allow cancelling them.',
+  };
+
+  const executor = fs.readFileSync(
+    path.resolve(__dirname, '../src/services/booking/transitionExecutor.ts'), 'utf8',
+  );
+
+  /** The body of each guard, comments removed. */
+  const guardBodies = (): Record<string, string> => {
+    const stripped = executor
+      .replace(/\r\n/g, '\n')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+    const registry = stripped.slice(
+      stripped.indexOf('export const BOOKING_GUARDS'),
+      stripped.indexOf('export const BOOKING_ACTIONS'),
+    );
+    const out: Record<string, string> = {};
+    const names = Object.keys(BOOKING_GUARDS);
+    names.forEach((name, i) => {
+      const start = registry.indexOf(`${name}:`);
+      const nextStarts = names
+        .map((n) => registry.indexOf(`${n}:`))
+        .filter((idx) => idx > start);
+      const end = nextStarts.length ? Math.min(...nextStarts) : registry.length;
+      out[name] = registry.slice(start, end);
+    });
+    return out;
+  };
+
+  it('only allow-listed guards read the raw status', () => {
+    const offenders = Object.entries(guardBodies())
+      .filter(([name, body]) => /ctx\.bookingStatus/.test(body) && !(name in RAW_STATUS_READERS))
+      .map(([name]) => name);
+    expect(offenders).toEqual([]);
+  });
+
+  it('every allow-listed reader actually reads it (the list cannot rot)', () => {
+    // An entry that no longer reads the raw status is a stale exemption, and a
+    // stale exemption is how the next one gets waved through.
+    const bodies = guardBodies();
+    for (const name of Object.keys(RAW_STATUS_READERS)) {
+      expect(bodies[name]).toBeDefined();
+      expect(bodies[name]).toMatch(/ctx\.bookingStatus/);
+    }
+  });
+
+  it('every entry states why the canonical state will not do', () => {
+    for (const [, reason] of Object.entries(RAW_STATUS_READERS)) {
+      expect(reason.length).toBeGreaterThan(60);
+    }
+  });
+
+  it('the detector finds a raw read at all (positive fixture)', () => {
+    // If the slicing broke, every guard would look clean forever.
+    const bodies = guardBodies();
+    const readers = Object.values(bodies).filter((b) => /ctx\.bookingStatus/.test(b));
+    expect(readers.length).toBe(Object.keys(RAW_STATUS_READERS).length);
+  });
+
+  it('no guard derives canonical state for itself', () => {
+    // Reading the raw column for a narrow, documented reason is one thing.
+    // Deriving state inside a guard is a second machine.
+    for (const [, body] of Object.entries(guardBodies())) {
+      expect(body).not.toContain('deriveCanonicalState');
+      expect(body).not.toContain('canTransition');
+    }
   });
 });

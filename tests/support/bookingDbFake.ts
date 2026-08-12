@@ -266,8 +266,10 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
   }
 
   // ── assignment / reassignment ──
-  if (/UPDATE servana\.booking_workers SET status = 'REASSIGNED'/i.test(flat)) {
-    for (const a of mine(Number(params[0]), params[1])) a.status = 'REASSIGNED';
+  // Reassignment closes the outgoing row as DECLINED, not REASSIGNED — see the
+  // executor's ASSIGNED branch for why the accurate word is not used.
+  if (/UPDATE servana\.booking_workers SET status = 'DECLINED' WHERE booking_id = \$1 AND worker_uid = \$2/i.test(flat)) {
+    for (const a of mine(Number(params[0]), params[1])) a.status = 'DECLINED';
     return done([]);
   }
   if (/INSERT INTO servana\.booking_workers/i.test(flat)) {
