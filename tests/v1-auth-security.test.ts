@@ -170,10 +170,12 @@ jest.mock('../src/services/customerReviewService', () => ({
 }));
 
 import v1Router from '../src/api/v1/register';
+import { startTestServer, request } from './support/httpTestServer';
 import { snapshot as authSnapshot, __resetAuthTelemetry } from '../src/api/v1/authTelemetry';
 import { identifierBucket } from '../src/middleware/credentialLimiter';
 
 let server: http.Server;
+let closeServer: () => Promise<void>;
 let base: string;
 const consoleLines: string[] = [];
 
@@ -187,14 +189,17 @@ beforeAll(async () => {
   app.use(express.json());
   app.set('trust proxy', true);
   app.use('/api/v1', v1Router);
-  server = http.createServer(app);
-  await new Promise<void>((resolve) => server.listen(0, resolve));
-  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  // Shared harness: keep-alive raised and Connection: close on every request,
+  // so the server's 5-second idle timer cannot close a pooled socket under a
+  // sibling request. See tests/support/httpTestServer.ts for why that mattered.
+  const started = await startTestServer(app);
+  server = started.server;
+  base = started.base;
+  closeServer = started.close;
 });
 
 afterAll(async () => {
-  server.closeAllConnections();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closeServer();
   jest.restoreAllMocks();
 });
 
@@ -204,26 +209,8 @@ beforeEach(() => {
   resendEmailOtp.mockReset().mockResolvedValue({ message: 'neutral' });
 });
 
-const post = async (path: string, body: unknown, headers: Record<string, string> = {}) => {
-  const res = await fetch(`${base}${path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
-    body: JSON.stringify(body),
-  });
-  const text = await res.text();
-  return {
-    status: res.status,
-    raw: text,
-    body: text ? JSON.parse(text) : null,
-    // Captured for the open enumeration-uniformity flake: if a 429 ever is the
-    // cause, these headers say so outright instead of leaving it to inference.
-    limits: {
-      limit: res.headers.get('ratelimit-limit'),
-      remaining: res.headers.get('ratelimit-remaining'),
-      retryAfter: res.headers.get('retry-after'),
-    },
-  };
-};
+const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
+  request(base, 'POST', path, { body, headers });
 
 // ─── 1. Enumeration ───────────────────────────────────────────────────────────
 

@@ -293,11 +293,13 @@ jest.mock('../src/services/booking/transitionExecutor', () => {
 });
 
 import v1Router from '../src/api/v1/register';
+import { startTestServer, request } from './support/httpTestServer';
 import { IMPLEMENTED, PLANNED, fullPath } from '../src/api/v1/contract';
 
 // ─── Harness ──────────────────────────────────────────────────────────────────
 
 let server: http.Server;
+let closeServer: () => Promise<void>;
 let base: string;
 
 beforeAll(async () => {
@@ -305,16 +307,17 @@ beforeAll(async () => {
   app.use(express.json());
   // Mounted exactly as app.ts mounts it.
   app.use('/api/v1', v1Router);
-  server = http.createServer(app);
-  await new Promise<void>((resolve) => server.listen(0, resolve));
-  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  // Shared harness: raised keep-alive plus Connection: close, so the server's
+  // 5-second idle timer cannot close a pooled socket under a later request.
+  // See tests/support/httpTestServer.ts.
+  const started = await startTestServer(app);
+  server = started.server;
+  base = started.base;
+  closeServer = started.close;
 });
 
 afterAll(async () => {
-  // Node's global fetch keeps sockets alive through undici's agent, so close()
-  // alone leaves the handle open and jest reports a worker that would not exit.
-  server.closeAllConnections();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closeServer();
 });
 
 type Call = { status: number; body: any; headers: Headers };
@@ -329,13 +332,8 @@ const call = async (
   if (opts.role) headers['x-test-role'] = opts.role;
   if (opts.body !== undefined) headers['content-type'] = 'application/json';
 
-  const res = await fetch(`${base}${path}`, {
-    method,
-    headers,
-    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-  });
-  const text = await res.text();
-  return { status: res.status, body: text ? JSON.parse(text) : null, headers: res.headers };
+  const res = await request(base, method, path, { headers, body: opts.body });
+  return { status: res.status, body: res.body, headers: res.headers };
 };
 
 // ─── Reachability ─────────────────────────────────────────────────────────────

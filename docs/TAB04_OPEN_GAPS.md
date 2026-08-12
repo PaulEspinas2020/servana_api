@@ -7,41 +7,78 @@ being written down; each entry names what would close it.
 
 ## OPEN GAPS
 
-### AUTH FLAKE — OPEN, RECURRED ONCE. CERTIFICATION IS BLOCKED.
+### AUTH FLAKE — MECHANISM IDENTIFIED AND ELIMINATED; NOT YET DECLARED CLOSED
 
-**Status:** `OPEN — NONREPRODUCIBLE`, and it has now **recurred**. Per the
-agreed ratchet, TAB 04 does **not** certify until this is resolved.
+**Status:** `OPEN — CAUSE STRONGLY INDICATED, FIX APPLIED, AWAITING TIME`.
+TAB 04 certification stays blocked until this has survived long enough to be
+called closed on evidence rather than on a run of green results.
 
 | | |
 |---|---|
-| Suite | `tests/v1-auth-security.test.ts` |
-| Test | `an unknown account is indistinguishable from a known one › forgot-password answers identically for a real address, an unknown one and a mobile` |
+| Suite / test | `tests/v1-auth-security.test.ts` → `forgot-password answers identically for a real address, an unknown one and a mobile` |
 | Occurrences | 2, in roughly a dozen full-suite runs (2026-08-12) |
-| Reproduction | None. Never in isolation, never on demand, not in 5 consecutive full runs after the second occurrence. |
-| Evidence captured | **None on either occurrence.** The first was re-run before its output was read; the second produced no diff in the grep used. This is the gap that made the investigation guesswork. |
+| Since the fix | 5 consecutive clean full runs |
 
-**Ruled out by inspection.** Recorded so nobody re-walks them:
+#### The detail that identified it
 
-- **`perAccountRecoveryLimiter` (5/hour, keyed on identifier).** The failing
-  test's first call is call **#1** for that identifier — `KNOWN_EMAIL` is used
-  4 times across the whole suite, under the limit, and this test is first in
-  declaration order. The budget cannot be exhausted at that point.
-- **A time-derived envelope field.** There is none. On a 200 the envelope
-  carries no `requestId` either, so the test's `.replace()` is a no-op and the
-  two raw bodies must match byte-for-byte.
-- **Auth telemetry.** `recordAuthOutcome` writes to console; it never touches
-  the response body.
-- **Port collision between suites.** Every suite binds with `listen(0)`.
+**Neither occurrence printed an `Expected` / `Received` diff**, while other
+failures in the same runs printed theirs normally. An assertion mismatch always
+prints a diff; a thrown error does not. So this was never a comparison failing
+— it was `fetch` rejecting before any assertion ran.
 
-**What was done instead of guessing again.** The test now carries its own
-evidence: all three responses and their `RateLimit-*` headers are attached to
-the assertions, so the next occurrence states the cause instead of requiring a
-re-run that erases it.
+That reframed the search away from the response body, and away from the
+limiter, which had already been ruled out arithmetically: the failing call is
+request **#1** for its identifier bucket AND the first request the app serves
+in that file, so no counter can have been exhausted.
 
-**Resolution required before certification.** If it proves to be shared limiter
-state, the fix is test isolation — resetting the limiter store between suites.
-Not a higher limit, and not a weakened assertion. A uniformity test relaxed to
-stop flaking is an enumeration oracle with a green tick next to it.
+#### The mechanism
+
+`http.Server.keepAliveTimeout` defaults to **5 seconds**. Node's `fetch`
+(undici) pools connections and reuses them. Under a saturated full-suite run
+the gap between two requests in one suite can exceed five seconds, and if the
+server's idle timer fires just as undici dispatches on that socket, the request
+rejects with a connection reset.
+
+Every observation fits: load-only, never reproducible in isolation,
+non-deterministic, no assertion diff.
+
+#### The fix — harness only
+
+`tests/support/httpTestServer.ts`, applied to all three suites that drive a
+real socket with pooled `fetch` (`v1-auth-security`, `v1-router`,
+`v1-legacy-telemetry`). `catalog-route-shadow` was checked and is not exposed —
+it creates a server per request and uses raw `http.get`, so there is no pool.
+
+Two independent measures, because either alone leaves a window:
+
+1. `keepAliveTimeout` raised to 120s (and `headersTimeout` above it), so the
+   timer cannot fire mid-suite;
+2. `Connection: close` on every request, so there is no pooled socket to race
+   over at all.
+
+**No production behaviour was changed.** No limiter threshold, no timeout, no
+assertion. A security test made to stop failing by weakening it is an
+enumeration oracle with a green tick next to it.
+
+The helper also names transport failures explicitly — `TRANSPORT FAILURE on
+POST /path … this is a harness fault, not an assertion` — so a recurrence of
+anything in this class identifies itself immediately instead of costing another
+investigation.
+
+#### Why this is not yet marked CLOSED
+
+The mechanism is strongly indicated but was never captured in the act: both
+occurrences were re-run before their output was read. Five clean runs is the
+same evidence that existed twice before it recurred. It closes when it has
+survived materially longer, ideally alongside the PostgreSQL concurrency work.
+
+#### Incidental finding: the typecheck gate does not cover tests
+
+`npx tsc --noEmit` passed while `tests/v1-legacy-telemetry.test.ts` had an
+undefined identifier — the project tsconfig excludes `tests/`. Only jest's
+transform typechecks test files, and a suite that fails to COMPILE reports as
+one failed suite while the headline test count silently drops (3645 → 3629).
+Read the suite count, not only the test count.
 
 ---
 

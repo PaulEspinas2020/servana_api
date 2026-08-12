@@ -18,6 +18,7 @@ jest.mock('../src/db/dbQuery', () => ({
 }));
 
 import express from 'express';
+import { startTestServer } from './support/httpTestServer';
 import http from 'http';
 import { AddressInfo } from 'net';
 import {
@@ -30,22 +31,22 @@ import {
 import { V1_CONTRACT } from '../src/api/v1/contract';
 
 let server: http.Server;
+let closeServer: () => Promise<void>;
 let base: string;
 
 beforeAll(async () => {
   const app = express();
   app.use(legacyContractTelemetry);
   app.all('/{*any}', (_req, res) => { res.json({ ok: true }); });
-  server = http.createServer(app);
-  await new Promise<void>((resolve) => server.listen(0, resolve));
-  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  // Shared harness — see tests/support/httpTestServer.ts.
+  const started = await startTestServer(app);
+  server = started.server;
+  base = started.base;
+  closeServer = started.close;
 });
 
 afterAll(async () => {
-  // Node's global fetch keeps sockets alive through undici's agent, so close()
-  // alone leaves the handle open and jest reports a worker that would not exit.
-  server.closeAllConnections();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closeServer();
 });
 
 beforeEach(() => __resetLegacyContractTelemetry());
