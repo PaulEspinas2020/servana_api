@@ -51,6 +51,7 @@ import {
   BOOKING_ACTIONS,
   __resetTransitionSchema,
 } from '../src/services/booking/transitionExecutor';
+import { deriveCanonicalState } from '../src/services/booking/canonicalState';
 
 const CUSTOMER = 'customer-1';
 const BOOKING = 1101;
@@ -380,5 +381,113 @@ describe('GET /transitions advertises the credential without validating it', () 
 
     await expect(confirmOtp(BOOKING, '999999', { actorUid: CUSTOMER })).rejects.toThrow();
     expect(store.booking?.status).toBe('PENDING_OTP');
+  });
+});
+
+/**
+ * ─── A MODEL LIMITATION, MADE INTENTIONAL AND OBSERVABLE ─────────────────────
+ *
+ * `PAID + no worker` and `CONFIRMED + no worker` share one operational
+ * reality — nobody is assigned — so both derive to AWAITING_ASSIGNMENT, and
+ * that collapse is correct for every purpose except one: whether OTP
+ * confirmation may still run.
+ *
+ * That is action eligibility, not a missing operational state, so it is
+ * expressed as a precondition rather than by splitting the state. These tests
+ * make the limitation deliberate rather than incidental, and hold the guard to
+ * its narrow scope.
+ *
+ * PROMOTE TO A CANONICAL STATE IF any of these become true — see
+ * docs/TAB04_OPEN_GAPS.md:
+ *   more than one action needs the distinction; the UI must display it;
+ *   notifications, analytics/SLA, assignment, or payment/refund depend on it.
+ */
+describe('the collapsed pair is intentional and observable', () => {
+  const raw = (status: string) => ({ bookingStatus: status, workerStatus: null, workerUid: null });
+
+  it('PAID + no worker: AWAITING_ASSIGNMENT, and confirmation IS allowed', async () => {
+    expect(deriveCanonicalState(raw('PAID'))).toBe('AWAITING_ASSIGNMENT');
+
+    seed({ status: 'PAID' });
+    const actions = await getAvailableActions(BOOKING, CUSTOMER, 'customer');
+    expect(actions.find((a) => a.action === 'CUSTOMER_CONFIRM_OTP')?.allowed).toBe(true);
+
+    await confirmOtp(BOOKING, OTP, { actorUid: CUSTOMER });
+    expect(store.booking?.status).toBe('CONFIRMED');
+  });
+
+  it('CONFIRMED + no worker: SAME canonical state, and confirmation is REFUSED', async () => {
+    expect(deriveCanonicalState(raw('CONFIRMED'))).toBe('AWAITING_ASSIGNMENT');
+
+    seed({ status: 'CONFIRMED' });
+    const actions = await getAvailableActions(BOOKING, CUSTOMER, 'customer');
+    const confirm = actions.find((a) => a.action === 'CUSTOMER_CONFIRM_OTP');
+    expect(confirm?.allowed).toBe(false);
+    expect(confirm?.reasonCode).toBe('BOOKING_ALREADY_CONFIRMED');
+
+    await expect(confirmOtp(BOOKING, OTP, { actorUid: CUSTOMER })).rejects.toThrow();
+    expect(store.transitions).toHaveLength(0);
+  });
+
+  it('the two are indistinguishable to the canonical machine — that is the point', () => {
+    // Stated as an assertion so the limitation cannot quietly disappear or
+    // quietly widen. If this ever fails because the derivation changed, the
+    // guard should be DELETED, not adjusted.
+    expect(deriveCanonicalState(raw('PAID'))).toBe(deriveCanonicalState(raw('CONFIRMED')));
+  });
+});
+
+describe('the guard stays narrow', () => {
+  const executor = codeOf('src/services/booking/transitionExecutor.ts');
+
+  it('exactly one action names it', () => {
+    // The failure this prevents: a precondition that starts influencing
+    // cancellation, assignment, notifications or Admin grouping is a state
+    // derivation wearing a guard's name. If a second legitimate consumer
+    // appears, that is the signal the distinction is really a missing state.
+    const namers = [...executor.matchAll(/guard: '(\w+)'/g)]
+      .filter((m) => m[1] === 'bookingAwaitsOtpConfirmation');
+    expect(namers).toHaveLength(1);
+
+    const actions = executor.slice(
+      executor.indexOf('export const BOOKING_ACTIONS'),
+      executor.indexOf('export type BookingAction'),
+    );
+    const confirmEntry = actions.slice(
+      actions.indexOf('CUSTOMER_CONFIRM_OTP:'),
+      actions.indexOf('CUSTOMER_CANCEL:') > actions.indexOf('CUSTOMER_CONFIRM_OTP:')
+        ? actions.indexOf('CUSTOMER_CANCEL:')
+        : undefined,
+    );
+    expect(confirmEntry).toContain("guard: 'bookingAwaitsOtpConfirmation'");
+  });
+
+  it('nothing outside the executor reads it', () => {
+    // A projection, controller or service consulting it would be a second
+    // opinion about state, which is the thing this whole command removed.
+    const SRC = path.resolve(__dirname, '..', 'src');
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!entry.name.endsWith('.ts')) continue;
+        const rel = path.relative(SRC, full).split(path.sep).join('/');
+        if (rel === 'services/booking/transitionExecutor.ts') continue;
+        if (fs.readFileSync(full, 'utf8').includes('bookingAwaitsOtpConfirmation')) offenders.push(rel);
+      }
+    };
+    walk(SRC);
+    expect(offenders).toEqual([]);
+  });
+
+  it('it answers eligibility only — it derives no state', () => {
+    const guard = executor.slice(
+      executor.indexOf('bookingAwaitsOtpConfirmation: (ctx)'),
+      executor.indexOf('export const BOOKING_ACTIONS'),
+    );
+    expect(guard).not.toContain('deriveCanonicalState');
+    expect(guard).not.toContain('canTransition');
+    expect(guard).not.toContain('BOOKING_STATES');
   });
 });

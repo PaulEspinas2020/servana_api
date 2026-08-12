@@ -130,6 +130,66 @@ certifies.
 
 ---
 
+### MODEL LIMITATION — the PAID / CONFIRMED collapse, guard-compensated
+
+**Deliberate for TAB 04. Not debt to be discovered later; debt with a trigger.**
+
+`deriveCanonicalState` maps both of these to `AWAITING_ASSIGNMENT`:
+
+```
+PAID      + worker_uid NULL    paid, NOT yet OTP-confirmed
+CONFIRMED + worker_uid NULL    confirmed, awaiting a provider
+```
+
+They share one operational reality — nobody is assigned — so the collapse is
+correct for every purpose except one: whether `CUSTOMER_CONFIRM_OTP` may still
+run. Because the booking OTP is never consumed, the code stays valid after
+confirmation, and without something to separate the two a confirmed booking
+could be confirmed again. The legacy SQL clause
+`status = 'PENDING_OTP' OR (status = 'PAID' AND worker_uid IS NULL)` was the
+only thing preventing that, and it was a second state machine.
+
+**The model, as it stands:**
+
+```
+canonical operational state      AWAITING_ASSIGNMENT
+transition precondition          bookingAwaitsOtpConfirmation = true | false
+```
+
+This is ACTION ELIGIBILITY, not a missing operational state. A new state
+(`AWAITING_OTP_CONFIRMATION` or similar) would ripple into the customer,
+provider and admin projections, state grouping, allowed-action tables, the
+transitions endpoint, timeline copy, the 1,040-combination agreement matrix,
+filters and analytics, notifications, and possibly installed clients — too
+much semantic surface to change for one action-specific distinction that a
+named precondition already expresses correctly.
+
+**PROMOTE TO A CANONICAL STATE IF ANY BECOMES TRUE:**
+
+- more than one action needs to distinguish the two;
+- the UI must display the distinction;
+- notifications depend on it;
+- analytics or SLA measurement requires it;
+- assignment behaviour differs between them;
+- payment or refund behaviour differs between them.
+
+Any of those means the distinction is broader than OTP eligibility, and the
+honest answer becomes a state rather than a guard.
+
+**The guard must stay narrow, and is held there by test:**
+
+| pinned | where |
+|---|---|
+| exactly one action names it | `tests/booking-c-confirm-otp.test.ts` → *the guard stays narrow* |
+| nothing outside the executor reads it | same |
+| it derives no state — no `deriveCanonicalState`, no `canTransition` | same |
+| both collapsed cases asserted directly | *the collapsed pair is intentional and observable* |
+
+If the derivation ever changes so the two states differ, the guard is
+**deleted**, not adjusted.
+
+---
+
 ## DELIBERATE BEHAVIOUR CHANGES SHIPPING WITH TAB 04
 
 ### 1. Admin: a closed assignment reports `awaiting_assignment`
