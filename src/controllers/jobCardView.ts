@@ -1,3 +1,4 @@
+import { disclosureLevelFor } from "./providerDisclosure";
 import { deriveCanonicalState } from "../services/booking/canonicalState";
 import { toProviderProjection } from "../services/booking/projections";
 import { providerActionsForState } from "../services/booking/providerActions";
@@ -25,23 +26,6 @@ import { coordinatesForAddress } from "../helpers/servanaLocationId";
 /// they need nothing.
 ///
 /// Keys are never removed, only emptied, so no consumer's shape changes.
-const OPERATIONAL_WORKER_STATUSES = new Set([
-  "ACCEPTED",
-  // EN_ROUTE and ARRIVED sit BETWEEN accepted and in-progress. A provider who
-  // tapped "on my way" is travelling to the address — withholding it there
-  // would break the journey the disclosure is meant to enable.
-  "EN_ROUTE",
-  "ARRIVED",
-  "IN_PROGRESS",
-]);
-
-/// Statuses where the provider has no ongoing relationship to the customer.
-const RELINQUISHED_WORKER_STATUSES = new Set([
-  "DECLINED",
-  "CANCELED",
-  "CANCELLED",
-]);
-
 /// "Maria Santos" -> "Maria S." — enough to recognise the job, not enough to
 /// identify the person. Mirrors the provider portal's `customerDisplayName`.
 function maskCustomerName(first: any, last: any): string {
@@ -53,13 +37,10 @@ function maskCustomerName(first: any, last: any): string {
 
 export function formatJobCard(job: any) {
   const workerStatus = String(job.worker_status ?? "").toUpperCase();
-  const operational = OPERATIONAL_WORKER_STATUSES.has(workerStatus);
-  const relinquished = RELINQUISHED_WORKER_STATUSES.has(workerStatus);
-
-  // COMPLETED keeps full detail deliberately: the provider was authorised for
-  // this customer, and earnings/history screens on both surfaces render the
-  // name. Narrowing it is a separate call with its own blast radius (JM-07).
-  const fullDisclosure = operational || workerStatus === "COMPLETED";
+  // ONE decision, shared with getProviderBookingDetail. See providerDisclosure.
+  const level = disclosureLevelFor(workerStatus);
+  const relinquished = level === "none";
+  const fullDisclosure = level === "full";
 
   const customer = fullDisclosure
     ? { uid: job.customer_id, name: `${job.first_name} ${job.last_name}`, phone: job.phone_number }

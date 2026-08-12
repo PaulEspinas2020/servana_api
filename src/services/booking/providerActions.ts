@@ -16,18 +16,24 @@
  *
  * ## Two things the machine alone cannot decide
  *
- * **1. Not every machine action has an endpoint.**
+ * **1. Not every machine action is ADVERTISED.**
  *
- * `providerCancel` is in the whitelist for `assigned_provider` from ACCEPTED,
- * EN_ROUTE and ARRIVED — TAB 04's E1 put it behind the executor. It has no
- * route. Generating the UI list naively would put a Cancel button in the
- * provider app whose request has nowhere to go, which is precisely the failure
- * `bookingActions.ts` was written to prevent: "the UI must never display an
- * unsupported action."
+ * The mapping is an explicit allow-list, and an action the machine permits but
+ * this list omits is recorded **by name, with a reason**, so the omission is a
+ * decision somebody can find rather than an accident.
  *
- * So the mapping is an explicit allow-list, and an action the machine permits
- * but nothing routes is omitted **by name, with a reason**. When the route
- * lands, one line here turns the button on.
+ * `providerCancel` is the current case, and the reason is NOT that it lacks a
+ * route — an earlier version of this comment said so and was wrong.
+ * `POST /api/provider/bookings/:bookingId/cancel` exists, is authenticated and
+ * role-guarded, runs through the executor, and ServanaWorker already calls it
+ * along with its `cancellation-eligibility` companion. The transport is
+ * complete on both sides.
+ *
+ * What is missing is a decision: whether the job card should ADVERTISE cancel
+ * as a first-class action, which changes what every provider sees on every
+ * accepted job. Advertising it is a product change with its own blast radius —
+ * the 48-hour window means most taps would be refused — so it stays omitted
+ * until that is decided, not because it cannot work.
  *
  * **2. Not every UI action is a transition.**
  *
@@ -87,13 +93,21 @@ const ROUTED_ACTIONS: Record<string, BookingAction> = {
  * Machine actions a provider may perform that are deliberately NOT offered,
  * each with the reason. Omitting silently is how a broken button ships.
  */
-export const UNROUTED_PROVIDER_ACTIONS: Record<string, string> = {
+export const UNADVERTISED_PROVIDER_ACTIONS: Record<string, string> = {
   providerCancel:
-    'In the whitelist from ACCEPTED/EN_ROUTE/ARRIVED and enforced by the '
-    + 'executor since TAB 04 E1, but no provider-facing route exists. Offering '
-    + 'it would put a Cancel button in the app whose request has nowhere to go. '
-    + 'Add the route, then delete this entry.',
+    'ROUTED AND WORKING: POST /api/provider/bookings/:bookingId/cancel, behind '
+    + 'verifyAuth + requireProviderRole + requireActiveProvider, executing '
+    + 'PROVIDER_CANCEL through the executor with the 48-hour window guard. '
+    + 'ServanaWorker already calls it and its cancellation-eligibility '
+    + 'companion. It is omitted from the advertised action list because '
+    + 'surfacing cancel on every accepted job is a PRODUCT decision, not a '
+    + 'transport gap — most taps would hit the notice window and be refused. '
+    + 'Decide, then either add the UI code or remove the action from the '
+    + 'provider-advertisable set.',
 };
+
+/** @deprecated Renamed — the omission is about advertising, not routing. */
+export const UNROUTED_PROVIDER_ACTIONS = UNADVERTISED_PROVIDER_ACTIONS;
 
 /**
  * Non-transition actions, per canonical state.

@@ -140,6 +140,11 @@ describe('both legacy derivations delegate to the canonical machine', () => {
       'GENERATED from one branch list and proven equal to deriveCanonicalState over ' +
       'the full cross-product by tests/admin-ops-status-sql.test.ts. That proof is ' +
       'asserted to exist below, so the permission cannot outlive it.',
+    'controllers/providerDisclosure.ts':
+      'PII staging. Decides how much of a CUSTOMER a provider may see, keyed by ' +
+      'the assignment status — it never decides what state the booking is in. ' +
+      'Shared by formatJobCard and getProviderBookingDetail so the two cannot ' +
+      'drift apart, which is the opposite of a second derivation.',
     'controllers/bookingActions.ts':
       'Provider ACTION metadata (confirmation and code flags). Holds transition ' +
       'knowledge too, which is pinned to the machine by the agreement test below ' +

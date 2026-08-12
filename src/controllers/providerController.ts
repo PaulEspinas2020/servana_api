@@ -2463,6 +2463,7 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
 
 // Shared formatter to avoid duplication between list and single-card endpoints
 import { formatJobCard } from "./jobCardView";
+import { hasFullDisclosure } from "./providerDisclosure";
 import { validateDataUri, AllowedUploadMime } from "../helpers/fileSignature";
 import { stripImageMetadata } from "../helpers/stripImageMetadata";
 import * as evidenceService from "../services/bookingEvidenceService";
@@ -3186,7 +3187,10 @@ export const getProviderBookingDetail = async (req: Request, res: Response) => {
     // authorization (§12), and this route has no UI at all.
     //
     // Keys are emptied, never removed, so no consumer's shape changes.
-    const operational = ["ACCEPTED", "EN_ROUTE", "ARRIVED", "IN_PROGRESS", "COMPLETED"].includes(workerStatus);
+    // The SHARED decision, not a second copy of the list. This site and
+    // formatJobCard used to hold equal sets by inspection alone; a comment
+    // claiming they matched was the only thing keeping them together.
+    const operational = hasFullDisclosure(workerStatus);
 
     const serviceAddress = row.service_address && typeof row.service_address === "object"
       ? { ...row.service_address }

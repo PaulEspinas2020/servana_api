@@ -195,14 +195,18 @@ describe('provider actions come from the transition whitelist', () => {
     }
   });
 
-  it('omits an unroutable action BY NAME, with a reason', () => {
+  it('omits an UNADVERTISED action BY NAME, with a reason', () => {
     /**
-     * `providerCancel` is in the whitelist and enforced by the executor, but has
-     * no route. Generating naively would put a Cancel button in the app whose
-     * request has nowhere to go.
+     * `providerCancel` is omitted, and the reason is a product decision rather
+     * than a transport gap — an earlier version of this test asserted it had no
+     * route, which was false: the endpoint exists and ServanaWorker calls it.
+     *
+     * The entry has to say WHY, because "omitted" with no reason is
+     * indistinguishable from "forgotten".
      */
     expect(Object.keys(UNROUTED_PROVIDER_ACTIONS)).toContain('providerCancel');
-    expect(UNROUTED_PROVIDER_ACTIONS.providerCancel.length).toBeGreaterThan(60);
+    expect(UNROUTED_PROVIDER_ACTIONS.providerCancel).toContain('ROUTED AND WORKING');
+    expect(UNROUTED_PROVIDER_ACTIONS.providerCancel).toContain('PRODUCT decision');
 
     for (const state of ['ACCEPTED', 'EN_ROUTE', 'ARRIVED'] as BookingState[]) {
       expect(allowedActions(state, 'assigned_provider')).toContain('providerCancel');
