@@ -1,0 +1,206 @@
+/**
+ * A fake `pg` faithful to the booking lifecycle path, shared by the B1/B2
+ * migration suites.
+ *
+ * Extracted from `booking-b1-accept.test.ts` when the second action needed it.
+ * One implementation means a later phase cannot quietly relax a property an
+ * earlier one relied on — and there is one property here that is easy to get
+ * wrong and expensive to get wrong silently:
+ *
+ * ## It implements real transactions
+ *
+ * BEGIN snapshots every mutable table; ROLLBACK restores it; COMMIT drops the
+ * snapshot. Without that, a rollback test passes against a fake that never
+ * rolled anything back, which is worse than not having the test.
+ *
+ * ## What it does NOT prove
+ *
+ * That PostgreSQL serialises two concurrent transactions on `FOR UPDATE`. The
+ * lock is recorded, not enforced across connections. That gap is named in
+ * docs/TAB04_OPEN_GAPS.md and closes with a real database, not here.
+ */
+
+export interface Row { [k: string]: unknown }
+
+export const store = {
+  booking: null as Row | null,
+  assignments: [] as Row[],
+  transitions: [] as Row[],
+  idempotency: [] as Row[],
+  tracking: [] as Row[],
+  /** Every statement issued, flattened. */
+  sql: [] as string[],
+  /** Statements issued between BEGIN and COMMIT. */
+  inTransaction: [] as string[],
+  open: false,
+  /** Makes the legacy tracking insert fail, to prove the rollback. */
+  trackingFails: false,
+};
+
+/** Side effects, captured in call order. */
+export const calls: string[] = [];
+
+/** The pre-transaction image, held between BEGIN and COMMIT/ROLLBACK. */
+let snapshot: string | null = null;
+
+export const reset = (): void => {
+  store.booking = null;
+  store.assignments = [];
+  store.transitions = [];
+  store.idempotency = [];
+  store.tracking = [];
+  store.sql = [];
+  store.inTransaction = [];
+  store.open = false;
+  store.trackingFails = false;
+  snapshot = null;
+  calls.length = 0;
+};
+
+const mine = (bookingId: number, uid: unknown) =>
+  store.assignments.filter((a) => a.booking_id === bookingId && a.worker_uid === uid);
+
+export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCount: number } => {
+  const flat = sql.replace(/\s+/g, ' ').trim();
+  store.sql.push(flat);
+  if (store.open && !/^COMMIT/i.test(flat)) store.inTransaction.push(flat);
+
+  const done = (rows: Row[]) => ({ rows, rowCount: rows.length });
+
+  if (/^BEGIN/i.test(flat)) {
+    store.open = true;
+    snapshot = JSON.stringify({
+      booking: store.booking,
+      assignments: store.assignments,
+      transitions: store.transitions,
+      idempotency: store.idempotency,
+      tracking: store.tracking,
+    });
+    return done([]);
+  }
+  if (/^ROLLBACK/i.test(flat)) {
+    store.open = false;
+    if (snapshot) Object.assign(store, JSON.parse(snapshot));
+    snapshot = null;
+    return done([]);
+  }
+  if (/^COMMIT/i.test(flat)) { store.open = false; snapshot = null; return done([]); }
+  if (/CREATE TABLE|CREATE INDEX|ALTER TABLE/i.test(flat)) return done([]);
+
+  // ── reads ──
+  if (/SELECT id, status, user_id AS customer_uid, worker_uid/i.test(flat)) {
+    return done(store.booking ? [{ ...store.booking, customer_uid: store.booking.user_id }] : []);
+  }
+  if (/SELECT user_id FROM servana\.bookings/i.test(flat)) {
+    return done(store.booking ? [{ user_id: store.booking.user_id }] : []);
+  }
+  if (/SELECT schedule FROM servana\.bookings/i.test(flat)) return done([{ schedule: null }]);
+  if (/FROM servana\.user_credentials/i.test(flat)) return done([{ first_name: 'Pro', last_name: 'Vider' }]);
+  if (/FROM servana\.bookings b JOIN servana\.service_options/i.test(flat)) {
+    // The reassignment lookup. No location, so the search short-circuits to
+    // NO_LOCATION rather than reaching the matching engine.
+    return done(store.booking ? [{ schedule: null, location_id: null, service_address: null, service_id: 1 }] : []);
+  }
+
+  if (/SELECT \* FROM servana\.booking_workers/i.test(flat)) {
+    const rows = mine(Number(params[0]), params[1]);
+    return done(rows.length ? [rows[rows.length - 1]] : []);
+  }
+  if (/SELECT status FROM servana\.booking_workers/i.test(flat)) {
+    const rows = mine(Number(params[0]), params[1]);
+    return done(rows.length ? [{ status: rows[rows.length - 1].status }] : []);
+  }
+
+  if (/FROM servana\.booking_transitions WHERE booking_id = \$1 AND to_state = 'DISPUTED'/i.test(flat)) {
+    return done(store.transitions.filter((t) => t.to_state === 'DISPUTED').slice(0, 1));
+  }
+  if (/FROM servana\.booking_transition_idempotency/i.test(flat)) {
+    const [actor, bookingId, action, key] = params;
+    const hit = store.idempotency.find(
+      (r) => r.actor_uid === actor && r.booking_id === Number(bookingId)
+        && r.action === action && r.idempotency_key === key,
+    );
+    return done(hit ? [hit] : []);
+  }
+
+  // ── writes ──
+  if (/INSERT INTO servana\.booking_transition_idempotency/i.test(flat)) {
+    store.idempotency.push({
+      actor_uid: params[0], booking_id: Number(params[1]), action: params[2],
+      idempotency_key: params[3], request_digest: params[4], result: JSON.parse(String(params[5])),
+    });
+    return done([]);
+  }
+
+  if (/UPDATE servana\.booking_workers SET status = \$3, accepted_at = NOW\(\)/i.test(flat)) {
+    for (const a of mine(Number(params[0]), params[1])) {
+      a.status = params[2];
+      a.accepted_at = '2026-08-12T00:00:00.000Z';
+    }
+    return done([]);
+  }
+  // The decline / provider-cancel close, which stamps declined_at conditionally.
+  if (/UPDATE servana\.booking_workers SET status = \$3, declined_at = CASE/i.test(flat)) {
+    for (const a of mine(Number(params[0]), params[1])) {
+      a.status = params[2];
+      if (params[3]) a.declined_at = '2026-08-12T00:00:00.000Z';
+    }
+    return done([]);
+  }
+  if (/UPDATE servana\.bookings SET worker_uid = NULL, status = 'CONFIRMED'/i.test(flat)) {
+    if (store.booking && store.booking.id === Number(params[0])) {
+      Object.assign(store.booking, {
+        worker_uid: null, status: 'CONFIRMED',
+        eta_minutes: null, eta_at: null, worker_code: null,
+      });
+    }
+    return done([]);
+  }
+
+  if (/INSERT INTO servana\.booking_tracking/i.test(flat)) {
+    if (store.trackingFails) throw new Error('relation "booking_tracking" is locked');
+    store.tracking.push({ booking_id: Number(params[0]), status: params[1], note: params[2] });
+    return done([]);
+  }
+  if (/INSERT INTO servana\.booking_transitions/i.test(flat)) {
+    const id = store.transitions.length + 1;
+    store.transitions.push({ id, from_state: params[2], to_state: params[3], action: params[1] });
+    return done([{ id }]);
+  }
+
+  return done([]);
+};
+
+/** The shape `jest.mock('../src/db/dbQuery', …)` should return. */
+export const dbMock = {
+  __esModule: true,
+  default: { query: async (sql: string, p?: unknown[]) => run(sql, p) },
+  pool: {
+    connect: async () => ({
+      query: async (sql: string, p?: unknown[]) => run(sql, p),
+      release: () => undefined,
+    }),
+  },
+};
+
+/** Every side effect the provider lifecycle fires, recorded not performed. */
+export const sideEffectMocks = {
+  mailer: { send: (...a: unknown[]) => { calls.push(`email:${String(a[1])}`); } },
+  notification: {
+    createCustomerNotification: async (uid: string) => { calls.push(`customerNotify:${uid}`); },
+    createNotification: async (uid: string, p: { type: string }) => { calls.push(`providerNotify:${p.type}`); },
+  },
+  adminNotification: {
+    notifyAdminsSafely: (p: { type: string }) => { calls.push(`adminNotify:${p.type}`); },
+  },
+  realtime: { emitToProvider: (uid: string, ev: string) => { calls.push(`emit:${ev}:${uid}`); } },
+  chat: {
+    getOrCreateConversation: async () => { calls.push('chat:conversation'); return { id: 77 }; },
+    postSystemMessageOnce: async () => { calls.push('chat:systemMessage'); },
+  },
+  chatRepo: { findExistingConversationByBookingId: async () => ({ id: 77 }) },
+  user: { getUserInfoByBookingId: async () => ({ email: 'c@x.co', firstName: 'Cee' }) },
+};
+
+/** Lets a test await the fire-and-forget side effects. */
+export const flush = (): Promise<unknown> => new Promise((r) => setImmediate(r));

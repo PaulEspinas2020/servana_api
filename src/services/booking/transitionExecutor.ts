@@ -59,26 +59,57 @@ const s = db.schema;
  * `to` is what the machine is asked to validate. It is derived from the action,
  * not supplied by the caller — that is the whole point of an action-based API.
  *
- * `resolveTo` exists for the two actions whose destination depends on the
- * booking: reassignment always lands on ASSIGNED, and a provider cancel lands
- * on AWAITING_ASSIGNMENT regardless of how far the old provider had got.
+ * ## Why some actions also name their SOURCE states
+ *
+ * The machine's whitelist is keyed on `(from, to, actor)`. Two actions that
+ * share a destination AND an actor are therefore indistinguishable to it — and
+ * four of these do:
+ *
+ *   PROVIDER_DECLINE / PROVIDER_CANCEL   both → AWAITING_ASSIGNMENT, provider
+ *   ADMIN_ASSIGN     / ADMIN_REASSIGN    both → ASSIGNED,            admin
+ *
+ * Without `from`, declining an already-ACCEPTED booking is accepted as if it
+ * were a cancellation. That is not a naming quibble: provider cancellation
+ * carries a 48-hour policy check, its own tracking note and its own
+ * notifications, so a decline that lands on the cancel transition slips past
+ * all three. Found by the B1.2 tests, which expected the legacy refusal.
+ *
+ * `from` is what makes the action, not merely its destination, decide what is
+ * legal. `tests/booking-state-machine.test.ts` fails if any two actions sharing
+ * a destination and an actor have overlapping source states.
  */
 export const BOOKING_ACTIONS = {
   CUSTOMER_CONFIRM_OTP: { to: 'AWAITING_ASSIGNMENT', actor: 'customer' },
   CUSTOMER_CANCEL: { to: 'CANCELLED', actor: 'customer' },
   PROVIDER_ACCEPT: { to: 'ACCEPTED', actor: 'assigned_provider' },
-  PROVIDER_DECLINE: { to: 'AWAITING_ASSIGNMENT', actor: 'assigned_provider' },
+  /** Answering an offer. Only ever from an unanswered assignment. */
+  PROVIDER_DECLINE: {
+    to: 'AWAITING_ASSIGNMENT', actor: 'assigned_provider',
+    from: ['ASSIGNED'],
+  },
   PROVIDER_EN_ROUTE: { to: 'EN_ROUTE', actor: 'assigned_provider' },
   PROVIDER_ARRIVED: { to: 'ARRIVED', actor: 'assigned_provider' },
   PROVIDER_START: { to: 'IN_PROGRESS', actor: 'assigned_provider' },
   PROVIDER_COMPLETE: { to: 'COMPLETED', actor: 'assigned_provider' },
-  PROVIDER_CANCEL: { to: 'AWAITING_ASSIGNMENT', actor: 'assigned_provider' },
-  ADMIN_ASSIGN: { to: 'ASSIGNED', actor: 'admin' },
-  ADMIN_REASSIGN: { to: 'ASSIGNED', actor: 'admin' },
+  /** Walking away from a job already taken on. Subject to the 48-hour policy. */
+  PROVIDER_CANCEL: {
+    to: 'AWAITING_ASSIGNMENT', actor: 'assigned_provider',
+    from: ['ACCEPTED', 'EN_ROUTE', 'ARRIVED'],
+  },
+  // Not PENDING_OTP: the machine has no such transition, because a booking is
+  // not assignable until its OTP is confirmed.
+  ADMIN_ASSIGN: { to: 'ASSIGNED', actor: 'admin', from: ['AWAITING_ASSIGNMENT'] },
+  ADMIN_REASSIGN: {
+    to: 'ASSIGNED', actor: 'admin',
+    from: ['ASSIGNED', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED'],
+  },
   ADMIN_CANCEL: { to: 'CANCELLED', actor: 'admin' },
   ADMIN_COMPLETE: { to: 'COMPLETED', actor: 'admin' },
   SYSTEM_EXPIRE: { to: 'EXPIRED', actor: 'system' },
-} as const satisfies Record<string, { to: BookingState; actor: Actor }>;
+} as const satisfies Record<
+  string,
+  { to: BookingState; actor: Actor; from?: readonly BookingState[] }
+>;
 
 export type BookingAction = keyof typeof BOOKING_ACTIONS;
 
@@ -125,7 +156,10 @@ export type TransitionErrorCode =
 export interface LockedSnapshot {
   bookingStatus: string | null;
   bookingWorkerUid: string | null;
+  /** The CURRENT provider's assignment row. */
   assignmentStatus: string | null;
+  /** The ACTOR's own assignment row, which after a decline is the only one. */
+  actorAssignmentStatus: string | null;
   canonicalState: BookingState;
 }
 
@@ -259,6 +293,14 @@ interface LoadedBooking {
   customerUid: string | null;
   workerUid: string | null;
   assignmentStatus: string | null;
+  /**
+   * The ACTOR's own assignment row, which is not always the booking's current
+   * one. After a decline the booking has no provider at all, so
+   * `assignmentStatus` is null and only this can tell a provider who already
+   * declined ("you have already done this", 200) from a stranger ("not yours",
+   * 409). Null when the actor never had a row, or is not a provider.
+   */
+  actorAssignmentStatus: string | null;
   hasEscalation: boolean;
 }
 
@@ -273,7 +315,11 @@ interface LoadedBooking {
  * The assignment is read with `FOR UPDATE` too — reassignment writes it, and
  * locking only the parent would leave that write unserialised.
  */
-async function loadForUpdate(client: PoolClient, bookingId: number): Promise<LoadedBooking | null> {
+async function loadForUpdate(
+  client: PoolClient,
+  bookingId: number,
+  actorUid: string | null,
+): Promise<LoadedBooking | null> {
   const booking = await client.query(
     `SELECT id, status, user_id AS customer_uid, worker_uid
        FROM ${s}.bookings
@@ -303,12 +349,30 @@ async function loadForUpdate(client: PoolClient, bookingId: number): Promise<Loa
     [bookingId],
   );
 
+  // The actor's OWN row, when they are not the booking's current provider.
+  // Locked too: the classification a caller builds from it must not be read
+  // from a moment other than the one the decision was made in.
+  let actorAssignmentStatus: string | null = assignment.rows[0]?.status ?? null;
+  if (actorUid && actorUid !== row.worker_uid) {
+    const own = await client.query(
+      `SELECT status
+         FROM ${s}.booking_workers
+        WHERE booking_id = $1 AND worker_uid = $2
+        ORDER BY assigned_at DESC NULLS LAST, id DESC
+        LIMIT 1
+        FOR UPDATE`,
+      [bookingId, actorUid],
+    );
+    actorAssignmentStatus = own.rows[0]?.status ?? null;
+  }
+
   return {
     id: Number(row.id),
     status: row.status ?? null,
     customerUid: row.customer_uid ?? null,
     workerUid: row.worker_uid ?? null,
     assignmentStatus: assignment.rows[0]?.status ?? null,
+    actorAssignmentStatus,
     hasEscalation: escalation.rows.length > 0,
   };
 }
@@ -450,6 +514,10 @@ async function writeLegacyStatusProjection(
 const LEGACY_TRACKING: Partial<Record<BookingAction, { status: string; note: string }>> = {
   // technicianService.acceptJob
   PROVIDER_ACCEPT: { status: 'ACCEPTED', note: 'Provider accepted the booking' },
+  // technicianService.releaseBookingAndReassign, called by declineJob.
+  // The tracking STATUS is the booking's new status, not the canonical state —
+  // the row records where the booking landed, and it landed back at CONFIRMED.
+  PROVIDER_DECLINE: { status: 'CONFIRMED', note: 'Worker declined — seeking reassignment' },
 };
 
 async function writeLegacyTracking(
@@ -481,14 +549,43 @@ async function applyState(
       // assignment is closed rather than overwritten, so its history survives.
       if (input.action === 'CUSTOMER_CONFIRM_OTP') {
         await client.query(`UPDATE ${s}.bookings SET status = 'CONFIRMED' WHERE id = $1`, [loaded.id]);
-      } else if (providerUid) {
-        await client.query(
-          `UPDATE ${s}.booking_workers SET status = $3
-            WHERE booking_id = $1 AND worker_uid = $2`,
-          [loaded.id, providerUid, input.action === 'PROVIDER_DECLINE' ? 'DECLINED' : 'CANCELLED'],
-        );
-        await client.query(`UPDATE ${s}.bookings SET worker_uid = NULL WHERE id = $1`, [loaded.id]);
+        return;
       }
+      if (!providerUid) return;
+
+      const declined = input.action === 'PROVIDER_DECLINE';
+      await client.query(
+        `UPDATE ${s}.booking_workers
+            SET status = $3,
+                declined_at = CASE WHEN $4 THEN NOW() ELSE declined_at END
+          WHERE booking_id = $1 AND worker_uid = $2`,
+        [loaded.id, providerUid, declined ? 'DECLINED' : CANONICAL_CANCELLED, declined],
+      );
+
+      /**
+       * The full release, not just the pointer.
+       *
+       * `worker_code` is the part that matters beyond tidiness. It is the
+       * six-digit code the customer reads out to start the job, and it is never
+       * consumed — clearing it here is the ONLY thing that invalidates it for
+       * the provider who just walked away. Leaving it set would let a declined
+       * provider start the job later with a code they had already been given.
+       *
+       * `status = 'CONFIRMED'` is what returns the booking to the pool: with
+       * `worker_uid` NULL it derives as AWAITING_ASSIGNMENT, which is where the
+       * reassignment search expects to find it. The ETA fields belonged to the
+       * departing provider and describe nothing now.
+       */
+      await client.query(
+        `UPDATE ${s}.bookings
+            SET worker_uid  = NULL,
+                status      = 'CONFIRMED',
+                eta_minutes = NULL,
+                eta_at      = NULL,
+                worker_code = NULL
+          WHERE id = $1`,
+        [loaded.id],
+      );
       return;
     }
 
@@ -697,7 +794,7 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
   try {
     await client.query('BEGIN');
 
-    const loaded = await loadForUpdate(client, input.bookingId);
+    const loaded = await loadForUpdate(client, input.bookingId, input.actorUid ?? null);
     if (!loaded) throw new TransitionError('BOOKING_NOT_FOUND', 'No such booking.');
 
     const fromState = deriveCanonicalState({
@@ -715,6 +812,7 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
       bookingStatus: loaded.status,
       bookingWorkerUid: loaded.workerUid,
       assignmentStatus: loaded.assignmentStatus,
+      actorAssignmentStatus: loaded.actorAssignmentStatus,
       canonicalState: fromState,
     };
 
@@ -737,6 +835,26 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
     }
 
     const toState = spec.to as BookingState;
+
+    /**
+     * The action's own source restriction, checked BEFORE the whitelist.
+     *
+     * Where two actions share a destination and an actor, this is the only
+     * thing separating them. Refusing here rather than letting the whitelist
+     * wave it through is what stops a decline being executed as a cancellation.
+     */
+    const allowedFrom = (spec as { from?: readonly BookingState[] }).from;
+    if (allowedFrom && !allowedFrom.includes(fromState)) {
+      throw new TransitionError(
+        isTerminal(fromState) ? 'TERMINAL_STATE' : 'INVALID_TRANSITION',
+        isTerminal(fromState)
+          ? `Booking is already ${fromState}.`
+          : `Cannot ${input.action} from ${fromState}.`,
+        { currentState: fromState, attempted: toState, reason: 'ACTION_SOURCE_NOT_PERMITTED' },
+        snapshot,
+      );
+    }
+
     const verdict = canTransition(fromState, toState, input.actorRole);
     if (!verdict.allowed) {
       // A refusal on a FINISHED booking is TERMINAL_STATE whatever the machine's

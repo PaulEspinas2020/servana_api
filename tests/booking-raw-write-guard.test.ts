@@ -90,7 +90,7 @@ function findRawWrites(): RawWrite[] {
  */
 const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason: string }> = {
   'services/booking/transitionExecutor.ts': {
-    count: 12,
+    count: 13,
     phase: 'EXECUTOR',
     reason:
       'THE executor. The one place permitted to write lifecycle state. One write '
@@ -98,8 +98,10 @@ const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason
       + 'the same statement rather than checking it separately. One is the '
       + 'LEGACY_STATUS_PROJECTION for EN_ROUTE / ARRIVED — a measured ServanaClient '
       + 'compatibility obligation with a retirement condition, not canonical '
-      + 'state. Neither moves the outstanding count, which counts writers OUTSIDE '
-      + 'the executor.',
+      + 'state. One is the decline/cancel release, which returns the booking to '
+      + 'the pool and clears worker_code in the same transaction as the '
+      + 'transition. None of them moves the outstanding count, which counts '
+      + 'writers OUTSIDE the executor.',
   },
   'services/bookingService.ts': {
     count: 3,
@@ -107,13 +109,14 @@ const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason
     reason: 'Customer cancel and confirm-OTP still write directly.',
   },
   'services/technicianService.ts': {
-    count: 9,
-    phase: 'B1/B2 — provider decline / arrival stages / start / complete',
+    count: 8,
+    phase: 'B1/B2 — arrival stages / start / complete (+ provider cancel)',
     reason:
-      'The provider lifecycle writer, mid-migration. ACCEPT is done (B1.1) and ' +
-      'now goes through the executor. Nine sites remain, covering decline, the ' +
-      'arrival stages, start and complete — one commit each, lowest-risk first, ' +
-      'so complete lands last.',
+      'The provider lifecycle writer, mid-migration. ACCEPT (B1.1) and DECLINE ' +
+      '(B1.2) now go through the executor. Eight sites remain: the arrival ' +
+      'stages, start, complete, and the shared release still used by ' +
+      'cancelAcceptedJob until PROVIDER_CANCEL migrates — one commit each, ' +
+      'lowest-risk first, so complete lands last.',
   },
   'services/adminBookingService.ts': {
     count: 8,

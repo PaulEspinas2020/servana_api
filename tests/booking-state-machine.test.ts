@@ -31,6 +31,7 @@ import {
   project,
   LEGACY_OPS_COLLAPSES,
 } from '../src/services/booking/projections';
+import { BOOKING_ACTIONS } from '../src/services/booking/transitionExecutor';
 
 const ACTORS: Actor[] = ['customer', 'assigned_provider', 'admin', 'system'];
 
@@ -488,6 +489,75 @@ describe('the action list a client renders matches what the machine allows', () 
         for (const next of allowedNextStates(state, actor)) {
           expect(canTransition(state, next, actor).allowed).toBe(true);
         }
+      }
+    }
+  });
+});
+
+/**
+ * Two actions that share a destination AND an actor are the same move to the
+ * machine, whose whitelist is keyed on (from, to, actor). Only their declared
+ * source states can tell them apart.
+ *
+ * This is not hypothetical. PROVIDER_DECLINE and PROVIDER_CANCEL both land on
+ * AWAITING_ASSIGNMENT as the assigned provider, so before `from` existed a
+ * decline on an ACCEPTED booking was executed as a cancellation — skipping the
+ * 48-hour policy check, the cancellation tracking note and the cancellation
+ * notifications, none of which the machine knows about.
+ *
+ * The guard is on the CLASS, not on that pair: any future action added with a
+ * colliding destination and actor and an overlapping source set fails here.
+ */
+describe('colliding actions are separated by their source states', () => {
+  type Spec = { to: string; actor: string; from?: readonly string[] };
+  const entries = Object.entries(BOOKING_ACTIONS) as Array<[string, Spec]>;
+
+  it('no two actions share a destination, an actor AND a source state', () => {
+    const collisions: string[] = [];
+
+    for (let i = 0; i < entries.length; i++) {
+      for (let j = i + 1; j < entries.length; j++) {
+        const [nameA, a] = entries[i];
+        const [nameB, b] = entries[j];
+        if (a.to !== b.to || a.actor !== b.actor) continue;
+
+        // Sharing destination and actor is allowed only if the source sets are
+        // disjoint AND both are declared — an undeclared `from` means "any",
+        // which overlaps with everything.
+        if (!a.from || !b.from) {
+          collisions.push(`${nameA} / ${nameB} collide on ${a.to}/${a.actor} and one declares no source states`);
+          continue;
+        }
+        const overlap = a.from.filter((f) => b.from!.includes(f));
+        if (overlap.length) {
+          collisions.push(`${nameA} / ${nameB} overlap on ${overlap.join(', ')}`);
+        }
+      }
+    }
+
+    expect(collisions).toEqual([]);
+  });
+
+  it('the detector fires on a real collision (positive fixture)', () => {
+    // A guard reporting zero because its comparison is broken looks exactly
+    // like a clean action map.
+    const fixture: Array<[string, Spec]> = [
+      ['DECLINE', { to: 'AWAITING_ASSIGNMENT', actor: 'assigned_provider', from: ['ASSIGNED', 'ACCEPTED'] }],
+      ['CANCEL', { to: 'AWAITING_ASSIGNMENT', actor: 'assigned_provider', from: ['ACCEPTED'] }],
+    ];
+    const [, a] = fixture[0];
+    const [, b] = fixture[1];
+    expect(a.from!.filter((f) => b.from!.includes(f))).toEqual(['ACCEPTED']);
+  });
+
+  it('every declared source state is a real state the machine allows', () => {
+    // A `from` naming a state the whitelist forbids anyway is dead
+    // configuration that reads like a rule.
+    for (const [name, spec] of entries) {
+      for (const from of spec.from ?? []) {
+        expect(BOOKING_STATES).toContain(from);
+        expect(canTransition(from as never, spec.to as never, spec.actor as never).allowed)
+          .toBe(true);
       }
     }
   });

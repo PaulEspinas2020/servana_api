@@ -9,7 +9,11 @@ import { getUserInfoByBookingId } from "./user.service";
 import { computeTranspoFee } from "./pricingService";
 import { createCustomerNotification, createNotification } from "./notification.service";
 import { notifyAdminsSafely } from './adminNotificationService';
-import { acceptanceConflictForSnapshot, classifyResponseMiss } from "./bookingResponseConflict";
+import {
+  acceptanceConflictForSnapshot,
+  declineConflictForSnapshot,
+  classifyResponseMiss,
+} from "./bookingResponseConflict";
 import { createDisbursement } from "./disbursement.service";
 import { getOrCreateConversation, postSystemMessageOnce } from "../chat/chat.service";
 import { findExistingConversationByBookingId } from "../chat/chat.repository";
@@ -1550,34 +1554,16 @@ const ensureCancellationColumns = (): Promise<void> => {
   return cancellationColumnsReady;
 };
 
-export const releaseBookingAndReassign = async (
-  bookingId: number,
-  workerUid: string,
-  trackingNote: string,
-  eventKind: "provider_declined" | "provider_cancelled",
-  customerMessage: string
-) => {
-  // 2. Get booking details needed for re-assignment
-  const bookingRes = await dbQuery.query(
-    `
-    SELECT
-      b.schedule,
-      b.user_address_id,
-      b.service_address,
-      ua.location_id,
-      so.service_id
-    FROM ${dbSchema}.bookings b
-    JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-    LEFT JOIN ${dbSchema}.user_address ua ON ua.address_id = b.user_address_id
-    WHERE b.id = $1
-    `,
-    [bookingId]
-  );
-
-  if (!bookingRes.rowCount) throw new Error("Booking not found");
-
-  const row = bookingRes.rows[0];
-
+/**
+ * Returns the booking row to the pool and records it on the customer timeline.
+ *
+ * Split out of `releaseBookingAndReassign` by B1.2. `declineJob` no longer
+ * calls it — the executor performs the identical release inside the transition
+ * transaction — but `cancelAcceptedJob` still does, and will until
+ * PROVIDER_CANCEL migrates. Keeping one implementation means the two cannot
+ * drift apart in the meantime.
+ */
+const releaseBookingRow = async (bookingId: number, trackingNote: string) => {
   // 3. Reset booking to CONFIRMED and clear the worker
   await dbQuery.query(
     `
@@ -1599,6 +1585,40 @@ export const releaseBookingAndReassign = async (
     `,
     [bookingId, trackingNote]
   );
+};
+
+/**
+ * Finds the next nearest qualified provider and tells the customer.
+ *
+ * The half of the release that is NOT a lifecycle transition. TAB 05 owns who
+ * gets assigned; this stays outside the executor deliberately, and runs after
+ * it has committed.
+ */
+export const findAndAssignNextProvider = async (
+  bookingId: number,
+  workerUid: string,
+  eventKind: "provider_declined" | "provider_cancelled",
+  customerMessage: string
+) => {
+  const bookingRes = await dbQuery.query(
+    `
+    SELECT
+      b.schedule,
+      b.user_address_id,
+      b.service_address,
+      ua.location_id,
+      so.service_id
+    FROM ${dbSchema}.bookings b
+    JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+    LEFT JOIN ${dbSchema}.user_address ua ON ua.address_id = b.user_address_id
+    WHERE b.id = $1
+    `,
+    [bookingId]
+  );
+
+  if (!bookingRes.rowCount) throw new Error("Booking not found");
+
+  const row = bookingRes.rows[0];
 
   // 4. Attempt to find the next nearest qualified worker
   let reassignment: any = { assigned: false, reason: "NO_LOCATION" };
@@ -1642,31 +1662,82 @@ export const releaseBookingAndReassign = async (
   return reassignment;
 };
 
-export const declineJob = async (bookingId: number, workerUid: string) => {
+/** The two halves, still available as one call for the unmigrated caller. */
+export const releaseBookingAndReassign = async (
+  bookingId: number,
+  workerUid: string,
+  trackingNote: string,
+  eventKind: "provider_declined" | "provider_cancelled",
+  customerMessage: string
+) => {
+  await releaseBookingRow(bookingId, trackingNote);
+  return findAndAssignNextProvider(bookingId, workerUid, eventKind, customerMessage);
+};
+
+/**
+ * ─── B1.2 · PROVIDER_DECLINE, on the canonical executor ──────────────────────
+ *
+ * The release is now part of the transition rather than a sequence of
+ * autocommit statements after it. Previously: CAS the assignment row, then
+ * reset the booking, then insert the tracking row — three separate commits, so
+ * a failure between them left a booking declined but not released, or released
+ * with no timeline entry and no reassignment attempted.
+ *
+ * ## The refusal vocabulary, and why it needed the actor's own row
+ *
+ * `declineConflictForSnapshot` replaces `classifyResponseMiss` here. Same
+ * codes, same precedence, but read from the rows the executor locked instead of
+ * a fresh SELECT. That required the executor to load the ACTOR's assignment row
+ * as well as the booking's current one: a decline clears
+ * `bookings.worker_uid`, so a provider double-tapping is, from the booking's
+ * point of view, a stranger. Only their own row still says DECLINED, and that
+ * is what makes the second tap a 200 rather than an error dialog.
+ *
+ * ## One behaviour change
+ *
+ * Declining a CANCELLED booking is now refused. The legacy CAS only checked
+ * `status = 'ASSIGNED'` on the assignment row, so it succeeded — and then the
+ * release reset `bookings.status` to CONFIRMED and looked for another provider.
+ * A cancelled booking was being un-cancelled and reassigned by a provider
+ * tapping decline. The machine refuses from a terminal state.
+ */
+export const declineJob = async (
+  bookingId: number,
+  workerUid: string,
+  options: { idempotencyKey?: string; correlationId?: string } = {},
+) => {
   await ensureArrivalColumns();
 
-  // 1. Mark the booking_workers row as DECLINED (only if currently ASSIGNED)
-  const declineRes = await dbQuery.query(
-    `
-    UPDATE ${dbSchema}.booking_workers
-    SET status = 'DECLINED',
-        declined_at = NOW()
-    WHERE booking_id = $1
-      AND worker_uid = $2
-      AND status = 'ASSIGNED'
-    RETURNING *
-    `,
-    [bookingId, workerUid]
-  );
-
-  if (!declineRes.rowCount) {
-    throw await classifyResponseMiss(bookingId, workerUid, "DECLINE");
+  let result: TransitionResult;
+  try {
+    result = await transitionBooking({
+      action: 'PROVIDER_DECLINE',
+      bookingId,
+      actorRole: 'assigned_provider',
+      actorUid: workerUid,
+      idempotencyKey: options.idempotencyKey,
+      correlationId: options.correlationId,
+    });
+  } catch (error) {
+    throw error instanceof TransitionError
+      ? declineConflictForSnapshot({ actorAssignmentStatus: error.snapshot?.actorAssignmentStatus ?? null })
+      : error;
   }
 
-  const reassignment = await releaseBookingAndReassign(
+  // A replay must not search for a second provider. The first call already
+  // reassigned; running it again would assign the booking twice.
+  if (result.idempotentReplay) {
+    return {
+      declined: true,
+      bookingId,
+      workerUid,
+      reassignment: { assigned: false, reason: 'IDEMPOTENT_REPLAY' },
+    };
+  }
+
+  const reassignment = await findAndAssignNextProvider(
     bookingId,
     workerUid,
-    "Worker declined — seeking reassignment",
     "provider_declined",
     "The assigned provider was unable to accept this booking. We are finding a new provider for you."
   );

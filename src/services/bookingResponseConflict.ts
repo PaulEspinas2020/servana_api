@@ -131,6 +131,51 @@ export function acceptanceConflictForSnapshot(
 }
 
 /**
+ * The decline counterpart of `acceptanceConflictForSnapshot`.
+ *
+ * `classifyResponseMiss` does the same job with its own SELECT. This one takes
+ * the rows the executor already read under `FOR UPDATE`, so the explanation
+ * comes from the moment the refusal was decided rather than from a later one.
+ *
+ * ## Why it reads the ACTOR's row, not the booking's
+ *
+ * A decline clears `bookings.worker_uid`. So a provider double-tapping decline
+ * is, from the booking's point of view, a stranger — there is no current
+ * assignment to compare them against. Only their own row still says DECLINED,
+ * and that is the difference between "you have already done this" (200) and
+ * "this was never yours" (409). Classifying a second decline as a 409 would put
+ * an error dialog in front of a provider who did nothing wrong.
+ *
+ * The precedence is `classifyResponseMiss`'s, unchanged: the caller's own row
+ * decides, and only an unrecognised or absent row falls through to
+ * NO_LONGER_ASSIGNED — §12, which forbids saying whose it is instead.
+ */
+export function declineConflictForSnapshot(
+  snapshot: { actorAssignmentStatus: string | null },
+): BookingResponseConflict {
+  const current = snapshot.actorAssignmentStatus;
+  const status = String(current ?? "").toUpperCase();
+
+  if (status === "DECLINED") {
+    return new BookingResponseConflict(
+      "ALREADY_DECLINED_BY_YOU", current, MESSAGES.ALREADY_DECLINED_BY_YOU
+    );
+  }
+  // Accepting and then declining is a different action, not a repeat of this
+  // one, so it is refused rather than treated as already satisfied.
+  if (status === "ACCEPTED") {
+    return new BookingResponseConflict("ALREADY_RESPONDED", current, MESSAGES.ALREADY_RESPONDED);
+  }
+  if (["EN_ROUTE", "ARRIVED", "IN_PROGRESS", "COMPLETED"].includes(status)) {
+    return new BookingResponseConflict("ALREADY_IN_PROGRESS", current, MESSAGES.ALREADY_IN_PROGRESS);
+  }
+  if (["CANCELED", "CANCELLED"].includes(status)) {
+    return new BookingResponseConflict("BOOKING_CANCELLED", current, MESSAGES.BOOKING_CANCELLED);
+  }
+  return new BookingResponseConflict("NO_LONGER_ASSIGNED", current, MESSAGES.NO_LONGER_ASSIGNED);
+}
+
+/**
  * Reads current state and explains why the compare-and-swap found no row.
  *
  * Called only after a miss, so it costs nothing on the success path.
