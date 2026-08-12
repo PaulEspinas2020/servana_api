@@ -616,6 +616,9 @@ const LEGACY_TRACKING: Partial<Record<BookingAction, { status: string; note: str
   // The tracking STATUS is the booking's new status, not the canonical state —
   // the row records where the booking landed, and it landed back at CONFIRMED.
   PROVIDER_DECLINE: { status: 'CONFIRMED', note: 'Worker declined — seeking reassignment' },
+  // technicianService.markEnRoute. Here the tracking status IS the canonical
+  // state, because the legacy path cascaded it onto `bookings.status` too.
+  PROVIDER_EN_ROUTE: { status: 'EN_ROUTE', note: 'Provider is on the way' },
 };
 
 async function writeLegacyTracking(
@@ -754,9 +757,17 @@ async function applyState(
 
     case 'EN_ROUTE':
     case 'ARRIVED': {
-      // Canonical: the provider lifecycle lives on the assignment row.
+      /**
+       * Canonical: the provider lifecycle lives on the assignment row.
+       *
+       * The timestamp column is chosen from the destination rather than passed
+       * in, so a caller cannot stamp `arrived_at` on an EN_ROUTE transition.
+       * The columns are real as of migration 027 — the executor performs no
+       * schema repair of its own.
+       */
+      const stampedAt = to === 'EN_ROUTE' ? 'en_route_at' : 'arrived_at';
       await client.query(
-        `UPDATE ${s}.booking_workers SET status = $3
+        `UPDATE ${s}.booking_workers SET status = $3, ${stampedAt} = NOW()
           WHERE booking_id = $1 AND worker_uid = $2`,
         [loaded.id, providerUid, to],
       );

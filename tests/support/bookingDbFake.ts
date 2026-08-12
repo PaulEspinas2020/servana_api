@@ -153,6 +153,21 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
     }
     return done([]);
   }
+  // The arrival stages, which stamp the column their destination implies.
+  if (/UPDATE servana\.booking_workers SET status = \$3, (en_route_at|arrived_at) = NOW\(\)/i.test(flat)) {
+    const column = /en_route_at/.test(flat) ? 'en_route_at' : 'arrived_at';
+    for (const a of mine(Number(params[0]), params[1])) {
+      a.status = params[2];
+      a[column] = '2026-08-12T00:00:00.000Z';
+    }
+    return done([]);
+  }
+  if (/UPDATE servana\.bookings SET status = \$2 WHERE id = \$1 AND worker_uid = \$3/i.test(flat)) {
+    if (store.booking && store.booking.id === Number(params[0]) && store.booking.worker_uid === params[2]) {
+      store.booking.status = params[1];
+    }
+    return done([]);
+  }
   // The decline / provider-cancel close, which stamps declined_at conditionally.
   if (/UPDATE servana\.booking_workers SET status = \$3, declined_at = CASE/i.test(flat)) {
     for (const a of mine(Number(params[0]), params[1])) {

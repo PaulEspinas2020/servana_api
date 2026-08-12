@@ -341,3 +341,65 @@ describe('assign and reassign are not interchangeable', () => {
     expect(store.transitions.map((t) => t.to_state)).toEqual(['ASSIGNED', 'ASSIGNED']);
   });
 });
+
+/**
+ * Roles 2 AND 4 are provider roles.
+ *
+ * A `role === 2` check is wrong and has been written that way more than once,
+ * which is why `constants/providerRoles` exists. My first version of the
+ * transitions handler derived the actor role from `role === 1` and would have
+ * shown every role-4 provider an empty action list — no error, just a screen
+ * with no buttons.
+ *
+ * This is a permanent regression on the CLASS, not on that one handler: no v1
+ * handler may decide provider-ness from a role literal when a shared predicate
+ * exists.
+ */
+describe('no v1 handler infers provider-ness from a role literal', () => {
+  const V1 = path.resolve(__dirname, '../src/api/v1');
+
+  const tsFiles = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...tsFiles(full));
+      else if (entry.name.endsWith('.ts')) out.push(full);
+    }
+    return out;
+  };
+
+  /** Comments stripped: a docblock explaining role 2 is not a role check. */
+  const codeOf = (file: string): string =>
+    fs.readFileSync(file, 'utf8')
+      .replace(/\r\n/g, '\n')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+
+  it('finds v1 handler files at all (positive fixture)', () => {
+    // A guard that scans an empty directory reports clean forever.
+    expect(tsFiles(V1).length).toBeGreaterThan(5);
+  });
+
+  it('no comparison of a role field against a numeric literal', () => {
+    const offenders: string[] = [];
+    for (const file of tsFiles(V1)) {
+      const code = codeOf(file);
+      // role === 2, role_id == 4, Number(user.role) === 2, and so on.
+      const match = code.match(/\brole(_id)?\b\s*[!=]==?\s*['"]?\d/g);
+      if (match) {
+        offenders.push(`${path.basename(file)} — ${match.join(', ')}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('the detector fires on the shape it forbids (positive fixture)', () => {
+    const broken = "const actorRole = req.user?.role_id === 1 ? 'customer' : 'assigned_provider';";
+    expect(/\brole(_id)?\b\s*[!=]==?\s*['"]?\d/.test(broken)).toBe(true);
+  });
+
+  it('the transitions handler uses the shared predicate', () => {
+    const handler = codeOf(path.join(V1, 'domains/bookingActions.ts'));
+    expect(handler).toContain('isProviderRole(');
+  });
+});

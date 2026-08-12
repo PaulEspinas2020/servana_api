@@ -1876,16 +1876,94 @@ const advanceArrivalStage = async (
   return res.rows[0];
 };
 
-/** The provider is travelling to the customer. */
-export const markEnRoute = (bookingId: number, workerUid: string) =>
-  advanceArrivalStage(
-    bookingId,
-    workerUid,
-    "ACCEPTED",
-    "EN_ROUTE",
-    "en_route_at",
-    "Provider is on the way"
+/**
+ * ─── B1.3 · PROVIDER_EN_ROUTE, on the canonical executor ─────────────────────
+ *
+ * The provider is travelling to the customer.
+ *
+ * This no longer goes through `advanceArrivalStage`. That helper served both
+ * arrival stages, and migrating it would have moved EN_ROUTE and ARRIVED in a
+ * single commit; duplicating it temporarily to fake two commits would have
+ * been more risk, not less. So EN_ROUTE leaves the helper here and ARRIVED
+ * follows in B1.3's successor, which then deletes it.
+ *
+ * ## What the executor now owns
+ *
+ *   - the ACCEPTED → EN_ROUTE legality check, from the canonical machine
+ *     rather than from `AND status = $3` in the SQL;
+ *   - `booking_workers.status` and `en_route_at`, in one statement;
+ *   - the `bookings.status` cascade, as LEGACY_STATUS_PROJECTION;
+ *   - the `booking_tracking` row, now inside the transaction.
+ *
+ * ## The tracking row is no longer best-effort
+ *
+ * The legacy insert was wrapped in a try/catch justified as "the state change
+ * is already committed and is the thing that matters" — true when the status
+ * write was a separate autocommit statement. Inside the executor nothing is
+ * committed yet, so the catch would guard nothing and would instead
+ * manufacture the outcome it was written to tolerate: a committed transition
+ * with a permanently missing timeline row, on three surfaces that read it.
+ * Recorded as a deliberate change in docs/TAB04_OPEN_GAPS.md.
+ *
+ * ## The refusal message is preserved verbatim
+ *
+ * `providerController.arrivalHandler` matches `/cannot move to/i` to answer
+ * 409 rather than 500. The executor's richer codes are available on the
+ * `/api/v1` path; this legacy endpoint keeps flattening them exactly as it
+ * did, because changing its response vocabulary is a client-visible change
+ * that belongs to the endpoint's own migration, not to this one.
+ */
+export const markEnRoute = async (
+  bookingId: number,
+  workerUid: string,
+  options: { idempotencyKey?: string; correlationId?: string } = {},
+) => {
+  await ensureArrivalColumns();
+  return runArrivalTransition(bookingId, workerUid, 'PROVIDER_EN_ROUTE', 'EN_ROUTE', options);
+};
+
+/**
+ * Shared shape for the executor-backed arrival stages.
+ *
+ * Returns the assignment row, which is what `arrivalHandler` reads to compute
+ * `availableActions`. Legacy returned it from `RETURNING *` inside the
+ * transaction; this reads it after the commit, which can only ever return a
+ * fresher row.
+ */
+const runArrivalTransition = async (
+  bookingId: number,
+  workerUid: string,
+  action: 'PROVIDER_EN_ROUTE' | 'PROVIDER_ARRIVED',
+  to: 'EN_ROUTE' | 'ARRIVED',
+  options: { idempotencyKey?: string; correlationId?: string } = {},
+) => {
+  try {
+    await transitionBooking({
+      action,
+      bookingId,
+      actorRole: 'assigned_provider',
+      actorUid: workerUid,
+      idempotencyKey: options.idempotencyKey,
+      correlationId: options.correlationId,
+    });
+  } catch (error) {
+    if (error instanceof TransitionError) {
+      // Byte-identical to the legacy refusal, so the controller's 409 mapping
+      // keeps working. The specific reason travels on /api/v1.
+      throw new Error(`Job cannot move to ${to}`);
+    }
+    throw error;
+  }
+
+  const res = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.booking_workers
+      WHERE booking_id = $1 AND worker_uid = $2
+      ORDER BY assigned_at DESC NULLS LAST, id DESC
+      LIMIT 1`,
+    [bookingId, workerUid],
   );
+  return res.rows[0];
+};
 
 /** The provider has reached the address and has not yet started work. */
 export const markArrived = (bookingId: number, workerUid: string) =>
