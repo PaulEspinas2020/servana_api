@@ -325,11 +325,20 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
     return done(rows.length ? [{ booking_id: Number(bookingId) }] : []);
   }
 
+  // Fixed-shape timestamp so a test can assert presence without a clock.
+const nowIso = () => new Date().toISOString();
+
   // ── assignment / reassignment ──
   // Reassignment closes the outgoing row as DECLINED, not REASSIGNED — see the
   // executor's ASSIGNED branch for why the accurate word is not used.
-  if (/UPDATE servana\.booking_workers SET status = 'DECLINED' WHERE booking_id = \$1 AND worker_uid = \$2/i.test(flat)) {
-    for (const a of mine(Number(params[0]), params[1])) a.status = 'DECLINED';
+  if (/UPDATE servana\.booking_workers SET status = 'DECLINED', declined_at = COALESCE\(declined_at, NOW\(\)\) WHERE booking_id = \$1 AND worker_uid = \$2/i.test(flat)) {
+    for (const a of mine(Number(params[0]), params[1])) {
+      a.status = 'DECLINED';
+      // COALESCE, modelled honestly: an existing timestamp is PRESERVED. A
+      // fake that always stamped would pass a retry test that the real
+      // statement would fail, which is worse than not testing it.
+      a.declined_at = a.declined_at ?? nowIso();
+    }
     return done([]);
   }
   if (/INSERT INTO servana\.booking_workers/i.test(flat)) {

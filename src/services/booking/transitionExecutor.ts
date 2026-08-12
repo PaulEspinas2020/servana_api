@@ -1491,8 +1491,27 @@ async function applyState(
          * both, or a metric that reads `booking_transitions` instead. Both are
          * assignment-policy changes, not state-machine ones.
          */
+        /**
+         * The closure timestamp, in the SAME statement as the status.
+         *
+         * A row reading `DECLINED` with no record of when it became declined is
+         * incomplete lifecycle data, independent of anything that consumes it.
+         * Written here rather than after, so the two cannot separate: a status
+         * without its timestamp is exactly the state this fixes.
+         *
+         * COALESCE, not NOW(). A retry must never move a historical departure
+         * forward — and a provider who genuinely declined earlier, before an
+         * admin reassigned the booking away, keeps the moment they declined
+         * rather than inheriting the admin's.
+         *
+         * No backfill. Rows closed before this shipped keep `declined_at NULL`,
+         * and anything deriving a bound from it must treat NULL as "unknown"
+         * and refuse, never as "no bound".
+         */
         await client.query(
-          `UPDATE ${s}.booking_workers SET status = 'DECLINED'
+          `UPDATE ${s}.booking_workers
+              SET status = 'DECLINED',
+                  declined_at = COALESCE(declined_at, NOW())
             WHERE booking_id = $1 AND worker_uid = $2`,
           [loaded.id, providerUid],
         );

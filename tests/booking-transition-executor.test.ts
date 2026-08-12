@@ -193,7 +193,10 @@ const runQueryInner = (conn: number, sql: string, params: unknown[] = []): { row
   // ASSIGNED branch: auto-assignment excludes providers whose row on this
   // booking says DECLINED, so the semantically accurate REASSIGNED would make
   // the provider an admin just removed eligible to be assigned straight back.
-  if (/UPDATE servana\.booking_workers SET status = 'DECLINED'[\s\S]*?worker_uid = \$2/i.test(sql)) {
+  // Whitespace-tolerant: this fake matches RAW sql, so a statement reformatted
+  // across lines would silently stop matching and fall through to a later
+  // branch — which reads as a wrong status rather than as a broken double.
+  if (/UPDATE\s+servana\.booking_workers\s+SET\s+status\s*=\s*'DECLINED'[\s\S]*?worker_uid\s*=\s*\$2/i.test(sql)) {
     for (const a of db.assignments) {
       if (a.booking_id === Number(params[0]) && a.worker_uid === params[1]) a.status = 'DECLINED';
     }
