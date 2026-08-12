@@ -23,6 +23,7 @@ class FakeDb {
   bookings = new Map<number, Row>();
   assignments: Row[] = [];
   transitions: Row[] = [];
+  payments: Row[] = [];
   idempotency: Row[] = [];
   /** Every statement issued, in order, tagged by connection. */
   log: Array<{ conn: number; sql: string }> = [];
@@ -34,6 +35,7 @@ class FakeDb {
     this.bookings.clear();
     this.assignments = [];
     this.transitions = [];
+    this.payments = [];
     this.idempotency = [];
     this.log = [];
     this.nextTransitionId = 1;
@@ -66,6 +68,20 @@ const runQueryInner = (conn: number, sql: string, params: unknown[] = []): { row
   }
 
   if (/CREATE TABLE|CREATE INDEX/i.test(sql)) return { rows: [] };
+
+  // The cash-settlement guard for PROVIDER_COMPLETE.
+  if (/EXISTS\s*\(\s*SELECT 1 FROM servana\.payments/is.test(sql)) {
+    const rows = db.payments.filter((p) => p.booking_id === Number(params[0]));
+    const settled = rows.some(
+      (p) => String(p.method ?? '').toUpperCase() !== 'CASH'
+        || String(p.status ?? '').toUpperCase() === 'PAID',
+    );
+    return { rows: [{
+      settled,
+      first_method: rows.length ? String(rows[0].method ?? '').toUpperCase() : null,
+      first_status: rows.length ? String(rows[0].status ?? '').toUpperCase() : null,
+    }] };
+  }
 
   // ── booking load, with the lock ──
   if (/FROM servana\.bookings\s+WHERE id = \$1\s+FOR UPDATE/is.test(sql)) {
@@ -218,6 +234,9 @@ const seedBooking = (opts: {
   /** Hours from now. Default is well outside the provider-cancel window, so a
    *  test about something else is not silently blocked by the 48-hour policy. */
   scheduleInHours?: number;
+  /** Default is a settled card payment, so the cash-completion guard passes
+   *  for tests that are not about payment. Set explicitly to exercise it. */
+  payment?: { method: string; status: string } | null;
 } = {}) => {
   db.reset();
   __resetTransitionSchema();
@@ -228,6 +247,9 @@ const seedBooking = (opts: {
     worker_uid: opts.workerUid === undefined ? PROVIDER_A : opts.workerUid,
     schedule: new Date(Date.now() + (opts.scheduleInHours ?? 240) * 3_600_000).toISOString(),
   });
+  db.payments = opts.payment === undefined
+    ? [{ booking_id: 1, method: 'CARD', status: 'PAID' }]
+    : opts.payment ? [{ booking_id: 1, ...opts.payment }] : [];
   if (opts.assignmentStatus && opts.workerUid !== null) {
     db.assignments.push({ booking_id: 1, worker_uid: opts.workerUid ?? PROVIDER_A, status: opts.assignmentStatus });
   }

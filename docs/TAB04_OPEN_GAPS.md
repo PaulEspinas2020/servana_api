@@ -7,45 +7,41 @@ being written down; each entry names what would close it.
 
 ## OPEN GAPS
 
-### AUTH FLAKE — OPEN, NONREPRODUCIBLE
+### AUTH FLAKE — OPEN, RECURRED ONCE. CERTIFICATION IS BLOCKED.
 
-**Status:** `OPEN — NONREPRODUCIBLE`. Do not call this fixed.
+**Status:** `OPEN — NONREPRODUCIBLE`, and it has now **recurred**. Per the
+agreed ratchet, TAB 04 does **not** certify until this is resolved.
 
 | | |
 |---|---|
 | Suite | `tests/v1-auth-security.test.ts` |
 | Test | `an unknown account is indistinguishable from a known one › forgot-password answers identically for a real address, an unknown one and a mobile` |
-| Location | `tests/v1-auth-security.test.ts:220` |
-| First seen | 2026-08-12, during the full-suite run that gated the LEGACY_STATUS_PROJECTION commit |
-| Reproduction | None. 4 subsequent passes — 3 isolated runs, 1 full suite. Later full runs also green. |
+| Occurrences | 2, in roughly a dozen full-suite runs (2026-08-12) |
+| Reproduction | None. Never in isolation, never on demand, not in 5 consecutive full runs after the second occurrence. |
+| Evidence captured | **None on either occurrence.** The first was re-run before its output was read; the second produced no diff in the grep used. This is the gap that made the investigation guesswork. |
 
-**What the failure output said.** Only the suite and test name were captured
-before the run was re-executed; the failing assertion within the test was not
-recorded. That is a gap in the evidence, not in the test — noted so the next
-occurrence is captured properly. **If it fails again, capture the full jest
-output before doing anything else.**
+**Ruled out by inspection.** Recorded so nobody re-walks them:
 
-**Run context at the time of failure.** Full suite, all workers busy; the suite
-took 97s versus ~20s isolated. Two suites failed in that run; the other
-(`source-reads-normalise-line-endings`) was a genuine failure with an
-identified cause, since fixed.
+- **`perAccountRecoveryLimiter` (5/hour, keyed on identifier).** The failing
+  test's first call is call **#1** for that identifier — `KNOWN_EMAIL` is used
+  4 times across the whole suite, under the limit, and this test is first in
+  declaration order. The budget cannot be exhausted at that point.
+- **A time-derived envelope field.** There is none. On a 200 the envelope
+  carries no `requestId` either, so the test's `.replace()` is a no-op and the
+  two raw bodies must match byte-for-byte.
+- **Auth telemetry.** `recordAuthOutcome` writes to console; it never touches
+  the response body.
+- **Port collision between suites.** Every suite binds with `listen(0)`.
 
-**Leading suspect, and why it is not yet convincing.** `perIpLoginLimiter` is
-mounted on every `/api/v1/auth/*` route (`src/api/v1/register.ts:238-246`) and
-keyed on one IP for the whole suite, so earlier tests in the file consume the
-same budget. But the timing runs the wrong way: a slow, loaded run spreads
-requests across *more* limiter windows and should trip *less* often, not more.
-The theory does not explain the observation.
+**What was done instead of guessing again.** The test now carries its own
+evidence: all three responses and their `RateLimit-*` headers are attached to
+the assertions, so the next occurrence states the cause instead of requiring a
+re-run that erases it.
 
-**The ratchet.** One more failure in any subsequent full suite → **stop and
-investigate before continuing release certification**. Several clean full-suite
-runs are required before TAB 04 certifies regardless, ideally alongside the
-real PostgreSQL concurrency work.
-
-**If it is shared limiter state:** the fix is test isolation — resetting the
-limiter store between suites. Not raising the limit, and not weakening the
-security assertion. A uniformity test that has been relaxed to stop flaking is
-an enumeration oracle with a green tick next to it.
+**Resolution required before certification.** If it proves to be shared limiter
+state, the fix is test isolation — resetting the limiter store between suites.
+Not a higher limit, and not a weakened assertion. A uniformity test relaxed to
+stop flaking is an enumeration oracle with a green tick next to it.
 
 ---
 

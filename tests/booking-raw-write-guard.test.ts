@@ -109,16 +109,16 @@ const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason
     reason: 'Customer cancel and confirm-OTP still write directly.',
   },
   'services/technicianService.ts': {
-    count: 5,
-    phase: 'B2 — complete (+ provider cancel, + assignWorker)',
+    count: 3,
+    phase: 'E — provider cancel; TAB 05 — assignWorker',
     reason:
-      'The provider lifecycle writer. All of B1 is migrated: ACCEPT, DECLINE, ' +
-      'EN_ROUTE, ARRIVED and START now go through the executor, and both ' +
-      'advanceArrivalStage and the duplicate worker-code predicate are gone. ' +
-      'Five sites remain: complete (B2, isolated because completion drives ' +
-      'reviews, payments and earnings), the shared release still used by ' +
-      'cancelAcceptedJob until PROVIDER_CANCEL migrates, and assignWorker, ' +
-      'which belongs to TAB 05.',
+      'THE ENTIRE PROVIDER LIFECYCLE IS MIGRATED. Accept, decline, en-route, ' +
+      'arrived, start and complete all go through the executor; ' +
+      'advanceArrivalStage, the duplicate worker-code predicate and the ' +
+      'unpaid-cash EXISTS clause are gone. Three sites remain and none is a ' +
+      'lifecycle fragment: the shared release still used by cancelAcceptedJob ' +
+      'until PROVIDER_CANCEL migrates, and assignWorker, which belongs to ' +
+      'TAB 05.',
   },
   'services/adminBookingService.ts': {
     count: 8,

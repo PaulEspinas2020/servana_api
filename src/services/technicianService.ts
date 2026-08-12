@@ -2055,46 +2055,82 @@ export class UnpaidCashBookingError extends Error {
   }
 }
 
-export const completeJob = async (bookingId: number, workerUid: string) => {
-  const res = await dbQuery.query(
-    `
-    UPDATE ${dbSchema}.booking_workers bw
-    SET status = 'COMPLETED',
-        completed_at = NOW()
-    WHERE bw.booking_id = $1
-    AND bw.worker_uid = $2
-    AND bw.status = 'IN_PROGRESS'
-    AND EXISTS (
-      SELECT 1
-      FROM ${dbSchema}.payments p
-      WHERE p.booking_id = bw.booking_id
-        AND (UPPER(COALESCE(p.method, '')) <> 'CASH' OR UPPER(COALESCE(p.status, '')) = 'PAID')
-    )
-    RETURNING bw.*
-    `,
-    [bookingId, workerUid]
-  );
-
-  if (!res.rowCount) {
-    const payment = await dbQuery.query(
-      `SELECT method, status FROM ${dbSchema}.payments WHERE booking_id = $1`,
-      [bookingId]
-    );
-    const row = payment.rows[0];
-    if (
-      String(row?.method ?? '').toUpperCase() === 'CASH' &&
-      String(row?.status ?? '').toUpperCase() !== 'PAID'
-    ) {
-      throw new UnpaidCashBookingError();
+/**
+ * ─── B2 · PROVIDER_COMPLETE, on the canonical executor ───────────────────────
+ *
+ * Completion is isolated from B1 because it is the first provider transition
+ * with broad downstream consequences — disbursement, earnings, reviews, the
+ * customer's receipt email. TAB 04's job here is narrow and specific: establish
+ * that completion happened EXACTLY ONCE and is authoritative. What completion
+ * triggers is deliberately left alone.
+ *
+ * ## The precondition moved; the side effects did not
+ *
+ * The unpaid-cash check was an `EXISTS` clause inside the UPDATE, which made it
+ * a genuine transition guard rather than a side effect: the write simply did
+ * not happen. It is now the named canonical guard
+ * `cashPaymentSettledBeforeCompletion`, evaluated inside the transaction
+ * before any write.
+ *
+ * That classification is the whole risk of this migration. Had it been treated
+ * as a post-transition check, a caller would receive `UnpaidCashBookingError`
+ * for a booking that had already committed COMPLETED — a failure response over
+ * a successful state change, with the provider's app showing the job open
+ * while the money pipeline treated it as done.
+ *
+ * Everything else — disbursement, the receipt email, the group-chat message —
+ * keeps its current position and its current failure behaviour. None of them
+ * is a precondition, and none is redesigned here.
+ *
+ * ## Exactly-once past the state row
+ *
+ * `createDisbursement` already dedupes on its own
+ * (`ON CONFLICT (booking_id) DO NOTHING`) and `postSystemMessageOnce` is keyed.
+ * The receipt email is NOT idempotent, which is why the replay gate below is
+ * on `idempotentReplay` rather than trusting the downstream effects to sort
+ * themselves out.
+ */
+export const completeJob = async (
+  bookingId: number,
+  workerUid: string,
+  options: { idempotencyKey?: string; correlationId?: string } = {},
+) => {
+  let result: TransitionResult;
+  try {
+    result = await transitionBooking({
+      action: 'PROVIDER_COMPLETE',
+      bookingId,
+      actorRole: 'assigned_provider',
+      actorUid: workerUid,
+      idempotencyKey: options.idempotencyKey,
+      correlationId: options.correlationId,
+    });
+  } catch (error) {
+    if (error instanceof TransitionError) {
+      // The one refusal callers branch on. `providerController.completeBooking`
+      // answers 409 CASH_PAYMENT_REQUIRED for it and 500 for everything else,
+      // so collapsing the two would turn an actionable prompt into a server
+      // error on a live money path.
+      if (error.detail?.reasonCode === 'BOOKING_CASH_PAYMENT_REQUIRED') {
+        throw new UnpaidCashBookingError();
+      }
+      throw new Error("Job cannot be completed");
     }
-    throw new Error("Job cannot be completed");
+    throw error;
   }
 
-  // Mark the parent booking as COMPLETED and queue the 72-h disbursement
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET status = 'COMPLETED' WHERE id = $1`,
-    [bookingId]
+  const completedRes = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.booking_workers
+      WHERE booking_id = $1 AND worker_uid = $2
+      ORDER BY assigned_at DESC NULLS LAST, id DESC
+      LIMIT 1`,
+    [bookingId, workerUid],
   );
+  const completed = completedRes.rows[0];
+
+  // A replay must not re-run the downstream. Disbursement would be caught by
+  // its own conflict clause, but the receipt email would go out twice.
+  if (result.idempotentReplay) return completed;
 
   try { await createDisbursement(bookingId); }
   catch (e) { console.error("createDisbursement failed (completeJob):", e); }
@@ -2150,7 +2186,7 @@ export const completeJob = async (bookingId: number, workerUid: string) => {
     }
   })();
 
-  return res.rows[0];
+  return completed;
 };
 
 // ---------------------------------------------------------------------------

@@ -211,7 +211,18 @@ const post = async (path: string, body: unknown, headers: Record<string, string>
     body: JSON.stringify(body),
   });
   const text = await res.text();
-  return { status: res.status, raw: text, body: text ? JSON.parse(text) : null };
+  return {
+    status: res.status,
+    raw: text,
+    body: text ? JSON.parse(text) : null,
+    // Captured for the open enumeration-uniformity flake: if a 429 ever is the
+    // cause, these headers say so outright instead of leaving it to inference.
+    limits: {
+      limit: res.headers.get('ratelimit-limit'),
+      remaining: res.headers.get('ratelimit-remaining'),
+      retryAfter: res.headers.get('retry-after'),
+    },
+  };
 };
 
 // ─── 1. Enumeration ───────────────────────────────────────────────────────────
@@ -222,9 +233,35 @@ describe('an unknown account is indistinguishable from a known one', () => {
     const unknown = await post('/api/v1/auth/forgot-password', { identifier: 'nobody-here@x.co' });
     const mobile = await post('/api/v1/auth/forgot-password', { identifier: '09171234567' });
 
-    expect(real.status).toBe(200);
-    expect(unknown.status).toBe(real.status);
-    expect(mobile.status).toBe(real.status);
+    /**
+     * AUTH FLAKE — OPEN, NONREPRODUCIBLE. See docs/TAB04_OPEN_GAPS.md.
+     *
+     * This test has failed twice in roughly a dozen full-suite runs and has
+     * never reproduced in isolation or on demand. The first occurrence was
+     * re-run before its output was captured, which is why the cause is still
+     * unknown — so the assertions now carry their evidence with them.
+     *
+     * Ruled out by inspection, recorded so nobody re-walks them:
+     *   - perAccountRecoveryLimiter (5/hour): the FIRST call below is call #1
+     *     for that identifier, so the budget cannot be exhausted here.
+     *   - a time-derived envelope field: there is none, and a 200 carries no
+     *     requestId either, so the replace() below is a no-op on success.
+     *   - auth telemetry: writes to console, never to the body.
+     *   - port collision between suites: every suite binds with listen(0).
+     *
+     * If this fails again, `context` is the whole picture — three statuses,
+     * three raw bodies, and the rate-limit headers that would prove or kill
+     * the limiter theory for good.
+     */
+    const context = JSON.stringify(
+      { real, unknown, mobile, limits: real.limits },
+      null,
+      2,
+    );
+
+    expect(`real.status=${real.status} ${context}`).toContain('real.status=200');
+    expect(`${unknown.status} ${context}`).toContain(`${real.status} `);
+    expect(`${mobile.status} ${context}`).toContain(`${real.status} `);
     expect(unknown.raw).toBe(real.raw.replace(/"requestId":"[^"]*"/, unknown.raw.match(/"requestId":"[^"]*"/)?.[0] ?? ''));
     expect(unknown.body).toEqual(real.body);
     expect(mobile.body).toEqual(real.body);

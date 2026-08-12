@@ -28,6 +28,7 @@ export const store = {
   transitions: [] as Row[],
   idempotency: [] as Row[],
   tracking: [] as Row[],
+  payments: [] as Row[],
   /** Every statement issued, flattened. */
   sql: [] as string[],
   /** Statements issued between BEGIN and COMMIT. */
@@ -49,6 +50,7 @@ export const reset = (): void => {
   store.transitions = [];
   store.idempotency = [];
   store.tracking = [];
+  store.payments = [];
   store.sql = [];
   store.inTransaction = [];
   store.open = false;
@@ -75,6 +77,7 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
       transitions: store.transitions,
       idempotency: store.idempotency,
       tracking: store.tracking,
+      payments: store.payments,
     });
     return done([]);
   }
@@ -114,6 +117,33 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
     // The reassignment lookup. No location, so the search short-circuits to
     // NO_LOCATION rather than reaching the matching engine.
     return done(store.booking ? [{ schedule: null, location_id: null, service_address: null, service_id: 1 }] : []);
+  }
+
+  // The cash-settlement guard: one round trip for the EXISTS plus the first
+  // payment row, mirroring what the legacy UPDATE and its miss-handler read.
+  if (/EXISTS \( SELECT 1 FROM servana\.payments/i.test(flat)) {
+    const rows = store.payments.filter((p) => p.booking_id === Number(params[0]));
+    const settled = rows.some(
+      (p) => String(p.method ?? '').toUpperCase() !== 'CASH'
+        || String(p.status ?? '').toUpperCase() === 'PAID',
+    );
+    return done([{
+      settled,
+      first_method: rows.length ? String(rows[0].method ?? '').toUpperCase() : null,
+      first_status: rows.length ? String(rows[0].status ?? '').toUpperCase() : null,
+    }]);
+  }
+
+  if (/UPDATE servana\.bookings SET status = 'COMPLETED'/i.test(flat)) {
+    if (store.booking && store.booking.id === Number(params[0])) store.booking.status = 'COMPLETED';
+    return done([]);
+  }
+  if (/UPDATE servana\.booking_workers SET status = 'COMPLETED', completed_at = NOW\(\)/i.test(flat)) {
+    for (const a of mine(Number(params[0]), params[1])) {
+      a.status = 'COMPLETED';
+      a.completed_at = '2026-08-12T00:00:00.000Z';
+    }
+    return done([]);
   }
 
   if (/SELECT \* FROM servana\.booking_workers/i.test(flat)) {

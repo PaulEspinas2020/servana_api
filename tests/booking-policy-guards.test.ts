@@ -218,6 +218,17 @@ describe('the transitions endpoint answers from the same guard', () => {
 });
 
 describe('the guard registry is honest', () => {
+  /** A context with everything a guard may read, defaults that pass. */
+  const guardCtx = (o: { schedule?: string | null } = {}) => ({
+    bookingId: BOOKING,
+    bookingStatus: 'WORKER_ASSIGNED',
+    workerStatus: 'ACCEPTED',
+    schedule: o.schedule ?? hoursFromNow(500),
+    now: new Date(),
+    metadata: {},
+    query: async () => ({ rows: [{ settled: true }], rowCount: 1 }),
+  });
+
   it('every guard named by an action exists', () => {
     for (const [, spec] of Object.entries(BOOKING_ACTIONS)) {
       const name = (spec as { guard?: string }).guard;
@@ -225,30 +236,38 @@ describe('the guard registry is honest', () => {
     }
   });
 
-  it('a guard returns a reason code whenever it refuses', () => {
+  it('a guard returns a reason code whenever it refuses', async () => {
     // A refusal with no reason is indistinguishable from a bug at the client.
-    const refused = BOOKING_GUARDS.providerCancellationWindow({
-      bookingStatus: 'WORKER_ASSIGNED', workerStatus: 'ACCEPTED',
-      schedule: hoursFromNow(1), now: new Date(), metadata: {},
-    });
+    const refused = await BOOKING_GUARDS.providerCancellationWindow(
+      guardCtx({ schedule: hoursFromNow(1) }),
+    );
     expect(refused.allowed).toBe(false);
     expect(refused.reasonCode).toBeTruthy();
     expect(refused.message).toBeTruthy();
   });
 
-  it('the guard delegates to the policy rather than reimplementing it', () => {
+  it('the guard delegates to the policy rather than reimplementing it', async () => {
     // Same inputs, same verdict — if the guard ever grew its own arithmetic
-    // this would drift the moment the constant changed.
-    for (const hours of [1, 47, 48, 49]) {
+    // this would drift the moment the constant changed. Half-hour offsets for
+    // the same floor-boundary reason as the parity test above.
+    for (const hours of [1.5, 47.5, 48.5, 49.5]) {
       const schedule = hoursFromNow(hours);
       const policy = evaluateCancellation({
         workerStatus: 'ACCEPTED', schedule, now: new Date(),
       });
-      const guard = BOOKING_GUARDS.providerCancellationWindow({
-        bookingStatus: 'WORKER_ASSIGNED', workerStatus: 'ACCEPTED',
-        schedule, now: new Date(), metadata: {},
-      });
+      const guard = await BOOKING_GUARDS.providerCancellationWindow(guardCtx({ schedule }));
       expect(guard.allowed).toBe(policy.canCancel);
+    }
+  });
+
+  it('every guard is reachable through the same context shape', async () => {
+    // Both guards take one GuardContext. A guard needing data reads it through
+    // ctx.query on the caller's connection; one that does not simply ignores
+    // it. That uniformity is what lets the executor and getAvailableActions
+    // run the identical registry.
+    for (const name of Object.keys(BOOKING_GUARDS) as Array<keyof typeof BOOKING_GUARDS>) {
+      const verdict = await BOOKING_GUARDS[name](guardCtx({ schedule: hoursFromNow(500) }));
+      expect(typeof verdict.allowed).toBe('boolean');
     }
   });
 });

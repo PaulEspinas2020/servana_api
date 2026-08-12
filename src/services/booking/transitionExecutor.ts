@@ -68,7 +68,9 @@ const s = db.schema;
  * decides which policy applies to which action, and turns a refusal into a
  * transport-neutral reason code.
  */
-export type BookingGuardName = 'providerCancellationWindow';
+export type BookingGuardName =
+  | 'providerCancellationWindow'
+  | 'cashPaymentSettledBeforeCompletion';
 
 export interface GuardVerdict {
   allowed: boolean;
@@ -80,11 +82,23 @@ export interface GuardVerdict {
 }
 
 export interface GuardContext {
+  bookingId: number;
   bookingStatus: string | null;
   workerStatus: string | null;
   schedule: unknown;
   now: Date;
   metadata: Record<string, unknown>;
+  /**
+   * Reads whatever the guard needs, on the CALLER's connection.
+   *
+   * The executor passes its locked transaction, so a guard sees the same
+   * consistent snapshot the decision is made in and cannot be raced between
+   * the check and the write. `getAvailableActions` passes the pool, because
+   * advertising what a provider may do is advisory and takes no lock.
+   *
+   * A guard that needs no data ignores it.
+   */
+  query: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount: number | null }>;
 }
 
 /**
@@ -95,7 +109,7 @@ export interface GuardContext {
  * implementation for both is the point: a UI deciding button visibility from
  * its own copy of a rule eventually offers something the executor refuses.
  */
-export const BOOKING_GUARDS: Record<BookingGuardName, (ctx: GuardContext) => GuardVerdict> = {
+export const BOOKING_GUARDS: Record<BookingGuardName, (ctx: GuardContext) => GuardVerdict | Promise<GuardVerdict>> = {
   providerCancellationWindow: (ctx) => {
     const verdict = evaluateCancellation({
       workerStatus: ctx.workerStatus,
@@ -130,6 +144,70 @@ export const BOOKING_GUARDS: Record<BookingGuardName, (ctx: GuardContext) => Gua
         noticeHours: verdict.noticeHours,
         hoursUntilStart: verdict.hoursUntilStart,
       },
+    };
+  },
+
+  /**
+   * A cash job cannot be completed until the cash is recorded as received.
+   *
+   * ## This is a PRECONDITION, not a side effect
+   *
+   * It was previously an `EXISTS` clause inside `completeJob`'s UPDATE, which
+   * made it a genuine transition guard: the write simply did not happen. The
+   * migration had to classify it correctly or break it. Running it after the
+   * executor committed would hand the caller `UnpaidCashBookingError` for a
+   * booking that had ALREADY completed — a failure response over a successful
+   * state change, and the provider's app would show the job still open while
+   * the money pipeline treated it as done.
+   *
+   * So it is a named guard, evaluated inside the transaction, before any
+   * write.
+   *
+   * ## The predicate is the legacy one, unchanged
+   *
+   *   EXISTS a payment row where the method is not CASH, or it is CASH and
+   *   already PAID.
+   *
+   * Note what that means for a booking with NO payment row at all: EXISTS is
+   * false, so completion is refused. That is existing behaviour and is
+   * preserved deliberately rather than corrected here — a booking with no
+   * payment record is not a completion problem to solve during a state-machine
+   * migration.
+   */
+  cashPaymentSettledBeforeCompletion: async (ctx) => {
+    const res = await ctx.query(
+      `SELECT
+         EXISTS (
+           SELECT 1 FROM ${s}.payments p
+            WHERE p.booking_id = $1
+              AND (UPPER(COALESCE(p.method, '')) <> 'CASH'
+                   OR UPPER(COALESCE(p.status, '')) = 'PAID')
+         ) AS settled,
+         (SELECT UPPER(COALESCE(method, '')) FROM ${s}.payments
+           WHERE booking_id = $1 LIMIT 1) AS first_method,
+         (SELECT UPPER(COALESCE(status, '')) FROM ${s}.payments
+           WHERE booking_id = $1 LIMIT 1) AS first_status`,
+      [ctx.bookingId],
+    );
+    if (res.rows[0]?.settled === true) return { allowed: true };
+
+    // Classified exactly as the legacy miss-handler did: the FIRST payment row
+    // decides whether this reads as unpaid cash or as a generic refusal.
+    const method = String(res.rows[0]?.first_method ?? '');
+    const status = String(res.rows[0]?.first_status ?? '');
+    const unpaidCash = method === 'CASH' && status !== 'PAID';
+
+    return {
+      allowed: false,
+      reasonCode: unpaidCash
+        ? 'BOOKING_CASH_PAYMENT_REQUIRED'
+        : 'BOOKING_COMPLETION_PAYMENT_UNSETTLED',
+      message: unpaidCash
+        ? "Record the customer's cash payment before completing this job"
+        : 'This booking cannot be completed yet.',
+      // No amounts, no payment ids. A provider needs to know what to do, not
+      // the customer's payment record.
+      detail: { cashPaymentOutstanding: unpaidCash },
     };
   },
 };
@@ -173,7 +251,10 @@ export const BOOKING_ACTIONS = {
   PROVIDER_EN_ROUTE: { to: 'EN_ROUTE', actor: 'assigned_provider' },
   PROVIDER_ARRIVED: { to: 'ARRIVED', actor: 'assigned_provider' },
   PROVIDER_START: { to: 'IN_PROGRESS', actor: 'assigned_provider' },
-  PROVIDER_COMPLETE: { to: 'COMPLETED', actor: 'assigned_provider' },
+  PROVIDER_COMPLETE: {
+    to: 'COMPLETED', actor: 'assigned_provider',
+    guard: 'cashPaymentSettledBeforeCompletion',
+  },
   /** Walking away from a job already taken on. Subject to the 48-hour policy. */
   PROVIDER_CANCEL: {
     to: 'AWAITING_ASSIGNMENT', actor: 'assigned_provider',
@@ -1029,12 +1110,16 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
      */
     const guardName = (spec as { guard?: BookingGuardName }).guard;
     if (guardName) {
-      const verdict = BOOKING_GUARDS[guardName]({
+      const verdict = await BOOKING_GUARDS[guardName]({
+        bookingId: loaded.id,
         bookingStatus: loaded.status,
         workerStatus: loaded.assignmentStatus,
         schedule: loaded.schedule,
         now: new Date(),
         metadata: input.metadata ?? {},
+        // The LOCKED transaction: a guard reads the same snapshot the decision
+        // is made in, so nothing can change between the check and the write.
+        query: (sql, params) => client.query(sql, params as any[]),
       });
       if (!verdict.allowed) {
         throw new TransitionError(
@@ -1237,12 +1322,16 @@ export async function getAvailableActions(
       continue;
     }
     if (spec.guard) {
-      const guarded = BOOKING_GUARDS[spec.guard]({
+      const guarded = await BOOKING_GUARDS[spec.guard]({
+        bookingId: Number(row.id),
         bookingStatus: row.status,
         workerStatus: row.worker_status,
         schedule: row.schedule,
         now: new Date(),
         metadata: {},
+        // No lock: this is advisory. Enforcement re-runs the same guard under
+        // FOR UPDATE, which is where a race is actually resolved.
+        query: (sql, params) => dbQuery.query(sql, params as any[]),
       });
       if (!guarded.allowed) {
         out.push({
