@@ -49,6 +49,7 @@ import {
 } from './canonicalState';
 import { CANONICAL_CANCELLED } from './cancellationVocabulary';
 import { evaluateCancellation, customerMayCancel } from './bookingPolicies';
+import { providerRoleSqlPredicate } from '../../constants/providerRoles';
 
 const s = db.schema;
 
@@ -350,10 +351,15 @@ export const BOOKING_ACTIONS = {
   },
   // Not PENDING_OTP: the machine has no such transition, because a booking is
   // not assignable until its OTP is confirmed.
-  ADMIN_ASSIGN: { to: 'ASSIGNED', actor: 'admin', from: ['AWAITING_ASSIGNMENT'] },
+  ADMIN_ASSIGN: {
+    to: 'ASSIGNED', actor: 'admin',
+    from: ['AWAITING_ASSIGNMENT'],
+    advisoryLock: 'PROVIDER_ASSIGNMENT',
+  },
   ADMIN_REASSIGN: {
     to: 'ASSIGNED', actor: 'admin',
     from: ['ASSIGNED', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED'],
+    advisoryLock: 'PROVIDER_ASSIGNMENT',
   },
   /**
    * Admin records a provider's acceptance ON BEHALF of them (§23).
@@ -433,6 +439,8 @@ export const BOOKING_ACTIONS = {
     requires?: BookingCredential;
     /** Only an EventOnlyAction may declare this. Asserted by test. */
     eventOnly?: { from: readonly BookingState[] };
+    /** Extra lock, key derived server-side. Allow-listed by test. */
+    advisoryLock?: AdvisoryLockRequirement;
   }
 >;
 
@@ -461,6 +469,31 @@ export type BookingCredential = 'BOOKING_OTP' | 'WORKER_CODE';
  * executor fallback, and it never substitutes for a refusal.
  */
 export type EventOnlyAction = 'ADMIN_APPROVE_COMPLETION';
+
+/**
+ * Locks an action needs BEYOND the booking row.
+ *
+ * A closed union, never a free-form key. `advisoryLockKey?: string` would be
+ * an arbitrary locking escape hatch and would let a caller name any lock it
+ * liked; the key here is derived SERVER-SIDE from validated input.
+ *
+ * ## PROVIDER_ASSIGNMENT, and why the booking lock is not enough
+ *
+ * `FOR UPDATE` on the booking row serialises actions on ONE booking. It does
+ * nothing across two bookings that share a provider — so two admins assigning
+ * the same provider to two overlapping bookings both pass the ±2-hour conflict
+ * check and both commit. The legacy `adminAssignProvider` knew this and took
+ * `pg_advisory_xact_lock` keyed on the provider. That lock is not assignment
+ * POLICY; it is part of what makes the conflict check mean anything, so the
+ * canonical writer has to hold it in the same transaction as the write.
+ *
+ * ## Lock ORDER is standardised: booking row, then provider
+ *
+ * Legacy took them the other way round. Two paths taking the same two locks in
+ * opposite orders is a deadlock, so one order is chosen and enforced by test:
+ * `loadForUpdate` first, advisory second, everywhere.
+ */
+export type AdvisoryLockRequirement = 'PROVIDER_ASSIGNMENT';
 
 /** Which metadata field carries each credential, and how it is refused. */
 const CREDENTIAL_FIELD: Record<BookingCredential, { field: string; code: TransitionErrorCode; message: string }> = {
@@ -924,6 +957,8 @@ const LEGACY_TRACKING: Partial<Record<BookingAction, { status: string; note: str
   PROVIDER_EN_ROUTE: { status: 'EN_ROUTE', note: 'Provider is on the way' },
   // technicianService.markArrived.
   PROVIDER_ARRIVED: { status: 'ARRIVED', note: 'Provider has arrived' },
+  // adminBookingService.adminAssignProvider
+  ADMIN_ASSIGN: { status: 'WORKER_ASSIGNED', note: 'Provider assigned by admin' },
   // bookingService.confirmOtp
   CUSTOMER_CONFIRM_OTP: { status: 'CONFIRMED', note: 'OTP verified' },
 };
@@ -981,6 +1016,12 @@ const LEGACY_TIMELINE_EVENT: Partial<Record<BookingAction, {
   // Written on BOTH branches: forcing completion and approving an already
   // completed job are each a real administrative act, and legacy recorded
   // both. Only the canonical evidence distinguishes them, via state_changed.
+  ADMIN_ASSIGN: {
+    eventType: 'booking_assigned',
+    title: 'Provider assigned by admin',
+    actorType: 'admin',
+    metadataKeys: ['providerUid', 'providerName'],
+  },
   ADMIN_APPROVE_COMPLETION: {
     eventType: 'completion_approved',
     title: 'Completion approved by admin',
@@ -1031,6 +1072,103 @@ async function writeLegacyTracking(
     `INSERT INTO ${s}.booking_tracking (booking_id, status, note) VALUES ($1, $2, $3)`,
     [bookingId, entry.status, entry.note],
   );
+}
+
+/**
+ * Everything that must be TRUE about the target provider at the moment the
+ * assignment is committed.
+ *
+ * Moved here from `adminBookingService` because checking it outside the
+ * provider advisory lock and then calling the executor recreates exactly the
+ * race the lock exists to prevent. This is NOT provider selection — TAB 05
+ * still owns which provider should be suggested, how they are ranked and
+ * whether auto-assignment picks them. This is the atomic validation required
+ * to commit a provider somebody has already chosen.
+ *
+ * Every message is the legacy one, verbatim.
+ */
+async function assertAssignableProvider(
+  client: PoolClient,
+  bookingId: number,
+  providerUid: string,
+): Promise<string> {
+  /**
+   * Roles 2 AND 4 are providers.
+   *
+   * Legacy asked `role::int = 2` here, so a role-4 provider was reported as
+   * "Provider not found" — the least diagnosable message available. The same
+   * file already used `IN (2, 4)` elsewhere. The predicate is built from the
+   * canonical set so the two cannot disagree again.
+   */
+  const provider = await client.query(
+    `SELECT uid, first_name, last_name, is_archive
+       FROM ${s}.user_credentials
+      WHERE uid = $1 AND ${providerRoleSqlPredicate('role')}`,
+    [providerUid],
+  );
+  if (!provider.rowCount) {
+    throw new TransitionError('GUARD_FAILED', 'Provider not found', { guard: 'provider_eligible' });
+  }
+  if (provider.rows[0].is_archive) {
+    throw new TransitionError(
+      'GUARD_FAILED', 'Provider is archived and cannot be assigned',
+      { guard: 'provider_eligible' },
+    );
+  }
+
+  const booking = await client.query(
+    `SELECT b.schedule, so.service_id
+       FROM ${s}.bookings b
+       JOIN ${s}.service_options so ON so.id = b.service_option_id
+      WHERE b.id = $1`,
+    [bookingId],
+  );
+  const serviceId = booking.rows[0]?.service_id ?? null;
+
+  const qualified = await client.query(
+    `SELECT 1 FROM ${s}.employee_services
+      WHERE employee_uid = $1 AND service_id = $2
+      UNION ALL
+     SELECT 1 FROM ${s}.worker_service_applications
+      WHERE worker_uid = $1 AND service_id = $2 AND status = 'approved'
+      LIMIT 1`,
+    [providerUid, serviceId],
+  );
+  if (!qualified.rowCount) {
+    throw new TransitionError(
+      'GUARD_FAILED', 'Provider is not qualified for this booking service',
+      { guard: 'provider_eligible' },
+    );
+  }
+
+  /**
+   * The ±2-hour conflict check, meaningful ONLY because the provider advisory
+   * lock is held. Without it two concurrent assignments of the same provider
+   * both read "no conflict" and both commit.
+   */
+  const schedule = new Date(booking.rows[0]?.schedule);
+  if (!Number.isNaN(schedule.getTime())) {
+    const busy = await client.query(
+      `SELECT id FROM ${s}.bookings
+        WHERE worker_uid = $1 AND id <> $2
+          AND schedule BETWEEN $3 AND $4
+          AND status NOT IN ('COMPLETED','CANCELLED','CANCELED','REFUNDED','FAILED','EXPIRED')
+        LIMIT 1`,
+      [
+        providerUid, bookingId,
+        new Date(schedule.getTime() - 2 * 60 * 60 * 1000),
+        new Date(schedule.getTime() + 2 * 60 * 60 * 1000),
+      ],
+    );
+    if (busy.rowCount) {
+      throw new TransitionError(
+        'GUARD_FAILED', 'Provider has a conflicting booking within 2 hours',
+        { guard: 'provider_eligible' },
+      );
+    }
+  }
+
+  return `${provider.rows[0].first_name ?? ''} ${provider.rows[0].last_name ?? ''}`.trim();
 }
 
 /** The physical writes a canonical destination implies. */
@@ -1135,6 +1273,11 @@ async function applyState(
       if (!nextProvider) {
         throw new TransitionError('GUARD_FAILED', 'providerUid is required to assign.', { guard: 'provider_eligible' });
       }
+
+      // Under the booking row lock AND the provider advisory lock. Checking
+      // this before the executor was called would put the conflict query
+      // outside the lock that makes it meaningful.
+      await assertAssignableProvider(client, loaded.id, nextProvider);
       if (input.action === 'ADMIN_ASSIGN' && providerUid) {
         throw new TransitionError(
           'INVALID_TRANSITION',
@@ -1195,7 +1338,20 @@ async function applyState(
          ON CONFLICT DO NOTHING`,
         [loaded.id, nextProvider],
       );
-      await client.query(`UPDATE ${s}.bookings SET worker_uid = $2 WHERE id = $1`, [loaded.id, nextProvider]);
+      /**
+       * Pointer AND the legacy status word, in one statement.
+       *
+       * `WORKER_ASSIGNED` is what `adminAssignProvider` has always written and
+       * what `deriveCanonicalState` reads to answer ASSIGNED. Writing only the
+       * pointer would leave a booking at CONFIRMED with a provider on it,
+       * which derives as ASSIGNED only because the pointer is present — true
+       * today, but relying on it would make the compatibility column and the
+       * canonical answer disagree about why.
+       */
+      await client.query(
+        `UPDATE ${s}.bookings SET worker_uid = $2, status = 'WORKER_ASSIGNED' WHERE id = $1`,
+        [loaded.id, nextProvider],
+      );
       return;
     }
 
@@ -1437,6 +1593,33 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
 
     const loaded = await loadForUpdate(client, input.bookingId, input.actorUid ?? null);
     if (!loaded) throw new TransitionError('BOOKING_NOT_FOUND', 'No such booking.');
+
+    /**
+     * The provider advisory lock, AFTER the booking row lock — always this
+     * order, everywhere.
+     *
+     * Legacy took them the other way round. Two paths acquiring the same two
+     * locks in opposite orders deadlock, so the order is fixed here and
+     * asserted by test rather than left to whoever writes the next assignment
+     * path.
+     *
+     * The key is built from the validated target provider, never from a
+     * caller-supplied string: `advisoryLock` names a REQUIREMENT, and the
+     * executor decides what that requirement locks.
+     */
+    const lockRequirement = (spec as { advisoryLock?: AdvisoryLockRequirement }).advisoryLock;
+    if (lockRequirement === 'PROVIDER_ASSIGNMENT') {
+      const target = String(input.metadata?.providerUid ?? '').trim();
+      if (!target) {
+        throw new TransitionError(
+          'GUARD_FAILED', 'providerUid is required to assign.',
+          { guard: 'provider_eligible' },
+        );
+      }
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+        `servana-provider-assignment:${target}`,
+      ]);
+    }
 
     const fromState = deriveCanonicalState({
       bookingStatus: loaded.status,

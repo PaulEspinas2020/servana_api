@@ -517,3 +517,161 @@ describe('raw bookings.status reads are allow-listed', () => {
     }
   });
 });
+
+/**
+ * ─── TWO LOCK CLASSES, ONE ACQUISITION ORDER ─────────────────────────────────
+ *
+ * D4 gave assignment a second lock. The booking row lock serialises actions on
+ * ONE booking; it does nothing across two bookings that share a provider, so
+ * two admins assigning the same provider to two overlapping bookings both pass
+ * the ±2-hour conflict check and both commit. The provider-scoped advisory
+ * lock is what makes that check mean anything.
+ *
+ * Once two lock classes exist, inconsistent acquisition order is a deadlock
+ * vector. Legacy took them provider-then-booking; the executor takes them
+ * booking-then-provider. One order is chosen and enforced here, because
+ * "both locks are present" is not the property that matters.
+ */
+describe('lock acquisition order is fixed', () => {
+  /**
+   * Comment-stripped. The docblock beside the lock explains the mechanism and
+   * names `pg_advisory_xact_lock` in prose, which would otherwise be counted
+   * as a second call site and would sit at the wrong offset for an ordering
+   * comparison.
+   */
+  const executor = fs.readFileSync(
+    path.resolve(__dirname, '../src/services/booking/transitionExecutor.ts'), 'utf8',
+  )
+    .replace(/\r\n/g, '\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('//'))
+    .join('\n');
+
+  it('the booking row lock is taken BEFORE the provider advisory lock', () => {
+    const bookingLock = executor.indexOf('await loadForUpdate(client, input.bookingId');
+    const advisory = executor.indexOf('pg_advisory_xact_lock');
+
+    expect(bookingLock).toBeGreaterThan(-1);
+    expect(advisory).toBeGreaterThan(-1);
+    expect(bookingLock).toBeLessThan(advisory);
+  });
+
+  it('there is exactly ONE place that takes the advisory lock', () => {
+    // Two call sites is two chances to get the order wrong.
+    const sites = executor.split('\n').filter((l) => l.includes('pg_advisory_xact_lock'));
+    expect(sites).toHaveLength(1);
+  });
+
+  it('the advisory lock happens inside the transaction it protects', () => {
+    // `pg_advisory_xact_lock` releases at COMMIT. Taken outside the executor's
+    // transaction it would protect nothing that the executor writes — which is
+    // precisely why the conflict check had to move in with it.
+    const begin = executor.indexOf("client.query('BEGIN')");
+    const advisory = executor.indexOf('pg_advisory_xact_lock');
+    const commit = executor.lastIndexOf("client.query('COMMIT')");
+    expect(begin).toBeLessThan(advisory);
+    expect(advisory).toBeLessThan(commit);
+  });
+
+  it('the conflict check runs AFTER the advisory lock, never before', () => {
+    // Checking first and locking second is the race with extra steps.
+    //
+    // Asserted on the CALL GRAPH, not on file position: the validator is
+    // *defined* above `transitionBooking` and *called* from inside
+    // `applyState`, so comparing offsets would compare the wrong thing and
+    // fail a correct implementation.
+    const advisory = executor.indexOf('pg_advisory_xact_lock');
+    const applyCall = executor.indexOf('await applyState(client, loaded, toState, input)');
+    expect(advisory).toBeGreaterThan(-1);
+    expect(advisory).toBeLessThan(applyCall);
+
+    // And the conflict check is reachable only from inside applyState.
+    const callSites = executor.split('\n').filter((l) => l.includes('assertAssignableProvider('));
+    expect(callSites).toHaveLength(2); // one declaration, one call
+    const call = callSites.find((l) => !l.includes('async function'))!;
+    expect(call).toContain('await assertAssignableProvider(client, loaded.id, nextProvider)');
+
+    const applyState = executor.slice(executor.indexOf('async function applyState'));
+    const assignBranch = applyState.slice(
+      applyState.indexOf("case 'ASSIGNED': {"),
+      applyState.indexOf("case 'ACCEPTED': {"),
+    );
+    expect(assignBranch).toContain('assertAssignableProvider(');
+  });
+
+  it('the lock key is derived server-side, never taken from the request', () => {
+    // `advisoryLock` names a REQUIREMENT; the executor decides what it locks.
+    // An `advisoryLockKey?: string` would let a caller name any lock it liked.
+    expect(executor).toContain("`servana-provider-assignment:${target}`");
+    expect(executor).not.toMatch(/advisoryLockKey/);
+    expect(executor).toContain("export type AdvisoryLockRequirement = 'PROVIDER_ASSIGNMENT';");
+  });
+
+  it('only the assignment actions require it', () => {
+    const declared = Object.entries(BOOKING_ACTIONS)
+      .filter(([, spec]) => (spec as { advisoryLock?: unknown }).advisoryLock)
+      .map(([name]) => name)
+      .sort();
+    expect(declared).toEqual(['ADMIN_ASSIGN', 'ADMIN_REASSIGN']);
+  });
+
+  it('no legacy path still takes the locks the other way round', () => {
+    // The deadlock this prevents needs TWO paths. There is now one.
+    const admin = fs.readFileSync(
+      path.resolve(__dirname, '../src/services/adminBookingService.ts'), 'utf8',
+    );
+    const assignFn = admin.slice(
+      admin.indexOf('export const adminAssignProvider'),
+      admin.indexOf('export const adminReassignProvider'),
+    );
+    expect(assignFn).not.toContain('pg_advisory_xact_lock');
+  });
+});
+
+/**
+ * ─── PROVIDER ROLE LITERALS ARE FORBIDDEN IN CANONICAL ASSIGNMENT CODE ───────
+ *
+ * Roles 2 AND 4 are providers. `adminAssignProvider` asked `role::int = 2`, so
+ * an admin could not assign a role-4 provider and was told "Provider not
+ * found" — while the SAME FILE used `IN (2, 4)` a few functions earlier.
+ *
+ * The v1 handler detector already covers this class for `src/api/v1`. This
+ * extends it to the canonical assignment writer, which is where getting it
+ * wrong denies a real provider real work.
+ */
+describe('canonical assignment code uses the provider-role helper', () => {
+  const codeOnly = (rel: string): string =>
+    fs.readFileSync(path.resolve(__dirname, '..', rel), 'utf8')
+      .replace(/\r\n/g, '\n')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+
+  it('the executor writes no role literal', () => {
+    const executor = codeOnly('src/services/booking/transitionExecutor.ts');
+    expect(executor).not.toMatch(/role::int\s*=\s*\d/);
+    expect(executor).not.toMatch(/role::int\s+IN\s*\(/);
+    expect(executor).toContain("providerRoleSqlPredicate('role')");
+  });
+
+  it('the helper is derived from the canonical set, not retyped', () => {
+    const roles = codeOnly('src/constants/providerRoles.ts');
+    expect(roles).toContain('providerRoleSqlList');
+    // Built by mapping PROVIDER_ROLES — not a hand-written '2, 4'.
+    expect(roles).toContain('[...PROVIDER_ROLES]');
+    expect(roles).not.toMatch(/return\s*['"]2,\s*4['"]/);
+  });
+
+  it('it refuses to inline a non-numeric role', () => {
+    // The values are interpolated into SQL. They come from this module, but a
+    // future non-numeric member must fail loudly rather than become an
+    // injection point.
+    const roles = codeOnly('src/constants/providerRoles.ts');
+    expect(roles).toContain('Number.isInteger(n)');
+    expect(roles).toContain('Non-numeric provider role cannot be inlined into SQL');
+  });
+
+  it('the detector fires on the shape it forbids (positive fixture)', () => {
+    expect(/role::int\s*=\s*\d/.test("WHERE uid = $1 AND role::int = 2")).toBe(true);
+  });
+});

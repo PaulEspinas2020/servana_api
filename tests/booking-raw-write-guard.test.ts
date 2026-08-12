@@ -52,6 +52,33 @@ interface RawWrite {
   line: number;
 }
 
+/**
+ * Does the statement STARTING at `lines[i]` mutate a lifecycle status?
+ *
+ * Extracted so the boundary rule can be tested against a fixture rather than
+ * against whichever production line happens to have the right shape today.
+ * The previous negative fixture named a real statement and stopped being a
+ * counter-example the moment that statement legitimately started setting
+ * status — a test only keeps proving something if what it proves does not
+ * depend on unrelated code staying still.
+ *
+ * SQL spans template literals here, so the SET may be lines below the UPDATE.
+ * The scan stops at the literal's closing backtick: a fixed line window bled
+ * across statement boundaries and attributed the NEXT query's `SET status` to
+ * a preceding pointer update.
+ */
+export function statusWriteAt(lines: string[], i: number): RawWrite['table'] | null {
+  const m = /UPDATE\s+\$\{[^}]+\}\.(bookings|booking_workers)\b/i.exec(lines[i]);
+  if (!m) return null;
+  const ahead = lines.slice(i, i + 12).join('\n');
+  const from = ahead.indexOf(m[0]);
+  const end = ahead.indexOf('`', from);
+  const stmt = end === -1 ? ahead : ahead.slice(from, end);
+  if (!/\bSET\b/i.test(stmt)) return null;
+  if (!/\bstatus\s*=/i.test(stmt)) return null;
+  return m[1].toLowerCase() as RawWrite['table'];
+}
+
 function findRawWrites(): RawWrite[] {
   const hits: RawWrite[] = [];
   const walk = (dir: string) => {
@@ -63,21 +90,10 @@ function findRawWrites(): RawWrite[] {
       const rel = path.relative(SRC, full).split(path.sep).join('/');
       const lines = codeOf(full).split('\n');
 
-      lines.forEach((line, i) => {
-        const m = /UPDATE\s+\$\{[^}]+\}\.(bookings|booking_workers)\b/i.exec(line);
-        if (!m) return;
-        // SQL here spans template literals, so the SET may be lines below the
-        // UPDATE. Scan forward — but stop at the literal's closing backtick.
-        // A fixed line window bled across statement boundaries and attributed
-        // the NEXT query's `SET status` to a preceding `SET worker_uid`,
-        // counting a write that does not touch lifecycle state at all.
-        const ahead = lines.slice(i, i + 12).join('\n');
-        const from = ahead.indexOf(m[0]);
-        const end = ahead.indexOf('`', from);
-        const stmt = end === -1 ? ahead : ahead.slice(from, end);
-        if (!/\bSET\b/i.test(stmt)) return;
-        if (!/\bstatus\s*=/i.test(stmt)) return;
-        hits.push({ file: rel, table: m[1].toLowerCase() as RawWrite['table'], line: i + 1 });
+      lines.forEach((_line, i) => {
+        const table = statusWriteAt(lines, i);
+        if (!table) return;
+        hits.push({ file: rel, table, line: i + 1 });
       });
     }
   };
@@ -94,7 +110,7 @@ function findRawWrites(): RawWrite[] {
  */
 const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason: string }> = {
   'services/booking/transitionExecutor.ts': {
-    count: 14,
+    count: 15,
     phase: 'EXECUTOR',
     reason:
       'THE executor. The one place permitted to write lifecycle state. One write '
@@ -120,14 +136,13 @@ const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason
       'TAB 05.',
   },
   'services/adminBookingService.ts': {
-    count: 3,
-    phase: 'D4/D5 — admin assign / reassign',
+    count: 2,
+    phase: 'D5 — admin reassign',
     reason:
-      'Admin operational actions, nearly done. Confirm-on-behalf (D1), cancel '
-      + '(D2) and approve-completion (D3) go through the executor. Three sites '
-      + 'remain, all assignment: one in assign and two in reassign. They carry '
-      + 'the race surface, which is why they are last — the pattern is proven '
-      + 'on the simpler actions first.',
+      'One admin action left. Confirm-on-behalf (D1), cancel (D2), '
+      + 'approve-completion (D3) and assign (D4) go through the executor. The '
+      + 'two remaining are both in adminReassignProvider: closing the outgoing '
+      + 'assignment and repointing the booking.',
   },
 };
 
@@ -213,13 +228,34 @@ describe('raw status writes are inventoried and shrinking', () => {
     // counted the reassignment pointer update as a status mutation. Changing
     // ownership is not changing lifecycle state, and a guard that cannot tell
     // them apart will mis-report the migration it exists to measure.
-    const executorSrc = codeOf(path.join(SRC, 'services/booking/transitionExecutor.ts'));
-    expect(executorSrc).toContain('UPDATE ${s}.bookings SET worker_uid = $2 WHERE id = $1');
-    const workerUidLine =
-      executorSrc.split('\n').findIndex((l) => l.includes('SET worker_uid = $2')) + 1;
-    expect(
-      found.some((h) => h.file === 'services/booking/transitionExecutor.ts' && h.line === workerUidLine),
-    ).toBe(false);
+    // A SYNTHETIC fixture, deliberately. This used to name a real statement in
+    // the executor and stopped being a counter-example the moment that
+    // statement legitimately started setting status too.
+    const fixture = [
+      '      await client.query(',
+      '        `UPDATE ${s}.bookings SET worker_uid = $2 WHERE id = $1`,',
+      '        [loaded.id, nextProvider],',
+      '      );',
+      '      await client.query(',
+      "        `UPDATE ${s}.bookings SET status = 'CONFIRMED' WHERE id = $1`,",
+      '        [loaded.id],',
+      '      );',
+    ];
+    expect(statusWriteAt(fixture, 1)).toBeNull();
+    // Positive half: the statement that DOES set status is still found.
+    expect(statusWriteAt(fixture, 5)).toBe('bookings');
+  });
+
+  it('a multi-line statement is still detected (boundary control)', () => {
+    // The boundary rule must not degrade into "only single-line statements
+    // count" — most of the executor's SQL spans several lines.
+    const fixture = [
+      '        `UPDATE ${s}.booking_workers',
+      '            SET status = $3,',
+      '                accepted_at = NOW()',
+      '          WHERE booking_id = $1`,',
+    ];
+    expect(statusWriteAt(fixture, 0)).toBe('booking_workers');
   });
 
   it('the detector ignores SQL quoted inside a comment (negative fixture)', () => {

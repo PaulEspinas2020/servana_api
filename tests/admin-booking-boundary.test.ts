@@ -37,10 +37,22 @@ describe('admin booking list and input boundaries', () => {
 });
 
 describe('assignment candidates match what the assign path will accept', () => {
-  const candidatesBlock = service.slice(
-    service.indexOf('export const getAssignmentCandidates'),
-    service.indexOf('export const adminAssignProvider'),
-  );
+  /**
+   * Comment-stripped.
+   *
+   * The slice ends at `adminAssignProvider`, and that function's docblock now
+   * explains the role-4 defect by quoting the predicate it replaced. Prose
+   * naming `role::int = 2` would satisfy a check for its absence.
+   */
+  const candidatesBlock = service
+    .slice(
+      service.indexOf('export const getAssignmentCandidates'),
+      service.indexOf('export const adminAssignProvider'),
+    )
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('//'))
+    .join('\n');
 
   it('offers both provider roles, not just role 2', () => {
     // Role 4 is the second provider role. `role::int = 2` meant no internal

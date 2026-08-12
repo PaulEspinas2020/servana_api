@@ -48,6 +48,16 @@ export const store = {
    * unmocked assignNearestWorker.
    */
   withLocation: false,
+
+  // ── Assignment-eligibility knobs, all default to "assignable" ──
+  /** The target provider does not exist, or holds no canonical provider role. */
+  providerMissing: false,
+  /** The target provider exists but is archived. */
+  providerArchived: false,
+  /** The target provider is not qualified for this booking's service. */
+  providerUnqualified: false,
+  /** The target provider already has a booking within the +/-2 hour window. */
+  providerBusy: false,
 };
 
 /** Side effects, captured in call order. */
@@ -70,6 +80,10 @@ export const reset = (): void => {
   store.trackingFails = false;
   store.timelineEventFails = false;
   store.withLocation = false;
+  store.providerMissing = false;
+  store.providerArchived = false;
+  store.providerUnqualified = false;
+  store.providerBusy = false;
   snapshot = null;
   calls.length = 0;
 };
@@ -105,6 +119,28 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
   }
   if (/^COMMIT/i.test(flat)) { store.open = false; snapshot = null; return done([]); }
   if (/CREATE TABLE|CREATE INDEX|ALTER TABLE/i.test(flat)) return done([]);
+  // The provider-scoped advisory lock. Recorded in `sql` so the ORDER guard
+  // can see it; not enforced across connections, same caveat as FOR UPDATE.
+  if (/pg_advisory_xact_lock/i.test(flat)) return done([]);
+
+  // ── ADMIN_ASSIGN / ADMIN_REASSIGN target validation ──
+  //
+  // Defaults are "assignable": a real provider, not archived, qualified, no
+  // conflict. Each refusal is opt-in, so a suite that is not about eligibility
+  // does not have to seed four things to assign anyone.
+  if (/FROM servana\.user_credentials WHERE uid = \$1 AND role::int IN/i.test(flat)) {
+    if (store.providerMissing) return done([]);
+    return done([{
+      uid: params[0], first_name: 'Pro', last_name: 'Vider',
+      is_archive: store.providerArchived,
+    }]);
+  }
+  if (/FROM servana\.employee_services/i.test(flat)) {
+    return done(store.providerUnqualified ? [] : [{ '?column?': 1 }]);
+  }
+  if (/SELECT id FROM servana\.bookings WHERE worker_uid = \$1 AND id <> \$2/i.test(flat)) {
+    return done(store.providerBusy ? [{ id: 9999 }] : []);
+  }
 
   // ── reads ──
   // getAvailableActions: booking + its current provider's assignment + dispute.
@@ -300,8 +336,11 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
     store.assignments.push({ booking_id: Number(params[0]), worker_uid: params[1], status: 'ASSIGNED' });
     return done([]);
   }
-  if (/UPDATE servana\.bookings SET worker_uid = \$2/i.test(flat)) {
-    if (store.booking && store.booking.id === Number(params[0])) store.booking.worker_uid = params[1];
+  if (/UPDATE servana\.bookings SET worker_uid = \$2, status = 'WORKER_ASSIGNED'/i.test(flat)) {
+    if (store.booking && store.booking.id === Number(params[0])) {
+      store.booking.worker_uid = params[1];
+      store.booking.status = 'WORKER_ASSIGNED';
+    }
     return done([]);
   }
 

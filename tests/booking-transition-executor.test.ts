@@ -69,6 +69,25 @@ const runQueryInner = (conn: number, sql: string, params: unknown[] = []): { row
 
   if (/CREATE TABLE|CREATE INDEX/i.test(sql)) return { rows: [] };
 
+  /**
+   * Assignment target validation, moved into the executor by D4.
+   *
+   * Defaults say "assignable" so the reassignment tests, which are about state
+   * and history rather than eligibility, do not each have to seed a provider
+   * record, a qualification row and an empty conflict window.
+   */
+  if (/pg_advisory_xact_lock/i.test(sql)) return { rows: [] };
+  if (/FROM servana\.user_credentials[\s\S]*?role::int IN/i.test(sql)) {
+    return { rows: [{ uid: params[0], first_name: 'Pro', last_name: 'Vider', is_archive: false }] };
+  }
+  if (/FROM servana\.employee_services/i.test(sql)) return { rows: [{ ok: 1 }] };
+  if (/SELECT id FROM servana\.bookings[\s\S]*?worker_uid = \$1 AND id <> \$2/i.test(sql)) {
+    return { rows: [] };
+  }
+  if (/SELECT b\.schedule, so\.service_id/i.test(sql)) {
+    return { rows: [{ schedule: null, service_id: 1 }] };
+  }
+
   // The cash-settlement guard for PROVIDER_COMPLETE.
   if (/EXISTS\s*\(\s*SELECT 1 FROM servana\.payments/is.test(sql)) {
     const rows = db.payments.filter((p) => p.booking_id === Number(params[0]));
@@ -128,6 +147,11 @@ const runQueryInner = (conn: number, sql: string, params: unknown[] = []): { row
     const id = Number(params[0]);
     const b = db.bookings.get(id);
     if (b) {
+      if (/worker_uid = \$2, status = 'WORKER_ASSIGNED'/i.test(sql)) {
+        b.worker_uid = params[1];
+        b.status = 'WORKER_ASSIGNED';
+        return { rows: [] };
+      }
       if (/status = 'CONFIRMED'/i.test(sql)) b.status = 'CONFIRMED';
       else if (/status = 'COMPLETED'/i.test(sql)) b.status = 'COMPLETED';
       else if (/status = 'EXPIRED'/i.test(sql)) b.status = 'EXPIRED';

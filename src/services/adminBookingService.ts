@@ -859,113 +859,101 @@ export const getAssignmentCandidates = async (bookingId: number): Promise<any[]>
 
 // ─── Admin Assign Provider ────────────────────────────────────────────────────
 
+/**
+ * ─── D4 · ADMIN_ASSIGN, on the canonical executor ────────────────────────────
+ *
+ * Everything that has to be true at the moment of commit now happens inside
+ * ONE transaction holding TWO locks, in a fixed order: the booking row, then
+ * a provider-scoped advisory lock.
+ *
+ * ## Why the target validation moved with it
+ *
+ * The ±2-hour conflict check is meaningful only while the provider advisory
+ * lock is held — without it, two admins assigning the same provider to two
+ * overlapping bookings both read "no conflict" and both commit. Validating
+ * here and then calling the executor would put the check outside the lock and
+ * recreate the race, so provider existence, role, archive state,
+ * qualification and the conflict check are all executor-side now.
+ *
+ * That is NOT provider selection. Which provider to suggest, how to rank them
+ * and whether auto-assignment picks them remain TAB 05's. This is the atomic
+ * validation required to safely commit a provider somebody already chose.
+ *
+ * ## BEHAVIOUR CHANGE: role-4 providers are assignable
+ *
+ * The legacy predicate was `role::int = 2`, so an admin could not assign a
+ * role-4 provider and was told "Provider not found". Roles 2 AND 4 are
+ * providers — this same file already used `IN (2, 4)` elsewhere. The predicate
+ * is now built from the canonical role set, so the two cannot disagree again.
+ *
+ * ## Lock ORDER changed, deliberately
+ *
+ * Legacy took the advisory lock BEFORE the booking row. The executor takes the
+ * booking row first. Two paths acquiring the same pair in opposite orders is a
+ * deadlock, so one order is standardised and enforced by test.
+ */
 export const adminAssignProvider = async (
   bookingId: number,
   providerUid: string,
   adminUid: string | null,
   reason?: string
 ): Promise<any> => {
-  const client = await pool.connect();
-  let customerUid: string | null = null;
-  let providerName = '';
-  try {
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
-      `servana-provider-assignment:${providerUid}`,
-    ]);
-    const bkRes = await client.query(
-      `SELECT b.id, b.status, b.worker_uid, b.user_id, b.schedule, so.service_id
+  const context = await dbQuery.query(
+    `SELECT b.user_id, b.worker_uid,
+            uc.first_name, uc.last_name
        FROM ${dbSchema}.bookings b
-       JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-       WHERE b.id = $1
-       FOR UPDATE OF b`,
-      [bookingId],
-    );
-    if (!bkRes.rowCount) throw new Error('Booking not found');
-    const before = bkRes.rows[0];
-    customerUid = before.user_id ?? null;
+       LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = $2
+      WHERE b.id = $1`,
+    [bookingId, providerUid],
+  );
+  if (!context.rowCount) throw new Error('Booking not found');
+  const customerUid: string | null = context.rows[0].user_id ?? null;
+  const providerName = (`${context.rows[0].first_name ?? ''} ${context.rows[0].last_name ?? ''}`).trim();
 
-    const provRes = await client.query(
-      `SELECT uid, first_name, last_name, is_archive FROM ${dbSchema}.user_credentials
-       WHERE uid = $1 AND role::int = 2`,
-      [providerUid],
-    );
-    if (!provRes.rowCount) throw new Error('Provider not found');
-    if (provRes.rows[0].is_archive) throw new Error('Provider is archived and cannot be assigned');
-    providerName = (`${provRes.rows[0].first_name ?? ''} ${provRes.rows[0].last_name ?? ''}`).trim();
-
-    if (before.worker_uid) {
-      if (String(before.worker_uid) !== providerUid) {
-        throw new Error('Booking is already assigned; use the reassignment action');
-      }
-      await client.query('COMMIT');
-      return { bookingId, providerUid, providerName, status: 'WORKER_ASSIGNED', idempotent: true };
+  /**
+   * Already assigned to THIS provider: idempotent success, as before.
+   *
+   * Checked ahead of the executor because the machine would answer
+   * INVALID_TRANSITION for a booking already at ASSIGNED, and this endpoint
+   * has always returned success for a repeat of the same assignment.
+   */
+  if (context.rows[0].worker_uid) {
+    if (String(context.rows[0].worker_uid) !== providerUid) {
+      throw new Error('Booking is already assigned; use the reassignment action');
     }
-    if (!['CONFIRMED', 'PAID'].includes(String(before.status ?? '').toUpperCase())) {
-      throw new Error(`Booking cannot be assigned from status ${before.status}`);
-    }
-
-    const eligRes = await client.query(
-      `SELECT 1 FROM ${dbSchema}.employee_services
-       WHERE employee_uid = $1 AND service_id = $2
-       UNION ALL
-       SELECT 1 FROM ${dbSchema}.worker_service_applications
-       WHERE worker_uid = $1 AND service_id = $2 AND status = 'approved'
-       LIMIT 1`,
-      [providerUid, before.service_id],
-    );
-    if (!eligRes.rowCount) throw new Error('Provider is not qualified for this booking service');
-
-    const schedule = new Date(before.schedule);
-    const busyRes = await client.query(
-      `SELECT id FROM ${dbSchema}.bookings
-       WHERE worker_uid = $1 AND id <> $2
-         AND schedule BETWEEN $3 AND $4
-         AND status NOT IN ('COMPLETED','CANCELLED','CANCELED','REFUNDED','FAILED','EXPIRED')
-       LIMIT 1`,
-      [
-        providerUid,
-        bookingId,
-        new Date(schedule.getTime() - 2 * 60 * 60 * 1000),
-        new Date(schedule.getTime() + 2 * 60 * 60 * 1000),
-      ],
-    );
-    if (busyRes.rowCount) throw new Error('Provider has a conflicting booking within 2 hours');
-
-    await client.query(
-      `INSERT INTO ${dbSchema}.booking_workers (worker_uid, booking_id, status, assigned_at)
-       VALUES ($1, $2, 'ASSIGNED', NOW())`,
-      [providerUid, bookingId],
-    );
-    const updated = await client.query(
-      `UPDATE ${dbSchema}.bookings
-       SET worker_uid = $1, status = 'WORKER_ASSIGNED'
-       WHERE id = $2 AND worker_uid IS NULL AND status IN ('CONFIRMED','PAID')
-       RETURNING id`,
-      [providerUid, bookingId],
-    );
-    if (!updated.rowCount) throw new Error('Booking assignment changed concurrently');
-    await client.query(
-      `INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note)
-       VALUES ($1, 'WORKER_ASSIGNED', 'Provider assigned by admin')`,
-      [bookingId],
-    );
-    await addTimelineEvent(
-      bookingId, 'booking_assigned', `Provider assigned: ${providerName}`,
-      reason ?? null, 'admin', adminUid, { providerUid, providerName }, client,
-    );
-    await logBookingAudit({
-      bookingId, actorUid: adminUid, actorRole: 'admin', action: 'booking_assigned',
-      before: { workerUid: before.worker_uid, status: before.status },
-      after: { workerUid: providerUid, status: 'WORKER_ASSIGNED' }, reason,
-    }, client);
-    await client.query('COMMIT');
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw error;
-  } finally {
-    client.release();
+    return { bookingId, providerUid, providerName, status: 'WORKER_ASSIGNED', idempotent: true };
   }
+
+  try {
+    await transitionBooking({
+      action: 'ADMIN_ASSIGN',
+      bookingId,
+      actorRole: 'admin',
+      actorUid: adminUid,
+      metadata: {
+        providerUid,
+        providerName,
+        ...(reason ? { reason } : {}),
+      },
+    });
+  } catch (error) {
+    if (error instanceof TransitionError) {
+      // GUARD_FAILED carries the legacy message verbatim; everything else is
+      // the state machine refusing, which legacy reported by status.
+      throw new Error(
+        error.code === 'GUARD_FAILED'
+          ? error.message
+          : `Booking cannot be assigned from status ${context.rows[0].worker_uid ?? 'unknown'}`,
+      );
+    }
+    throw error;
+  }
+
+  await logBookingAudit({
+    bookingId, actorUid: adminUid, actorRole: 'admin', action: 'booking_assigned',
+    before: { workerUid: null, status: null },
+    after: { workerUid: providerUid, status: 'WORKER_ASSIGNED' }, reason,
+  });
 
   publishAdminAssignment({ bookingId, providerUid, customerUid });
   return { bookingId, providerUid, providerName, status: 'WORKER_ASSIGNED' };

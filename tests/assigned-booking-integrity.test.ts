@@ -100,12 +100,34 @@ describe('assigned job-card privacy', () => {
 describe('admin assignment writes are transactional', () => {
   const source = read('src/services/adminBookingService.ts');
 
-  it.each(['adminAssignProvider', 'adminReassignProvider'])('%s locks and commits its timeline', (name) => {
-    const start = source.indexOf(`export const ${name}`);
-    const endMarker = name === 'adminAssignProvider'
-      ? 'export const adminReassignProvider'
-      : 'export const adminRescheduleBooking';
-    const body = source.slice(start, source.indexOf(endMarker, start + 20));
+  /**
+   * ADMIN_ASSIGN moved into the canonical executor in D4, so the transaction it
+   * runs in is no longer opened here. The property is unchanged and the
+   * assertion follows it; `adminReassignProvider` still owns its own
+   * transaction until D5, and is still asserted where it lives.
+   */
+  it('adminAssignProvider commits through the executor transaction', () => {
+    const executor = read('src/services/booking/transitionExecutor.ts');
+    expect(executor).toContain("await client.query('BEGIN')");
+    expect(executor).toContain('FOR UPDATE');
+    expect(executor).toContain("await client.query('COMMIT')");
+    expect(executor).toContain("await client.query('ROLLBACK')");
+    // The tracking row ADMIN_ASSIGN has always written, now a declared
+    // projection rather than an inline INSERT.
+    expect(executor).toContain("ADMIN_ASSIGN: { status: 'WORKER_ASSIGNED'");
+
+    // And the service no longer runs a transaction of its own.
+    const body = source.slice(
+      source.indexOf('export const adminAssignProvider'),
+      source.indexOf('export const adminReassignProvider'),
+    );
+    expect(body).not.toContain("await client.query('BEGIN')");
+    expect(body).toContain("action: 'ADMIN_ASSIGN'");
+  });
+
+  it('adminReassignProvider locks and commits its timeline', () => {
+    const start = source.indexOf('export const adminReassignProvider');
+    const body = source.slice(start, source.indexOf('export const adminRescheduleBooking', start + 20));
     expect(body).toContain("await client.query('BEGIN')");
     expect(body).toContain('FOR UPDATE');
     expect(body).toContain("await client.query('COMMIT')");
