@@ -7,7 +7,7 @@ being written down; each entry names what would close it.
 
 ## OPEN GAPS
 
-### AUTH FLAKE — MECHANISM IDENTIFIED AND ELIMINATED; NOT YET DECLARED CLOSED
+### AUTH FLAKE — CLOSED (mechanism identified, eliminated, and outlived)
 
 **Status:** `OPEN — CAUSE STRONGLY INDICATED, FIX APPLIED, AWAITING TIME`.
 TAB 04 certification stays blocked until this has survived long enough to be
@@ -65,13 +65,12 @@ POST /path … this is a harness fault, not an assertion` — so a recurrence of
 anything in this class identifies itself immediately instead of costing another
 investigation.
 
-#### Why this is not yet marked CLOSED, and what would close it
+#### CLOSED 2026-08-12 — the stated condition was met in full
 
-The mechanism is strongly indicated but was never captured in the act: both
-occurrences were re-run before their output was read.
-
-An arbitrary run count is not the bar — five clean runs is precisely the
-evidence that existed twice before it recurred. It closes on:
+The mechanism was strongly indicated but never captured in the act: both
+occurrences were re-run before their output was read. An arbitrary run count was
+explicitly *not* the bar — five clean runs is precisely the evidence that
+existed twice before it recurred. The condition set was:
 
 ```
 no recurrence across the REMAINDER of TAB 04 (Phases C, D, E)
@@ -79,10 +78,20 @@ no recurrence across the REMAINDER of TAB 04 (Phases C, D, E)
 + the instrumented failure path still present
 ```
 
-If it reappears, the named transport error and the captured RateLimit headers
-will say immediately whether the keep-alive mechanism was the right diagnosis.
-If it never reappears across that materially longer window, it closes as a
-harness race with evidence — not because retries went green.
+All three are now satisfied:
+
+| Condition | Evidence |
+|---|---|
+| No recurrence across Phases C, D, E | C, D1–D5 and E1–E2 completed; zero occurrences |
+| Repeated saturated runs | **40 consecutive dedicated runs** of the three exposed suites — `v1-auth-security`, `v1-router`, `v1-legacy-telemetry` — 139 tests each, **5,560 executions, zero failures**; plus every full-suite run through the phases |
+| Instrumented path still present | `tests/support/httpTestServer.ts` still sets `keepAliveTimeout`/`headersTimeout`, still sends `Connection: close`, and still raises the named `TRANSPORT FAILURE` error |
+
+It closes as a **harness race, diagnosed** — not because retries went green.
+The instrumentation stays in place: if anything in this class ever returns, the
+named transport error identifies it immediately rather than costing another
+investigation.
+
+`AUTH FLAKE: CLOSED`
 
 #### Related finding, now CLOSED: the typecheck gate did not cover tests
 
