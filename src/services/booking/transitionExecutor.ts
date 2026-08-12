@@ -326,6 +326,75 @@ function authorize(loaded: LoadedBooking, input: TransitionInput): void {
   throw new TransitionError('NOT_AUTHORIZED', 'Unrecognised actor.');
 }
 
+/**
+ * ─── LEGACY_STATUS_PROJECTION ────────────────────────────────────────────────
+ *
+ * Mirrors an arrival state onto `bookings.status`.
+ *
+ * ## This is NOT canonical state
+ *
+ * The canonical operational progression lives on `booking_workers.status`.
+ * `bookings.status` carrying EN_ROUTE or ARRIVED is a duplicate, and it is
+ * exactly the dual-status architecture this command exists to end. It is
+ * written anyway, for one measured reason.
+ *
+ * ## The measured reason
+ *
+ * A sweep of every consumer (2026-08-12) found the backend does not depend on
+ * it at all — all 29 `bookings.status` filters use COMPLETED, CANCELLED,
+ * PENDING_OTP, CONFIRMED, PAID, WORKER_ASSIGNED, IN_PROGRESS, REFUNDED, FAILED
+ * or EXPIRED, and every arrival-aware SQL predicate is on
+ * `booking_workers.status`. Neither does the Admin portal, Provider Web,
+ * ServanaWorker or the customer web portal.
+ *
+ * ServanaClient does. `formatBooking` spreads the raw row, so the customer app
+ * receives both `status` and `effectiveStatus`, and it reads `status` in the
+ * two places that matter:
+ *
+ *   customer_booking.dart:166           the bookings LIST
+ *   assignment_polling_service.dart:100 the POLLER that detects the transition
+ *
+ * Drop the projection and neither errors — the booking simply never appears to
+ * progress. A silent stall on the largest installed base.
+ *
+ * ## Retirement
+ *
+ * LEGACY_STATUS_PROJECTION_RETIREMENT_BLOCKER:
+ *   ServanaClient's bookings list and assignment poller read `bookings.status`.
+ *
+ * RETIREMENT CONDITION — both, not either:
+ *   1. A customer-app version reading `effectiveStatus` (or `canonicalState`)
+ *      is released AND sufficiently adopted; and
+ *   2. production telemetry confirms no installed version still requires the
+ *      projection.
+ *
+ * Two Dart lines is the code change. It is not the retirement condition —
+ * an unupdated app keeps reading the old field for as long as it stays
+ * installed, which is the whole reason mobile aliases carry a 90-day rule.
+ *
+ * ## The rule this must never break
+ *
+ * The value written here is DERIVED from a transition the canonical machine has
+ * already approved, under the row lock, before this runs. It is never an input
+ * to whether the transition is legal. A projection that starts deciding things
+ * is a second state machine, and `tests/booking-legacy-status-projection.test.ts`
+ * fails if this is reached from anywhere but an approved transition.
+ */
+async function writeLegacyStatusProjection(
+  client: PoolClient,
+  bookingId: number,
+  providerUid: string | null,
+  approvedState: Extract<BookingState, 'EN_ROUTE' | 'ARRIVED'>,
+): Promise<void> {
+  if (!providerUid) return;
+  // Scoped to this provider's booking, exactly as `advanceArrivalStage` was, so
+  // a concurrent admin action on a reassigned booking cannot be clobbered.
+  await client.query(
+    `UPDATE ${s}.bookings SET status = $2 WHERE id = $1 AND worker_uid = $3`,
+    [bookingId, approvedState, providerUid],
+  );
+}
+
 /** The physical writes a canonical destination implies. */
 async function applyState(
   client: PoolClient,
@@ -381,14 +450,24 @@ async function applyState(
     }
 
     case 'ACCEPTED':
-    case 'EN_ROUTE':
-    case 'ARRIVED':
       await client.query(
         `UPDATE ${s}.booking_workers SET status = $3
           WHERE booking_id = $1 AND worker_uid = $2`,
         [loaded.id, providerUid, to],
       );
       return;
+
+    case 'EN_ROUTE':
+    case 'ARRIVED': {
+      // Canonical: the provider lifecycle lives on the assignment row.
+      await client.query(
+        `UPDATE ${s}.booking_workers SET status = $3
+          WHERE booking_id = $1 AND worker_uid = $2`,
+        [loaded.id, providerUid, to],
+      );
+      await writeLegacyStatusProjection(client, loaded.id, providerUid, to);
+      return;
+    }
 
     case 'IN_PROGRESS': {
       /**

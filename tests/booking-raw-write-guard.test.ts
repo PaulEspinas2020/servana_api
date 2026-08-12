@@ -61,10 +61,17 @@ function findRawWrites(): RawWrite[] {
       lines.forEach((line, i) => {
         const m = /UPDATE\s+\$\{[^}]+\}\.(bookings|booking_workers)\b/i.exec(line);
         if (!m) return;
-        // SQL here spans template literals; look ahead for the SET … status.
-        const window = lines.slice(i, i + 8).join('\n');
-        if (!/\bSET\b/i.test(window)) return;
-        if (!/\bstatus\s*=/i.test(window)) return;
+        // SQL here spans template literals, so the SET may be lines below the
+        // UPDATE. Scan forward — but stop at the literal's closing backtick.
+        // A fixed line window bled across statement boundaries and attributed
+        // the NEXT query's `SET status` to a preceding `SET worker_uid`,
+        // counting a write that does not touch lifecycle state at all.
+        const ahead = lines.slice(i, i + 12).join('\n');
+        const from = ahead.indexOf(m[0]);
+        const end = ahead.indexOf('`', from);
+        const stmt = end === -1 ? ahead : ahead.slice(from, end);
+        if (!/\bSET\b/i.test(stmt)) return;
+        if (!/\bstatus\s*=/i.test(stmt)) return;
         hits.push({ file: rel, table: m[1].toLowerCase() as RawWrite['table'], line: i + 1 });
       });
     }
@@ -82,12 +89,16 @@ function findRawWrites(): RawWrite[] {
  */
 const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason: string }> = {
   'services/booking/transitionExecutor.ts': {
-    count: 10,
+    count: 12,
     phase: 'EXECUTOR',
     reason:
-      'THE executor. The one place permitted to write lifecycle state. The tenth '
-      + 'write is the atomic PROVIDER_START, which carries the worker-code '
-      + 'predicate in the same statement rather than checking it separately.',
+      'THE executor. The one place permitted to write lifecycle state. One write '
+      + 'is the atomic PROVIDER_START, which carries the worker-code predicate in '
+      + 'the same statement rather than checking it separately. One is the '
+      + 'LEGACY_STATUS_PROJECTION for EN_ROUTE / ARRIVED — a measured ServanaClient '
+      + 'compatibility obligation with a retirement condition, not canonical '
+      + 'state. Neither moves the outstanding count, which counts writers OUTSIDE '
+      + 'the executor.',
   },
   'services/bookingService.ts': {
     count: 3,
@@ -185,11 +196,26 @@ describe('raw status writes are inventoried and shrinking', () => {
     expect(byFile['services/booking/transitionExecutor.ts']).toBeGreaterThan(0);
   });
 
+  it('a SET that does not touch status is not a lifecycle write (negative fixture)', () => {
+    // ADMIN_REASSIGN writes `SET worker_uid` and, a few lines later, a separate
+    // statement writes `SET status`. A fixed line window joined the two and
+    // counted the reassignment pointer update as a status mutation. Changing
+    // ownership is not changing lifecycle state, and a guard that cannot tell
+    // them apart will mis-report the migration it exists to measure.
+    const executorSrc = codeOf(path.join(SRC, 'services/booking/transitionExecutor.ts'));
+    expect(executorSrc).toContain('UPDATE ${s}.bookings SET worker_uid = $2 WHERE id = $1');
+    const workerUidLine =
+      executorSrc.split('\n').findIndex((l) => l.includes('SET worker_uid = $2')) + 1;
+    expect(
+      found.some((h) => h.file === 'services/booking/transitionExecutor.ts' && h.line === workerUidLine),
+    ).toBe(false);
+  });
+
   it('the detector ignores SQL quoted inside a comment (negative fixture)', () => {
     // `bookingResponseConflict.ts` documents the racing UPDATE in a docblock.
     // Counting that would inflate the ledger with prose.
     const conflict = path.join(SRC, 'services/bookingResponseConflict.ts');
-    const raw = fs.readFileSync(conflict, 'utf8');
+    const raw = fs.readFileSync(conflict, 'utf8').replace(/\r\n/g, '\n');
     expect(raw).toContain('UPDATE booking_workers SET status');
     expect(byFile['services/bookingResponseConflict.ts'] ?? 0).toBe(0);
   });
