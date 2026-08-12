@@ -65,20 +65,56 @@ POST /path … this is a harness fault, not an assertion` — so a recurrence of
 anything in this class identifies itself immediately instead of costing another
 investigation.
 
-#### Why this is not yet marked CLOSED
+#### Why this is not yet marked CLOSED, and what would close it
 
 The mechanism is strongly indicated but was never captured in the act: both
-occurrences were re-run before their output was read. Five clean runs is the
-same evidence that existed twice before it recurred. It closes when it has
-survived materially longer, ideally alongside the PostgreSQL concurrency work.
+occurrences were re-run before their output was read.
 
-#### Incidental finding: the typecheck gate does not cover tests
+An arbitrary run count is not the bar — five clean runs is precisely the
+evidence that existed twice before it recurred. It closes on:
+
+```
+no recurrence across the REMAINDER of TAB 04 (Phases C, D, E)
++ repeated saturated full-suite runs
++ the instrumented failure path still present
+```
+
+If it reappears, the named transport error and the captured RateLimit headers
+will say immediately whether the keep-alive mechanism was the right diagnosis.
+If it never reappears across that materially longer window, it closes as a
+harness race with evidence — not because retries went green.
+
+#### Related finding, now CLOSED: the typecheck gate did not cover tests
 
 `npx tsc --noEmit` passed while `tests/v1-legacy-telemetry.test.ts` had an
-undefined identifier — the project tsconfig excludes `tests/`. Only jest's
-transform typechecks test files, and a suite that fails to COMPILE reports as
-one failed suite while the headline test count silently drops (3645 → 3629).
-Read the suite count, not only the test count.
+undefined identifier — `tsconfig.json` sets `rootDir: ./src` and includes only
+`src/**`, so the test tree was never compiled by the gate. Only jest's
+transform compiled it, and a suite that fails to COMPILE does not fail its
+assertions: it never runs. Jest reports one failed suite while the headline
+test count silently drops (3645 → 3629), so a summary read by test count looks
+like a smaller green run rather than a guard that stopped guarding.
+
+Closed by three things:
+
+- **`tsconfig.tests.json`** — extends the production config, adds
+  `src + tests`, `noEmit`. Deliberately separate: `tests/` must never enter
+  `rootDir`, the build output or the shipped artefact.
+- **`npm run typecheck:tests`**, required by both `verify` and `verify:quick`.
+  Verified by fixture, not assumed: with a deliberate fault in a test file the
+  production typecheck exits **0** and this one exits **2**.
+- **`tests/suite-inventory.test.ts`** — pins the suite count and reads the
+  ignore list from `jest.config.js` rather than restating it, so a suite that
+  is deleted, renamed or newly ignored must be acknowledged in a diff.
+
+**Gate on all three, not on the test count alone:**
+
+```
+expected suite count      182
+zero failed suites
+legitimate test count
+```
+
+Any reduction requires an explicit explanation in the commit that causes it.
 
 ---
 
