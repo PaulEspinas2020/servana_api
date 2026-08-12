@@ -36,6 +36,15 @@ export const store = {
   open: false,
   /** Makes the legacy tracking insert fail, to prove the rollback. */
   trackingFails: false,
+  /**
+   * Opt IN to an address the assignment lookup can use.
+   *
+   * Default false, so a suite that is not about assignment does not silently
+   * start invoking the matching engine — which is what happened when this
+   * defaulted the other way and every decline test began calling an
+   * unmocked assignNearestWorker.
+   */
+  withLocation: false,
 };
 
 /** Side effects, captured in call order. */
@@ -55,6 +64,7 @@ export const reset = (): void => {
   store.inTransaction = [];
   store.open = false;
   store.trackingFails = false;
+  store.withLocation = false;
   snapshot = null;
   calls.length = 0;
 };
@@ -108,15 +118,27 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
   if (/SELECT id, status, user_id AS customer_uid, worker_uid/i.test(flat)) {
     return done(store.booking ? [{ ...store.booking, customer_uid: store.booking.user_id }] : []);
   }
+  if (/SELECT \* FROM servana\.bookings WHERE id = \$1/i.test(flat)) {
+    return done(store.booking && store.booking.id === Number(params[0]) ? [{ ...store.booking }] : []);
+  }
   if (/SELECT user_id FROM servana\.bookings/i.test(flat)) {
     return done(store.booking ? [{ user_id: store.booking.user_id }] : []);
   }
   if (/SELECT schedule FROM servana\.bookings/i.test(flat)) return done([{ schedule: null }]);
   if (/FROM servana\.user_credentials/i.test(flat)) return done([{ first_name: 'Pro', last_name: 'Vider' }]);
   if (/FROM servana\.bookings b JOIN servana\.service_options/i.test(flat)) {
-    // The reassignment lookup. No location, so the search short-circuits to
-    // NO_LOCATION rather than reaching the matching engine.
-    return done(store.booking ? [{ schedule: null, location_id: null, service_address: null, service_id: 1 }] : []);
+    // Serves both the reassignment lookup and the post-confirm assignment
+    // lookup. `noLocation` reproduces a booking whose address carries no
+    // location_id — the case that used to throw AFTER the status was
+    // committed.
+    if (!store.booking) return done([]);
+    return done([{
+      schedule: null,
+      service_address: null,
+      service_id: 1,
+      user_address_id: 55,
+      location_id: store.withLocation ? 900 : null,
+    }]);
   }
 
   // The cash-settlement guard: one round trip for the EXISTS plus the first
@@ -134,6 +156,15 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
     }]);
   }
 
+  // OTP confirmation: the credential is compared IN the write, so the fake
+  // must too — a fake that checked it separately would pass an implementation
+  // that had split them.
+  if (/UPDATE servana\.bookings SET status = 'CONFIRMED' WHERE id = \$1 AND otp_code = \$2/i.test(flat)) {
+    if (!store.booking || store.booking.id !== Number(params[0])) return done([]);
+    if (String(store.booking.otp_code ?? '') !== String(params[1])) return done([]);
+    store.booking.status = 'CONFIRMED';
+    return done([{ id: store.booking.id }]);
+  }
   if (/UPDATE servana\.bookings SET status = 'COMPLETED'/i.test(flat)) {
     if (store.booking && store.booking.id === Number(params[0])) store.booking.status = 'COMPLETED';
     return done([]);

@@ -267,14 +267,33 @@ describe('the machine refuses the impossible', () => {
     }
   });
 
+  /**
+   * Two states declare a real self-transition, and both are OPERATIONS rather
+   * than repeats:
+   *
+   *   ASSIGNED → ASSIGNED             reassignment to a different provider
+   *   AWAITING_ASSIGNMENT → itself    OTP confirmation of a payment-first
+   *                                    booking, which writes CONFIRMED and
+   *                                    releases it to the pool
+   *
+   * Everything else re-entering itself is a retry after success, and a retry
+   * is not a failure.
+   */
+  const DECLARED_SELF_TRANSITIONS = new Set(['ASSIGNED', 'AWAITING_ASSIGNMENT']);
+
   it('re-entering the same state is ALREADY_IN_STATE, not an error', () => {
-    // A retry arriving after the first request succeeded is not a failure.
-    // ASSIGNED is excluded: it declares a real self-transition (reassignment to
-    // a different provider), which is an operation rather than a repeat.
     for (const state of BOOKING_STATES) {
-      if (state === 'ASSIGNED') continue;
+      if (DECLARED_SELF_TRANSITIONS.has(state)) continue;
       expect(canTransition(state, state, 'admin')).toEqual({ allowed: false, reason: 'ALREADY_IN_STATE' });
     }
+  });
+
+  it('every declared self-transition is in that set (the set cannot rot)', () => {
+    // Derived from the table rather than trusted: a new self-transition added
+    // without acknowledging it here fails, instead of silently widening what
+    // "already in state" tolerates.
+    const declared = new Set(TRANSITIONS.filter((r) => r.from === r.to).map((r) => r.from));
+    expect([...declared].sort()).toEqual([...DECLARED_SELF_TRANSITIONS].sort());
   });
 
   it('ASSIGNED \u2192 ASSIGNED is a declared operation, not a no-op', () => {

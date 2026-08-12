@@ -69,6 +69,10 @@ export const V1_ERROR_STATUS = {
   BOOKING_TERMINAL: 409,
   /** The six-digit code the customer reads out did not match. */
   BOOKING_WORKER_CODE_INVALID: 403,
+  /** The booking verification code the customer received did not match. */
+  BOOKING_OTP_INVALID: 403,
+  /** Verification already happened, or the booking has moved past it. */
+  BOOKING_ALREADY_CONFIRMED: 409,
 
   /**
    * Policy refusals, each naming the rule that refused.

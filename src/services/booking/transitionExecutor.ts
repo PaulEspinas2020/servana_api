@@ -70,7 +70,8 @@ const s = db.schema;
  */
 export type BookingGuardName =
   | 'providerCancellationWindow'
-  | 'cashPaymentSettledBeforeCompletion';
+  | 'cashPaymentSettledBeforeCompletion'
+  | 'bookingAwaitsOtpConfirmation';
 
 export interface GuardVerdict {
   allowed: boolean;
@@ -210,6 +211,50 @@ export const BOOKING_GUARDS: Record<BookingGuardName, (ctx: GuardContext) => Gua
       detail: { cashPaymentOutstanding: unpaidCash },
     };
   },
+
+  /**
+   * The booking has not already been OTP-confirmed.
+   *
+   * ## Why a guard is needed at all: the derivation is LOSSY here
+   *
+   * `deriveCanonicalState` maps BOTH of these to AWAITING_ASSIGNMENT:
+   *
+   *   status = PAID,      worker_uid NULL   — paid, NOT yet OTP-confirmed
+   *   status = CONFIRMED, worker_uid NULL   — confirmed, awaiting a provider
+   *
+   * Operationally they are the same thing — a booking with no provider on it —
+   * so the collapse is right for every other purpose. It is wrong for exactly
+   * one question: may this booking still be confirmed? The legacy
+   * compare-and-swap answered it with
+   * `status = 'PENDING_OTP' OR (status = 'PAID' AND worker_uid IS NULL)`, and
+   * that clause is the ONLY reason replaying a valid OTP failed.
+   *
+   * Dropping it into the canonical UPDATE would rebuild a state machine in
+   * SQL. Dropping it entirely lets a correct code confirm the same booking
+   * twice — which the Phase C replay test caught. So it is stated here
+   * instead: one named guard, one documented reason, in one place.
+   *
+   * ## Not a second state machine
+   *
+   * It answers a single question the canonical state cannot express, and it
+   * answers nothing about legality — the machine has already decided the
+   * transition is structurally permitted before this runs. If the derivation
+   * ever gains a state that distinguishes "paid, unconfirmed" from
+   * "confirmed", this guard is deleted rather than extended.
+   */
+  bookingAwaitsOtpConfirmation: (ctx) => {
+    const status = String(ctx.bookingStatus ?? '').toUpperCase();
+    if (status === 'PENDING_OTP') return { allowed: true };
+    // Payment-first bookings land at PAID still needing the code. Once a
+    // provider is on it, the moment for confirmation has passed.
+    if (status === 'PAID' && !ctx.metadata.hasProvider) return { allowed: true };
+
+    return {
+      allowed: false,
+      reasonCode: 'BOOKING_ALREADY_CONFIRMED',
+      message: 'This booking is not awaiting verification.',
+    };
+  },
 };
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
@@ -240,7 +285,21 @@ export const BOOKING_GUARDS: Record<BookingGuardName, (ctx: GuardContext) => Gua
  * a destination and an actor have overlapping source states.
  */
 export const BOOKING_ACTIONS = {
-  CUSTOMER_CONFIRM_OTP: { to: 'AWAITING_ASSIGNMENT', actor: 'customer' },
+  /**
+   * The customer proves presence with the booking OTP.
+   *
+   * `requires` is not documentation. It is checked before any write, so the
+   * action cannot be performed without the credential even by an internal
+   * caller that never went near HTTP — which is exactly the hole this closes:
+   * before Phase C this branch wrote CONFIRMED with no credential check at
+   * all, and was saved only by not yet being wired to an endpoint.
+   */
+  CUSTOMER_CONFIRM_OTP: {
+    to: 'AWAITING_ASSIGNMENT', actor: 'customer',
+    from: ['PENDING_OTP', 'AWAITING_ASSIGNMENT'],
+    requires: 'BOOKING_OTP',
+    guard: 'bookingAwaitsOtpConfirmation',
+  },
   CUSTOMER_CANCEL: { to: 'CANCELLED', actor: 'customer' },
   PROVIDER_ACCEPT: { to: 'ACCEPTED', actor: 'assigned_provider' },
   /** Answering an offer. Only ever from an unanswered assignment. */
@@ -273,8 +332,41 @@ export const BOOKING_ACTIONS = {
   SYSTEM_EXPIRE: { to: 'EXPIRED', actor: 'system' },
 } as const satisfies Record<
   string,
-  { to: BookingState; actor: Actor; from?: readonly BookingState[]; guard?: BookingGuardName }
+  {
+    to: BookingState;
+    actor: Actor;
+    from?: readonly BookingState[];
+    guard?: BookingGuardName;
+    requires?: BookingCredential;
+  }
 >;
+
+/**
+ * A secret the ACTOR must present, checked atomically with the write.
+ *
+ * Distinct from a guard. A guard asks the operator's policy a question the
+ * server can answer alone; a credential is something only the right person
+ * holds, and it is verified in the same statement as the mutation so there is
+ * no window between proving it and using it.
+ *
+ * Both existing credentials are six-digit codes the CUSTOMER reads out or
+ * receives, and both are compared inside the UPDATE rather than before it.
+ */
+export type BookingCredential = 'BOOKING_OTP' | 'WORKER_CODE';
+
+/** Which metadata field carries each credential, and how it is refused. */
+const CREDENTIAL_FIELD: Record<BookingCredential, { field: string; code: TransitionErrorCode; message: string }> = {
+  BOOKING_OTP: {
+    field: 'otp',
+    code: 'BOOKING_OTP_INVALID',
+    message: 'That code does not match this booking.',
+  },
+  WORKER_CODE: {
+    field: 'workerCode',
+    code: 'WORKER_CODE_INVALID',
+    message: 'That code does not match this booking. Ask the customer to read it again.',
+  },
+};
 
 export type BookingAction = keyof typeof BOOKING_ACTIONS;
 
@@ -307,6 +399,14 @@ export type TransitionErrorCode =
    * one cause. The legacy path answered "Job cannot be started" for all four.
    */
   | 'WORKER_CODE_INVALID'
+  /**
+   * The booking OTP did not match.
+   *
+   * Same shape as WORKER_CODE_INVALID and for the same reason: state,
+   * authorization and terminality are all validated before the statement runs,
+   * so a zero-row result names exactly one cause.
+   */
+  | 'BOOKING_OTP_INVALID'
   /**
    * A named policy guard refused, and said which.
    *
@@ -702,6 +802,8 @@ const LEGACY_TRACKING: Partial<Record<BookingAction, { status: string; note: str
   PROVIDER_EN_ROUTE: { status: 'EN_ROUTE', note: 'Provider is on the way' },
   // technicianService.markArrived.
   PROVIDER_ARRIVED: { status: 'ARRIVED', note: 'Provider has arrived' },
+  // bookingService.confirmOtp
+  CUSTOMER_CONFIRM_OTP: { status: 'CONFIRMED', note: 'OTP verified' },
 };
 
 async function writeLegacyTracking(
@@ -732,7 +834,34 @@ async function applyState(
       // the assignment ends and the booking returns to the pool — the OLD
       // assignment is closed rather than overwritten, so its history survives.
       if (input.action === 'CUSTOMER_CONFIRM_OTP') {
-        await client.query(`UPDATE ${s}.bookings SET status = 'CONFIRMED' WHERE id = $1`, [loaded.id]);
+        /**
+         * The OTP is compared IN the statement that writes, exactly as the
+         * legacy compare-and-swap did.
+         *
+         * A check-then-write would be equivalent only if the lock behaves as
+         * expected; keeping the predicate here means the credential and the
+         * mutation cannot be separated at all. Same reasoning as the worker
+         * code on PROVIDER_START.
+         *
+         * What is deliberately NOT reproduced is the legacy statement's other
+         * half —
+         *
+         *   status = 'PENDING_OTP' OR (status = 'PAID' AND worker_uid IS NULL)
+         *
+         * — which was a second state machine written in SQL. The canonical
+         * machine has already decided this transition is legal from this
+         * state, under the row lock, before this line runs. One authority for
+         * the lifecycle; the predicate is only for the credential.
+         */
+        const otp = String(input.metadata?.otp ?? '').trim();
+        const confirmed = await client.query(
+          `UPDATE ${s}.bookings SET status = 'CONFIRMED'
+            WHERE id = $1 AND otp_code = $2::text`,
+          [loaded.id, otp],
+        );
+        if (!confirmed.rowCount) {
+          throw new TransitionError('BOOKING_OTP_INVALID', CREDENTIAL_FIELD.BOOKING_OTP.message);
+        }
         return;
       }
       if (!providerUid) return;
@@ -1108,6 +1237,23 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
      * schedule it measures against cannot be edited between the check and the
      * transition.
      */
+    /**
+     * The credential must be PRESENT before anything is written.
+     *
+     * Its correctness is proven inside the write itself; this only refuses a
+     * caller that supplied nothing, so an action declaring `requires` can
+     * never reach its mutation without one. Structural, not conventional: an
+     * internal caller that bypasses HTTP entirely is refused here too.
+     */
+    const credential = (spec as { requires?: BookingCredential }).requires;
+    if (credential) {
+      const { field, code, message } = CREDENTIAL_FIELD[credential];
+      const supplied = input.metadata?.[field];
+      if (typeof supplied !== 'string' || !supplied.trim()) {
+        throw new TransitionError(code, message, { credential, missing: true }, snapshot);
+      }
+    }
+
     const guardName = (spec as { guard?: BookingGuardName }).guard;
     if (guardName) {
       const verdict = await BOOKING_GUARDS[guardName]({
@@ -1116,7 +1262,7 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
         workerStatus: loaded.assignmentStatus,
         schedule: loaded.schedule,
         now: new Date(),
-        metadata: input.metadata ?? {},
+        metadata: { ...(input.metadata ?? {}), hasProvider: !!loaded.workerUid },
         // The LOCKED transaction: a guard reads the same snapshot the decision
         // is made in, so nothing can change between the check and the write.
         query: (sql, params) => client.query(sql, params as any[]),
@@ -1234,6 +1380,15 @@ export interface AvailableAction {
   reasonCode?: string;
   /** Safe context — deadlines and counts, never another party's identity. */
   detail?: Record<string, unknown>;
+  /**
+   * A secret the caller must supply when performing this action.
+   *
+   * `allowed: true` here means the STATE permits the action, never that the
+   * credential has been proven — this endpoint does not have the code and must
+   * not ask for one merely to render a button. A client uses it to know it
+   * needs to prompt; the POST remains the only authority.
+   */
+  requiresCredential?: BookingCredential;
 }
 
 /**
@@ -1303,6 +1458,7 @@ export async function getAvailableActions(
       actor: Actor;
       from?: readonly BookingState[];
       guard?: BookingGuardName;
+      requires?: BookingCredential;
     };
     if (spec.actor !== actorRole) continue;
     if (actorRole === 'assigned_provider' && !isCurrentProvider) continue;
@@ -1328,7 +1484,7 @@ export async function getAvailableActions(
         workerStatus: row.worker_status,
         schedule: row.schedule,
         now: new Date(),
-        metadata: {},
+        metadata: { hasProvider: !!row.worker_uid },
         // No lock: this is advisory. Enforcement re-runs the same guard under
         // FOR UPDATE, which is where a race is actually resolved.
         query: (sql, params) => dbQuery.query(sql, params as any[]),
@@ -1343,7 +1499,14 @@ export async function getAvailableActions(
         continue;
       }
     }
-    out.push({ action, allowed: true });
+    // Deliberately no credential check: this endpoint neither holds the OTP
+    // nor the worker code, and validating one here would leak whether a code
+    // is correct to anyone who can read a booking.
+    out.push({
+      action,
+      allowed: true,
+      ...(spec.requires ? { requiresCredential: spec.requires } : {}),
+    });
   }
   return out;
 }

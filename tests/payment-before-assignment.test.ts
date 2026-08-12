@@ -21,8 +21,24 @@ describe('payment before worker assignment', () => {
   });
 
   test('legacy paid-but-unassigned bookings can confirm and resend OTP', () => {
-    expect(booking).toContain("status='PAID' AND worker_uid IS NULL");
+    // Resend still checks it inline. Confirmation moved to the canonical
+    // executor in Phase C, so the SQL clause it used to assert is gone — the
+    // capability is now carried by the `bookingAwaitsOtpConfirmation` guard,
+    // which is where the assertion follows it. Deleting the check would drop a
+    // real guarantee: a payment-first booking holding a valid code must still
+    // be confirmable.
     expect(booking).toContain("status === 'PAID' && !booking.worker_uid");
+
+    const executor = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'services', 'booking', 'transitionExecutor.ts'),
+      'utf8',
+    );
+    const guard = executor.slice(
+      executor.indexOf('bookingAwaitsOtpConfirmation: (ctx)'),
+      executor.indexOf('export const BOOKING_ACTIONS'),
+    );
+    expect(guard).toContain("status === 'PAID' && !ctx.metadata.hasProvider");
+    expect(guard).toContain("status === 'PENDING_OTP'");
   });
 
   test('operations counts read authoritative payment status', () => {

@@ -21,6 +21,7 @@ import {
   projectTimelineForCustomer,
 } from "../controllers/bookingTimeline";
 import { notifyAdminsSafely } from './adminNotificationService';
+import { transitionBooking, TransitionError } from './booking/transitionExecutor';
 
 export const createBooking = async (
   userId: string,
@@ -336,38 +337,87 @@ export const resendBookingOtp = async (bookingId: number) => {
   return { bookingId, resent: true };
 };
 
+/**
+ * ─── PHASE C · CUSTOMER_CONFIRM_OTP, on the canonical executor ───────────────
+ *
+ * The customer proves presence with the booking OTP, and the booking is
+ * released to the assignment pool.
+ *
+ * ## What was preserved, deliberately and in full
+ *
+ * The booking OTP has NO expiry, NO attempt limit and is NOT consumed — all
+ * three absent by construction, not by oversight: `resendBookingOtp`'s own
+ * docblock states the code has no expiry. Adding any of them here would be a
+ * product-policy change wearing a refactor's clothes, so none was added. Replay
+ * still errors rather than answering 200, because installed clients were built
+ * against that.
+ *
+ * The credential predicate stays IN the write, exactly as the legacy
+ * compare-and-swap had it. What did NOT come with it is the other half of that
+ * statement — `status = 'PENDING_OTP' OR (status = 'PAID' AND worker_uid IS
+ * NULL)` — which was a second state machine written in SQL. The canonical
+ * machine decides legality now; the predicate is only for the credential.
+ *
+ * ## One behaviour change, and it is a bug fix
+ *
+ * The legacy sequence committed the status write, then inserted tracking, then
+ * looked up the address for auto-assignment — and threw
+ * `Error("Address missing locationId.")` if the address had no location. The
+ * customer received HTTP 400 for a booking that was ALREADY confirmed.
+ *
+ * The address is needed only for auto-assignment: every earlier branch
+ * (`no rows`, `no user_address_id`) returned the confirmed booking
+ * successfully. So the coupling was accidental, and it is gone. Confirmation
+ * commits, and a failure to find a provider afterwards leaves the booking
+ * CONFIRMED with no worker — which is AWAITING_ASSIGNMENT, exactly the queue an
+ * admin watches for bookings needing a provider.
+ *
+ * ## Authorization
+ *
+ * `assertBookingAccess` stays in the controller for now, and the executor
+ * independently refuses a customer who does not own the booking. That is
+ * duplicated ENFORCEMENT, not duplicated policy — and the executor's is the
+ * one that cannot be bypassed by a caller that never touched HTTP. The
+ * controller check is removed when the legacy endpoint migrates.
+ */
 export const confirmOtp = async (
   bookingId: number,
-  otp: string
+  otp: string,
+  options: { actorUid?: string | null; correlationId?: string } = {},
 ) => {
   try {
-    const r = await dbQuery.query(
-      `
-      UPDATE ${dbSchema}.bookings
-      SET status='CONFIRMED'
-      WHERE id=$1
-        AND otp_code=$2::text
-        AND (
-          status='PENDING_OTP'
-          OR (status='PAID' AND worker_uid IS NULL)
-        )
-      RETURNING *
-      `,
-      [bookingId, otp]
-    );
-
-    if (!r.rowCount) {
+    await transitionBooking({
+      action: 'CUSTOMER_CONFIRM_OTP',
+      bookingId,
+      actorRole: options.actorUid ? 'customer' : 'admin',
+      actorUid: options.actorUid ?? null,
+      correlationId: options.correlationId,
+      metadata: { otp },
+    });
+  } catch (error) {
+    // The legacy message, byte for byte: both callers surface `e.message`
+    // directly and answer 400 for every failure here.
+    if (error instanceof TransitionError) {
       throw new Error("Invalid OTP or booking is not in PENDING_OTP.");
     }
+    throw error;
+  }
 
-    await dbQuery.query(
-      `
-      INSERT INTO ${dbSchema}.booking_tracking (booking_id,status,note)
-      VALUES ($1,'CONFIRMED','OTP verified')
-      `,
-      [bookingId]
-    );
+  const confirmed = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.bookings WHERE id = $1`,
+    [bookingId],
+  );
+  const booking = confirmed.rows[0];
 
+  /**
+   * Auto-assignment, AFTER the commit and unable to fail the confirmation.
+   *
+   * TAB 05 owns who gets assigned. What matters here is that the customer is
+   * told their booking is confirmed — because it is — and a booking left
+   * without a provider surfaces to an admin as awaiting assignment rather than
+   * as a 400 the customer cannot act on.
+   */
+  try {
     const bookingRes = await dbQuery.query(
       `
       SELECT
@@ -382,29 +432,23 @@ export const confirmOtp = async (
       [bookingId]
     );
 
-    if (!bookingRes.rowCount) return r.rows[0];
-
     const row = bookingRes.rows[0];
-
-    if (!row.user_address_id) return r.rows[0];
-
-    const locationId = row.location_id;
-    if (!locationId) throw new Error("Address missing locationId.");
-
-    const [lon, lat] = await getLatLonByLocationId(String(locationId));
-
-    const serviceId = row.service_id ? Number(row.service_id) : null;
-    await assignNearestWorker(
-      bookingId,
-      Number(lat),
-      Number(lon),
-      serviceId
-    );
-
-    return r.rows[0];
-  } catch (e) {
-    throw e;
+    if (row?.user_address_id && row.location_id) {
+      const [lon, lat] = await getLatLonByLocationId(String(row.location_id));
+      await assignNearestWorker(
+        bookingId,
+        Number(lat),
+        Number(lon),
+        row.service_id ? Number(row.service_id) : null,
+      );
+    }
+  } catch (assignErr) {
+    // Never surfaced to the customer: the booking IS confirmed, and telling
+    // them otherwise is the defect this replaced.
+    console.error(`auto-assignment after OTP confirm failed for booking ${bookingId}:`, assignErr);
   }
+
+  return booking;
 };
 
 

@@ -104,9 +104,12 @@ const RAW_WRITE_ALLOWLIST: Record<string, { count: number; phase: string; reason
       + 'writers OUTSIDE the executor.',
   },
   'services/bookingService.ts': {
-    count: 3,
-    phase: 'B — customer cancellation / OTP confirm',
-    reason: 'Customer cancel and confirm-OTP still write directly.',
+    count: 2,
+    phase: 'C — customer cancellation',
+    reason:
+      'Customer cancellation still writes directly. OTP confirmation is done: '
+      + 'it goes through the executor, with the credential compared inside the '
+      + 'write exactly as the legacy compare-and-swap had it.',
   },
   'services/technicianService.ts': {
     count: 3,

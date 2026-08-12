@@ -49,6 +49,7 @@ const TRANSITION_CODE: Record<TransitionErrorCode, V1ErrorCode> = {
   GUARD_FAILED: 'VALIDATION_FAILED',
   IDEMPOTENCY_KEY_REUSED: 'IDEMPOTENCY_KEY_REUSED',
   WORKER_CODE_INVALID: 'BOOKING_WORKER_CODE_INVALID',
+  BOOKING_OTP_INVALID: 'BOOKING_OTP_INVALID',
   // The fallback. A guard that names its own reason overrides this below —
   // collapsing every policy refusal into one code would tell a provider that
   // something is not allowed without telling them which rule said so.
@@ -129,6 +130,9 @@ const runAction = (
         // Read by the cancellation policy guard, which validates it against the
         // standardized list rather than accepting free text.
         ...(typeof body.reasonCode === 'string' ? { reasonCode: body.reasonCode } : {}),
+        // The booking verification code. Redacted before it reaches the
+        // timeline, like every other credential.
+        ...(typeof body.otp === 'string' ? { otp: body.otp } : {}),
       },
       correlationId: String((req as any).id ?? ''),
     });

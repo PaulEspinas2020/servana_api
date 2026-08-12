@@ -158,7 +158,15 @@ export const confirmOtp = async (req: Request, res: Response) => {
     // entitled to this booking. Check both (§11).
     await assertBookingAccess(bookingId, (req as any).user?.uid);
 
-    const booking = await bookingService.confirmOtp(bookingId, otp);
+    // The actor travels through to the executor, which refuses a customer who
+    // does not own the booking INDEPENDENTLY of the check above. Duplicated
+    // enforcement while this endpoint is the only caller; the controller check
+    // goes when it migrates. No internal caller may bypass ownership merely by
+    // bypassing the controller.
+    const booking = await bookingService.confirmOtp(bookingId, otp, {
+      actorUid: (req as any).user?.uid ?? null,
+      correlationId: String((req as any).id ?? ''),
+    });
 
     return res.json({ success: true, booking: formatBooking(booking) });
   } catch (e: any) {

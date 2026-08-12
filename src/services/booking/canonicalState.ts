@@ -159,6 +159,21 @@ export const TRANSITIONS: readonly TransitionRule[] = [
   // ── Assignment ────────────────────────────────────────────────────────────
   {
     from: 'AWAITING_ASSIGNMENT',
+    to: 'AWAITING_ASSIGNMENT',
+    action: 'confirmOtp',
+    actors: ['customer', 'admin'],
+    requires: ['valid_booking_otp'],
+    note:
+      'A booking that reached PAID without a provider already derives as '
+      + 'AWAITING_ASSIGNMENT, but it has NOT been OTP-confirmed: the legacy '
+      + 'compare-and-swap accepted `status = PAID AND worker_uid IS NULL` as a '
+      + 'confirmable source. Same canonical state either side, so this is a '
+      + 'self-transition — but it is not a no-op. It writes CONFIRMED and '
+      + 'releases the booking to auto-assignment. Refusing it would strand '
+      + 'every payment-first booking holding a valid code.',
+  },
+  {
+    from: 'AWAITING_ASSIGNMENT',
     to: 'ASSIGNED',
     action: 'assignProvider',
     actors: ['admin', 'system'],
