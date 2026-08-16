@@ -309,8 +309,20 @@ describe('adminCreateBooking — permissions', () => {
 });
 
 describe('adminCreateBooking — app.ts wiring', () => {
-  it('wires ensureAdminCreateBookingSchema IIFE in app.ts', () => {
-    expect(appSrc).toContain('ensureAdminCreateBookingSchema');
+  it('declares ensureAdminCreateBookingSchema as a required startup dependency', () => {
+    /**
+     * TAB 03 moved this out of an app.ts IIFE into the startup dependency
+     * graph, and classified it `required`: an admin-created booking is a real
+     * booking, and the idempotency table this creates is what stops a retried
+     * admin form producing two of them.
+     */
+    const startup = require('fs')
+      .readFileSync(require('path').resolve(__dirname, '../src/startup.ts'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(startup).toContain('ensureAdminCreateBookingSchema');
+    const idx = startup.indexOf("name: 'admin-create-booking-schema'");
+    expect(idx).toBeGreaterThan(-1);
+    expect(startup.substring(idx, idx + 200)).toContain("kind: 'required'");
   });
 });
 

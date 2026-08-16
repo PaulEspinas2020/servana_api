@@ -636,7 +636,9 @@ describe('app.ts audit integration', function () {
   });
 
   it('calls ensureAuditSchema on startup', function () {
-    expect(appSrc).toContain('ensureAuditSchema');
+    // TAB 03: moved into the startup dependency graph.
+    var startupSrc = fs.readFileSync(path.resolve(__dirname, '../src/startup.ts'), 'utf8').replace(/\r\n/g, '\n');
+    expect(startupSrc).toContain('ensureAuditSchema');
   });
 
   it('stamps request IDs via middleware', function () {

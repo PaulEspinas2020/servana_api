@@ -301,26 +301,10 @@ app.use("/api", cors(corsOptionsDelegate), adminOnboardingRoutes);
 import adminBookingRoutes from "./routes/adminBooking.routes";
 app.use("/api", cors(corsOptionsDelegate), adminBookingRoutes);
 
-import { ensureAdminCreateBookingSchema } from "./services/adminCreateBookingService";
-(async () => {
-  try {
-    await ensureAdminCreateBookingSchema();
-  } catch (err) {
-    console.error("[admin-create-booking] schema error:", err);
-  }
-})();
 
 import adminBookingDraftRoutes from "./routes/adminBookingDraft.routes";
 app.use("/api", cors(corsOptionsDelegate), adminBookingDraftRoutes);
 
-import { ensureAdminBookingDraftSchema } from "./services/adminBookingDraftService";
-(async () => {
-  try {
-    await ensureAdminBookingDraftSchema();
-  } catch (err) {
-    console.error("[admin-booking-draft] schema error:", err);
-  }
-})();
 
 import adminDashboardRoutes from "./routes/adminDashboard.routes";
 app.use("/api", cors(corsOptionsDelegate), adminDashboardRoutes);
@@ -379,153 +363,100 @@ initProviderSocket(io);
 // statement is IF NOT EXISTS, so this is a no-op after the first boot. It is
 // not awaited — a DDL hiccup must not stop the server coming up, and every
 // read path COALESCEs the new columns.
-import { ensureChatLifecycleSchema } from "./chat/chat.repository";
-ensureChatLifecycleSchema().catch((e) =>
-  console.error("[chat] lifecycle schema init failed:", e)
-);
-
+/**
+ * Startup phases.
+ *
+ * What was here: twelve fire-and-forget `(async () => …)()` bootstraps, each
+ * swallowing its error into `console.error`, followed immediately by
+ * `httpServer.listen()`. The server accepted requests while its schema was
+ * still being created, and nothing said which of the twelve mattered.
+ *
+ * The graph now lives in `startup.ts` as data, `initializeDependencies` awaits
+ * it before anything listens, and readiness reflects the result.
+ */
 import { startScheduler } from "./scheduler";
-startScheduler();
-
-import { initProviderCatalogSchema, seedBuiltInOfferings } from "./services/providerCatalogService";
-(async () => {
-  try {
-    await initProviderCatalogSchema();
-    await seedBuiltInOfferings();
-  } catch (err) {
-    console.error("[provider-catalog] schema/seed error:", err);
-  }
-})();
-
-import { ensureOnboardingSchema, seedReasonCodes, seedRequirementDefinitions } from "./services/adminOnboardingService";
-(async () => {
-  try {
-    await ensureOnboardingSchema();
-    await seedReasonCodes();
-    await seedRequirementDefinitions();
-  } catch (err) {
-    console.error("[admin-onboarding] schema/seed error:", err);
-  }
-})();
-
-import { ensureAttributionSchema } from "./services/adminMobileAttributionService";
-(async () => {
-  try {
-    await ensureAttributionSchema();
-  } catch (err) {
-    console.error("[mobile-attribution] schema error:", err);
-  }
-})();
-
-import { ensureProviderWebSchema } from "./services/providerOnboardingService";
-(async () => {
-  try {
-    await ensureProviderWebSchema();
-  } catch (err) {
-    console.error("[provider-web-onboarding] schema error:", err);
-  }
-})();
-
-import { ensureBookingOpsSchema } from "./services/adminBookingService";
-(async () => {
-  try {
-    await ensureBookingOpsSchema();
-  } catch (err) {
-    console.error("[booking-ops] schema error:", err);
-  }
-})();
-
-import { ensureAuditSchema } from "./services/adminAuditService";
-(async () => {
-  try {
-    await ensureAuditSchema();
-  } catch (err) {
-    console.error("[admin-audit] schema error:", err);
-  }
-})();
-
-import { ensureCommunicationSchema } from "./services/adminCommunicationService";
-(async () => {
-  try {
-    await ensureCommunicationSchema();
-  } catch (err) {
-    console.error("[admin-communication] schema error:", err);
-  }
-})();
-
-import { bootstrap as bootstrapAutoOnline } from "./services/providerAutoOnlineEngine";
-(async () => {
-  try {
-    await bootstrapAutoOnline();
-  } catch (err) {
-    console.error("[auto-online] schema error:", err);
-  }
-})();
-
-import { ensureFinanceSchema } from "./services/adminFinanceService";
-(async () => {
-  try {
-    await ensureFinanceSchema();
-  } catch (err) {
-    console.error("[admin-finance] schema error:", err);
-  }
-})();
-
-/**
- * Identity columns MUST be ensured at boot.
- *
- * upsertFirebaseUser has written email_normalized / phone_normalized since
- * f97fc0d, but this bootstrap was written and never called — so the columns did
- * not exist in production and EVERY Firebase sign-in failed with
- * `42703 column "email_normalized" does not exist`.
- *
- * It went unnoticed because email/password sign-in uses a different endpoint
- * that never touches this table's normalized columns. Only phone auth, which
- * goes through firebase-login, was broken — so it read as a mobile-specific bug
- * rather than as a missing migration.
- */
-import { ensureIdentityColumns } from "./services/identityColumns";
-(async () => {
-  try {
-    await ensureIdentityColumns();
-  } catch (err) {
-    console.error("[identity] column bootstrap failed:", err);
-  }
-})();
-
-import { ensurePermissionSchema } from "./services/adminPermissionService";
-(async () => {
-  try {
-    await ensurePermissionSchema();
-  } catch (err) {
-    console.error("[admin-permission] schema error:", err);
-  }
-})();
-
 import { assertContinueUrlsAreUsable } from "./constants/platformContinueUrls";
-import { ensureDashboardSchema } from "./services/adminDashboardService";
-(async () => {
-  try {
-    await ensureDashboardSchema();
-  } catch (err) {
-    console.error("[admin-dashboard] schema error:", err);
-  }
-})();
+import { STARTUP_DEPENDENCIES } from "./startup";
+import {
+  initializeDependencies,
+  installSignalHandlers,
+  isLive,
+  isReady,
+  readinessSnapshot,
+} from "./lifecycle";
 
 /**
- * Refuse to start on a Firebase continue URL that could never work.
+ * Liveness and readiness are separate answers.
  *
- * These URLs are only ever exercised by an email somebody receives, so a typo
- * in `CUSTOMER_RESET_URL` is the kind of defect that surfaces as a locked-out
- * customer that support cannot explain. Checking at boot is the last cheap
- * moment; the alternative is finding out from the person it happened to.
+ * Liveness says the process is up; a failing liveness probe means RESTART ME.
+ * Readiness says it is safe to route work here; a failing readiness probe means
+ * SEND TRAFFIC ELSEWHERE. Conflating them turns a degraded dependency into a
+ * restart loop, which is how a slow database becomes an outage.
  *
- * Deliberately before `listen`, and deliberately fatal. A process that starts
- * and silently emails broken password-reset links is worse than one that
- * refuses to start and names the variable that is wrong.
+ * Both are public: they carry no account data, and a probe that needs a
+ * credential is a probe that stops being run.
  */
+app.get("/healthz", (_req: Request, res: Response) => {
+  res.status(isLive() ? 200 : 503).json({ status: isLive() ? "alive" : "shutting_down" });
+});
+
+app.get("/readyz", (_req: Request, res: Response) => {
+  res.status(isReady() ? 200 : 503).json(readinessSnapshot());
+});
+
 assertContinueUrlsAreUsable();
 
-httpServer.listen(port, () => {
+/**
+ * Listen only after the dependency graph has been awaited.
+ *
+ * The previous code called `listen` on the line after twelve un-awaited
+ * bootstraps, so the first requests of every deploy raced the schema they
+ * needed. Now the graph resolves first and readiness reflects it: a required
+ * dependency that failed leaves `/readyz` returning 503, so a load balancer
+ * routes elsewhere while the process stays up and says why.
+ *
+ * The listener still binds in either case. Refusing to bind would leave an
+ * operator with no endpoint to ask WHY it is unhealthy, which is the state
+ * this whole change exists to end.
+ */
+void (async () => {
+  const results = await initializeDependencies(STARTUP_DEPENDENCIES);
+  const unhealthy = results.filter((r) => r.state !== 'ready');
+
+  httpServer.listen(port, () => {
     console.log(`Magic is running on port ${port}`);
-});
+    console.log(
+      `[lifecycle] ${results.length - unhealthy.length}/${results.length} dependencies ready` +
+        (unhealthy.length
+          ? ` — degraded: ${unhealthy.map((r) => `${r.name}(${r.kind}/${r.state})`).join(', ')}`
+          : ''),
+    );
+  });
+
+  // Workers start AFTER the schema they read. A scheduler tick that fires
+  // against a half-built schema is the same defect as an early request, and it
+  // has no client to report the error to.
+  startScheduler();
+
+  installSignalHandlers(() => [
+    // Order matters: stop taking new work, then close what work uses.
+    {
+      name: 'http',
+      timeoutMs: 10_000,
+      close: () => new Promise<void>((resolve) => httpServer.close(() => resolve())),
+    },
+    {
+      name: 'socket.io',
+      timeoutMs: 5_000,
+      close: () => new Promise<void>((resolve) => io.close(() => resolve())),
+    },
+    {
+      name: 'postgres',
+      timeoutMs: 5_000,
+      close: async () => {
+        const { pool } = await import('./db/dbQuery');
+        await pool.end();
+      },
+    },
+  ]);
+})();

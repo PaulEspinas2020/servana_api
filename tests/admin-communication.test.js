@@ -471,7 +471,9 @@ describe('app.ts — adminCommunication registration', function () {
     expect(src).toContain("adminCommunicationRoutes");
   });
   test('calls ensureCommunicationSchema on startup', function () {
-    expect(src).toContain('ensureCommunicationSchema');
+    // TAB 03: moved into the startup dependency graph.
+    var startupSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'startup.ts'), 'utf8').replace(/\r\n/g, '\n');
+    expect(startupSrc).toContain('ensureCommunicationSchema');
   });
 });
 

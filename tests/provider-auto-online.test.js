@@ -380,7 +380,11 @@ describe('Command 14 — adminAutoOnline.routes.ts', () => {
 
 describe('Command 14 — app.ts wiring', () => {
   let app;
-  beforeAll(() => { app = fs.readFileSync(SRC('app.ts'), 'utf8'); });
+  beforeAll(() => {
+      app = fs.readFileSync(SRC('app.ts'), 'utf8');
+      // TAB 03: bootstraps live in the startup graph now.
+      startup = fs.readFileSync(SRC('startup.ts'), 'utf8');
+    });
 
   it('imports adminAutoOnlineRoutes', () => {
     expect(app).toContain('adminAutoOnlineRoutes');
@@ -392,7 +396,8 @@ describe('Command 14 — app.ts wiring', () => {
   });
 
   it('bootstraps auto-online schema on startup', () => {
-    expect(app).toContain('bootstrapAutoOnline');
+    // TAB 03: declared in the startup graph.
+    expect(startup).toContain('bootstrapAutoOnline');
   });
 });
 

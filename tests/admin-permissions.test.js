@@ -12,6 +12,7 @@ const MW     = path.resolve(__dirname, '../src/middleware/requirePermission.ts')
 const CTRL   = path.resolve(__dirname, '../src/controllers/adminPermissionController.ts');
 const ROUTES = path.resolve(__dirname, '../src/routes/adminPermission.routes.ts');
 const APP    = path.resolve(__dirname, '../src/app.ts');
+const STARTUP = path.resolve(__dirname, '../src/startup.ts');
 const AUDIT  = path.resolve(__dirname, '../src/services/adminAuditService.ts');
 
 // ── Route files ───────────────────────────────────────────────────────────────
@@ -546,18 +547,30 @@ describe('app.ts — permission route registration', () => {
     expect(segment).toContain('/api');
   });
 
-  test('imports ensurePermissionSchema', () => {
-    expect(src).toContain('ensurePermissionSchema');
+  /**
+   * TAB 03 moved these bootstraps out of app.ts into a declared dependency
+   * graph. The IIFE and its `[admin-permission]` catch are gone — replaced by
+   * a classification and a central failure path — so the assertions now check
+   * the thing that carries the guarantee.
+   *
+   * This is strictly stronger. "app.ts mentions ensurePermissionSchema" could
+   * not distinguish a live bootstrap from a stale import; the graph says the
+   * dependency exists AND that authorization is `required`, so a failure
+   * withholds readiness rather than being logged.
+   */
+  test('ensurePermissionSchema is a declared startup dependency', () => {
+    const startup = fs.readFileSync(STARTUP, 'utf8').replace(/\r\n/g, '\n');
+    expect(startup).toContain('ensurePermissionSchema');
+    expect(startup).toContain("name: 'admin-permission-schema'");
   });
 
-  test('calls ensurePermissionSchema in IIFE', () => {
-    expect(src).toContain('await ensurePermissionSchema()');
-  });
-
-  test('permission IIFE has error handler', () => {
-    const idx = src.indexOf('ensurePermissionSchema');
-    const segment = src.substring(idx, idx + 200);
-    expect(segment).toContain('[admin-permission]');
+  test('authorization is classified required, not optional', () => {
+    // TAB 03 stop condition: an authorization dependency must never be
+    // silently downgraded to optional.
+    const startup = fs.readFileSync(STARTUP, 'utf8').replace(/\r\n/g, '\n');
+    const idx = startup.indexOf("name: 'admin-permission-schema'");
+    expect(idx).toBeGreaterThan(-1);
+    expect(startup.substring(idx, idx + 200)).toContain("kind: 'required'");
   });
 });
 

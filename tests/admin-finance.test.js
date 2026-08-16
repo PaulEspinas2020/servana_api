@@ -15,6 +15,8 @@ const SVC   = (...parts) => SRC('services', ...parts);
 const CTRL  = (...parts) => SRC('controllers', ...parts);
 const ROUTE = (...parts) => SRC('routes', ...parts);
 const APP   = SRC('app.ts');
+// TAB 03: bootstraps moved out of app.ts into a declared dependency graph.
+const STARTUP = SRC('startup.ts');
 
 // ── File existence ─────────────────────────────────────────────────────────────
 
@@ -43,9 +45,15 @@ describe('C17 Finance — app.ts registers finance route and schema', () => {
     expect(app).toContain('adminFinanceRoutes');
   });
   it('calls ensureFinanceSchema on startup', () => {
-    expect(app).toContain('ensureFinanceSchema');
+    // TAB 03: declared in the startup graph rather than inlined in app.ts,
+    // and classified `required` so a failure withholds readiness.
+    const startup = fs.readFileSync(STARTUP, 'utf8').replace(/\r\n/g, '\n');
+    expect(startup).toContain('ensureFinanceSchema');
+    expect(startup).toContain("name: 'finance-schema'");
+    expect(startup).toContain("kind: 'required'");
   });
   it('ensureFinanceSchema import is from adminFinanceService', () => {
+    const app = fs.readFileSync(STARTUP, 'utf8').replace(/\r\n/g, '\n');
     expect(app).toContain('adminFinanceService');
   });
 });
