@@ -5,28 +5,40 @@
   "totalTabs": 15,
   "completedTabs": [
     "TAB 01", "TAB 02", "TAB 03", "TAB 04", "TAB 05", "TAB 06", "TAB 07",
-    "TAB 08", "TAB 09", "TAB 10", "TAB 11", "TAB 12", "TAB 13", "TAB 14"
+    "TAB 08", "TAB 09", "TAB 10", "TAB 11", "TAB 12", "TAB 13", "TAB 14",
+    "TAB 15"
   ],
-  "currentObjective": "TAB 15 locally exhausted. Every derivable deliverable is built and executed; the remaining gate needs a production schema-only dump restored into a disposable instance, which is a human boundary.",
-  "status": "BLOCKED_ON_HUMAN_BOUNDARY",
-  "supervisorCycleCount": 6,
+  "currentObjective": "All 15 TABs certified. TAB 15 gap closed: baseline captured, sanitised, and proven to bootstrap a fresh database with zero pending migrations.",
+  "status": "COMPLETE",
+  "supervisorCycleCount": 14,
   "lastHourlyReportAt": null,
-  "lastCheckpointAt": "2026-08-16 — commit 5db9263",
-  "lastLocalCommit": "5db9263",
-  "workingTreeState": "CLEAN",
-  "activeBlockers": [
-    "TAB 15 P0: no sanitized schema baseline. Needs a production schema-only dump restored into a disposable PostgreSQL, then `npm run baseline:capture`. Forbidden to this session; inferring the DDL was rejected as worse than leaving the gap visible.",
-    "TAB 15 P1: ownership/role separation unverified on a real engine. PGlite runs as one bundled superuser; the `fresh` CI job with a service container covers it and is skipped until a baseline exists."
+  "lastCheckpointAt": "2026-08-16 — TAB 15 certified",
+  "lastLocalCommit": "pending — see git log",
+  "workingTreeState": "committing",
+  "activeBlockers": [],
+  "openItems": [
+    "P0 production has NO servana.schema_migrations ledger — migrations applied by hand, deploy.yml never invokes the runner. `migrations:apply` there today would find all 36 pending and fail on 001. Marking it is a PRODUCTION WRITE and was not performed.",
+    "P1 a 4MB+ banner upload can throw RangeError instead of a clean 400 — product-code regex over a multi-MB data URI; outside TAB 15, deliberately not fixed",
+    "P1 ownership unverified on a real engine — PGlite has no role separation; the `fresh` CI job now activates but has not been observed running",
+    "P2 scripts/** is typechecked by neither tsconfig"
   ],
   "pendingQuestions": [],
   "researchDecisions": [
-    "PGlite (@electric-sql/pglite 0.5.5) chosen over pg-mem and a local server install — it is real PostgreSQL source compiled to WASM, so disagreements with it are meaningful",
-    "engine-proven asserted as a SUBSET of model-reported, not equal — the engine stops each file at its first error and legitimately sees fewer"
+    "PGlite over pg-mem or a server install — real PostgreSQL source compiled to WASM, so disagreements are meaningful",
+    "engine-proven asserted as a SUBSET of model-reported — the engine stops each file at its first error",
+    "baseline-version ledger (Flyway/Sqitch pattern) rather than replaying a chain that is spent",
+    "pending count read back OUT of the database, not derived from the SQL that wrote it"
   ],
-  "contextPressure": "NORMAL",
+  "contextPressure": "ELEVATED",
   "gates": {
-    "npm run verify": "PASS exit 0 — 251 suites, 5654 tests",
-    "npm run db:verify": "FAIL exit 1 — correct; 18 tables missing",
-    "npm run db:verify:embedded": "FAIL exit 1 — correct; dies on 001; model agrees with engine"
+    "npm run verify": "PASS exit 0 — 251 suites, 5656 tests (3 consecutive clean runs)",
+    "npm run db:verify": "PASS exit 0",
+    "npm run db:verify:embedded": "PASS exit 0 — 121 tables, 0 pending"
+  },
+  "productionActions": {
+    "reads": "one — pg_dump --schema-only over SSH, explicitly authorised",
+    "writes": "none",
+    "deploys": "none",
+    "credentialChanges": "none"
   }
 }

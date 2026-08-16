@@ -1,8 +1,100 @@
 # Database baseline capture and fresh-database reproducibility
 
-> The repository cannot currently build Servana's database from zero. This
-> document says exactly how far it gets, why, what a baseline must contain, how
-> to capture one safely, and how to restore or roll back when it goes wrong.
+> **The gap is closed.** `scripts/baseline/000-baseline.sql` is a captured,
+> sanitised schema baseline, and `npm run db:verify:embedded` restores it into a
+> real PostgreSQL and proves a fresh database reaches the current schema with
+> zero pending migrations. This document says how it was captured, how to
+> regenerate it, how the version ledger works, and how to restore or roll back.
+
+---
+
+## 0. Reproducing the capture
+
+Three steps. The first is the only one that touches production, and it is a
+read.
+
+```bash
+# 1 — schema only, streamed over SSH so nothing is written on the server
+#     and no credential leaves it
+ssh servana 'cd /path/to/app && \
+  export PGPASSWORD=$(grep -oP "(?<=^DB_PASSWORD=).*" .env | tr -d "\r") && \
+  pg_dump --schema-only --no-owner --no-privileges --schema=servana \
+          -h localhost -U admin -d servana' > prod-schema.sql
+
+# 2 — sanitise: drop psql meta-commands, guard the schema statement,
+#     declare the extension the schema depends on
+#     (see §0.1 for exactly what changes and why)
+
+# 3 — prove it
+npm run db:verify            # requirements, semantics, sanitisation
+npm run db:verify:embedded   # restore into real PostgreSQL, assert 0 pending
+```
+
+### 0.1 The three transforms, and why each is necessary
+
+| Transform | Why |
+| --- | --- |
+| drop `\restrict` / `\unrestrict` | psql meta-commands, not SQL. `pg_dump` 16 emits them; no driver — `pg`, PGlite, or the migration runner — can execute them. |
+| `CREATE SCHEMA servana` → `... IF NOT EXISTS` | The deploy wrapper creates the schema and owns it. An unguarded statement makes the baseline fight whoever provisioned the database. |
+| add `CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA public` | `--schema=servana` cannot see extensions installed in `public`, but the schema depends on one: `public.uuid_generate_v4()` is a column default throughout. Without it the baseline fails on its first table. Production carries exactly `plpgsql` and `uuid-ossp`. |
+
+Nothing else is altered. Ownership is **not** rewritten because `--no-owner`
+means there is none to rewrite: ownership becomes a property of whoever applies
+the file, and the runner applies it as `admin`.
+
+### 0.2 What was verified before it was committed
+
+```
+COPY statements          0
+INSERT statements        0
+OWNER TO statements      0
+GRANT statements         0
+email-shaped values      0
+bcrypt hashes            0
+JSON Web Tokens          0
+FORBIDDEN_BASELINE_PATTERNS matched   0
+```
+
+Plus every check in `verifyBaseline()`: all 43 proven columns present, all 12
+Catalog V2 semantic rules passing.
+
+---
+
+## 0.3 The version ledger — why a baseline cannot simply be replayed
+
+The captured baseline **is the current production schema**. Everything the
+migration chain has ever done is already in it, so running the chain on top does
+not reproduce production — it replays spent history against a schema that has
+moved on, and it provably fails:
+
+```
+001–008  column s.category does not exist      Catalog V2 removed it
+023/024  "service_families" is not a view      it is a table now
+020/025  cannot change owner of sequence       ownership already settled
+```
+
+Those migrations are not broken. They are **spent**. So a fresh database is
+brought to parity the way every migration framework does it — Flyway `baseline`,
+Sqitch `deploy --to`: restore the schema, then record the version it corresponds
+to, so nothing historical re-runs. `ledgerAtBaselineSql()` emits that record,
+and `npm run db:verify:embedded` asserts the result has **zero pending
+migrations**.
+
+Checksums are computed from the migration files at call time rather than frozen
+into the artifact, so editing a migration fires the runner's
+`Applied migration checksum changed` guard on a real edit instead of on a stale
+copy of a hash.
+
+> ### ⚠ Production has no ledger
+>
+> `servana.schema_migrations` **does not exist in production**. Migrations there
+> have been applied by hand — `.github/workflows/deploy.yml` never invokes the
+> runner — so there is no record of which ones ran.
+>
+> The consequence is concrete: `npm run migrations:apply` against production
+> today would create the ledger, find all 36 migrations pending, and fail on
+> 001. Marking production at its true baseline version is a separate, deliberate
+> operation and is **not** performed by anything in this repository.
 
 ---
 

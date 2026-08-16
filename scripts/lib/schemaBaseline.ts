@@ -46,6 +46,7 @@
  * its output against (2) and (3) before it is trusted.
  */
 
+import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import {
@@ -70,19 +71,106 @@ export const migrationInputs = (): ReplayInput[] =>
     .sort()
     .map((file) => ({ file, sql: fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8') }));
 
+/**
+ * Read-through caches.
+ *
+ * The baseline is a ~235 KB capture and the replay allocates a catalog for it.
+ * Both are pure functions of files that do not change while a process runs, but
+ * the TAB 15 suite alone calls them eleven times, and under `jest --runInBand`
+ * every suite shares one process and one heap.
+ *
+ * That is not a micro-optimisation. Re-parsing on every call pushed peak heap
+ * high enough to destabilise an unrelated suite: `catalog-banner` validates a
+ * 4 MB upload with `/^data:([^;,]+);base64,(.+)$/`, and V8 allocates a regex
+ * stack proportional to that 5.6 MB input. Under memory pressure the allocation
+ * fails and the regex throws `RangeError: Maximum call stack size exceeded`
+ * instead of the size error the test expects. The suite passed 251/251 without
+ * the baseline and failed intermittently, in a different place each run, with
+ * it.
+ *
+ * Caching is safe here — nothing in the repository writes these files at
+ * runtime — and the callers only read the result.
+ */
+let baselineCache: { value: ReplayInput | null } | null = null;
+
 /** The baseline, when one has been captured. `null` until then. */
-export const baselineInput = (): ReplayInput | null =>
-  fs.existsSync(BASELINE_FILE)
-    ? { file: '000-baseline.sql', sql: fs.readFileSync(BASELINE_FILE, 'utf8') }
-    : null;
+export const baselineInput = (): ReplayInput | null => {
+  if (!baselineCache) {
+    baselineCache = {
+      value: fs.existsSync(BASELINE_FILE)
+        ? { file: '000-baseline.sql', sql: fs.readFileSync(BASELINE_FILE, 'utf8') }
+        : null,
+    };
+  }
+  return baselineCache.value;
+};
+
+/** Drop every cache. For a test that deliberately changes what is on disk. */
+export const resetBaselineCaches = (): void => {
+  baselineCache = null;
+  migrationsCatalogCache = null;
+  withBaselineCatalogCache = null;
+};
+
+/**
+ * SQL that marks every migration in the repository as already applied.
+ *
+ * ## Why a baseline needs this
+ *
+ * The captured baseline IS the current production schema — everything the chain
+ * has ever done is already in it. Replaying the chain on top does not reproduce
+ * production, it replays *history against a schema that has moved on*, and it
+ * provably fails: migrations 001–008 read `services.category`, a column Catalog
+ * V2 removed, and 023/024 expect `service_families` to be a view when it is now
+ * a table. Those migrations are not broken — they are simply spent.
+ *
+ * So a fresh database is brought to parity the way every migration framework
+ * does it (Flyway `baseline`, Sqitch `deploy --to`): restore the schema, then
+ * record the version it corresponds to, so nothing historical re-runs.
+ *
+ * Checksums are computed from the files at call time rather than frozen into the
+ * baseline artifact. Freezing them would mean editing any migration silently
+ * invalidated the baseline with `Applied migration checksum changed`, which is a
+ * real guard and should fire on a real edit — not on a stale copy of a hash.
+ */
+export const ledgerAtBaselineSql = (): string => {
+  const rows = migrationInputs()
+    .map(({ file, sql }) => {
+      const checksum = createHash('sha256').update(sql).digest('hex');
+      return `  ('${file.replace(/'/g, "''")}', '${checksum}')`;
+    })
+    .join(',\n');
+
+  return `CREATE TABLE IF NOT EXISTS servana.schema_migrations (
+  migration_name TEXT PRIMARY KEY,
+  checksum_sha256 TEXT NOT NULL,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO servana.schema_migrations (migration_name, checksum_sha256)
+VALUES
+${rows}
+ON CONFLICT (migration_name) DO NOTHING;`;
+};
+
+let migrationsCatalogCache: SchemaCatalog | null = null;
+let withBaselineCatalogCache: SchemaCatalog | null = null;
 
 /** Replay migrations alone — what a fresh database would actually get. */
-export const replayMigrationsOnly = (): SchemaCatalog => replay(migrationInputs());
+export const replayMigrationsOnly = (): SchemaCatalog => {
+  if (!migrationsCatalogCache) migrationsCatalogCache = replay(migrationInputs());
+  return migrationsCatalogCache;
+};
 
 /** Replay baseline + migrations — what a fresh database gets once one exists. */
 export const replayWithBaseline = (): SchemaCatalog => {
-  const baseline = baselineInput();
-  return replay(baseline ? [baseline, ...migrationInputs()] : migrationInputs());
+  if (!withBaselineCatalogCache) {
+    const baseline = baselineInput();
+    withBaselineCatalogCache = replay(
+      baseline ? [baseline, ...migrationInputs()] : migrationInputs(),
+    );
+  }
+  return withBaselineCatalogCache;
 };
 
 // ─── The gap ──────────────────────────────────────────────────────────────────

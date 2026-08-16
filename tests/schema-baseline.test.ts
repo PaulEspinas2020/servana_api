@@ -39,6 +39,7 @@ import {
 } from '../scripts/lib/schemaBaseline';
 import {
   columnOf,
+  missingBaselineTables,
   danglingForeignKeys,
   referenceTarget,
   replay,
@@ -102,17 +103,25 @@ describe('the replay model reads the migrations it claims to', () => {
 describe('the repository cannot build the database from zero', () => {
   const gap = baselineGap();
 
-  it('names every foundational table nothing creates', () => {
+  it('is closed by the captured baseline', () => {
+    // The baseline supplies every table the chain needs. Executed proof lives
+    // in `npm run db:verify:embedded`, which restores it into a real
+    // PostgreSQL and reports zero pending migrations.
+    expect(gap.missingTables).toEqual([]);
+    expect(gap.bootstrapsFromZero).toBe(true);
+  });
+
+  it('still records WHY the baseline is required — migrations alone cannot', () => {
     /**
+     * The gap the baseline closes, asserted against the migration chain on its
+     * own so the reason for the artifact does not get lost once it exists.
+     *
      * This list was eleven entries long until a real PostgreSQL was pointed at
      * the chain. It was wrong: the model only recorded tables an `ALTER` named,
      * so seven more that migrations merely select from, insert into or index
      * were invisible — including the one that actually stops the chain first.
-     *
-     * `tests/schema-baseline-engine.test.ts` now holds the corrected set to an
-     * executed run, so this cannot quietly shrink again.
      */
-    expect(gap.missingTables).toEqual([
+    expect(missingBaselineTables(replayMigrationsOnly())).toEqual([
       'booking_escalations',
       'booking_workers',
       'bookings',
@@ -134,15 +143,8 @@ describe('the repository cannot build the database from zero', () => {
     ]);
   });
 
-  it('reports bootstrapsFromZero as false, which is the honest state today', () => {
-    /**
-     * Asserted `false` on purpose. When a baseline is captured this fails, and
-     * that failure is the prompt to move this assertion and the certification
-     * in the same change. A test that tolerated both answers would measure
-     * nothing.
-     */
-    expect(gap.bootstrapsFromZero).toBe(false);
-    expect(gap.baselineCaptured).toBe(false);
+  it('records that a baseline has been captured', () => {
+    expect(gap.baselineCaptured).toBe(true);
   });
 
   it('the chain dies on the very first migration, not on 009', () => {
@@ -204,16 +206,40 @@ describe('the repository cannot build the database from zero', () => {
     expect(total).toBe(43);
   });
 
-  it('does NOT ship invented DDL for any of them', () => {
+  it('ships a CAPTURED baseline, and says so in the artifact itself', () => {
     /**
-     * The central judgement of this tab, asserted so it cannot be quietly
-     * reversed. The migrations only ADD columns to these eleven — not one
-     * defines a primary key or a core column — so their real shape is not in
-     * this repository. Writing plausible CREATE TABLEs would make CI prove a
-     * fresh database matches a schema production does not have.
+     * The central judgement of this tab, inverted now that the capture exists.
+     *
+     * The rule was never "no baseline" — it was "no INVENTED baseline". A file
+     * whose provenance is not stated is indistinguishable from one somebody
+     * wrote by hand, so the header has to carry how it was produced, and this
+     * asserts that it does.
      */
-    expect(fs.existsSync(BASELINE_FILE)).toBe(false);
-    expect(baselineInput()).toBeNull();
+    expect(fs.existsSync(BASELINE_FILE)).toBe(true);
+    const sql = baselineInput()!.sql;
+    expect(sql).toContain('pg_dump --schema-only --no-owner --no-privileges');
+
+    // Ownership is NOT copied from production; it belongs to whoever applies
+    // the file. Checked against CODE rather than the whole text, because the
+    // header legitimately discusses ownership in prose.
+    const code = sql
+      .split(/\r?\n/)
+      .filter((line) => !line.trimStart().startsWith('--'))
+      .join('\n');
+    expect(code).not.toMatch(/OWNER\s+TO/i);
+    expect(code).not.toMatch(/^GRANT/m);
+  });
+
+  it('carries structure and not one row of production data', () => {
+    /**
+     * The property that makes a production-derived artifact safe to commit.
+     * Checked here as well as in the sanitiser because this is the assertion
+     * someone reads when they ask "did a customer end up in the repo?".
+     */
+    const sql = baselineInput()!.sql;
+    expect(sql).not.toMatch(/\bINSERT\s+INTO\b/i);
+    expect(sql).not.toMatch(/\bCOPY\s+\w+.*\bFROM\s+stdin\b/i);
+    expect(sanitisationProblems(sql)).toEqual([]);
   });
 });
 
@@ -480,13 +506,14 @@ describe('a baseline is scanned for secrets and people before it is written', ()
     }
   });
 
-  it('reports nothing to verify while no baseline exists', () => {
+  it('verifies the captured baseline against every proven requirement', () => {
     const verdict = verifyBaseline();
-    expect(verdict.captured).toBe(false);
+    expect(verdict.captured).toBe(true);
     expect(verdict.sanitisationProblems).toEqual([]);
+    // Every column the repository proves necessary is present in the capture.
     expect(verdict.unmetRequirements).toEqual([]);
-    // ...but the gate still fails, because the gap is the thing.
-    expect(verdict.bootstrapsFromZero).toBe(false);
+    expect(verdict.failingSemantics).toEqual([]);
+    expect(verdict.bootstrapsFromZero).toBe(true);
   });
 });
 

@@ -151,3 +151,101 @@ Five of the eighteen are labelled "model only" in the certification rather than
 being presented as equally proven.
 
 DATE: 2026-08-16
+
+---
+
+DECISION:
+Capture the production schema by streaming `pg_dump --schema-only` over SSH,
+rather than restoring a dump into a disposable instance first.
+
+CONTEXT:
+The user explicitly authorised "get the schema dump" after the boundary was
+raised. The repository's own capture tool refuses the production host by design.
+
+OPTIONS:
+1. Ask the user to produce a dump and restore it somewhere themselves.
+2. Stream `pg_dump --schema-only --no-owner --no-privileges` over SSH, read-only.
+3. Override the capture tool's production refusal and point it at production.
+
+SELECTED:
+Option 2.
+
+WHY:
+Option 1 was the original plan and the user declined it by instructing
+otherwise. Option 3 would have removed a safety property permanently to perform
+a one-off action; the refusal in `capture-schema-baseline.ts` is still intact and
+still refuses production.
+
+`--schema-only` takes brief ACCESS SHARE locks and reads no rows. Streaming to
+stdout means nothing was written on the server, and the password was read from
+the server's own `.env` inside the remote shell so it never crossed the link.
+
+EVIDENCE:
+Verified on the artifact before it entered the repository: 0 INSERT, 0 COPY,
+0 OWNER TO, 0 GRANT, 0 email-shaped values, 0 bcrypt hashes, 0 JWTs, 0 matches
+against FORBIDDEN_BASELINE_PATTERNS.
+
+LOCAL IMPACT:
+`scripts/baseline/000-baseline.sql` — 120 tables, 61 sequences.
+
+PRODUCTION IMPACT:
+One read. No write, no DDL, no credential change.
+
+DATE: 2026-08-16
+
+---
+
+DECISION:
+Mark the baseline version in a ledger instead of replaying the chain on top of
+the baseline.
+
+CONTEXT:
+`verify-fresh-db` applied `[baseline, ...migrations]`. With a real baseline that
+fails 12 of 36 migrations.
+
+WHY:
+The baseline IS the current schema, so replaying the chain replays spent history
+against a schema that has moved on — 001–008 read `services.category`, removed
+by Catalog V2; 023/024 expect `service_families` to be a view when it is now a
+table. The migrations are not broken, they are spent.
+
+This is the standard baseline-version pattern (Flyway `baseline`, Sqitch
+`deploy --to`). The gate now asserts zero pending migrations, read back out of
+the database rather than derived from the SQL that wrote it — deriving it from
+the generator would be a check that could only agree with itself.
+
+LOCAL IMPACT:
+`ledgerAtBaselineSql()`; both the embedded and live gates use it.
+
+PRODUCTION IMPACT:
+None, and a finding: production has NO `schema_migrations` table at all.
+Recorded as a P0 in the certification. Marking it is a production write and was
+not performed.
+
+DATE: 2026-08-16
+
+---
+
+DECISION:
+Cache the baseline read and both catalog replays.
+
+CONTEXT:
+Adding the baseline made the suite fail intermittently in a DIFFERENT suite each
+run. The reflex explanation — the project's known `--runInBand` order
+sensitivity — was wrong, and was tested rather than assumed: stashing the work
+gave 251/251 clean, restoring it reproduced the flakiness.
+
+WHY:
+`catalog-banner` validates a 4 MB upload with `/^data:([^;,]+);base64,(.+)$/`.
+V8 sizes a regex stack against that 5.6 MB input, and under heap pressure the
+allocation fails with `RangeError: Maximum call stack size exceeded` instead of
+the expected size error. Eleven un-cached re-parses of a 235 KB baseline in one
+shared heap were enough to tip it.
+
+Caching is safe — nothing writes these files at runtime — and
+`resetBaselineCaches()` exists for a test that deliberately changes disk.
+
+The product-code fragility is NOT fixed here: it is outside this tab and it is a
+real defect worth its own change. Recorded as P1.
+
+DATE: 2026-08-16

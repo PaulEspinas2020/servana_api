@@ -170,8 +170,20 @@ const runLive = async (target: string): Promise<boolean> => {
       );
     }
 
+    /**
+     * Baseline, then the version mark, then only what is genuinely pending.
+     *
+     * NOT baseline + every migration. The baseline is the current schema, so
+     * replaying the chain on top replays spent history — 001–008 read
+     * `services.category`, which Catalog V2 removed — and fails for reasons
+     * that say nothing about reproducibility. See §0.3 of
+     * DATABASE_BASELINE_CAPTURE.md.
+     */
     const baseline = baselineInput();
-    const chain = baseline ? [baseline, ...migrationInputs()] : migrationInputs();
+    const { ledgerAtBaselineSql } = await import('./lib/schemaBaseline');
+    const chain = baseline
+      ? [baseline, { file: '000-ledger.sql', sql: ledgerAtBaselineSql() }]
+      : migrationInputs();
     console.log(`Applying ${chain.length} file(s) to ${new URL(target).hostname}…`);
 
     for (const file of chain) {
@@ -190,8 +202,19 @@ const runLive = async (target: string): Promise<boolean> => {
 
     // §159: replay a second time. Every migration is IF NOT EXISTS or guarded,
     // so a re-run must be a no-op rather than an error.
-    console.log('\nReplaying the chain a second time (idempotence)…');
-    for (const file of chain) {
+    /**
+     * §159, re-applying only what is meant to be re-appliable.
+     *
+     * A `pg_dump` baseline is not idempotent and is not supposed to be — it is
+     * restored once into an empty schema, which is why this gate refuses a
+     * schema that already has tables. Asserting otherwise would fail a correct
+     * artifact. The version mark IS idempotent (`IF NOT EXISTS` +
+     * `ON CONFLICT DO NOTHING`), and that is what makes a half-finished
+     * bootstrap safe to re-run.
+     */
+    const replayable = chain.filter((file) => file.file !== '000-baseline.sql');
+    console.log('\nRe-applying the version mark (idempotence)…');
+    for (const file of replayable) {
       try {
         const { stripTransactionControl } = await import('./lib/migrationSafety');
         await client.query('BEGIN');
@@ -203,7 +226,18 @@ const runLive = async (target: string): Promise<boolean> => {
         return false;
       }
     }
-    console.log('  the chain is replayable.');
+
+    // The proof that matters: a deploy onto this database would do nothing.
+    const ledger = await client.query<{ migration_name: string }>(
+      'SELECT migration_name FROM servana.schema_migrations',
+    );
+    const recorded = new Set(ledger.rows.map((r) => r.migration_name));
+    const stillPending = migrationInputs().filter((m) => !recorded.has(m.file));
+    console.log(`  migrations still pending: ${stillPending.length}`);
+    for (const migration of stillPending) console.log(`    ${migration.file}`);
+    if (stillPending.length > 0) return false;
+
+    console.log('  a fresh database reaches the current schema.');
     return true;
   } finally {
     client.release();
@@ -225,17 +259,127 @@ const runLive = async (target: string): Promise<boolean> => {
  * proved missing (never expected — that is the fail-open this mode exists to
  * catch).
  */
+/**
+ * What `run-migrations.ts` would consider pending on a freshly bootstrapped
+ * database, computed the same way it does: by name, against the ledger.
+ *
+ * Zero is the proof. A non-zero answer means a deploy onto a fresh database
+ * would try to replay history, which is exactly what the baseline exists to
+ * prevent.
+ */
+const pendingAfterBaseline = async (): Promise<string[]> => {
+  const { createHash } = await import('crypto');
+  const { createEngine, applyChain, RUNTIME_ROLE, TARGET_SCHEMA } =
+    await import('./lib/embeddedEngine');
+  const { ledgerAtBaselineSql } = await import('./lib/schemaBaseline');
+  const baseline = baselineInput();
+  if (!baseline) return migrationInputs().map((m) => m.file);
+
+  const db = await createEngine();
+  try {
+    await db.exec(
+      `CREATE ROLE ${RUNTIME_ROLE};
+       CREATE SCHEMA IF NOT EXISTS ${TARGET_SCHEMA} AUTHORIZATION ${RUNTIME_ROLE};`,
+    );
+    await applyChain((sql) => db.exec(sql), [
+      baseline,
+      { file: '000-ledger.sql', sql: ledgerAtBaselineSql() },
+    ]);
+
+    // Read the ledger back out of the database, not out of the SQL that wrote
+    // it. Deriving this from the generator would be a check that can only agree
+    // with itself.
+    const rows = await db.query<{ migration_name: string; checksum_sha256: string }>(
+      `SELECT migration_name, checksum_sha256 FROM ${TARGET_SCHEMA}.schema_migrations`,
+    );
+    const ledger = new Map(rows.rows.map((r) => [r.migration_name, r.checksum_sha256]));
+
+    // Exactly run-migrations.ts's rule: pending when absent, and a recorded
+    // checksum that no longer matches the file is a hard error there.
+    return migrationInputs()
+      .filter(({ file, sql }) => {
+        const recorded = ledger.get(file);
+        if (!recorded) return true;
+        return recorded !== createHash('sha256').update(sql).digest('hex');
+      })
+      .map((m) => m.file);
+  } finally {
+    await db.close();
+  }
+};
+
 const runEmbedded = async (): Promise<boolean> => {
   const { runEmbeddedReplay, enumerateMissingRelations } = await import('./lib/embeddedEngine');
   const { replayMigrationsOnly } = await import('./lib/schemaBaseline');
   const { missingBaselineTables } = await import('./lib/schemaModel');
 
-  const chain = migrationInputs();
+  const baseline = baselineInput();
   console.log('\nServana fresh-database gate — EMBEDDED PostgreSQL (PGlite, in-process)\n');
+  console.log(`  baseline available       ${baseline ? 'yes' : 'NO'}`);
 
+  if (baseline) {
+    /**
+     * The baseline path, which is what a real fresh database does.
+     *
+     * Restore the schema, record the version it corresponds to, then run
+     * whatever is still pending. Replaying the whole chain on top instead would
+     * replay spent history against a schema that has moved on — 001–008 read
+     * `services.category`, which Catalog V2 removed — and would fail for
+     * reasons that say nothing about reproducibility.
+     */
+    const { ledgerAtBaselineSql } = await import('./lib/schemaBaseline');
+    const bootstrap = await runEmbeddedReplay(
+      [baseline, { file: '000-ledger.sql', sql: ledgerAtBaselineSql() }],
+      { stopOnFirstFailure: true },
+    );
+    const restored = bootstrap.applied === 2;
+    console.log(`  restore + mark version   ${restored ? 'ok' : `FAILED on ${bootstrap.firstFailure}`}`);
+    if (!restored) {
+      const failure = bootstrap.outcomes.find((o) => !o.ok);
+      console.log(`    ${failure?.error}`);
+      console.log('\n  EMBEDDED RESULT: FAIL');
+      return false;
+    }
+    console.log(`  tables reached           ${bootstrap.tablesReached.length}`);
+
+    /**
+     * §159, stated as the property that actually matters.
+     *
+     * A `pg_dump` baseline is NOT idempotent and is not supposed to be — it is
+     * restored once into an empty database, which is why the live gate refuses
+     * a schema that already has tables. Asserting otherwise would fail a
+     * correct artifact.
+     *
+     * What must hold is that the chain is *settled*: after restore, nothing is
+     * pending, so a deploy against a freshly bootstrapped database is a no-op
+     * rather than a replay of spent history. That is the real meaning of "a
+     * fresh database reaches the current schema".
+     */
+    const ledgerStep = { file: '000-ledger.sql', sql: ledgerAtBaselineSql() };
+    const settled = await runEmbeddedReplay(
+      [baseline, ledgerStep, ledgerStep],
+      { stopOnFirstFailure: true },
+    );
+    const ledgerIdempotent = settled.applied === 3;
+    console.log(`  version mark idempotent  ${ledgerIdempotent ? 'yes' : `NO — ${settled.firstFailure}`}`);
+
+    const pending = await pendingAfterBaseline();
+    console.log(`  migrations still pending ${pending.length}${pending.length ? ` — ${pending.join(', ')}` : ''}`);
+
+    const ok = restored && ledgerIdempotent && pending.length === 0;
+    console.log(`\n  EMBEDDED RESULT: ${ok ? 'PASS' : 'FAIL'}`);
+    if (ok) {
+      console.log('  A fresh database reaches the current schema from this repository.');
+    }
+    return ok;
+  }
+
+  // No baseline: measure the gap it exists to close.
+  const chain = migrationInputs();
   const faithful = await runEmbeddedReplay(chain, { stopOnFirstFailure: true });
-  console.log(`  runner-faithful replay   dies on ${faithful.firstFailure ?? 'nothing'}`);
-  console.log(`  applied before that      ${faithful.applied}/${chain.length}`);
+  const bootstraps = faithful.applied === chain.length;
+  console.log(`  runner-faithful replay   ${bootstraps ? 'applied every file' : `dies on ${faithful.firstFailure}`}`);
+  console.log(`  applied                  ${faithful.applied}/${chain.length}`);
 
   const full = await runEmbeddedReplay(chain);
   console.log(`  continue-past-failure    ${full.applied}/${chain.length} applied`);
@@ -254,7 +398,6 @@ const runEmbedded = async (): Promise<boolean> => {
   const unreported = genuine.filter((r) => !modelled.has(r));
   console.log(`\n  model agrees with engine ${unreported.length === 0 ? 'yes' : `NO — ${unreported.join(', ')}`}`);
 
-  const bootstraps = faithful.applied === chain.length;
   const ok = bootstraps && unreported.length === 0;
   console.log(`\n  EMBEDDED RESULT: ${ok ? 'PASS' : 'FAIL'}`);
   if (!bootstraps) {

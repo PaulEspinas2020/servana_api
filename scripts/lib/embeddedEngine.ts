@@ -74,6 +74,38 @@ export const parseMissingRelation = (message: string): string | null => {
 export type Exec = (sql: string) => Promise<unknown>;
 
 /**
+ * Boot PGlite with the extensions production actually has.
+ *
+ * Production carries exactly two: `plpgsql`, which every PostgreSQL has, and
+ * `uuid-ossp` in `public`, which the baseline depends on for
+ * `public.uuid_generate_v4()` column defaults. Booting without it fails the
+ * baseline on its first table, and loading it here is not a convenience — an
+ * engine missing an extension the schema requires would be measuring a
+ * different database.
+ *
+ * Imported lazily so the static gate keeps working with no dependency at all.
+ */
+export const createEngine = async () => {
+  const { PGlite } = await import('@electric-sql/pglite');
+  /**
+   * `require`, not `import`, on purpose.
+   *
+   * `tsconfig.json` sets `moduleResolution: node`, which predates the `exports`
+   * field and cannot resolve a subpath like `.../contrib/uuid_ossp`. Node's own
+   * resolver understands it perfectly. Reaching into `dist/` instead would work
+   * today and break on any repackaging, so the stable public specifier is used
+   * and the resolution is left to the runtime that supports it.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+  const { uuid_ossp } = require('@electric-sql/pglite/contrib/uuid_ossp') as {
+    uuid_ossp: Parameters<typeof PGlite.create>[0] extends { extensions?: infer E }
+      ? E extends Record<string, infer V> ? V : never
+      : never;
+  };
+  return PGlite.create({ extensions: { uuid_ossp } });
+};
+
+/**
  * Apply a chain of SQL files, each in its own transaction.
  *
  * `stopOnFirstFailure` mirrors `scripts/run-migrations.ts`, which throws as soon
@@ -120,9 +152,7 @@ export const runEmbeddedReplay = async (
   chain: readonly ReplayInput[],
   options: { stopOnFirstFailure?: boolean } = {},
 ): Promise<EngineReplay> => {
-  // Imported lazily so the static gate keeps working without the dependency.
-  const { PGlite } = await import('@electric-sql/pglite');
-  const db = await PGlite.create();
+  const db = await createEngine();
   try {
     await db.exec(
       `CREATE ROLE ${RUNTIME_ROLE};
@@ -172,12 +202,11 @@ export const enumerateMissingRelations = async (
   chain: readonly ReplayInput[],
   maxRounds = 12,
 ): Promise<{ relations: string[]; rounds: number; converged: boolean }> => {
-  const { PGlite } = await import('@electric-sql/pglite');
   const known = new Set<string>();
   let rounds = 0;
 
   for (; rounds < maxRounds; rounds += 1) {
-    const db = await PGlite.create();
+    const db = await createEngine();
     let discovered = 0;
     try {
       await db.exec(
