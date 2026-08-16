@@ -363,10 +363,40 @@ const runEmbedded = async (): Promise<boolean> => {
     const ledgerIdempotent = settled.applied === 3;
     console.log(`  version mark idempotent  ${ledgerIdempotent ? 'yes' : `NO — ${settled.firstFailure}`}`);
 
+    /**
+     * Pending is EXPECTED, not a failure.
+     *
+     * The baseline is production's schema, and production has not received
+     * every migration in this repository — 030–035 are undeployed. So a fresh
+     * database reaches the CURRENT REPOSITORY state in two steps: restore what
+     * production has, then apply what it does not.
+     *
+     * Asserting zero pending here was wrong, and wrong in the dangerous
+     * direction: it passed only because the ledger was marking all 36 applied,
+     * which would have skipped those six forever.
+     */
     const pending = await pendingAfterBaseline();
-    console.log(`  migrations still pending ${pending.length}${pending.length ? ` — ${pending.join(', ')}` : ''}`);
+    console.log(`  pending after baseline   ${pending.length}${pending.length ? ` — ${pending.join(', ')}` : ''}`);
 
-    const ok = restored && ledgerIdempotent && pending.length === 0;
+    // The real question: do the undeployed migrations apply cleanly ON TOP of
+    // production's actual schema? That is exactly what a deploy would do, and
+    // nothing else in this repository answers it.
+    const pendingInputs = migrationInputs().filter((m) => pending.includes(m.file));
+    const applied = await runEmbeddedReplay(
+      [baseline, ledgerStep, ...pendingInputs],
+      { stopOnFirstFailure: true },
+    );
+    const allApplied = applied.applied === 2 + pendingInputs.length;
+    console.log(
+      `  pending applied on top   ${allApplied ? 'all clean' : `FAILED on ${applied.firstFailure}`}`,
+    );
+    if (!allApplied) {
+      const failure = applied.outcomes.find((o) => !o.ok);
+      console.log(`    ${failure?.error}`);
+    }
+    console.log(`  final table count        ${applied.tablesReached.length}`);
+
+    const ok = restored && ledgerIdempotent && allApplied;
     console.log(`\n  EMBEDDED RESULT: ${ok ? 'PASS' : 'FAIL'}`);
     if (ok) {
       console.log('  A fresh database reaches the current schema from this repository.');

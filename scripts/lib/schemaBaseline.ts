@@ -134,7 +134,34 @@ export const resetBaselineCaches = (): void => {
  * real guard and should fire on a real edit — not on a stale copy of a hash.
  */
 export const ledgerAtBaselineSql = (): string => {
+  /**
+   * Only the migrations the baseline ALREADY REFLECTS.
+   *
+   * This used to mark all 36, which was wrong and quietly so. The baseline is
+   * production's schema, and production has never received migrations 030–035 —
+   * the booking-experience, finance-ledger, messaging, outbox, account-settings
+   * and support-case work, none of which has been deployed. Marking those
+   * applied told the runner to skip them forever, so a database bootstrapped
+   * from this baseline would never get `finance_ledger_events`,
+   * `domain_event_outbox`, `account_settings` or `booking_support_cases` — and
+   * the fresh-DB gate reported "0 pending" and passed.
+   *
+   * `scripts/verify-baseline-ledger.ts` decides which is which by looking for
+   * each migration's objects in the baseline, so the answer is evidence rather
+   * than a list somebody maintains.
+   */
+  // Imported lazily: the checker imports this module, so a static import would
+  // be a cycle.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+  const { checkAll } = require('../verify-baseline-ledger') as {
+    checkAll: () => Array<{ file: string; verdict: string }>;
+  };
+  const reflected = new Set(
+    checkAll().filter((c) => c.verdict !== 'ABSENT').map((c) => c.file),
+  );
+
   const rows = migrationInputs()
+    .filter(({ file }) => reflected.has(file))
     .map(({ file, sql }) => {
       const checksum = createHash('sha256').update(sql).digest('hex');
       return `  ('${file.replace(/'/g, "''")}', '${checksum}')`;
