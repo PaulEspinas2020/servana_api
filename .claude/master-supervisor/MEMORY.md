@@ -28,19 +28,27 @@ Hard constraints carried into every TAB:
 Critical paths:
 
 ```
-src/api/v1/contract.ts        ONE contract array — all 95 v1 endpoints
-src/api/v1/register.ts        route composition; the only v1 mount point
-src/api/v1/convergence.ts     federated capability registry + convergence verdicts
-src/api/v1/errors.ts          canonical error catalog
-src/api/v1/openapi.ts         OpenAPI generated FROM the contract
-src/services/booking/         transitionExecutor (ONE executor) + eligibilityPipeline
-scripts/migrations/           36 migrations, 001..035
-scripts/lib/schemaModel.ts    engine-free DDL replay (TAB 15)
-scripts/lib/schemaBaseline.ts gap / requirements / semantics / sanitisation
+src/api/v1/contract.ts          ONE contract array — all 95 v1 endpoints
+src/api/v1/register.ts          route composition; the only v1 mount point
+src/api/v1/convergence.ts       federated capability registry + convergence verdicts
+src/api/v1/errors.ts            canonical error catalog
+src/api/v1/openapi.ts           OpenAPI generated FROM the contract
+src/services/booking/           transitionExecutor (ONE executor) + eligibilityPipeline
+scripts/migrations/             36 migrations, 001..035
+scripts/lib/schemaModel.ts      static DDL replay (TAB 15) — was under-reporting
+scripts/lib/embeddedEngine.ts   EXECUTED replay on PostgreSQL 18 via PGlite
+scripts/lib/schemaBaseline.ts   gap / requirements / semantics / sanitisation
 ```
 
-The gate is **`npm run verify`**: typecheck + typecheck:tests +
-guard:protected-contracts + 10 doc-drift checks + `test:ci`.
+Gates:
+
+- `npm run verify` — typecheck + typecheck:tests + guard:protected-contracts +
+  10 doc-drift checks + `test:ci`. **PASS, exit 0 — 251 suites, 5654 tests.**
+- `npm run db:verify` — static fresh-DB gate. **FAIL exit 1, correctly.**
+- `npm run db:verify:embedded` — executed fresh-DB gate. **FAIL exit 1, correctly.**
+
+The two `db:verify` gates are red *by design* and are deliberately NOT part of
+`verify`. They go green when a baseline is captured.
 
 ## TAB status
 
@@ -66,181 +74,57 @@ guard:protected-contracts + 10 doc-drift checks + `test:ci`.
 
 The gate is "a fresh database can reach current schema automatically." It cannot.
 
-**The correction this session made.** TAB 15 had concluded 11 missing tables and a
-stop at migration 009, from  — a hand-written DDL
-interpreter validated only by its own suite. It was under-reporting: it recorded
-a table only when an  named it, so DML-only dependencies were
-invisible.
+**The correction this session made.** TAB 15 had concluded eleven missing tables
+and a stop at migration 009, from `scripts/lib/schemaModel.ts` — a hand-written
+DDL interpreter validated only by its own suite. It was under-reporting: it
+recorded a table only when an `ALTER TABLE` named it, so dependencies expressed
+as INSERT / UPDATE / SELECT / CREATE INDEX / COMMENT ON were invisible.
 
 PGlite (PostgreSQL 18 compiled to WASM, in-process) executed the chain and proved:
 
-- the chain dies on **001-massage-services.sql**, not 009 — it seeds by reading
-   and , and 
-  rethrows on first failure, so nothing after 001 runs;
+- the chain dies on **001-massage-services.sql**, not 009 — it seeds the catalog
+  by reading `servana.service_option_meta` and `servana.bookings`, and
+  `run-migrations.ts` rethrows on first failure, so nothing after 001 runs;
 - **13 tables proven missing** by execution, **18** by the widened model;
-- three were never reported at all: ,
-  , .
+- three had never been reported at all: `provider_catalog_offerings`,
+  `provider_onboarding_cases`, `service_options`.
 
+A baseline verified against the old eleven-table list would have passed and still
+been unable to create a database.
 
-> servana_api@1.0.0 db:verify:embedded
-> ts-node scripts/verify-fresh-db.ts --embedded
-
-Servana fresh-database gate — STATIC replay (no engine required)
-
-  baseline captured        NO
-  migrations replayed      36
-  statements parsed        366 (0 unparsed)
-  tables reached           45
-  bootstraps from zero     NO
-
-  A fresh database CANNOT reach the current schema. 18 table(s)
-  are altered or read by a migration and created by none:
-
-    booking_escalations          needed by 030-booking-experiences.sql
-      proven columns: category, opened_by_role, state_snapshot
-    booking_workers              needed by 016-booking-worker-lifecycle-timestamps.sql, 027-booking-lifecycle-timestamps.sql
-      proven columns: en_route_at, arrived_at, accepted_at, declined_at
-    bookings                     needed by 020-catalog-v2-expand.sql, 028-booking-synthetic-marker.sql
-      proven columns: catalog_service_id, is_synthetic
-    chat_participants            needed by 032-messaging-read-receipts.sql
-      proven columns: last_read_at
-    disbursements                needed by 017-paymongo-transaction-integrity.sql
-      proven columns: payout_attempt
-    email_otps                   needed by 026-otp-purpose.sql
-      proven columns: purpose
-    employee_services            needed by 021-catalog-v2-backfill.sql, 029-capability-canonical-source.sql
-    payments                     needed by 017-paymongo-transaction-integrity.sql, 018-payment-return-origin.sql, 020-payment-superseded-sessions.sql
-      proven columns: checkout_attempt, refund_attempt, return_origin, superseded_session_ids
-    provider_catalog_offerings   needed by 005-beauty-services.sql, 006-beauty-catalog-description.sql
-      proven columns: id
-    provider_onboarding_cases    needed by 021-backfill-submitted-onboarding-cases.sql
-    provider_onboarding_drafts   needed by 021-backfill-submitted-onboarding-cases.sql
-    service_families             needed by 024-catalog-v2-canonical-rename.sql
-    service_option_meta          needed by 001-massage-services.sql, 002-massage-specific-services.sql, 003-nail-services.sql, 004-hair-barber-services.sql, 005-beauty-services.sql, 007-aircon-cleaning-services.sql, 021-catalog-v2-backfill.sql
-    service_options              needed by 001-massage-services.sql, 002-massage-specific-services.sql, 003-nail-services.sql, 004-hair-barber-services.sql, 005-beauty-services.sql, 007-aircon-cleaning-services.sql, 008-aircon-installation-repair-services.sql, 021-catalog-v2-backfill.sql
-    services                     needed by 024-catalog-v2-canonical-rename.sql, 025-catalog-v2-services-sequence.sql
-      proven columns: id
-    user_profile                 needed by 009-provider-profile-compliance.sql
-      proven columns: public_display_name, public_bio, public_skills, public_languages, public_experience_summary, legal_address, profile_version, public_profile_version, updated_at
-    worker_requirements          needed by 009-provider-profile-compliance.sql, 010-provider-contact-media-security.sql
-      proven columns: storage_path, mime_type, byte_size, content_sha256, client_request_id, lifecycle_state, scan_status, issue_date, expires_at, identifier_mask, replacement_for_id, replaced_by_id, version, updated_at, scanner_engine, id
-    worker_service_applications  needed by 029-capability-canonical-source.sql
-
-  Capture a baseline: npm run baseline:plan
-
-  Canonical semantics (§155-§157):
-    pass  catalog-hierarchy-exists           services=true catalog_subcategories=true catalog_categories=true
-    pass  services-to-subcategory            services.subcategory_id -> catalog_subcategories.id
-    pass  subcategory-to-category            catalog_subcategories.category_id -> catalog_categories.id
-    pass  services-is-catalog-v2             services former names: [catalog_services]
-    pass  capability-to-canonical-service    catalog_provider_services.service_id -> services.id
-    pass  no-canonical-fk-to-family          none
-    pass  services-sequence-exists           present
-    pass  services-sequence-floor            START 100000 — must clear carried-over ids
-    pass  services-sequence-owned-by-column  OWNED BY services.id
-    pass  services-id-default                services.id DEFAULT nextval('servana.catalog_services_id_seq')
-    pass  no-unapproved-owner                all declared owners in [admin]
-    pass  sequence-owner-approved            catalog_services_id_seq owner admin
-
-  Migrations leaking transaction control: 0
-
-  RESULT: FAIL
-  Expected while no baseline exists. This is the gap TAB 15 documents.
-
-Servana fresh-database gate — EMBEDDED PostgreSQL (PGlite, in-process)
-
-  runner-faithful replay   dies on 001-massage-services.sql
-  applied before that      0/36
-  continue-past-failure    7/36 applied
-  engine-proven missing    13 (converged in 3 round(s))
-    booking_escalations
-    booking_workers
-    bookings
-    chat_participants
-    disbursements
-    email_otps
-    payments
-    provider_catalog_offerings
-    provider_onboarding_cases
-    service_families
-    service_options
-    user_profile
-    worker_requirements
-
-  model agrees with engine yes
-
-  EMBEDDED RESULT: FAIL
-  A fresh database cannot reach the current schema. This is the TAB 15 gap,
-  now proven by execution rather than by a model. now fails the build if the model ever again reports
-less than the engine proves. Engine ⊆ model is the invariant (the engine stops
-each file at its first error, so it legitimately sees fewer).
+`npm run db:verify:embedded` now fails the build if the model ever again reports
+less than the engine proves. The invariant is **engine ⊆ model**, not equality:
+the engine stops each file at its first error, so it legitimately sees fewer.
 
 **Still open, and it needs a human:** a schema-only production dump restored into
-a disposable PostgreSQL, then 
-> servana_api@1.0.0 baseline:capture
-> ts-node -r dotenv/config scripts/capture-schema-baseline.ts
-
-Servana baseline capture — PLAN ONLY. Nothing was connected to.
-
-  target file            scriptsaseline -baseline.sql
-  catalog queries        7 (information_schema / pg_catalog only)
-  reads application rows no
-
-Tables the migration chain proves must exist before it runs (18):
-
-  booking_escalations    3 proven column(s), altered by 1 migration(s)
-      category, opened_by_role, state_snapshot
-  booking_workers        4 proven column(s), altered by 2 migration(s)
-      en_route_at, arrived_at, accepted_at, declined_at
-  bookings               2 proven column(s), altered by 2 migration(s)
-      catalog_service_id, is_synthetic
-  chat_participants      1 proven column(s), altered by 1 migration(s)
-      last_read_at
-  disbursements          1 proven column(s), altered by 1 migration(s)
-      payout_attempt
-  email_otps             1 proven column(s), altered by 1 migration(s)
-      purpose
-  employee_services      0 proven column(s), altered by 0 migration(s)
-  payments               4 proven column(s), altered by 3 migration(s)
-      checkout_attempt, refund_attempt, return_origin, superseded_session_ids
-  provider_catalog_offerings 1 proven column(s), altered by 0 migration(s)
-      id
-  provider_onboarding_cases 0 proven column(s), altered by 0 migration(s)
-  provider_onboarding_drafts 0 proven column(s), altered by 0 migration(s)
-  service_families       0 proven column(s), altered by 1 migration(s)
-  service_option_meta    0 proven column(s), altered by 0 migration(s)
-  service_options        0 proven column(s), altered by 0 migration(s)
-  services               1 proven column(s), altered by 2 migration(s)
-      id
-  user_profile           9 proven column(s), altered by 1 migration(s)
-      public_display_name, public_bio, public_skills, public_languages, public_experience_summary, legal_address, profile_version, public_profile_version, updated_at
-  worker_requirements    16 proven column(s), altered by 2 migration(s)
-      storage_path, mime_type, byte_size, content_sha256, client_request_id, lifecycle_state, scan_status, issue_date, expires_at, identifier_mask, replacement_for_id, replaced_by_id, version, updated_at, scanner_engine, id
-  worker_service_applications 0 proven column(s), altered by 0 migration(s)
-
-Refusals in force:
-  • never the configured production host or database
-  • non-local sources need BASELINE_SOURCE_ACK=<host:port>
-  • output is scanned for secrets and personal data before it is written
-
-To capture: restore a production dump into a DISPOSABLE instance, then
-  npm run baseline:capture -- --from=postgres://user@localhost:5432/servana_baseline. Inferring the DDL was
-rejected — a wrong baseline is worse than a missing one.
+a disposable PostgreSQL, then `npm run baseline:capture`. Inferring the DDL was
+rejected — a wrong baseline is worse than a missing one, because a missing one is
+visibly missing.
 
 **PGlite cannot check ownership.** It runs as one bundled superuser, so role
-separation is still only covered by the  CI job, which waits on a baseline.
+separation is still covered only by the `fresh` CI job, which waits on a baseline.
 
 ## Environment gaps (all TABs)
 
 - No PostgreSQL *server* locally (no docker/psql/pg_dump/initdb). PGlite now
   provides an in-process engine for replay, but not role separation.
 - The only credentialed database is **production** — forbidden.
-- No production smoke run; smoke suite exists and is planned-only.
+- No production smoke run; the smoke suite exists and is planned-only.
 
 ## Git / working tree
 
-Branch `main`. See `state.json` for HEAD and commit state.
+Branch `main`, working tree **clean**. Local commits this session:
+
+```
+bad3c49  supervisor: TAB 15 checkpoint after the engine correction
+5db9263  tab15: execute the migration chain on a real PostgreSQL — the model was wrong
+8282e46  centralization: TABs 06-15 — booking experiences through fresh-DB gap
+36ca152  (inherited) booking: ADMIN_REASSIGN records WHEN the outgoing assignment closed
+```
+
+Nothing pushed. Nothing deployed. No production access.
 
 ## Next action
 
-See `state.json.currentObjective`.
+TAB 15 has no remaining locally derivable work. The next step is the human
+boundary recorded in `docs/database/TAB15_CERTIFICATION.md` §10.
