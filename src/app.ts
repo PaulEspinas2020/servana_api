@@ -419,7 +419,25 @@ assertContinueUrlsAreUsable();
  * operator with no endpoint to ask WHY it is unhealthy, which is the state
  * this whole change exists to end.
  */
-void (async () => {
+/**
+ * Composed for import; started only when RUN as the entry point.
+ *
+ * TAB 03 asks that "tests can import and compose the app without opening ports
+ * or touching real services". Importing this module used to do both: it awaited
+ * a dependency graph that connects to PostgreSQL, bound a port, and started
+ * cron.
+ *
+ * `require.main === module` is true for `node dist/app.js` — the only way this
+ * process is ever launched, per package.json `start` — and false for every
+ * import. So production behaviour is unchanged and a test can now compose the
+ * real application instead of replicating its mounting.
+ *
+ * That also closes TAB 01's remaining criterion: `tests/v1-router.test.ts`
+ * builds its own app under a comment reading "Mounted exactly as app.ts mounts
+ * it", guarded by `tests/v1-mount-parity.test.ts` because it could not import
+ * the real one. It can now.
+ */
+export const startServer = async (): Promise<void> => {
   const results = await initializeDependencies(STARTUP_DEPENDENCIES);
   const unhealthy = results.filter((r) => r.state !== 'ready');
 
@@ -459,4 +477,11 @@ void (async () => {
       },
     },
   ]);
-})();
+};
+
+/** The composed application, for tests and for anything that embeds it. */
+export { app, httpServer, io };
+
+if (require.main === module) {
+  void startServer();
+}
