@@ -249,3 +249,58 @@ The product-code fragility is NOT fixed here: it is outside this tab and it is a
 real defect worth its own change. Recorded as P1.
 
 DATE: 2026-08-16
+
+---
+
+DECISION:
+Sweep TABs 01, 04, 07, 09, 13, 14 for the self-validating-detector failure class,
+and mutation-test every gate rather than trusting a green result.
+
+CONTEXT:
+TAB 15 produced three instances of one shape: a specific, plausible, well-
+commented claim that no independent source ever checked.
+
+FINDINGS:
+
+  TAB 13  DEFECT   5 of 54 capabilities declared a `domainModule` that none of
+                   their endpoints reach. Every declared module existed as a
+                   file, which is what made the claims read as verified.
+  TAB 14  DEFECT   `ROLE_ACCESS` documented itself as "asserted against
+                   register.ts's authChain". It was not — a source-text regex
+                   and a presence check. The VALUES were correct; they were
+                   simply unverified. Also named a test file that never existed.
+  TAB 09  GAP      The 6 silent booking actions were a deliberate, well-argued
+                   decision recorded only as prose. Nothing asserted the
+                   partition, so a new action joined the silent half by default.
+  TAB 07  CLEAN    Earnings derive from payments/disbursements/milestones, not
+                   job cards. The ledger has a real writer called from five
+                   modules. Partition gate added anyway.
+  TAB 04  CLEAN    State matrix is GENERATED from BOOKING_ACTIONS, so it cannot
+                   drift. Raw-write guard mutation-verified: an injected raw
+                   status write produces 3 failures.
+  TAB 01  CLEAN    Route existence mutation-verified: unmounting a real contract
+                   entry produces 3 failures.
+
+WHY MUTATION TESTING WAS NOT OPTIONAL:
+The first version of the TAB 07 gate was VACUOUS. It counted any module
+containing `recordLedgerEvent` as a writer, and every type is declared in one of
+those modules, so each type matched its own declaration. An injected orphan did
+not fail it. That is the exact defect being hunted, written into the detector
+meant to hunt it — and only a mutation test found it.
+
+The mutation test was itself wrong on the first attempt (injected into
+financeLedger.ts when LEDGER_EVENTS is declared in financePolicy.ts), so it was
+a no-op that "passed".
+
+FOUR FALSE LEADS, ALL FROM GREP:
+  - ADDITIONAL_WORK_CAPTURED looked producerless; it is emitted by a ternary
+  - four booking events looked producerless; published generically from a map
+  - the vacuous gate above
+  - a mutation probe using `catalog.categories`, which is not a contract id
+Every one was settled by reading the code. Grep says where to look.
+
+PRODUCTION IMPACT:
+None. One product defect fixed en route: a 4MB banner upload threw RangeError
+instead of a clean 400.
+
+DATE: 2026-08-16
