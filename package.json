@@ -53,6 +53,7 @@
     "smoke:plan": "ts-node scripts/production-smoke.ts --plan",
     "smoke": "ts-node scripts/production-smoke.ts",
     "release:summary": "ts-node scripts/release-summary.ts",
+    "ddl:inventory": "ts-node scripts/runtime-ddl-inventory.ts",
     "db:verify": "ts-node scripts/verify-fresh-db.ts",
     "db:verify:embedded": "ts-node scripts/verify-fresh-db.ts --embedded",
     "migrations:baseline:plan": "ts-node scripts/verify-baseline-ledger.ts",
