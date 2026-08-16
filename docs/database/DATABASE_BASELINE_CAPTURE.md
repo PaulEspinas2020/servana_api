@@ -9,48 +9,71 @@
 ## 1. The gap, proven
 
 `scripts/migrations/` is an **increment over a schema that exists only in
-production**. Replaying the whole chain against an empty catalog stops at
-migration 009, which runs `ALTER TABLE servana.user_profile` — a table no
-migration in this repository creates.
+production**. Applying the chain to an empty database dies on the **first**
+migration: `001-massage-services.sql` seeds the catalog by reading
+`servana.service_option_meta` and `servana.bookings`, and nothing in this
+repository creates either. `scripts/run-migrations.ts` rethrows on the first
+failure, so on a fresh database nothing after 001 runs at all.
 
-Eleven foundational tables are in that position:
+> **This document previously said the chain stopped at migration 009 and that
+> eleven tables were missing.** Both were wrong. The static model behind those
+> numbers recorded a table only when an `ALTER TABLE` named it, so every
+> dependency expressed as `INSERT … SELECT`, `UPDATE … FROM` or `CREATE INDEX ON`
+> was invisible to it. Executing the chain against a real PostgreSQL corrected
+> it. See `TAB15_CERTIFICATION.md` §1.
+
+Eighteen tables are in that position — thirteen proven by execution, five more
+found by reading references in migrations the engine never reached because an
+earlier file had already failed:
 
 | Table | Needed by | Columns the repository proves it must already have |
 | --- | --- | --- |
 | `booking_escalations` | 030 | `category`, `opened_by_role`, `state_snapshot` |
 | `booking_workers` | 016, 027 | `en_route_at`, `arrived_at`, `accepted_at`, `declined_at` |
-| `bookings` | 020, 028 | `catalog_service_id`, `is_synthetic` |
+| `bookings` | 001–004, 007, 020, 028 | `catalog_service_id`, `is_synthetic` |
 | `chat_participants` | 032 | `last_read_at` |
 | `disbursements` | 017 | `payout_attempt` |
 | `email_otps` | 026 | `purpose` |
+| `employee_services` | 029 | *(read-only reference)* |
 | `payments` | 017, 018, 020 | `checkout_attempt`, `refund_attempt`, `return_origin`, `superseded_session_ids` |
+| `provider_catalog_offerings` | 005, 006, 011 | `catalog_key`, plus `id` for an inbound FK |
+| `provider_onboarding_cases` | 021 | `provider_uid` |
+| `provider_onboarding_drafts` | onboarding backfill | *(read-only reference)* |
 | `service_families` | 024 | *(a rename cascade — see §3)* |
-| `services` *(legacy)* | 024, 025 | `id` |
+| `service_option_meta` | 001 | *(read-only reference)* |
+| `service_options` | 001–008 | `service_id` |
+| `services` *(legacy)* | 012, 023–025 | `id` |
 | `user_profile` | 009 | 9 public-profile and versioning columns |
 | `worker_requirements` | 009, 010 | 16 document-lifecycle columns, plus `id` for an inbound FK |
+| `worker_service_applications` | onboarding backfill | *(read-only reference)* |
 
-**42 columns in total**, and that is a *lower bound* — it is only what the
+**43 columns in total**, and that is a *weak lower bound* — it is only what the
 repository can prove, from `ALTER … ADD COLUMN` statements and from foreign keys
-in other tables that point at these.
+in other tables that point at these. Eighteen tables sharing 43 proven columns
+means most of them have almost no proven shape at all.
 
 Run it yourself:
 
 ```
-npm run db:verify
+npm run db:verify            # static model, no dependencies
+npm run db:verify:embedded   # executed on PostgreSQL 18 in-process (PGlite)
 ```
 
-It exits non-zero today. That is the honest state, not a broken check.
+Both exit non-zero today. That is the honest state, not a broken check. The
+embedded run additionally fails if the static model ever stops reporting
+something the engine proves missing — the exact fail-open that produced the
+correction above.
 
 ---
 
 ## 2. Why no baseline DDL is committed here
 
-It would be easy to write eleven `CREATE TABLE` statements that look right, and
+It would be easy to write eighteen `CREATE TABLE` statements that look right, and
 it would be a fiction.
 
-The migrations only ever **add** columns to these tables. Not one of them
-defines a primary key, a core column, or a foreign key for any of the eleven. So
-their real shape is not in this repository to be read. Inferring it from the
+The migrations only ever **add** columns to these tables, or read from them. Not
+one of them defines a primary key, a core column, or a foreign key for any of
+them. So their real shape is not in this repository to be read. Inferring it from the
 `SELECT` lists in service code would produce a baseline that is plausible,
 unverified, and authoritative-looking — and CI would then prove that a fresh
 database matches a schema **production does not have**.

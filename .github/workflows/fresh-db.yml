@@ -1,18 +1,27 @@
 # Zero-to-current database creation (§158).
 #
-# ## Two jobs, and the first one runs today
+# ## Three jobs, and two of them run today
 #
 # `static` needs no database. It replays the migration chain against a modelled
 # catalog and fails when a migration references a table nothing creates — which
-# is true of eleven tables right now, so this job is RED until a baseline is
+# is true of eighteen tables right now, so this job is RED until a baseline is
 # captured. That is the point: the gap becomes a build failure instead of a
 # thing somebody knows.
 #
-# `fresh` creates a real PostgreSQL, applies the baseline and every migration to
-# an empty schema, replays them a second time to prove replayability, and then
-# runs the backend suite against it. It is skipped while no baseline file
-# exists, because without one it can only reproduce the failure `static`
-# already reports, more slowly.
+# `embedded` runs the chain through PGlite — PostgreSQL 18 compiled to WASM,
+# in-process, no service container. It exists because `static` was believed for
+# a while and was wrong: its model only recorded tables an ALTER named, so it
+# reported eleven when a real engine proves more, and blamed migration 009 when
+# the chain actually dies on 001. This job also asserts the model reports
+# everything the engine proves, so that class of fail-open cannot return.
+#
+# `fresh` creates a real PostgreSQL service container, applies the baseline and
+# every migration to an empty schema as the runtime role, replays them a second
+# time to prove replayability, and runs the backend suite against it. It is
+# skipped while no baseline file exists. It is not redundant with `embedded`:
+# PGlite runs as a single bundled superuser, so ownership and role separation —
+# the defect that left 29 of 116 tables unusable in production — are only
+# checkable here.
 #
 # ## Engine version
 #
@@ -56,6 +65,19 @@ jobs:
       - run: npm ci
       - name: Replay the migration chain against an empty catalog
         run: npm run db:verify
+
+  embedded:
+    name: zero-to-current on an in-process engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: Execute the chain against PostgreSQL 18 (PGlite)
+        run: npm run db:verify:embedded
 
   fresh:
     name: zero-to-current on a real engine

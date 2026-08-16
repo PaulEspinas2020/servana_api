@@ -4,8 +4,8 @@
  * ## What this suite proves, and what it cannot
  *
  * It PROVES, statically, that the migration chain in this repository cannot
- * build Servana's database from zero: eleven foundational tables are altered by
- * migrations and created by none, so a fresh database stops at migration 009.
+ * build Servana's database from zero: eighteen foundational tables are altered
+ * or read by migrations and created by none, so a fresh database dies on 001.
  * That is the structural gap this command exists to close, and it is asserted
  * here as a fact with a name attached rather than described in a document.
  *
@@ -102,7 +102,16 @@ describe('the replay model reads the migrations it claims to', () => {
 describe('the repository cannot build the database from zero', () => {
   const gap = baselineGap();
 
-  it('names the eleven foundational tables nothing creates', () => {
+  it('names every foundational table nothing creates', () => {
+    /**
+     * This list was eleven entries long until a real PostgreSQL was pointed at
+     * the chain. It was wrong: the model only recorded tables an `ALTER` named,
+     * so seven more that migrations merely select from, insert into or index
+     * were invisible — including the one that actually stops the chain first.
+     *
+     * `tests/schema-baseline-engine.test.ts` now holds the corrected set to an
+     * executed run, so this cannot quietly shrink again.
+     */
     expect(gap.missingTables).toEqual([
       'booking_escalations',
       'booking_workers',
@@ -110,11 +119,18 @@ describe('the repository cannot build the database from zero', () => {
       'chat_participants',
       'disbursements',
       'email_otps',
+      'employee_services',
       'payments',
+      'provider_catalog_offerings',
+      'provider_onboarding_cases',
+      'provider_onboarding_drafts',
       'service_families',
+      'service_option_meta',
+      'service_options',
       'services',
       'user_profile',
       'worker_requirements',
+      'worker_service_applications',
     ]);
   });
 
@@ -129,19 +145,31 @@ describe('the repository cannot build the database from zero', () => {
     expect(gap.baselineCaptured).toBe(false);
   });
 
-  it('the chain stops at the first ALTER of a table nothing creates', () => {
-    // Migration 009 is the wall. Anything before it is catalog seed data.
+  it('the chain dies on the very first migration, not on 009', () => {
+    /**
+     * The wall is 001, and this was previously asserted as 009.
+     *
+     * 001 is catalog seed data, which is exactly why it was dismissed — but it
+     * seeds by reading `servana.service_option_meta` and `servana.bookings`, and
+     * a SELECT against a table that does not exist ends the transaction as
+     * surely as an ALTER does. `run-migrations.ts` rethrows on the first
+     * failure, so nothing after 001 runs at all.
+     *
+     * Confirmed by execution against PostgreSQL 18, not by this model alone.
+     */
     const first = replayMigrationsOnly().problems.find((p) => p.kind === 'missing-table');
-    expect(first?.file).toBe('009-provider-profile-compliance.sql');
-    expect(first?.detail).toContain('user_profile');
+    expect(first?.file).toBe('001-massage-services.sql');
+    expect(first?.detail).toContain('service_option_meta');
   });
 
-  it('every migration that alters a missing table is named in the requirements', () => {
+  it('every missing table is justified by a migration that names it', () => {
     for (const requirement of requirements()) {
-      // `service_families` is a rename cascade rather than a directly altered
-      // table, so it is the one entry with no ADD COLUMN evidence.
-      if (requirement.table === 'service_families') continue;
-      expect(requirement.alteredBy.length).toBeGreaterThan(0);
+      /**
+       * `alteredBy` is ADD COLUMN evidence. Tables reached only by DML or by a
+       * rename cascade legitimately have none, and their requirement is the
+       * reference itself — recorded in `neededBy`.
+       */
+      expect(requirement.neededBy.length).toBeGreaterThan(0);
     }
   });
 
@@ -161,11 +189,19 @@ describe('the repository cannot build the database from zero', () => {
     expect(byTable.get('worker_requirements')!.provenColumns).toContain('id');
   });
 
-  it('proves a total of 42 columns across the eleven', () => {
-    // A number that moves when a migration adds a column to a foundational
-    // table, so the requirement set cannot silently go stale.
+  it('proves 43 columns across the missing tables', () => {
+    /**
+     * A number that moves when a migration adds a column to a foundational
+     * table, so the requirement set cannot silently go stale.
+     *
+     * It is a LOWER bound and a weak one: it counts only columns the repository
+     * proves — an `ADD COLUMN` that must land somewhere, or an inbound foreign
+     * key. Eighteen tables with 43 proven columns between them means most of
+     * these tables have almost no proven shape at all, which is the honest
+     * measure of how far a capture still has to go.
+     */
     const total = requirements().reduce((n, r) => n + r.provenColumns.length, 0);
-    expect(total).toBe(42);
+    expect(total).toBe(43);
   });
 
   it('does NOT ship invented DDL for any of them', () => {

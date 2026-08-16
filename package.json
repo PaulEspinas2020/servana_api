@@ -53,6 +53,7 @@
     "smoke:plan": "ts-node scripts/production-smoke.ts --plan",
     "smoke": "ts-node scripts/production-smoke.ts",
     "db:verify": "ts-node scripts/verify-fresh-db.ts",
+    "db:verify:embedded": "ts-node scripts/verify-fresh-db.ts --embedded",
     "baseline:plan": "ts-node scripts/capture-schema-baseline.ts --plan",
     "baseline:capture": "ts-node -r dotenv/config scripts/capture-schema-baseline.ts"
   },
@@ -79,6 +80,7 @@
     "socket.io": "^4.8.3"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.5",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",

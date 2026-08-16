@@ -182,9 +182,10 @@ export const BASELINE_HEADER = `-- ─── Servana baseline schema ───�
 --
 -- WHAT THIS IS
 --
--- The schema that predates this repository's migration chain. Migrations 009
--- onward ALTER eleven foundational tables that no migration creates, so a fresh
--- database cannot reach the current schema without this file first.
+-- The schema that predates this repository's migration chain. The chain alters
+-- and reads eighteen foundational tables that no migration creates -- starting
+-- with 001 -- so a fresh database cannot reach the current schema without this
+-- file first.
 --
 -- WHAT IT CONTAINS
 --

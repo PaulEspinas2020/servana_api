@@ -239,6 +239,40 @@ export interface ReplayInput {
 }
 
 /**
+ * Statement kinds where naming an absent relation is a hard error on a fresh
+ * database.
+ *
+ * `DO` is excluded on purpose: its body is PL/pgSQL, resolved when the block
+ * runs rather than when it is planned, so a reference inside one proves nothing
+ * about what the schema must already contain. `CREATE FUNCTION` is excluded for
+ * the same reason. Both are also dollar-quoted, so `maskNonCode` has already
+ * blanked their bodies — the exclusion is belt and braces.
+ */
+const REFERENCE_BEARING =
+  /^(CREATE\s+(UNIQUE\s+)?INDEX|COMMENT\s+ON|GRANT|REVOKE|SELECT|INSERT|UPDATE|DELETE|WITH|REFRESH|ANALYZE|CREATE\s+TRIGGER)\b/i;
+
+/**
+ * Schema-qualified tables a statement names, read from length-aligned masked
+ * text so a name inside a string literal or comment cannot be mistaken for a
+ * real reference.
+ *
+ * Only `servana.<name>` is matched. Every migration in this repository qualifies
+ * its references, and requiring the qualifier is what keeps CTE names, column
+ * aliases and `information_schema` lookups out of the result. A name followed by
+ * `(` is a function call, not a table.
+ */
+const referencedTables = (aligned: string): string[] => {
+  const names = new Set<string>();
+  for (const match of aligned.matchAll(/\bservana\.(\w+)\s*(\()?/gi)) {
+    if (match[2]) continue;
+    const name = match[1].toLowerCase();
+    if (/_seq$/.test(name)) continue;
+    names.add(name);
+  }
+  return [...names];
+};
+
+/**
  * Apply one statement to the catalog.
  *
  * Returns `true` when the statement was understood — whether or not it
@@ -485,11 +519,26 @@ const applyStatement = (catalog: SchemaCatalog, file: string, statement: string)
     return;
   }
 
-  // ── Statements with no model impact, recognised so they are not "unparsed" ──
+  // ── Statements with no *structural* model impact ─────────────────────────
+  //
+  // These change no table shape, but most of them still REFERENCE tables, and a
+  // reference to a table nothing creates fails on a fresh database exactly as
+  // hard as an ALTER does. Recording only ALTER targets is what let this model
+  // report eleven missing tables while a real PostgreSQL proved more, and name
+  // migration 009 as the wall when the chain actually dies on 001 — whose only
+  // sin is `INSERT ... SELECT FROM servana.bookings`.
   if (
     /^(CREATE\s+(UNIQUE\s+)?INDEX|DROP\s+INDEX|COMMENT\s+ON|GRANT|REVOKE|SET\s|SELECT|INSERT|UPDATE|DELETE|DO|WITH|CREATE\s+OR\s+REPLACE\s+FUNCTION|CREATE\s+FUNCTION|CREATE\s+TRIGGER|DROP\s+TRIGGER|ANALYZE|VACUUM|REFRESH|CREATE\s+EXTENSION|CREATE\s+SCHEMA|ALTER\s+SCHEMA|BEGIN|COMMIT|ROLLBACK)\b/i.test(code)
   ) {
     applied();
+    if (REFERENCE_BEARING.test(code)) {
+      for (const referenced of referencedTables(aligned)) {
+        if (catalog.sequences.has(referenced)) continue;
+        if (!resolveTableName(catalog, referenced)) {
+          note('missing-table', `reference to ${referenced}`);
+        }
+      }
+    }
     return;
   }
 
@@ -565,12 +614,22 @@ export const danglingForeignKeys = (
   return out.sort((a, b) => a.from.localeCompare(b.from));
 };
 
-/** Tables a migration tried to ALTER but nothing creates — the baseline gap. */
+/**
+ * Tables the chain needs that nothing in it creates — the baseline gap.
+ *
+ * Counts every way a migration can depend on a table, not only `ALTER TABLE`.
+ * A table that is merely selected from or inserted into is just as fatal on a
+ * fresh database, and excluding those is what made this function report eleven
+ * when a real PostgreSQL proves more.
+ */
 export const missingBaselineTables = (catalog: SchemaCatalog): string[] => {
   const names = new Set<string>();
   for (const problem of catalog.problems) {
     if (problem.kind !== 'missing-table') continue;
-    const match = /ALTER TABLE on ([\w.]+)/.exec(problem.detail) ?? /unknown ([\w.]+)/.exec(problem.detail);
+    const match =
+      /ALTER TABLE on ([\w.]+)/.exec(problem.detail) ??
+      /reference to ([\w.]+)/.exec(problem.detail) ??
+      /unknown ([\w.]+)/.exec(problem.detail);
     if (match) names.add(match[1]);
   }
   return [...names].sort();

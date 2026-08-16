@@ -1,27 +1,34 @@
 /**
  * The fresh-database gate (§158, §159, §161).
  *
- * Run: npm run db:verify                  — static replay. No engine needed.
+ * Run: npm run db:verify                  — static replay. No dependencies.
+ *      npm run db:verify -- --embedded    — EXECUTES the chain on PostgreSQL 18
+ *                                            in-process (PGlite). No server.
  *      npm run db:verify -- --live=URL    — also applies the chain to a real,
  *                                            EMPTY, non-production database.
  *
- * ## Why the default is static
+ * ## Three modes, because they answer different questions
  *
  * The release gate is "a fresh database can reach current schema
  * automatically". Answering it properly means creating a database and running
- * the migrations, and no PostgreSQL engine is reachable here — no `psql`, no
- * `pg_dump`, no Docker. The only database this repository has credentials for
- * is production.
+ * the migrations.
  *
- * So the default mode replays the chain against a modelled catalog
- * (`lib/schemaModel.ts`) and reports exactly what a real run would hit. It is
- * strictly weaker than executing, and it catches the defect this command exists
- * to find — a migration that references a table nothing creates — which is
- * currently true of eleven tables.
+ * `--embedded` does exactly that, and is the authority. PGlite is PostgreSQL
+ * compiled to WebAssembly, so the chain is parsed and planned by the real thing
+ * without a server, a container or a credential.
  *
- * `--live` is the same gate with the engine attached, for CI. It refuses a
- * non-empty schema and refuses production, so it cannot be pointed at anything
- * that matters.
+ * The default static mode replays against a modelled catalog
+ * (`lib/schemaModel.ts`). It is strictly weaker and it is kept because it needs
+ * no dependency at all — but it is no longer trusted on its own. It once
+ * reported eleven missing tables and blamed migration 009; the engine proved
+ * more tables and showed the chain dies on 001. `--embedded` now fails the build
+ * if the model ever again reports less than the engine proves.
+ *
+ * `--live` is the same gate against a real server, for CI. It is not redundant
+ * with `--embedded`: PGlite runs as a single bundled superuser, so ownership and
+ * role separation — the defect that left 29 of 116 tables unusable in production
+ * — are only checkable there. It refuses a non-empty schema and refuses
+ * production, so it cannot be pointed at anything that matters.
  *
  * ## Exit codes
  *
@@ -64,11 +71,12 @@ const runStatic = (): boolean => {
 
   if (!gap.bootstrapsFromZero) {
     console.log(`  A fresh database CANNOT reach the current schema. ${gap.missingTables.length} table(s)`);
-    console.log('  are altered by a migration and created by none:\n');
+    console.log('  are altered or read by a migration and created by none:\n');
     for (const requirement of requirements()) {
-      console.log(
-        `    ${requirement.table.padEnd(22)} needed by ${requirement.alteredBy.join(', ') || 'a rename chain'}`,
-      );
+      const needed = requirement.alteredBy.length
+        ? requirement.alteredBy.join(', ')
+        : requirement.neededBy.join(', ') || 'a rename chain';
+      console.log(`    ${requirement.table.padEnd(28)} needed by ${needed}`);
       if (requirement.provenColumns.length) {
         console.log(`      proven columns: ${requirement.provenColumns.join(', ')}`);
       }
@@ -203,9 +211,77 @@ const runLive = async (target: string): Promise<boolean> => {
   }
 };
 
+// ─── Embedded gate ────────────────────────────────────────────────────────────
+
+/**
+ * The same gate, executed by a real PostgreSQL running in-process.
+ *
+ * This is the mode that caught the static model under-reporting. It needs no
+ * server, no container and no credentials, so unlike `--live` it can run
+ * anywhere — including as part of `npm run verify`.
+ *
+ * Exits non-zero on two conditions: the chain not bootstrapping (expected while
+ * no baseline exists), and the model failing to report something the engine
+ * proved missing (never expected — that is the fail-open this mode exists to
+ * catch).
+ */
+const runEmbedded = async (): Promise<boolean> => {
+  const { runEmbeddedReplay, enumerateMissingRelations } = await import('./lib/embeddedEngine');
+  const { replayMigrationsOnly } = await import('./lib/schemaBaseline');
+  const { missingBaselineTables } = await import('./lib/schemaModel');
+
+  const chain = migrationInputs();
+  console.log('\nServana fresh-database gate — EMBEDDED PostgreSQL (PGlite, in-process)\n');
+
+  const faithful = await runEmbeddedReplay(chain, { stopOnFirstFailure: true });
+  console.log(`  runner-faithful replay   dies on ${faithful.firstFailure ?? 'nothing'}`);
+  console.log(`  applied before that      ${faithful.applied}/${chain.length}`);
+
+  const full = await runEmbeddedReplay(chain);
+  console.log(`  continue-past-failure    ${full.applied}/${chain.length} applied`);
+
+  const proven = await enumerateMissingRelations(chain);
+  const catalog = replayMigrationsOnly();
+  const createdSomewhere = new Set([...catalog.tables.values()].map((t) => t.name));
+  const genuine = proven.relations.filter((r) => !createdSomewhere.has(r));
+  console.log(`  engine-proven missing    ${genuine.length} (converged in ${proven.rounds} round(s))`);
+  for (const relation of genuine) console.log(`    ${relation}`);
+
+  // The anti-fail-open check. The model may legitimately report MORE than the
+  // engine reaches, because the engine stops each file at its first error. It
+  // must never report less.
+  const modelled = new Set(missingBaselineTables(catalog));
+  const unreported = genuine.filter((r) => !modelled.has(r));
+  console.log(`\n  model agrees with engine ${unreported.length === 0 ? 'yes' : `NO — ${unreported.join(', ')}`}`);
+
+  const bootstraps = faithful.applied === chain.length;
+  const ok = bootstraps && unreported.length === 0;
+  console.log(`\n  EMBEDDED RESULT: ${ok ? 'PASS' : 'FAIL'}`);
+  if (!bootstraps) {
+    console.log('  A fresh database cannot reach the current schema. This is the TAB 15 gap,');
+    console.log('  now proven by execution rather than by a model.');
+  }
+  if (unreported.length) {
+    console.log('  The static model is UNDER-REPORTING. Widen scripts/lib/schemaModel.ts.');
+  }
+  return ok;
+};
+
 if (require.main === module) {
   const staticOk = runStatic();
-  if (!liveArg) {
+  if (args.includes('--embedded')) {
+    runEmbedded()
+      .then((embeddedOk) => {
+        // Under-reporting is a defect in this repository and fails the gate.
+        // Not bootstrapping is the documented gap and is already reported by
+        // the static run, so the exit code is driven by the same condition.
+        process.exitCode = staticOk && embeddedOk ? 0 : 1;
+      })
+      .catch((error) => {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      });
+  } else if (!liveArg) {
     process.exitCode = staticOk ? 0 : 1;
   } else {
     runLive(liveArg)

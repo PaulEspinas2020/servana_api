@@ -3,11 +3,16 @@
  *
  * ## The finding this file exists to carry
  *
- * `scripts/migrations/` cannot build Servana's database from zero. Replaying
- * every migration against an empty catalog (see `schemaModel.ts`) stops at
- * migration 009, which does `ALTER TABLE servana.user_profile` — a table no
- * migration in this repository creates. Eleven foundational tables are in that
+ * `scripts/migrations/` cannot build Servana's database from zero. Applying the
+ * chain to an empty database dies on `001-massage-services.sql`, which seeds the
+ * catalog by reading `servana.service_option_meta` and `servana.bookings` — and
+ * nothing here creates either. Eighteen foundational tables are in that
  * position, and they are the oldest and most load-bearing ones in the platform.
+ *
+ * Both numbers above were once "009" and "eleven". They were wrong: the model
+ * only recorded tables an `ALTER` named, so dependencies expressed as DML were
+ * invisible. `npm run db:verify:embedded` executes the chain on a real
+ * PostgreSQL and now gates against that class of under-reporting.
  *
  * The migration chain is therefore an INCREMENT over a schema that exists only
  * in production. That is the structural gap this command names, and it means no
@@ -15,10 +20,10 @@
  *
  * ## Why this file does not contain the missing DDL
  *
- * It would be easy to write eleven `CREATE TABLE` statements that look right.
+ * It would be easy to write eighteen `CREATE TABLE` statements that look right.
  * It would also be a fiction. The migrations only ever ADD columns to these
  * tables — not one of them defines a primary key, a core column or a foreign
- * key for any of the eleven — so their real shape is not in this repository to
+ * key for any of them — so their real shape is not in this repository to
  * be read. Inferring it from the SELECT lists in service code would produce a
  * baseline that is plausible, unverified, and authoritative-looking, and CI
  * would then prove a fresh database matches a schema production does not have.
@@ -122,6 +127,15 @@ export interface TableRequirement {
   referencedBy: Array<{ from: string; column: string }>;
   /** Which migrations alter it, i.e. what breaks without it. */
   alteredBy: string[];
+  /**
+   * Every migration that names it at all — ALTER, SELECT, INSERT, INDEX.
+   *
+   * `alteredBy` alone misses the tables a migration only reads from, and those
+   * are just as fatal: the chain's actual first failure is `001`, which merely
+   * selects from two tables nothing creates. Keeping both makes the difference
+   * between "shape is proven" and "existence is proven" visible.
+   */
+  neededBy: string[];
   owner: string;
 }
 
@@ -137,8 +151,22 @@ export const requirements = (): TableRequirement[] => {
   const out = new Map<string, TableRequirement>();
   for (const table of missing) {
     out.set(table, {
-      table, provenColumns: [], referencedBy: [], alteredBy: [], owner: APPROVED_OWNER_ROLES[0],
+      table, provenColumns: [], referencedBy: [], alteredBy: [], neededBy: [],
+      owner: APPROVED_OWNER_ROLES[0],
     });
+  }
+
+  // Every migration that names a missing table, however it names it.
+  for (const problem of catalog.problems) {
+    if (problem.kind !== 'missing-table') continue;
+    const match =
+      /ALTER TABLE on ([\w.]+)/.exec(problem.detail) ??
+      /reference to ([\w.]+)/.exec(problem.detail) ??
+      /unknown ([\w.]+)/.exec(problem.detail);
+    const requirement = match ? out.get(match[1]) : undefined;
+    if (requirement && !requirement.neededBy.includes(problem.file)) {
+      requirement.neededBy.push(problem.file);
+    }
   }
 
   // Columns proven by ADD COLUMN, and the migrations that need the table.
@@ -188,7 +216,7 @@ export interface SemanticFinding {
  * The Catalog V2 rules, executed against a replayed catalog.
  *
  * These are checkable TODAY, because migration 020 creates the whole Catalog V2
- * hierarchy and 024/025 finish it — unlike the eleven foundational tables, none
+ * hierarchy and 024/025 finish it — unlike the missing foundational tables, none
  * of Catalog V2 depends on a schema that exists only in production.
  *
  * They are also the rules with the most expensive failure mode: if
