@@ -14,6 +14,9 @@
  * payout reported as settled.
  */
 
+import fs from 'fs';
+import path from 'path';
+import { LEDGER_EVENTS } from '../src/services/finance/financeLedger';
 jest.mock('../src/config', () => ({ db: { schema: 'servana' }, tempId: undefined }));
 jest.mock('../src/db/dbQuery', () => ({
   __esModule: true,
@@ -346,5 +349,109 @@ describe('ledger event keys', () => {
    */
   it('separate refund attempts are separate facts', () => {
     expect(eventKeys.paymentRefunded(47, 1)).not.toBe(eventKeys.paymentRefunded(47, 2));
+  });
+});
+
+// ─── Every declared ledger event type must be writable ────────────────────────
+
+describe('the ledger vocabulary has no orphan event types', () => {
+  /**
+   * The gap this closes.
+   *
+   * `LEDGER_EVENTS` declares the financial vocabulary. A type declared but never
+   * written is a hole in the ledger that reconciliation cannot see: the money
+   * still moves through `payments` and `disbursements`, so earnings report it,
+   * while the ledger has no row for it and the two can never be balanced against
+   * each other. TAB 07's release gate is "ledger reconciliation has zero
+   * unexplained breaks" — an orphan type is an unexplained break waiting to be
+   * introduced.
+   *
+   * ## What this can and cannot prove
+   *
+   * It proves each type is NAMED by a module that imports a ledger writer, so a
+   * type nothing could ever record fails. It does not prove the code path is
+   * reached at runtime — only an integration test against a real transaction
+   * does that, and `finance-idempotency` covers the two highest-value types.
+   *
+   * The looseness is deliberate. A stricter textual rule — matching `type: 'X'`
+   * at a call site — was tried and gave a FALSE POSITIVE: the capture writer
+   * chooses with `type: isAdditional ? 'ADDITIONAL_WORK_CAPTURED' : ...`, which
+   * a literal-only pattern cannot see. A check that reports a healthy ledger as
+   * broken gets switched off, and then it protects nothing.
+   */
+  const SRC = path.resolve(__dirname, '..', 'src');
+
+  const walk = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) return walk(full);
+      return entry.isFile() && full.endsWith('.ts') ? [full] : [];
+    });
+
+  /**
+   * The declaration itself, masked out.
+   *
+   * The first version of this check counted `financeLedger.ts` as a writer —
+   * true, it contains `recordLedgerEvent` — but every type is also DECLARED
+   * there, so each one matched its own declaration and the check passed for
+   * anything. A deliberately injected orphan type did not fail it.
+   *
+   * That is the exact defect this sweep exists to find, written into the
+   * detector meant to find it, and only a mutation test surfaced it. Masking
+   * the `LEDGER_EVENTS` literal is what makes the remaining text evidence of
+   * USE rather than of declaration.
+   */
+  const maskDeclaration = (text: string): string => {
+    const start = text.indexOf('LEDGER_EVENTS');
+    if (start < 0) return text;
+    const open = text.indexOf('{', start);
+    if (open < 0) return text;
+    let depth = 0;
+    for (let i = open; i < text.length; i += 1) {
+      if (text[i] === '{') depth += 1;
+      else if (text[i] === '}') {
+        depth -= 1;
+        if (depth === 0) return text.slice(0, start) + ' '.repeat(i - start + 1) + text.slice(i + 1);
+      }
+    }
+    return text;
+  };
+
+  /** Modules that can append to the ledger, with declarations masked out. */
+  const writers = walk(SRC)
+    .map((file) => ({ file, text: maskDeclaration(fs.readFileSync(file, 'utf8')) }))
+    .filter(({ text }) => /recordLedgerEvent/.test(text));
+
+  const namedByAWriter = (type: string): boolean =>
+    writers.some(({ text }) => text.includes(`'${type}'`) || text.includes(`"${type}"`));
+
+  it('finds the ledger writers at all (positive fixture)', () => {
+    // A broken walk would find nothing and pass every check below forever.
+    expect(writers.length).toBeGreaterThan(3);
+  });
+
+  it('every declared event type is USED by a module that can write it', () => {
+    const orphans = Object.keys(LEDGER_EVENTS).filter((type) => !namedByAWriter(type));
+    expect(orphans).toEqual([]);
+  });
+
+  it('would notice a type nothing can record (negative fixture)', () => {
+    /**
+     * The check that the check works. This name is declared nowhere and used
+     * nowhere, so a predicate that always answered "yes" — which the first
+     * version of this suite did — fails here.
+     */
+    expect(namedByAWriter('PROVIDER_BONUS_GRANTED_NOT_A_REAL_TYPE')).toBe(false);
+  });
+
+  it('still credits a type chosen conditionally, not just by literal', () => {
+    /**
+     * `ADDITIONAL_WORK_CAPTURED` is produced by
+     * `type: isAdditional ? 'ADDITIONAL_WORK_CAPTURED' : 'PAYMENT_CAPTURED'`.
+     * A stricter rule matching `type: 'X'` at a call site reported it as an
+     * orphan — a false positive on the money path, which is how a check earns
+     * its way into being switched off.
+     */
+    expect(namedByAWriter('ADDITIONAL_WORK_CAPTURED')).toBe(true);
   });
 });
