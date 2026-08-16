@@ -1,0 +1,60 @@
+# The release gate (TAB 01).
+#
+# One job, one command, one artifact. The gate's verdict is whatever
+# `npm run release:summary` writes — this workflow does not re-derive it, because
+# a CI job that computes its own answer becomes a second definition of
+# releasable and then the two disagree at the worst moment.
+#
+# The summary is retained whether the gate passes or fails. A failed run is the
+# one you most want the artifact from, and `if: always()` is what makes that
+# true rather than aspirational.
+
+name: release-gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gate:
+    name: hermetic release gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+
+      # Generated-document and OpenAPI drift. Separate from the summary because
+      # these fail on CONTENT, and their diff is the useful output.
+      - name: Generated document drift
+        run: npm run verify
+
+      - name: Release summary
+        run: npm run release:summary
+
+      - name: Retain the summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-summary
+          path: reports/release-summary.json
+          if-no-files-found: error
+          retention-days: 30
+
+      # The gate must not leave anything behind in a tracked directory.
+      # `tests/release-gate-hermeticity.test.ts` asserts this statically; this
+      # proves it dynamically, on a real clean checkout.
+      - name: Working tree is still clean
+        if: always()
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::the gate wrote into the working tree:"
+            git status --porcelain
+            exit 1
+          fi

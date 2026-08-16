@@ -52,6 +52,7 @@
     "safety:docs:check": "ts-node scripts/generate-release-safety-docs.ts --check",
     "smoke:plan": "ts-node scripts/production-smoke.ts --plan",
     "smoke": "ts-node scripts/production-smoke.ts",
+    "release:summary": "ts-node scripts/release-summary.ts",
     "db:verify": "ts-node scripts/verify-fresh-db.ts",
     "db:verify:embedded": "ts-node scripts/verify-fresh-db.ts --embedded",
     "migrations:baseline:plan": "ts-node scripts/verify-baseline-ledger.ts",
