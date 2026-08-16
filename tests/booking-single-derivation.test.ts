@@ -39,6 +39,7 @@ import {
   isCancelledStatus,
   normalizeCancelledStatus,
 } from '../src/services/booking/cancellationVocabulary';
+import * as dbFake from './support/bookingDbFake';
 
 const SRC = path.resolve(__dirname, '..', 'src');
 
@@ -466,5 +467,45 @@ describe('one spelling of cancelled', () => {
     // may branch on.
     expect(deriveEffectiveBookingStatus('CANCELED', 'ACCEPTED')).toBe('CANCELED');
     expect(deriveEffectiveBookingStatus('CANCELLED', 'ACCEPTED')).toBe('CANCELLED');
+  });
+});
+
+// ─── The fake must fail closed ────────────────────────────────────────────────
+
+describe('bookingDbFake refuses SQL it does not model', () => {
+  /**
+   * The gap this closes.
+   *
+   * The fake used to end in `return done([])`. A double that answers "no rows"
+   * to a statement it does not recognise does not report a broken double — it
+   * reports wrong BEHAVIOUR, because the code under test takes its no-data
+   * branch and the assertions agree with it. Reformatting a production query is
+   * enough to trigger it.
+   *
+   * Two real cases were in exactly that state:
+   *
+   *   - `CONFLICTING_BOOKING_SQL`, the scheduling-overlap check, answered "no
+   *     conflict" 34 times across 7 lifecycle suites whatever the store held;
+   *   - the `domain_event_outbox` INSERT ran 114 times and recorded nothing, so
+   *     no test could observe an event the lifecycle published.
+   *
+   * Both are routed now, and anything else throws.
+   */
+  it('throws on an unmodelled statement rather than answering empty', async () => {
+    await expect(
+      dbFake.dbMock.default.query('SELECT nonsense FROM servana.not_a_table', []),
+    ).rejects.toThrow(/unrouted SQL/i);
+  });
+
+  it('answers the overlap check from the store, not from a fall-through', async () => {
+    dbFake.reset();
+    const sql = 'WITH target AS ( SELECT 1 ) SELECT b.id FROM servana.bookings b WHERE b.worker_uid = $1';
+
+    const none = await dbFake.dbMock.default.query(sql, ['p1', 1]);
+    expect(none.rows).toEqual([]);
+
+    dbFake.store.conflictingBookingId = 42;
+    const clash = await dbFake.dbMock.default.query(sql, ['p1', 1]);
+    expect(clash.rows).toEqual([{ id: 42 }]);
   });
 });

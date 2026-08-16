@@ -45,6 +45,25 @@ export const store = {
   inTransaction: [] as string[],
   open: false,
   /** Makes the legacy tracking insert fail, to prove the rollback. */
+  /**
+   * The answer to the scheduling-overlap check, stated rather than fallen into.
+   *
+   * `CONFLICTING_BOOKING_SQL` used to reach the fake's terminal `return []`,
+   * so every lifecycle test silently got "no conflict" whatever the store held
+   * — 34 executions across 7 suites, none of them modelled. The overlap
+   * PREDICATE is proven against real SQL in the conflict suite; re-implementing
+   * it here would just be a second copy to drift. So the fake answers what a
+   * test says it should answer, and says so out loud.
+   */
+  /**
+   * Domain events the lifecycle published.
+   *
+   * The outbox INSERT reached the terminal fall-through, so 114 publications
+   * across the booking suites wrote nothing and no test could see one. Captured
+   * here so event emission is observable rather than assumed.
+   */
+  outbox: [] as Row[],
+  conflictingBookingId: null as number | null,
   trackingFails: false,
   /** Makes the legacy timeline-event insert fail, to prove the rollback. */
   timelineEventFails: false,
@@ -87,6 +106,8 @@ export const reset = (): void => {
   store.sql = [];
   store.inTransaction = [];
   store.open = false;
+  store.outbox.length = 0;
+  store.conflictingBookingId = null;
   store.trackingFails = false;
   store.timelineEventFails = false;
   store.withLocation = false;
@@ -437,7 +458,44 @@ const nowIso = () => new Date().toISOString();
     return done([{ id }]);
   }
 
-  return done([]);
+  /**
+   * The scheduling-overlap check (`CONFLICTING_BOOKING_SQL`).
+   *
+   * Returns the id a test declared, or nothing. Matched on the CTE header
+   * because the statement is a multi-line template and its whitespace is not
+   * stable enough to match whole.
+   */
+  if (/WITH target AS/i.test(flat) && /b\.worker_uid = \$1/i.test(flat)) {
+    return done(store.conflictingBookingId === null ? [] : [{ id: store.conflictingBookingId }]);
+  }
+
+  /**
+   * Lazily-created dedupe indexes. The outbox and the escalation store issue
+   * these on first use, and a fake has nothing to do with DDL — but they are
+   * matched BY NAME rather than swallowed by a catch-all, so a different index
+   * appearing is still a failure.
+   */
+  if (/INSERT INTO servana\.domain_event_outbox/i.test(flat)) {
+    // The publisher reads `rows[0].id`, so an empty answer used to crash or
+    // silently mark the event uncreated depending on the caller.
+    const id = store.outbox.length + 1;
+    store.outbox.push({ id, event_name: params[0], dedupe_key: params[2] });
+    return done([{ id }]);
+  }
+  if (/CREATE UNIQUE INDEX IF NOT EXISTS uq_domain_event_outbox_dedupe/i.test(flat)) return done([]);
+  if (/CREATE UNIQUE INDEX IF NOT EXISTS uq_booking_escalations_one_open/i.test(flat)) return done([]);
+
+  /**
+   * Fail CLOSED.
+   *
+   * This used to be `return done([])`. A fake that answers "no rows" to a
+   * statement it does not recognise does not report a broken double — it
+   * reports wrong BEHAVIOUR, because the code under test takes its no-data
+   * branch and the test agrees with it. Reformatting a production query was
+   * enough to trigger it, and the scheduling-overlap check above had been in
+   * exactly that state.
+   */
+  throw new Error(`bookingDbFake: unrouted SQL — ${flat.slice(0, 220)}`);
 };
 
 /** The shape `jest.mock('../src/db/dbQuery', …)` should return. */
