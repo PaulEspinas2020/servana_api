@@ -37,6 +37,7 @@ import fs from 'fs';
 import path from 'path';
 import { V1_CONTRACT, fullPath } from '../src/api/v1/contract';
 import { EXPECTED_REGIONS, renderRegions } from '../scripts/generate-api-docs';
+import { tempWorkspace } from './support/tempWorkspace';
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DOCS_DIR = path.join(REPO_ROOT, 'docs', 'api');
@@ -149,22 +150,30 @@ describe('the generated regions inside the hand-written documents', () => {
     // The bug this test exists for: the first parser accepted only lowercase
     // region names, so `v1-moves:providerWeb` was copied through as ordinary
     // text with an empty body, and `--check` stayed green.
-    const tmp = path.join(REPO_ROOT, 'docs', 'api', '.drift-fixture.md');
-    fs.writeFileSync(tmp, '<!-- BEGIN GENERATED: not a region name -->\n<!-- END GENERATED -->\n', 'utf8');
+    // Written to an untracked scratch directory, not into `docs/api/`. An
+    // interrupted run used to leave a fixture inside a tracked directory.
+    const workspace = tempWorkspace('drift-malformed-marker');
     try {
-      expect(() => renderRegions('docs/api/.drift-fixture.md')).toThrow(/malformed region marker/);
+      const fixture = workspace.write(
+        'fixture.md',
+        '<!-- BEGIN GENERATED: not a region name -->\n<!-- END GENERATED -->\n',
+      );
+      expect(() => renderRegions(fixture.relative)).toThrow(/malformed region marker/);
     } finally {
-      fs.unlinkSync(tmp);
+      workspace.cleanup();
     }
   });
 
   it('an unknown region name is a throw', () => {
-    const tmp = path.join(REPO_ROOT, 'docs', 'api', '.drift-fixture-2.md');
-    fs.writeFileSync(tmp, '<!-- BEGIN GENERATED: v1-nonexistent -->\n<!-- END GENERATED: v1-nonexistent -->\n', 'utf8');
+    const workspace = tempWorkspace('drift-unknown-region');
     try {
-      expect(() => renderRegions('docs/api/.drift-fixture-2.md')).toThrow(/unknown generated region/);
+      const fixture = workspace.write(
+        'fixture.md',
+        '<!-- BEGIN GENERATED: v1-nonexistent -->\n<!-- END GENERATED: v1-nonexistent -->\n',
+      );
+      expect(() => renderRegions(fixture.relative)).toThrow(/unknown generated region/);
     } finally {
-      fs.unlinkSync(tmp);
+      workspace.cleanup();
     }
   });
 });
