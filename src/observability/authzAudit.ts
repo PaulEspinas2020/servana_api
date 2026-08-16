@@ -59,6 +59,28 @@ export interface AuthzDecision {
   objectType?: string;
 }
 
+/**
+ * A stable route identity, safe to log.
+ *
+ * `req.route.path` is the PATTERN Express matched — `/bookings/:bookingId` —
+ * not the URL, so it carries no identifiers. `req.baseUrl` is the mount prefix
+ * and is likewise static.
+ *
+ * The raw URL is deliberately never used: `/api/v1/bookings/4471` names a
+ * customer's appointment, and a log line is the wrong place for it.
+ */
+export const routeIdOf = (req: Request): string => {
+  const declared = (req as { v1RouteId?: unknown }).v1RouteId;
+  if (typeof declared === 'string' && declared) return declared;
+
+  const pattern = (req as { route?: { path?: unknown } }).route?.path;
+  const base = typeof req.baseUrl === 'string' ? req.baseUrl : '';
+  if (typeof pattern === 'string' && pattern) return `${req.method} ${base}${pattern}`;
+
+  // No matched route yet — a middleware can run before Express resolves one.
+  return `${req.method} ${base || 'unresolved'}`;
+};
+
 /** Six characters: enough to tell accounts apart, useless for impersonation. */
 export const shortActor = (uid: unknown): string => {
   const value = typeof uid === 'string' ? uid.trim() : '';
@@ -80,6 +102,26 @@ export const __resetAuthzAudit = (): void => { recent = []; };
  * pipeline can alert on them without this module owning a table.
  */
 export const recordAuthzDecision = (decision: AuthzDecision): void => {
+  try {
+    emit(decision);
+  } catch {
+    // Never throw from the audit path.
+    //
+    // This is called from INSIDE the denial branch of an authorization
+    // middleware. A throw here does not lose a log line — it aborts the
+    // middleware before it can send its 403, so the request gets an unhandled
+    // error instead of a refusal. app.ts states the rule for the request
+    // logger: "an observability bug is a missing line, never a 500 on a live
+    // client". The same rule applies here, and more sharply, because the code
+    // it wraps is the code that says no.
+    //
+    // Found by a negative fixture: a request double without `req.get` made
+    // `clientLabelOf` throw, and `admin mode denies role 4` started passing as
+    // ALLOWED.
+  }
+};
+
+const emit = (decision: AuthzDecision): void => {
   recent.push(decision);
   if (recent.length > 100) recent.shift();
 
@@ -118,7 +160,17 @@ export const decisionFor = (
   routeId: fields.routeId,
   reason: fields.reason,
   ...(fields.objectType ? { objectType: fields.objectType } : {}),
-  actorRole: actorRoleOf(req),
-  actor: shortActor((req as { user?: { uid?: unknown } }).user?.uid),
-  client: clientLabelOf(req),
+  // Each derived field falls back rather than throwing: this runs on the
+  // denial path, where an exception costs the 403 rather than a log line.
+  actorRole: safely(() => actorRoleOf(req), 'anonymous' as ActorRole),
+  actor: safely(() => shortActor((req as { user?: { uid?: unknown } }).user?.uid), 'anonymous'),
+  client: safely(() => clientLabelOf(req), 'unknown'),
 });
+
+const safely = <T>(read: () => T, fallback: T): T => {
+  try {
+    return read();
+  } catch {
+    return fallback;
+  }
+};

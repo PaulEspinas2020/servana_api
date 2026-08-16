@@ -123,3 +123,57 @@ describe('what gets emitted', () => {
     expect(__authzDecisions().length).toBeLessThanOrEqual(100);
   });
 });
+
+describe('the audit can never break the decision it observes', () => {
+  /**
+   * The regression this pins, found by a negative fixture rather than by
+   * design.
+   *
+   * Wiring the audit into `verifyRoles` made `clientLabelOf` throw on a request
+   * double that had no `req.get`. The throw did not lose a log line — it
+   * aborted the middleware BEFORE it sent its 403, and the authz matrix test
+   * `admin mode denies role 4` started reporting ALLOWED.
+   *
+   * An observability bug must be a missing line, never a changed decision, and
+   * that matters most in the code whose job is to say no.
+   */
+  it('survives a request with no accessors at all', () => {
+    const hostile: any = {};
+    expect(() =>
+      recordAuthzDecision(
+        decisionFor(hostile, {
+          outcome: 'deny', rule: 'role', routeId: 'x', reason: 'FORBIDDEN_ROLE',
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('survives a request whose accessors throw', () => {
+    const hostile: any = {
+      get: () => { throw new Error('header access exploded'); },
+      get user() { throw new Error('user access exploded'); },
+    };
+    expect(() =>
+      recordAuthzDecision(
+        decisionFor(hostile, {
+          outcome: 'deny', rule: 'ownership', routeId: 'x', reason: 'NOT_OWNED',
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('still records something useful when it falls back', () => {
+    // Degraded, not silent: the RULE and REASON are supplied by the caller and
+    // survive whatever the request does.
+    __resetAuthzAudit();
+    recordAuthzDecision(
+      decisionFor({} as any, {
+        outcome: 'deny', rule: 'capability', routeId: 'provider.earnings', reason: 'NOT_ACTIVE',
+      }),
+    );
+    const [recorded] = __authzDecisions();
+    expect(recorded.rule).toBe('capability');
+    expect(recorded.reason).toBe('NOT_ACTIVE');
+    expect(recorded.client).toBe('unknown');
+  });
+});
