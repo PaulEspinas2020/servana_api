@@ -339,7 +339,7 @@ No role split. Scoped to the author, and it returns the private feedback the pub
 
 No role split on the shared list, and a genuinely different one for admin: `/admin/providers/:uid/reviews` carries moderation state, internal notes and rejected reviews, all behind a named permission. Same table, different question - and the public route cannot answer it because the projection does not carry those fields at all.
 
-**A provider's rating summary** (`services/ratingAggregationService.getPublicRatingSummary`)
+**A provider's rating summary** (`services/customerReviewService`)
 
 No role split, and this is the gate: one summary service and one contract, so a provider cannot be shown a different average from the one on their own customer-facing card. Backend-derived throughout - no endpoint accepts a rating, because a rating a caller can set is one a caller can inflate.
 

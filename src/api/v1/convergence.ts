@@ -166,7 +166,7 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'auth.forgotPassword', 'auth.resetPassword',
       'auth.verifyEmail', 'auth.resendVerification', 'auth.verifyMobile',
     ],
-    domainModule: 'services/authSessionService',
+    domainModule: 'services/auth + services/otpService',
     surfaces: CLIENT_SURFACES,
     roleSplitRationale:
       'No role split. Recovery answers identically whatever the account turns out to be — a ' +
@@ -208,7 +208,7 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
     title: 'Read a booking',
     source: 'api/v1/convergence (core)',
     contractIds: ['bookings.listMine', 'bookings.get', 'bookings.timeline', 'bookings.transitions'],
-    domainModule: 'services/bookingService + services/booking/canonicalState',
+    domainModule: 'services/bookingService + services/bookingAccessService',
     surfaces: CLIENT_SURFACES,
     roleSplitRationale:
       'No role split on the READ. `bookings.get` is booking-scoped and authorizes through ' +
@@ -474,6 +474,58 @@ export const convergenceOf = (capability: CapabilityRecord): ConvergenceReport =
         : 'SHARED';
 
   return { capability, verdict, sharedService, services, entries, missingIds, routeFamilies };
+};
+
+/**
+ * Capabilities whose declared `domainModule` names something none of their
+ * endpoints actually use.
+ *
+ * ## Why this check exists
+ *
+ * `domainModule` says "the ONE domain module the capability's endpoints are
+ * expected to share". It was declared by hand, published in the parity matrix
+ * and the TAB 13 certification as a statement of architecture — and checked by
+ * nothing. Five capabilities named a module no endpoint reached, including
+ * `services/ratingAggregationService`, which exists but is not what the rating
+ * endpoints call. A claim that is plausible, specific and unverified is worse
+ * than no claim, because it reads as evidence.
+ *
+ * ## Containment, not equality
+ *
+ * Asserts declared ⊆ actual. A capability legitimately touches several services
+ * — `bookings.get` authorises through one module and fetches through another —
+ * so demanding equality would cry wolf about ordinary composition until someone
+ * turned the check off. What must never happen is a declared module that no
+ * endpoint reaches at all, which is the case that was silently true here.
+ */
+export interface DeclaredServiceDrift {
+  capability: string;
+  declared: string[];
+  actual: string[];
+  unreached: string[];
+}
+
+export const declaredServiceDrift = (): DeclaredServiceDrift[] => {
+  const drift: DeclaredServiceDrift[] = [];
+  for (const capability of capabilityRegistry()) {
+    const report = convergenceOf(capability);
+    if (report.verdict === 'BROKEN') continue;
+
+    const declared = [
+      ...new Set(
+        capability.domainModule
+          .split('+')
+          .map((part) => resolveDelegation(domainServiceRoot(part.trim())))
+          .filter(Boolean),
+      ),
+    ].sort();
+    const actual = report.services.slice().sort();
+    const unreached = declared.filter((module) => !actual.includes(module));
+    if (unreached.length) {
+      drift.push({ capability: capability.key, declared, actual, unreached });
+    }
+  }
+  return drift;
 };
 
 // ─── Parity ───────────────────────────────────────────────────────────────────

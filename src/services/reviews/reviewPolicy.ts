@@ -580,7 +580,7 @@ export const REVIEW_CAPABILITIES: readonly ReviewCapability[] = Object.freeze([
     key: 'ratingSummary',
     title: "A provider's rating summary",
     contractIds: ['reviews.provider.rating'],
-    domainModule: 'services/ratingAggregationService.getPublicRatingSummary',
+    domainModule: 'services/customerReviewService',
     surfaces: Object.freeze([
       'customerMobile', 'customerWeb', 'providerMobile', 'providerWeb', 'admin',
     ] as ClientSurface[]),

@@ -387,7 +387,7 @@ export const HOME_CAPABILITIES: readonly HomeCapability[] = Object.freeze([
     key: 'homeSections',
     title: 'Which sections exist and what owns each',
     contractIds: ['home.sections'],
-    domainModule: 'services/home/homePolicy',
+    domainModule: 'services/home/homeService',
     surfaces: Object.freeze([
       'customerMobile', 'customerWeb', 'admin',
     ] as ClientSurface[]),

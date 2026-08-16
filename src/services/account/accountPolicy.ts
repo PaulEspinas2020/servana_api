@@ -777,7 +777,7 @@ export const ACCOUNT_CAPABILITIES: readonly AccountCapability[] = Object.freeze(
     key: 'providerDocuments',
     title: 'Read my documents and requirements',
     contractIds: ['provider.documents.list'],
-    domainModule: 'services/providerProfileComplianceService',
+    domainModule: 'services/account/providerProfileService',
     surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
     roleSplitRationale:
       'Provider-only, and it must stay that way. The projection carries review STATE and never ' +

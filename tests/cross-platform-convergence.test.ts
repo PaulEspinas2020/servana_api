@@ -45,6 +45,7 @@ import {
   domainServiceRoot,
   doubleClaimedIds,
   parityRow,
+  declaredServiceDrift,
   resolveDelegation,
   unclaimedEntries,
 } from '../src/api/v1/convergence';
@@ -378,5 +379,48 @@ describe('the parity matrix reports honestly', () => {
     for (const row of withLegacy) {
       for (const p of row.legacyPaths) expect(p).toMatch(/^(GET|POST|PUT|PATCH|DELETE) \/api\//);
     }
+  });
+});
+
+// ─── The declaration must match the code ──────────────────────────────────────
+
+describe('declared domain modules are checked against the contract', () => {
+  /**
+   * The gap this closes.
+   *
+   * `domainModule` says "the ONE domain module the capability's endpoints are
+   * expected to share". It is authored by hand, published in
+   * CLIENT_ENDPOINT_PARITY_MATRIX.md and quoted in the TAB 13 certification as a
+   * statement of architecture — and until now nothing compared it to the
+   * `domainService` the contract entries actually name.
+   *
+   * Five capabilities were naming a module no endpoint reached, including
+   * `services/ratingAggregationService`, which exists but is not what the rating
+   * endpoints call, and `services/providerProfileComplianceService`, where the
+   * real module is `services/account/providerProfileService`. Every one of them
+   * was a real file, which is what made the claims read as verified.
+   *
+   * This is the same failure class TAB 15 hit: a careful, specific, plausible
+   * claim that no second source ever checked.
+   */
+  it('names no domain module that none of its endpoints reach', () => {
+    const drift = declaredServiceDrift();
+    expect(
+      drift.map((d) => `${d.capability}: declared ${d.unreached.join(', ')}, actual ${d.actual.join(', ')}`),
+    ).toEqual([]);
+  });
+
+  it('tolerates a capability composing several services', () => {
+    /**
+     * Containment, not equality — asserted so the rule cannot be tightened into
+     * one that cries wolf. `bookings.get` authorises through one module and
+     * fetches through another; calling that a drift would make the check
+     * useless and it would get turned off.
+     */
+    const composing = capabilityRegistry()
+      .map(convergenceOf)
+      .filter((r) => r.services.length > 1);
+    expect(composing.length).toBeGreaterThan(0);
+    expect(declaredServiceDrift()).toEqual([]);
   });
 });

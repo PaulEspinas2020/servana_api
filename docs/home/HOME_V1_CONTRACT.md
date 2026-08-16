@@ -215,6 +215,6 @@ the response a role branch and two meanings.
 
 No role split, and no client split — which IS the capability. Customer Web and Customer Mobile receive the identical section set and the identical DTOs from one composition, so "equivalent shared content" is a property of there being one endpoint rather than two implementations kept in step. Providers have a dashboard with genuinely different content and their own endpoint; folding both into one surface would give the response a role branch and two meanings.
 
-**Which sections exist and what owns each** (`services/home/homePolicy`)
+**Which sections exist and what owns each** (`services/home/homeService`)
 
 No role split. The registry is metadata about the page, not content: it says which section types exist, what owns each and how long each may be cached. A client uses it to render unknown sections safely; an admin uses it to see what home is made of without reading the source.

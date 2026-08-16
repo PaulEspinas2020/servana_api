@@ -25,7 +25,7 @@
  * test, because none of them can see the whole contract.
  *
  * This declares, per sensitive domain, which endpoints are object-scoped and
- * what the scoping predicate is, so `tests/authorization-matrix.test.ts` can
+ * what the scoping predicate is, so `tests/route-health-and-authz.test.ts` can
  * fail when a new booking-scoped endpoint appears with no ownership rule.
  */
 
@@ -44,9 +44,15 @@ export type Access = 'allow' | 'deny';
 /**
  * Which roles the AUTH CHAIN admits, per declared mode.
  *
- * Derived from `register.ts`'s `authChain`, and asserted against it — a mode
- * whose chain changes without this table changing is a matrix that documents
- * an access rule the router no longer applies.
+ * Asserted against `register.ts`'s `authChain` by
+ * `tests/authz-matrix-behaviour.test.ts`, which EXECUTES the real chain for
+ * every mode x role and compares the outcome to this table.
+ *
+ * That check did not exist until it was noticed missing. This comment used to
+ * claim it did, while the only checks were a source-text regex and a presence
+ * check — so widening `verifyRoles([1])` to `verifyRoles([1, 4])` would have
+ * left SECURITY_AUTHZ_MATRIX.md publishing `provider: deny` with nothing
+ * failing. Role 4 is a provider role, so that edit is plausible, not contrived.
  */
 export const ROLE_ACCESS: Readonly<Record<AuthMode, Readonly<Record<Role, Access>>>> = Object.freeze({
   public: Object.freeze({ anonymous: 'allow', customer: 'allow', provider: 'allow', admin: 'allow' }),

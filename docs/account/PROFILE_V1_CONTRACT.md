@@ -380,7 +380,7 @@ No role split. Five legacy routes with five shapes — query-param ids, a POST t
 
 Role-specific by DATA and by WORKFLOW. A provider profile field is classified, and editing a reviewable one submits a revision rather than writing a column — the compliance service owns that, and the canonical PATCH delegates to it instead of reimplementing it.
 
-**Read my documents and requirements** (`services/providerProfileComplianceService`)
+**Read my documents and requirements** (`services/account/providerProfileService`)
 
 Provider-only, and it must stay that way. The projection carries review STATE and never a document URL or storage path; the preview endpoint mints a short-lived signed URL after re-authorizing, which is a different operation with a different audit trail.
 

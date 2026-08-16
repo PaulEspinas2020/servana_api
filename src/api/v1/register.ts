@@ -70,8 +70,17 @@ const guard = (id: string, handler: V1Handler): RequestHandler =>
     }
   };
 
-/** Auth chain for each declared mode. The contract's `auth` field picks one. */
-const authChain = (entry: ContractEntry): RequestHandler[] => {
+/**
+ * Auth chain for each declared mode. The contract's `auth` field picks one.
+ *
+ * Exported so `tests/authz-matrix-behaviour.test.ts` can EXECUTE the real chain
+ * rather than assert against a copy of it. `ROLE_ACCESS` in `authzMatrix.ts`
+ * claimed to be "derived from register.ts's authChain, and asserted against it";
+ * it was not. The only checks were a source-text regex and a presence check, so
+ * changing `verifyRoles([1])` to `verifyRoles([1, 4])` would have left the
+ * published security matrix saying `provider: deny` with nothing failing.
+ */
+export const authChain = (entry: ContractEntry): RequestHandler[] => {
   switch (entry.auth) {
     case 'public':
       return [];
