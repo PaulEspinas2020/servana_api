@@ -35,6 +35,8 @@ import {
   projectEvent,
   type DomainEventEnvelope,
 } from '../src/services/events/domainEvents';
+import { ACTION_EVENTS, SILENT_ACTIONS } from '../src/services/events/bookingEventBridge';
+import { BOOKING_ACTIONS } from '../src/services/booking/transitionExecutor';
 
 const CUSTOMER = 'customer-1';
 const PROVIDER = 'provider-1';
@@ -328,5 +330,58 @@ describe('the outbox is durable and drains', () => {
     const counts = snapshot().counts;
     expect(counts['EVENT_PUBLISHED:JobStarted']).toBe(1);
     expect(counts['EVENT_DISPATCHED']).toBe(1);
+  });
+});
+
+// ─── The action → event partition ─────────────────────────────────────────────
+
+describe('every booking action has a declared notification decision', () => {
+  /**
+   * The gap this closes.
+   *
+   * `ACTION_EVENTS` maps 10 of 16 canonical actions to a domain event. The
+   * other 6 publish nothing, which is a deliberate and well-argued product
+   * decision — EN_ROUTE and ARRIVED are carried by the tracking surface the
+   * customer is already watching, and a push per state change is how an app
+   * teaches people to mute it.
+   *
+   * But it was recorded only as prose. Nothing enumerated the silent set and
+   * nothing asserted the two halves covered `BOOKING_ACTIONS`, so a new action
+   * joined the silent half by default: the notification decision got made by
+   * forgetting rather than by choosing. Deleting a mapping entry failed nothing
+   * either.
+   */
+  const canonical = Object.keys(BOOKING_ACTIONS).sort();
+
+  it('partitions the canonical actions exactly — no action is undecided', () => {
+    const decided = [...Object.keys(ACTION_EVENTS), ...Object.keys(SILENT_ACTIONS)].sort();
+    expect(decided).toEqual(canonical);
+  });
+
+  it('never maps an action that is not a real transition', () => {
+    // A ghost key looks configured and publishes nothing.
+    const real = new Set(canonical);
+    expect(Object.keys(ACTION_EVENTS).filter((a) => !real.has(a))).toEqual([]);
+    expect(Object.keys(SILENT_ACTIONS).filter((a) => !real.has(a))).toEqual([]);
+  });
+
+  it('does not both publish and silence the same action', () => {
+    const published = new Set(Object.keys(ACTION_EVENTS));
+    expect(Object.keys(SILENT_ACTIONS).filter((a) => published.has(a))).toEqual([]);
+  });
+
+  it('gives a REASON for every silence, not just a name', () => {
+    // A silent list with empty rationales is the prose problem again, in a
+    // shape that passes the partition check.
+    for (const [action, why] of Object.entries(SILENT_ACTIONS)) {
+      expect(why.length).toBeGreaterThan(40);
+      expect(action).toMatch(/^[A-Z_]+$/);
+    }
+  });
+
+  it('maps every event it names to a declared domain event', () => {
+    for (const name of Object.values(ACTION_EVENTS)) {
+      expect(DOMAIN_EVENT_NAMES).toContain(name);
+    }
   });
 });

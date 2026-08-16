@@ -44,6 +44,47 @@ export const ACTION_EVENTS: Readonly<Record<string, DomainEventName>> = Object.f
   ADMIN_CANCEL: 'BookingCancelled',
 });
 
+/**
+ * Actions that deliberately publish nothing, and why.
+ *
+ * ## Why silence has to be declared rather than implied
+ *
+ * The partial mapping above is a good decision badly recorded. "Most actions
+ * produce no event" is prose: it names none of them, so the silent set was
+ * whatever `BOOKING_ACTIONS` minus `ACTION_EVENTS` happened to be on any given
+ * day. Nothing asserted the two sets partitioned the canonical actions, which
+ * means a new action joins the silent set by default — the notification decision
+ * gets made by forgetting rather than by choosing — and deleting a mapping entry
+ * fails nothing.
+ *
+ * With both halves declared, `tests/notification-event-contract.test.ts` asserts
+ * they are disjoint and together cover `BOOKING_ACTIONS` exactly. Adding an
+ * action then fails the build until somebody writes down which half it is in.
+ * That is the whole point: the build asks the question, rather than answering it
+ * silently.
+ */
+export const SILENT_ACTIONS: Readonly<Record<string, string>> = Object.freeze({
+  CUSTOMER_CONFIRM_OTP:
+    'The customer is holding the phone that just produced the code. Telling them ' +
+    'they did the thing they are currently doing is noise.',
+  PROVIDER_DECLINE:
+    'Returns the booking to AWAITING_ASSIGNMENT, and the customer-visible fact is ' +
+    'the NEXT assignment, not this refusal. Surfacing a decline would also expose ' +
+    'one provider\'s choice to the customer, which is a matching detail rather ' +
+    'than a booking fact.',
+  PROVIDER_EN_ROUTE:
+    'Carried by the tracking surface the customer is already watching. A push for ' +
+    'every movement is how an app teaches people to mute it.',
+  PROVIDER_ARRIVED:
+    'Same as EN_ROUTE — and by definition somebody is at the door.',
+  ADMIN_CONFIRM_ASSIGNMENT:
+    'An internal bookkeeping confirmation of an assignment already announced by ' +
+    'BookingAssigned. Publishing again would duplicate one fact.',
+  SYSTEM_EXPIRE:
+    'Not a party acting. Expiry notification is owned by the scheduler that ' +
+    'decides a booking is stale, which has the context to say why.',
+});
+
 export const eventForAction = (action: string): DomainEventName | null =>
   ACTION_EVENTS[action] ?? null;
 

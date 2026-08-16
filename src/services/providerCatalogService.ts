@@ -1497,10 +1497,38 @@ export const setSpecificServiceBanner = async (
     throw Object.assign(new Error('Specific service not found'), { statusCode: 404 });
   }
 
-  const match = /^data:([^;,]+);base64,(.+)$/i.exec(String(fileDataUri ?? '').trim());
-  if (!match) {
+  /**
+   * Parsed by index rather than by regex, deliberately.
+   *
+   * This was `/^data:([^;,]+);base64,(.+)$/`. The `(.+)` captures the whole
+   * payload, and V8 sizes a regex stack against the input — so a 4 MB image
+   * (≈5.6 MB of base64) could throw `RangeError: Maximum call stack size
+   * exceeded` instead of the 400 below. The caller then saw a 500 on an upload
+   * that was merely too large, and the size limit that exists to produce a
+   * clean error never got the chance to run.
+   *
+   * It surfaced as an intermittent test failure rather than a report, because
+   * whether the allocation fails depends on heap pressure at the moment of the
+   * call — so it moved between suites and looked like flakiness.
+   *
+   * `indexOf` + `slice` does no backtracking and is O(n) on any input.
+   */
+  const raw = String(fileDataUri ?? '').trim();
+  const SEPARATOR = ';base64,';
+  const separatorAt = raw.indexOf(SEPARATOR);
+  const header = separatorAt >= 0 ? raw.slice(0, separatorAt) : '';
+  const declaredMime = header.startsWith('data:') ? header.slice('data:'.length) : '';
+
+  // The MIME may not itself contain a parameter separator — `data:image/png;q=1`
+  // is a different shape and is refused rather than silently accepted.
+  if (separatorAt < 0 || !declaredMime || /[;,]/.test(declaredMime)) {
     throw Object.assign(new Error('Banner must be a base64 data URI'), { statusCode: 400 });
   }
+  const payload = raw.slice(separatorAt + SEPARATOR.length);
+  if (!payload) {
+    throw Object.assign(new Error('Banner must be a base64 data URI'), { statusCode: 400 });
+  }
+  const match = [raw, declaredMime, payload] as const;
   const mimeType = match[1].toLowerCase();
   if (!ALLOWED_BANNER_MIMES.includes(mimeType)) {
     throw Object.assign(
