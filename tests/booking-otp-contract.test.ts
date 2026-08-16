@@ -446,3 +446,57 @@ describe('confirmation releases the booking to matching', () => {
     expect(assignments).toEqual([]);
   });
 });
+
+// ─── The rotation boundary must not depend on the clock ───────────────────────
+
+describe('an attempt budget is scoped by ORDER, not by timestamp equality', () => {
+  /**
+   * The bug this pins.
+   *
+   * `failedAttempts` was `created_at >= lastIssueAt`, which charged the NEW
+   * credential for failures recorded at exactly the issue instant. That is not a
+   * hypothetical tie: `booking_otp_events.created_at` defaults to `now()`, and
+   * PostgreSQL's `now()` is TRANSACTION start time — every row written in one
+   * transaction shares an identical timestamp.
+   *
+   * So a customer who exhausted their attempts and rotated could be handed a
+   * fresh code whose budget was already spent, with the only symptom being a
+   * refusal they could not explain.
+   *
+   * It surfaced as an intermittent TEST failure rather than a bug report,
+   * because whether the events and the reissue landed in the same instant
+   * depended on how fast the process was running. It passed in isolation and
+   * failed inside a long suite, three times, before it was chased down.
+   */
+  it('a rotation clears failures recorded at the SAME instant as the issue', async () => {
+    const sameInstant = minutesAgo(1);
+    seedBooking({ status: 'PENDING_OTP', otp_code: '123456' });
+
+    // Five failures, then a rotation, all stamped identically — the exact tie a
+    // single transaction produces.
+    for (let i = 0; i < 5; i++) {
+      seedOtpEvent('BOOKING_CONFIRMATION', 'FAILED', sameInstant);
+    }
+    seedOtpEvent('BOOKING_CONFIRMATION', 'ISSUED', sameInstant);
+
+    const state = await readCredentialState(BOOKING, 'BOOKING_CONFIRMATION');
+
+    // The failures precede the issue in the declared order, so the new
+    // credential starts clean. A `>=` timestamp comparison scores this 5.
+    expect(state.failedAttempts).toBe(0);
+    expect(state.attemptsRemaining).toBe(CONFIRM.maxVerifyAttempts);
+  });
+
+  it('still counts failures that genuinely follow the issue', async () => {
+    // The negative half: if the boundary were "always clean", the limit would
+    // never engage and this suite would be measuring nothing.
+    const t = minutesAgo(1);
+    seedBooking({ status: 'PENDING_OTP', otp_code: '123456' });
+    seedOtpEvent('BOOKING_CONFIRMATION', 'ISSUED', t);
+    seedOtpEvent('BOOKING_CONFIRMATION', 'FAILED', t);
+    seedOtpEvent('BOOKING_CONFIRMATION', 'FAILED', t);
+
+    const state = await readCredentialState(BOOKING, 'BOOKING_CONFIRMATION');
+    expect(state.failedAttempts).toBe(2);
+  });
+});

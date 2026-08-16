@@ -189,15 +189,32 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
       created_at: store.booking.created_at ?? new Date().toISOString(),
     }]);
   }
-  if (/SELECT event, created_at FROM servana\.booking_otp_events/i.test(flat)) {
-    return done(
-      store.otpEvents
-        .filter((e) => e.booking_id === Number(params[0]) && e.purpose === params[1])
-        .map((e) => ({ event: e.event, created_at: e.created_at })),
-    );
+  if (/FROM servana\.booking_otp_events/i.test(flat)) {
+    /**
+     * Ordered as the real query declares (`created_at ASC, id ASC`), and matched
+     * WITHOUT pinning the column list.
+     *
+     * Pinning it meant that adding `id` to the production SELECT stopped this
+     * branch matching — which, before the fail-closed default, would have
+     * silently answered "no attempts recorded" and disabled an OTP security
+     * limit in every test that touches it.
+     */
+    const ordered = (store.otpEvents as any[])
+      .filter((e) => e.booking_id === Number(params[0]) && e.purpose === params[1])
+      .map((e, i) => ({ ...e, id: e.id ?? i + 1 }))
+      .sort((a, b) => {
+        const at = new Date(String(a.created_at)).getTime();
+        const bt = new Date(String(b.created_at)).getTime();
+        return at === bt ? Number(a.id) - Number(b.id) : at - bt;
+      });
+    return done(ordered.map((e) => ({ id: e.id, event: e.event, created_at: e.created_at })));
   }
   if (/INSERT INTO servana\.booking_otp_events/i.test(flat)) {
     store.otpEvents.push({
+      // Serial identity, because production SELECTs it: the attempt-budget
+      // boundary is the last ISSUED row's id, not its timestamp. A fake that
+      // omitted it made every FAILED row unattributable to a credential.
+      id: store.otpEvents.length + 1,
       booking_id: Number(params[0]), purpose: params[1], event: params[2],
       actor_uid: params[3], actor_role: params[4],
       created_at: new Date().toISOString(),

@@ -161,7 +161,7 @@ export async function readCredentialState(
   const present = !!String(row?.[spec.credentialColumn] ?? '').trim();
 
   const { rows } = await dbQuery.query(
-    `SELECT event, created_at
+    `SELECT id, event, created_at
        FROM ${s}.booking_otp_events
       WHERE booking_id = $1 AND purpose = $2
       ORDER BY created_at ASC, id ASC`,
@@ -169,20 +169,42 @@ export async function readCredentialState(
   );
 
   const issues = rows.filter((r: any) => r.event === 'ISSUED');
-  const lastIssueAt = issues.length ? asDate(issues[issues.length - 1].created_at) : null;
+  const lastIssue = issues.length ? issues[issues.length - 1] : null;
+  const lastIssueAt = lastIssue ? asDate(lastIssue.created_at) : null;
 
   const issuedAt = lastIssueAt ?? asDate(row?.created_at);
   const expiresAt = issuedAt
     ? new Date(issuedAt.getTime() + spec.expiryMinutes * 60_000)
     : null;
 
-  // Only failures AFTER the current code was issued count. A rotation is a
-  // fresh credential and a fresh budget — otherwise a resend would hand back a
-  // code that was already dead on arrival.
+  /**
+   * Only failures AFTER the current code was issued count. A rotation is a
+   * fresh credential and a fresh budget — otherwise a resend would hand back a
+   * code that was already dead on arrival.
+   *
+   * ## Why this is ordered by id and not by timestamp
+   *
+   * It used to be `created_at >= lastIssueAt`, and that charged the NEW
+   * credential for failures recorded at exactly the issue instant. Which is not
+   * a hypothetical tie: `created_at` defaults to `now()`, and PostgreSQL's
+   * `now()` is TRANSACTION start time — every row written in one transaction
+   * carries an identical timestamp. So "after" was undecidable precisely when
+   * events were written together, and a rotation could hand back a credential
+   * whose budget was already spent.
+   *
+   * It surfaced as an intermittent test failure rather than a report: whether
+   * the failures and the reissue landed in the same instant depended on how
+   * fast the process was running, so it passed in isolation and failed inside a
+   * long suite.
+   *
+   * The query already orders by `created_at ASC, id ASC` — it always knew the
+   * timestamp alone was not a total order. So the boundary is the last ISSUED
+   * row's POSITION in that ordering, which is unambiguous whatever the clock
+   * says, and needs no second comparison of its own to get wrong.
+   */
+  const lastIssueIndex = rows.map((r: any) => r.event).lastIndexOf('ISSUED');
   const failedAttempts = rows.filter(
-    (r: any) =>
-      r.event === 'FAILED' &&
-      (!lastIssueAt || (asDate(r.created_at)?.getTime() ?? 0) >= lastIssueAt.getTime()),
+    (r: any, index: number) => r.event === 'FAILED' && index > lastIssueIndex,
   ).length;
 
   const cooldownRemainingSeconds = lastIssueAt

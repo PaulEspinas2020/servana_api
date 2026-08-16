@@ -100,6 +100,8 @@ export const seedOtpEvent = (
   createdAt: Date,
 ): void => {
   store.otpEvents.push({
+    // See bookingDbFake: production reads `id` to scope the attempt budget.
+    id: store.otpEvents.length + 1,
     booking_id: store.booking?.id ?? 5001,
     purpose,
     event,
@@ -156,12 +158,28 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
   }
 
   // ── booking codes ──
-  if (/SELECT event, created_at FROM servana\.booking_otp_events/i.test(flat)) {
-    return done(
-      store.otpEvents
-        .filter((e) => e.booking_id === Number(params[0]) && e.purpose === params[1])
-        .map((e) => ({ event: e.event, created_at: e.created_at })),
-    );
+  if (/FROM servana\.booking_otp_events/i.test(flat)) {
+    /**
+     * Honours the ORDER BY the real query declares.
+     *
+     * This used to match `SELECT event, created_at` literally and return rows in
+     * PUSH order. Both were wrong. Adding `id` to the production SELECT stopped
+     * the branch matching at all, and the fake fell through to its permissive
+     * default — so the attempt budget read as zero and a security limit silently
+     * stopped being tested.
+     *
+     * The column list is no longer matched, because a fake that breaks when a
+     * caller selects one more column is a tripwire rather than a double.
+     */
+    const ordered = (store.otpEvents as any[])
+      .filter((e) => e.booking_id === Number(params[0]) && e.purpose === params[1])
+      .map((e, i) => ({ ...e, id: e.id ?? i + 1 }))
+      .sort((a, b) => {
+        const at = new Date(String(a.created_at)).getTime();
+        const bt = new Date(String(b.created_at)).getTime();
+        return at === bt ? Number(a.id) - Number(b.id) : at - bt;
+      });
+    return done(ordered.map((e) => ({ id: e.id, event: e.event, created_at: e.created_at })));
   }
   if (/INSERT INTO servana\.booking_otp_events/i.test(flat)) {
     store.otpEvents.push({
@@ -273,7 +291,19 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
     return done([]);
   }
 
-  return done([]);
+  /**
+   * Fail CLOSED.
+   *
+   * This was `return done([])`, and it cost real time: adding `id` to the OTP
+   * service's SELECT stopped the `booking_otp_events` branch matching, this
+   * default answered "no rows", and the attempt budget read as ZERO — an OTP
+   * security limit silently untested, with every assertion still green.
+   *
+   * A double that answers "no rows" to a statement it does not recognise does
+   * not report a broken double. It reports wrong behaviour, and the test agrees
+   * with it.
+   */
+  throw new Error(`experienceDbFake: unrouted SQL — ${flat.slice(0, 220)}`);
 };
 
 export const dbMock = {
