@@ -571,6 +571,6 @@ later domain command starts from a route list rather than from a grep.
 | `PUT` | `/api/reviews/:reviewId` | `src/routes/customerReview.routes.ts:37` |
 | `DELETE` | `/api/reviews/:reviewId` | `src/routes/customerReview.routes.ts:38` |
 | `POST` | `/api/reviews/:reviewId/report` | `src/routes/customerReview.routes.ts:39` |
-| `POST` | `/api/account/deletion-request` | `src/routes/accountDeletion.routes.ts:26` |
-| `POST` | `/api/account/deletion-request/me` | `src/routes/accountDeletion.routes.ts:27` |
-| `GET` | `/account-deletion` | `src/routes/accountDeletion.routes.ts:142` |
+| `POST` | `/api/account/deletion-request` | `src/routes/accountDeletion.routes.ts:27` |
+| `POST` | `/api/account/deletion-request/me` | `src/routes/accountDeletion.routes.ts:28` |
+| `GET` | `/account-deletion` | `src/routes/accountDeletion.routes.ts:143` |

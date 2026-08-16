@@ -5,7 +5,8 @@ import verifyAuth from "../middleware/verifyAuth";
 import * as ctrl from "../controllers/accountDeletionController";
 import { ensureAccountDeletionTable } from "../services/accountDeletionService";
 
-ensureAccountDeletionTable().catch(console.error);
+// Startup: declared in src/startup.ts (TAB 03). A route module is an
+// especially bad place for DDL — it runs on import of the router.
 
 /**
  * Tighter than the sign-in limiter. The public form is unauthenticated and

@@ -57,7 +57,7 @@ export const ensureAvailabilitySchema = (): Promise<void> => {
 };
 
 // Warm up on module load (fire-and-forget; callers await their own ops)
-ensureAvailabilitySchema().catch(() => {});
+// Startup: declared in src/startup.ts (TAB 03).
 
 // ── Audit helper ──────────────────────────────────────────────────────────────
 

@@ -104,7 +104,8 @@ export const ensureActivationSchema = (): Promise<void> => {
   return schemaReady;
 };
 
-ensureActivationSchema().catch(() => {});
+// Startup: declared in src/startup.ts (TAB 03). Running DDL at import
+// meant every importer issued it, including tests and CLI scripts.
 
 /**
  * Read the stored row WITHOUT creating one.

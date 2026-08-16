@@ -50,6 +50,11 @@ import { ensureIdentityColumns } from './services/identityColumns';
 import { bootstrap as bootstrapAutoOnline } from './services/providerAutoOnlineEngine';
 import { ensureAdminCreateBookingSchema } from './services/adminCreateBookingService';
 import { ensureAdminBookingDraftSchema } from './services/adminBookingDraftService';
+import { ensureActivationSchema } from './services/providerActivationService';
+import { ensureAvailabilitySchema } from './services/providerOperationalAvailabilityService';
+import { ensureAccountDeletionTable } from './services/accountDeletionService';
+import { ensureReviewTables } from './services/customerReviewService';
+import { ensureCustomerSupportTables } from './services/customerSupportService';
 
 /** Generous, but bounded. A hung bootstrap must not hold the boot open. */
 const SCHEMA_TIMEOUT_MS = 30_000;
@@ -104,6 +109,45 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
   },
 
   // ── Optional: degraded, reported, and not a reason to withhold traffic ──
+  {
+    name: 'provider-activation-schema',
+    kind: 'optional',
+    timeoutMs: SCHEMA_TIMEOUT_MS,
+    start: ensureActivationSchema,
+    why:
+      'Was executed at import of providerActivationService, so every importer ' +
+      'issued DDL — including tests and CLI scripts.',
+  },
+  {
+    name: 'provider-availability-schema',
+    kind: 'optional',
+    timeoutMs: SCHEMA_TIMEOUT_MS,
+    start: ensureAvailabilitySchema,
+    why: 'Was executed at import of providerOperationalAvailabilityService.',
+  },
+  {
+    name: 'account-deletion-schema',
+    kind: 'optional',
+    timeoutMs: SCHEMA_TIMEOUT_MS,
+    start: ensureAccountDeletionTable,
+    why:
+      'Was executed at import of a ROUTE module, which is the worst place for ' +
+      'DDL: it ran whenever the router was loaded.',
+  },
+  {
+    name: 'customer-review-schema',
+    kind: 'optional',
+    timeoutMs: SCHEMA_TIMEOUT_MS,
+    start: ensureReviewTables,
+    why: 'Was executed at import of customerReviewController.',
+  },
+  {
+    name: 'customer-support-schema',
+    kind: 'optional',
+    timeoutMs: SCHEMA_TIMEOUT_MS,
+    start: ensureCustomerSupportTables,
+    why: 'Was executed at import of a route module.',
+  },
   {
     name: 'admin-booking-draft-schema',
     kind: 'optional',
