@@ -3,8 +3,9 @@
 > **The gap is closed.** `scripts/baseline/000-baseline.sql` is a captured,
 > sanitised schema baseline, and `npm run db:verify:embedded` restores it into a
 > real PostgreSQL and proves a fresh database reaches the current schema with
-> zero pending migrations. This document says how it was captured, how to
-> regenerate it, how the version ledger works, and how to restore or roll back.
+> the six migrations production has not yet received. This document says how it
+> was captured, how to regenerate it, how the version ledger works, and how to
+> restore or roll back.
 
 ---
 
@@ -27,7 +28,7 @@ ssh servana 'cd /path/to/app && \
 
 # 3 — prove it
 npm run db:verify            # requirements, semantics, sanitisation
-npm run db:verify:embedded   # restore into real PostgreSQL, assert 0 pending
+npm run db:verify:embedded   # restore, then apply what production lacks
 ```
 
 ### 0.1 The three transforms, and why each is necessary
@@ -77,8 +78,14 @@ Those migrations are not broken. They are **spent**. So a fresh database is
 brought to parity the way every migration framework does it — Flyway `baseline`,
 Sqitch `deploy --to`: restore the schema, then record the version it corresponds
 to, so nothing historical re-runs. `ledgerAtBaselineSql()` emits that record,
-and `npm run db:verify:embedded` asserts the result has **zero pending
-migrations**.
+and `npm run db:verify:embedded` then APPLIES whatever production has not yet
+received — six migrations today — proving they land cleanly on production's real
+schema.
+
+> **Only migrations the baseline already reflects are marked.** Marking all of
+> them would not defer `030`–`035`, it would forget them: the runner applies only
+> what is absent from the ledger. `npm run migrations:baseline:plan` decides
+> which is which by looking for each migration's objects in the baseline.
 
 Checksums are computed from the migration files at call time rather than frozen
 into the artifact, so editing a migration fires the runner's

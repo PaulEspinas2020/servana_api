@@ -9,14 +9,15 @@ DATABASE BASELINE VERDICT: CERTIFIED_WITH_NONBLOCKING_GAPS
 The command's first release gate is **"a fresh database can reach current schema
 automatically."** It now does. `scripts/baseline/000-baseline.sql` is a captured,
 sanitised schema baseline; `npm run db:verify:embedded` restores it into a real
-PostgreSQL, marks the version, and proves **zero migrations pending**.
+PostgreSQL, marks the version, and then applies the six migrations production
+has not yet received — proving they land cleanly on its real schema.
 
 Two revisions of this document previously reported a gap of eleven tables and a
 stop at migration 009. Both were wrong, and the corrections are recorded in §1
 rather than quietly overwritten.
 
 ```
-FRESH DATABASE REACHES CURRENT SCHEMA     PROVEN      ✔  executed; 121 tables, 0 pending
+FRESH DATABASE REACHES CURRENT SCHEMA     PROVEN      ✔  executed; 121 restored + 6 applied = 128
 BASELINE CAPTURED AND SANITISED           PROVEN      ✔  0 rows, 0 owners, 0 grants, 0 forbidden patterns
 BASELINE MEETS EVERY PROVEN REQUIREMENT   PROVEN      ✔  43 proven columns, all present
 STATIC MODEL VALIDATED AGAINST AN ENGINE  PROVEN      ✔  it was under-reporting; now gated
@@ -145,7 +146,9 @@ migration fires the runner's `Applied migration checksum changed` guard on a
 restore + mark version   ok
 tables reached           121
 version mark idempotent  yes
-migrations still pending 0
+pending after baseline   6 — 030…035, undeployed
+pending applied on top   all clean
+final table count        128
 ```
 
 The pending count is read back **out of the database**, not derived from the SQL
@@ -209,7 +212,7 @@ with a stack-overflow `RangeError` rather than a clean 400. See §7 P1.
 
 | | Gap | Why |
 | --- | --- | --- |
-| **P0** | Production has **no `schema_migrations` ledger at all** | It has never existed. `deploy.yml` never invokes the runner, so migrations there were applied by hand with no record. `npm run migrations:apply` against production today would create the ledger, find all 36 pending, and fail on 001. Marking production at its true baseline version is a deliberate operation and nothing in this repository performs it. |
+| **P0** | Production has **no `schema_migrations` ledger at all**, and only 16 of 36 migrations may be marked applied | It has never existed. `deploy.yml` never invokes the runner, so migrations there were applied by hand with no record. `npm run migrations:apply` against production today would create the ledger, find all 36 pending, and fail on 001. Marking production at its true baseline version is a deliberate operation and nothing in this repository performs it. |
 | **P1** | Ownership unverified on a real engine | PGlite runs as one bundled superuser. The `fresh` CI job with a service container covers it and now activates, but has not been observed running. |
 | **P1** | A 4 MB+ banner upload can throw `RangeError` instead of a 400 | Product-code regex fragility surfaced in §5. Outside this tab; needs an `indexOf`/`slice` parse rather than `(.+)` over a multi-MB string. |
 | **P2** | Baseline not re-diffed against production since capture | It was captured *from* production, so it matched at that instant. Drift after that is unmeasured; a periodic diff would close it. |
@@ -223,7 +226,7 @@ with a stack-overflow `RangeError` rather than a clean 400. See §7 P1.
 ```
 npm run verify              PASS  exit 0 — 251 suites, 5656 tests
 npm run db:verify           PASS  exit 0 — requirements, semantics, sanitisation
-npm run db:verify:embedded  PASS  exit 0 — restored into PostgreSQL 18; 0 pending
+npm run db:verify:embedded  PASS  exit 0 — 121 restored, 6 applied, 128 final
 npm run typecheck           PASS
 npm run typecheck:tests     PASS
 guard:protected-contracts   PASS
