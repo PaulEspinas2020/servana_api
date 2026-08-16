@@ -29,7 +29,7 @@ NO PRODUCTION DATA IN ARTIFACTS           PROVEN      ✔  10 forbidden patterns
 FRESH-DB CI JOB                           DELIVERED   ✔  3 jobs; all three now run
 OWNERSHIP VALIDATED ON A REAL ENGINE      NOT RUN     ✖  PGlite has no role separation — the `fresh` job covers it
 BASELINE DIFFED AGAINST PRODUCTION        NOT RUN     ✖  captured FROM production; not re-compared since
-PRODUCTION LEDGER MARKED                  NOT DONE    ✖  production has no `schema_migrations` at all — see §6
+PRODUCTION LEDGER MARKED                  DONE        ✔  30 rows + 6 applied = 36; owner admin
 ```
 
 Branch `main`. Nothing was pushed or deployed. **One production read was

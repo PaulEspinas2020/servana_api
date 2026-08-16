@@ -25,7 +25,7 @@ PostgreSQL. None of it is a statement about the running system.
 
 Ordering matters here, and it is not the obvious one.
 
-### 1.1 Mark the production migration ledger — 16 rows, NOT 36
+### 1.1 Mark the production migration ledger — 30 rows, NOT 36
 
 `servana.schema_migrations` **does not exist in production** and never has.
 `.github/workflows/deploy.yml` never invokes the runner, so migrations were
@@ -34,21 +34,28 @@ applied by hand with no record.
 Consequence: `npm run migrations:apply` against production today creates the
 ledger, finds all 36 pending, and dies on `001`.
 
-**Only 16 migrations may be marked applied.** Marking all of them does not defer
-the rest — it forgets them, because the runner only ever applies what is absent
-from the ledger.
+**Exactly 30 migrations may be marked applied — every one except 030–035.**
+Marking all 36 does not defer the rest, it forgets them: the runner only ever
+applies what is absent from the ledger.
+
+The 14 DML-only migrations MUST be marked even though the baseline cannot prove
+they ran. They did — the catalog they seed exists — and they cannot re-run:
+001–008 read `services.category`, which Catalog V2 removed. Leaving them
+unmarked recreates the exact breakage this fixes, with `migrations:apply` dying
+on 001.
 
 ```
 npm run migrations:baseline:plan
 
-  present            16   production already has these effects — safe to mark
-  ABSENT              6   030–035, undeployed — MUST NOT be marked
-  no schema effect   14   DML-only; no schema fingerprint — human judgement
+  present            16   production already has these effects — mark
+  no schema effect   14   DML-only; ran, but unprovable from schema — mark
+  ABSENT              6   030–035, undeployed — DO NOT mark
+                          ------
+                    30   rows to insert
 ```
 
 The 14 DML-only migrations are catalog seeds (`001`–`008`), backfills and the
-credential canary. They almost certainly ran, but the baseline cannot prove it,
-so they are listed rather than assumed.
+credential canary.
 
 > **If `030`–`035` are marked applied, `finance_ledger_events`,
 > `domain_event_outbox`, `account_settings`, `booking_support_cases`,
@@ -150,14 +157,22 @@ question in the suite.
 Everything below is prepared and verified locally. None of it has been executed.
 
 ```
-1  mark the ledger        16 rows — see npm run migrations:baseline:plan
-2  apply 030–035          proven clean on production's schema
-3  push / deploy          63 commits; push IS the deploy
-4  production smoke       npm run smoke:plan, then smoke with credentials
-5  migrate client 1       admin web — cheapest to correct
+1  mark the ledger        DONE 2026-08-16   30 rows, owner admin
+2  apply 030–035          DONE 2026-08-16   6 migrations, 121 -> 128 tables
+3  push / deploy          PENDING           63 commits; push IS the deploy
+4  production smoke       PENDING           needs credentials
+5  migrate client 1       PENDING           admin web — cheapest to correct
 ```
 
-Steps 1–4 are production actions. Step 3 additionally conflicts with the
+Steps 1 and 2 were executed under explicit authorisation and verified:
+36 ledger rows, 128 tables, **0 tables not owned by `admin`**, and
+`servana-prod` online through the change with **0 restarts**.
+
+The PGlite rehearsal predicted 121 -> 128 and production landed on exactly 128,
+which is the strongest evidence so far that the fresh-DB gate models the real
+thing.
+
+Steps 3–5 remain production actions. Step 3 additionally conflicts with the
 standing local-only rule.
 
 **Rollback:** `docs/database/DATABASE_BASELINE_CAPTURE.md` §7–§8 covers restore
