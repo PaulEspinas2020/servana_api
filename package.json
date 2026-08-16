@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build": "tsc && cp servana-serviceAccountKey.json ./dist",
+    "build": "tsc",
     "start": "tsc -p . && node dist/app.js",
     "dev": "nodemon --files src/app.ts",
     "typecheck": "tsc --noEmit",
