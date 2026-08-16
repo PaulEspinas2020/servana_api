@@ -189,6 +189,73 @@ describe('a real reassignment', () => {
     });
   });
 
+  it('records the override: actor, reason, outgoing and incoming provider', async () => {
+    /**
+     * The four facts that make a manual override reviewable months later.
+     * Asserted on the ROW rather than on the call, because the caller's
+     * arguments prove only what was intended, not what was kept.
+     */
+    seed();
+    await reassign();
+
+    expect(store.timelineEvents[0]).toMatchObject({
+      event_type: 'provider_reassigned',
+      actor_type: 'admin',
+      actor_uid: ADMIN,
+      description: 'customer request',
+    });
+    // Stored as JSON text, so it is parsed rather than matched as a string —
+    // a substring check would pass on a metadata bag that had the two uids the
+    // wrong way round.
+    const metadata = JSON.parse(String(store.timelineEvents[0].metadata));
+    expect(metadata).toMatchObject({
+      fromProviderUid: OLD_PROVIDER,
+      toProviderUid: NEW_PROVIDER,
+    });
+  });
+
+  it('REFUSES the override outright when no reason is given', async () => {
+    /**
+     * Enforced by the action declaration, not by the admin service.
+     *
+     * `adminBookingService.adminReassignProvider` throws on a blank reason and
+     * always has. That protected one path: any other caller reaching the
+     * executor directly — an internal script, a future controller, a job — could
+     * move a job between providers and leave a timeline entry with an empty
+     * description. `requiresReason` closes it structurally.
+     */
+    expect((BOOKING_ACTIONS.ADMIN_REASSIGN as { requiresReason?: boolean }).requiresReason)
+      .toBe(true);
+
+    seed();
+    const error = await transitionBooking({
+      action: 'ADMIN_REASSIGN', bookingId: BOOKING,
+      actorRole: 'admin', actorUid: ADMIN,
+      metadata: { providerUid: NEW_PROVIDER, providerName: 'Pro Vider' },
+    }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(TransitionError);
+    expect(error.code).toBe('GUARD_FAILED');
+    expect(error.detail).toMatchObject({ missing: 'reason' });
+  });
+
+  it('refuses whitespace as a reason, and writes nothing when it does', async () => {
+    // A space satisfies "a reason was supplied" and answers nothing.
+    seed();
+    const error = await transitionBooking({
+      action: 'ADMIN_REASSIGN', bookingId: BOOKING,
+      actorRole: 'admin', actorUid: ADMIN,
+      metadata: { providerUid: NEW_PROVIDER, reason: '   ' },
+    }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(TransitionError);
+    // Refused BEFORE any write: the outgoing provider still holds the job.
+    expect(store.booking).toMatchObject({ worker_uid: OLD_PROVIDER });
+    expect(store.transitions).toHaveLength(0);
+    expect(store.timelineEvents).toHaveLength(0);
+    expect(activeRows()).toHaveLength(1);
+  });
+
   it('writes both legacy projections, with the interpolated title', async () => {
     seed();
     await reassign();

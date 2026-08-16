@@ -7,6 +7,12 @@ import { tempId } from "../config";
 import { setIo, roomName } from "./chat.realtime";
 import * as chatService from "./chat.service";
 import * as repo from "./chat.repository";
+import { REALTIME_NAMESPACE } from "../services/messaging/messagingPolicy";
+import {
+  recordRealtimeConnected,
+  recordRealtimeDisconnected,
+} from "../services/messaging/messagingTelemetry";
+import { withRealtimeEnvelope } from "../services/messaging/conversationDto";
 
 const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
 
@@ -42,7 +48,7 @@ export const initChatSocket = (httpServer: HttpServer) => {
 
   setIo(io); // let the service layer broadcast
 
-  const chat = io.of("/chat");
+  const chat = io.of(REALTIME_NAMESPACE);
 
   // --- Handshake auth: verify the firebase id token, attach the actor ------
   chat.use(async (socket: Socket, next) => {
@@ -71,6 +77,19 @@ export const initChatSocket = (httpServer: HttpServer) => {
 
   chat.on("connection", (socket: Socket) => {
     const actor: chatService.ChatActor = (socket as any).actor;
+
+    /**
+     * Connection churn, counted (§89).
+     *
+     * A reconnect loop presents as a healthy connection count and as clients
+     * "randomly" missing messages, because each drop is a window where realtime
+     * delivers nothing and the fallback read has not run yet. Counting connects,
+     * disconnects and reconnects separately is what distinguishes a flapping
+     * transport from people closing the app.
+     */
+    recordRealtimeConnected(actor.uid);
+    socket.on("disconnect", (reason: string) => recordRealtimeDisconnected(reason));
+
     const conversationIdOf = (raw: unknown): number => {
       const value = Number(raw);
       if (!Number.isSafeInteger(value) || value <= 0) throw new Error('Invalid conversation id');
@@ -86,11 +105,17 @@ export const initChatSocket = (httpServer: HttpServer) => {
         socket.join(roomName(id));
         const conversation = await chatService.getConversationWithParticipants(id, actor);
         ack?.({ ok: true, conversation });
-        socket.to(roomName(id)).emit("participant:joined", {
-          conversationId: id,
-          userUid: actor.uid,
-          role: access.role,
-        });
+        // Stamped with the same envelope every server-emitted event carries.
+        // `socket.to` rather than the shared emitter because presence goes to
+        // the REST of the room — telling a client it joined is not news to it.
+        socket.to(roomName(id)).emit(
+          "participant:joined",
+          withRealtimeEnvelope("participant:joined", {
+            conversationId: id,
+            userUid: actor.uid,
+            role: access.role,
+          }),
+        );
       } catch (e: any) {
         ack?.({ ok: false, error: e?.message || "error" });
       }
@@ -133,11 +158,14 @@ export const initChatSocket = (httpServer: HttpServer) => {
         const id = conversationIdOf(conversationId);
         const { access } = await chatService.resolveAccessForConversation(actor, id);
         if (!access.allowed) return;
-        socket.to(roomName(id)).emit("typing", {
-          conversationId: id,
-          userUid: actor.uid,
-          isTyping: !!isTyping,
-        });
+        socket.to(roomName(id)).emit(
+          "typing",
+          withRealtimeEnvelope("typing", {
+            conversationId: id,
+            userUid: actor.uid,
+            isTyping: !!isTyping,
+          }),
+        );
       } catch (_) {
         // Swallow — typing indicators are best-effort
       }

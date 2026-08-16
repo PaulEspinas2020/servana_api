@@ -50,11 +50,18 @@ import {
 import { CANONICAL_CANCELLED } from './cancellationVocabulary';
 import { evaluateCancellation, customerMayCancel } from './bookingPolicies';
 import { providerRoleSqlPredicate } from '../../constants/providerRoles';
+import { publishBookingEvent } from '../events/bookingEventBridge';
+import { dispatchSoon } from '../events/notificationProjector';
 import {
   PROVIDER_CAPABILITY_SQL,
   CONFLICTING_BOOKING_SQL,
-  conflictWindowFor,
+  bookingCanonicalServiceSql,
 } from './eligibilityPipeline';
+import {
+  classifyCapabilityRows,
+  recordCapabilityDecision,
+} from './capabilitySource';
+import { recordAutoAssignEvaluation } from './autoAssignDiagnostics';
 
 const s = db.schema;
 
@@ -385,21 +392,47 @@ export const BOOKING_ACTIONS = {
    * Selection stays entirely outside: `assignNearestWorker` ranks by distance,
    * applies its exclusions and hands a uid in. The executor never chooses.
    *
-   * LEGACY_AUTO validation: the schedule conflict only. See
-   * TargetValidationProfile for the gap this preserves and why.
+   * `FULL` validation, as of TAB 05. It used to be `LEGACY_AUTO` — the schedule
+   * conflict and nothing else — so auto-assignment could commit a provider
+   * `ADMIN_ASSIGN` would refuse: archived, wrong role, or not qualified for the
+   * service. Two producers of the same write disagreeing is the failure this
+   * tab exists to remove, and "the matching engine may pick anyone" is not a
+   * policy anybody chose; it was the shape legacy happened to have.
+   *
+   * The tightening is safe to make because the refusal is SKIPPABLE: the
+   * caller walks a ranked candidate list, so refusing one provider moves to the
+   * next rather than failing the booking. Every refusal is attributed to a
+   * candidate-diagnostics reason code and counted
+   * (`services/booking/autoAssignDiagnostics.ts`), so a booking that finds
+   * nobody says why instead of reporting an empty result.
    */
   AUTO_ASSIGN: {
     to: 'ASSIGNED', actor: 'system',
     from: ['AWAITING_ASSIGNMENT'],
     advisoryLock: 'PROVIDER_ASSIGNMENT',
-    targetValidation: 'LEGACY_AUTO',
+    targetValidation: 'FULL',
   },
+  /**
+   * The manual override: a job is taken from one provider and given to another.
+   *
+   * `requiresReason` is the audit model made structural. The reason, the actor,
+   * the outgoing provider and the incoming one are what make an override
+   * reviewable months later, and until now only ONE caller enforced the reason
+   * — `adminBookingService.adminReassignProvider`, which throws on a blank
+   * one. Any other caller reaching the executor directly could move a job
+   * between providers and leave a timeline entry with an empty description.
+   *
+   * Declaring it here means the reason is checked before any write, on every
+   * path, including an internal caller that never went near HTTP. Exactly the
+   * argument `requires: 'BOOKING_OTP'` makes for a credential.
+   */
   ADMIN_REASSIGN: {
     to: 'ASSIGNED', actor: 'admin',
     from: ['ASSIGNED', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED'],
     advisoryLock: 'PROVIDER_ASSIGNMENT',
     sameTarget: 'IDEMPOTENT_NO_OP',
     targetValidation: 'FULL',
+    requiresReason: true,
   },
   /**
    * Admin records a provider's acceptance ON BEHALF of them (§23).
@@ -485,6 +518,15 @@ export const BOOKING_ACTIONS = {
     sameTarget?: SameTargetBehavior;
     /** How much the action validates its target. Default FULL. */
     targetValidation?: TargetValidationProfile;
+    /**
+     * The action is refused unless `metadata.reason` is a non-empty string,
+     * and it is refused before any write.
+     *
+     * For administrative overrides, where the record of WHY is what makes the
+     * act reviewable. Declared on the action rather than checked by a caller,
+     * so no path can perform the override unaudited.
+     */
+    requiresReason?: boolean;
   }
 >;
 
@@ -577,7 +619,16 @@ export type SameTargetBehavior = 'IDEMPOTENT_NO_OP';
  *
  * ADMIN_ASSIGN is NOT weakened to match. The gap closes upward.
  */
-export type TargetValidationProfile = 'FULL' | 'LEGACY_AUTO';
+/**
+ * How hard an action validates its assignment target.
+ *
+ * One value. `LEGACY_AUTO` — the schedule conflict only — was retired in
+ * TAB 05: it let auto-assignment commit a provider Admin assignment would
+ * refuse. The union is kept as a named type rather than deleted so the field
+ * can grow a second profile deliberately, in a diff somebody reviews, rather
+ * than by a boolean appearing on one action.
+ */
+export type TargetValidationProfile = 'FULL';
 
 /**
  * Assignment-associated fields an action may write with the assignment.
@@ -1218,25 +1269,26 @@ async function assertNoScheduleConflict(
   bookingId: number,
   providerUid: string,
 ): Promise<void> {
-  const booking = await client.query(
-    `SELECT schedule FROM ${s}.bookings WHERE id = $1`,
-    [bookingId],
-  );
-  const schedule = new Date(booking.rows[0]?.schedule);
-  if (Number.isNaN(schedule.getTime())) return;
-
-  // Stage 7, from the shared pipeline. The +/-2h window is UNCHANGED; only its
-  // definition moved, so candidate generation and this commit-time recheck ask
-  // the same question.
-  const window = conflictWindowFor(schedule);
+  /**
+   * Stage 7, from the shared pipeline: half-open overlap against each job's
+   * real span.
+   *
+   * BOTH spans are resolved inside the query, from the booking rows themselves.
+   * Nothing is computed here and passed in, so this commit-time recheck cannot
+   * disagree with candidate generation about how long a job lasts — the shape
+   * that let the preview and the committer answer differently before.
+   *
+   * A booking whose schedule is unreadable is left to the state machine rather
+   * than refused here: the overlap predicate simply matches nothing.
+   */
   const busy = await client.query(
     CONFLICTING_BOOKING_SQL(s),
-    [providerUid, bookingId, window.from, window.to],
+    [providerUid, bookingId],
   );
   if (busy.rowCount) {
     throw new TransitionError(
-      'GUARD_FAILED', 'Provider has a conflicting booking within 2 hours',
-      { guard: 'provider_schedule_conflict' },
+      'GUARD_FAILED', 'Provider has a conflicting booking during this job',
+      { guard: 'provider_schedule_conflict', reasonCode: 'BOOKING_CONFLICT' },
     );
   }
 }
@@ -1260,35 +1312,67 @@ async function assertAssignableProvider(
       WHERE uid = $1 AND ${providerRoleSqlPredicate('role')}`,
     [providerUid],
   );
+  /**
+   * Every refusal carries a `reasonCode` from `BLOCKER_PRECEDENCE`.
+   *
+   * The same vocabulary the Admin candidate list uses, because "why did nobody
+   * get this job" and "why is this provider greyed out" are the same question.
+   * The message stays the legacy one — clients read it — and the code is what
+   * the diagnostics rank and count.
+   */
   if (!provider.rowCount) {
-    throw new TransitionError('GUARD_FAILED', 'Provider not found', { guard: 'provider_eligible' });
+    throw new TransitionError('GUARD_FAILED', 'Provider not found', {
+      guard: 'provider_eligible', reasonCode: 'ACCOUNT_INACTIVE',
+    });
   }
   if (provider.rows[0].is_archive) {
     throw new TransitionError(
       'GUARD_FAILED', 'Provider is archived and cannot be assigned',
-      { guard: 'provider_eligible' },
+      { guard: 'provider_eligible', reasonCode: 'ACCOUNT_ARCHIVED' },
     );
   }
 
+  /**
+   * TWO service ids, because there are two id spaces.
+   *
+   * `services.id` is canonical and is what `catalog_provider_services` keys on.
+   * `service_options.service_id` is the legacy FAMILY the old grant tables key
+   * on. Reading only the family — which is all this used to do — makes the
+   * canonical source unaskable.
+   */
   const booking = await client.query(
-    `SELECT b.schedule, so.service_id
+    `SELECT b.schedule,
+            so.service_id AS legacy_family_id,
+            ${bookingCanonicalServiceSql(s)} AS canonical_service_id
        FROM ${s}.bookings b
        JOIN ${s}.service_options so ON so.id = b.service_option_id
       WHERE b.id = $1`,
     [bookingId],
   );
-  const serviceId = booking.rows[0]?.service_id ?? null;
+  const legacyFamilyId = booking.rows[0]?.legacy_family_id ?? null;
+  const canonicalServiceId = booking.rows[0]?.canonical_service_id ?? null;
 
-  // Stage 4, from the shared pipeline. Same SQL it always was, now in one place
-  // so the preview and the committer cannot answer differently.
+  /**
+   * Stage 4, from the shared pipeline: canonical first, legacy as an
+   * instrumented fallback.
+   *
+   * The decision is CLASSIFIED rather than merely counted, because "the
+   * canonical table answered" and "only the legacy grant did" are the two
+   * numbers that decide when the fallback can be removed. Recording it here —
+   * inside the committer, under lock — measures the decisions that actually
+   * matter rather than the ones a preview happened to render.
+   */
   const qualified = await client.query(
     PROVIDER_CAPABILITY_SQL(s),
-    [providerUid, serviceId],
+    [providerUid, canonicalServiceId, legacyFamilyId],
   );
-  if (!qualified.rowCount) {
+  const decision = classifyCapabilityRows(qualified.rows);
+  recordCapabilityDecision(decision, { canonicalServiceId, legacyFamilyId });
+
+  if (!decision.qualified) {
     throw new TransitionError(
       'GUARD_FAILED', 'Provider is not qualified for this booking service',
-      { guard: 'provider_eligible' },
+      { guard: 'provider_eligible', reasonCode: 'NO_ACTIVE_SERVICE' },
     );
   }
 
@@ -1438,10 +1522,38 @@ async function applyState(
       const profile =
         (BOOKING_ACTIONS[input.action] as { targetValidation?: TargetValidationProfile })
           .targetValidation ?? 'FULL';
-      if (profile === 'LEGACY_AUTO') {
-        await assertNoScheduleConflict(client, loaded.id, nextProvider);
-      } else {
+      /**
+       * ONE validation, for every producer of this write.
+       *
+       * Admin assignment, reassignment and auto-assignment now pass through the
+       * same hard constraints, under the same two locks, in the same
+       * transaction. `LEGACY_AUTO` — which checked the schedule conflict and
+       * skipped role, archive state and capability — is gone as a deciding
+       * profile.
+       *
+       * The outcome is recorded either way. A refusal here is not the end of
+       * the story for auto-assignment: the caller walks a ranked list and tries
+       * the next candidate, and the attributed count is what turns "nobody was
+       * available" into a sentence naming the stage that emptied the pool.
+       */
+      if (profile !== 'FULL') {
+        throw new TransitionError(
+          'GUARD_FAILED',
+          `Unknown target validation profile: ${String(profile)}`,
+          { guard: 'provider_eligible' },
+        );
+      }
+      try {
         await assertAssignableProvider(client, loaded.id, nextProvider);
+        recordAutoAssignEvaluation({ committed: true });
+      } catch (error) {
+        if (error instanceof TransitionError) {
+          recordAutoAssignEvaluation({
+            committed: false,
+            reasonCode: (error.detail as { reasonCode?: unknown } | undefined)?.reasonCode,
+          });
+        }
+        throw error;
       }
       if (input.action === 'ADMIN_ASSIGN' && providerUid) {
         throw new TransitionError(
@@ -2046,6 +2158,26 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
       }
     }
 
+    /**
+     * An override without a stated reason is an override nobody can review.
+     *
+     * Same placement and the same argument as the credential above: refused
+     * before any write, so the audit trail cannot be incomplete rather than
+     * merely inconvenient. The reason is carried into the timeline event's
+     * description by `writeLegacyTimelineEvent`.
+     */
+    if ((spec as { requiresReason?: boolean }).requiresReason) {
+      const reason = input.metadata?.reason;
+      if (typeof reason !== 'string' || !reason.trim()) {
+        throw new TransitionError(
+          'GUARD_FAILED',
+          'A reason is required for this administrative override.',
+          { missing: 'reason' },
+          snapshot,
+        );
+      }
+    }
+
     const guardName = (spec as { guard?: BookingGuardName }).guard;
     if (guardName) {
       const verdict = await BOOKING_GUARDS[guardName]({
@@ -2124,7 +2256,54 @@ export async function transitionBooking(input: TransitionInput): Promise<Transit
       );
     }
 
+    /**
+     * ── The domain event, in the SAME transaction (§92) ──────────────────────
+     *
+     * The outbox row is written here, before the COMMIT, for the same reason
+     * the timeline is: a fact that changed operational state with no durable
+     * record of what was owed downstream is the gap where a crash leaves a
+     * booking that moved and a provider nobody told.
+     *
+     * Publishing INSIDE the transaction gives both halves of the guarantee:
+     *
+     *   - roll back, and the event was never written, so nobody is notified
+     *     about a job that does not exist;
+     *   - commit, and the event is durable, so the dispatcher will project it —
+     *     now, or on the next boot if this process dies first.
+     *
+     * It is deliberately NOT wrapped in a catch. A publish that cannot be
+     * written should fail the transition, because the alternative is a
+     * committed state change that silently notifies nobody — and this is the
+     * one place in the pipeline where refusing is still cheap. Everywhere
+     * downstream of the commit uses `publishEventSafely`, which never throws.
+     *
+     * Actions with no mapped event publish nothing; `ACTION_EVENTS` is
+     * deliberately partial, and the reasoning lives in `bookingEventBridge`.
+     */
+    await publishBookingEvent({
+      action: input.action,
+      bookingId: loaded.id,
+      // The provider on the booking at the moment of the transition. For an
+      // assignment this is the incoming provider (already written by
+      // `applyState` above); for a cancellation it is whoever held it.
+      providerUid: (input.metadata?.providerUid as string | undefined) ?? loaded.workerUid ?? null,
+      actorUid: input.actorUid ?? null,
+      actorRole: input.actorRole,
+      correlationId,
+      client,
+    });
+
     await client.query('COMMIT');
+
+    /**
+     * Dispatch AFTER the commit, never awaited.
+     *
+     * Before the commit the notification would announce a fact that has not
+     * happened yet; awaited, a slow push would hold a database transaction
+     * open. §45 — a committed transition must not be undone, or delayed, by
+     * its own announcement.
+     */
+    dispatchSoon();
     return result;
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);

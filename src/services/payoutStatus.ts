@@ -87,13 +87,25 @@ export const payoutsPayoutDialect = (raw: string | null | undefined): string => 
   return "pending";
 };
 
-/** `/provider/ledger`. Emits `settled` / `failed` / `pending`. */
-export const ledgerPayoutDialect = (raw: string | null | undefined): string => {
-  const c = canonicalPayoutStatus(raw);
-  if (c === "paid") return "settled";
-  if (c === "failed") return "failed";
+/**
+ * `/provider/ledger`, from an ALREADY-canonical value.
+ *
+ * Split out because the ledger endpoint now projects from the canonical earnings
+ * domain service, which hands it a `PayoutStatus` rather than the raw column.
+ * Without this the controller would have had to convert its canonical value back
+ * into the database's vocabulary to feed `ledgerPayoutDialect` — a round trip
+ * whose only purpose would be to satisfy a signature, and one more place the
+ * mapping could be got wrong.
+ */
+export const ledgerDialectOf = (canonical: PayoutStatus): string => {
+  if (canonical === "paid") return "settled";
+  if (canonical === "failed") return "failed";
   return "pending";
 };
+
+/** `/provider/ledger`. Emits `settled` / `failed` / `pending`. */
+export const ledgerPayoutDialect = (raw: string | null | undefined): string =>
+  ledgerDialectOf(canonicalPayoutStatus(raw));
 
 /**
  * Hours between a booking being completed and the provider share becoming

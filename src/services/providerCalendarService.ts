@@ -27,6 +27,10 @@
  */
 
 import { db } from '../config';
+import {
+  bookingSpan,
+  DEFAULT_SERVICE_DURATION_MINS,
+} from './booking/eligibilityPipeline';
 import dbQuery from '../db/dbQuery';
 
 const s = db.schema;
@@ -268,19 +272,25 @@ async function loadBookingEvents(providerUid: string, q: CalendarQuery): Promise
     const workerStatus = String(r.worker_status ?? '').toUpperCase();
     const confirmed = CONFIRMED_WORKER_STATUSES.includes(workerStatus);
 
-    // `service_options.duration_mins` is the booked job length and is the right
-    // width for a calendar block. `eta_minutes` is only the travel estimate, so
-    // it is a fallback rather than the first choice — a 10-minute drive would
-    // otherwise draw a 10-minute job.
-    const duration = Number(r.duration_mins);
-    const eta = Number(r.eta_minutes);
-    const minutes =
-      Number.isFinite(duration) && duration > 0
-        ? duration
-        : Number.isFinite(eta) && eta > 0
-          ? eta
-          : 0;
-    const end = endAfter(start, minutes > 0 ? new Date(start.getTime() + minutes * 60_000) : null, 60);
+    /**
+     * The calendar block is the span the MATCHER reserves, not a second guess.
+     *
+     * `service_options.duration_mins` is the booked job length and is the right
+     * width for a calendar block. What changed: the fallbacks.
+     *
+     * `eta_minutes` used to stand in when the duration was missing, and it is
+     * not a duration at all — it is the travel estimate, so a 10-minute drive
+     * drew a 10-minute job. Worse, the terminal fallback was 60 minutes while
+     * every occupancy question in the backend assumes 120. A provider looking
+     * at this calendar saw a free hour that the matcher would refuse to fill,
+     * and answering "can I get from the 10am to the 2pm?" is the entire reason
+     * this field exists.
+     *
+     * `bookingSpan` is the same helper the conflict rule uses, so the block a
+     * provider sees is exactly the time the system is holding for them.
+     */
+    const span = bookingSpan(start, Number(r.duration_mins));
+    const end = endAfter(start, span.to, DEFAULT_SERVICE_DURATION_MINS);
 
     const service = String(r.service_name ?? '').trim() || 'Servana booking';
     const updatedAt =

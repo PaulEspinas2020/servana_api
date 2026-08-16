@@ -28,6 +28,13 @@ import {
   TransitionError,
   type TransitionResult,
 } from './booking/transitionExecutor';
+import {
+  CAPABILITY_GRANT_EXISTS_SQL,
+  BUSY_PROVIDERS_SQL,
+  bookingCanonicalServiceSql,
+  bookingEndSql,
+} from './booking/eligibilityPipeline';
+import { providerRoleSqlPredicate } from '../constants/providerRoles';
 const dbSchema = db.schema;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -911,7 +918,9 @@ export const addBookingNote = async (
 
 export const getAssignmentCandidates = async (bookingId: number): Promise<any[]> => {
   const bkRes = await dbQuery.query(
-    `SELECT b.schedule, so.service_id
+    `SELECT b.schedule, so.service_id,
+            ${bookingCanonicalServiceSql(dbSchema)} AS canonical_service_id,
+            ${bookingEndSql('b', 'so')} AS ends_at
      FROM ${dbSchema}.bookings b
      JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
      WHERE b.id = $1`,
@@ -919,12 +928,17 @@ export const getAssignmentCandidates = async (bookingId: number): Promise<any[]>
   );
   if (!bkRes.rowCount) return [];
 
-  const { schedule, service_id } = bkRes.rows[0];
+  const { schedule, service_id, canonical_service_id, ends_at } = bkRes.rows[0];
   const serviceId = Number(service_id);
+  // Canonical `services.id` for the canonical grant, legacy family id for the
+  // fallback. Two id spaces, so two parameters — see eligibilityPipeline.
+  const canonicalServiceId = canonical_service_id === null || canonical_service_id === undefined
+    ? null
+    : Number(canonical_service_id);
 
-  // Two corrections here, both about matching what adminAssignProvider will actually
-  // accept — a candidate list narrower than the assign guard hides usable providers,
-  // and one wider than it offers providers the assign will reject.
+  // Two corrections were made here, both about matching what adminAssignProvider
+  // will actually accept — a candidate list narrower than the assign guard hides
+  // usable providers, and one wider than it offers providers the assign rejects.
   //
   //  1. role IN (2,4), not role = 2. Role 4 is the second provider role (internal /
   //     employee providers) and every other provider query in the codebase uses
@@ -935,30 +949,27 @@ export const getAssignmentCandidates = async (bookingId: number): Promise<any[]>
   //     which is exactly the UNION adminAssignProvider's eligibility check uses. The
   //     INNER JOIN on employee_services alone hid providers whose approval had not
   //     been mirrored into that table yet — assignable, but never listed.
+  //
+  // Both are now IMPORTED rather than restated. Agreement re-established by hand
+  // is agreement that lasts until the next edit to one copy: the role list and
+  // the grant sources come from the canonical declarations, so this producer
+  // cannot drift from the executor without the shared predicate changing.
   const providersRes = await dbQuery.query(
     `SELECT DISTINCT uc.uid, uc.first_name, uc.last_name, uc.phone_number
      FROM ${dbSchema}.user_credentials uc
      WHERE uc.is_archive = false
-       AND uc.role::int IN (2, 4)
-       AND (
-         EXISTS (SELECT 1 FROM ${dbSchema}.employee_services es
-                  WHERE es.employee_uid = uc.uid AND es.service_id = $1)
-         OR EXISTS (SELECT 1 FROM ${dbSchema}.worker_service_applications wsa
-                     WHERE wsa.worker_uid = uc.uid AND wsa.service_id = $1
-                       AND wsa.status = 'approved')
-       )`,
-    [serviceId]
+       AND ${providerRoleSqlPredicate('uc.role')}
+       AND ${CAPABILITY_GRANT_EXISTS_SQL(dbSchema, 'uc.uid', '$2', '$1')}`,
+    [serviceId, canonicalServiceId]
   );
 
-  const windowStart = new Date(new Date(schedule).getTime() - 2 * 60 * 60 * 1000);
-  const windowEnd   = new Date(new Date(schedule).getTime() + 2 * 60 * 60 * 1000);
-
+  // Occupancy comes from the pipeline: half-open overlap against this booking's
+  // real span, and the same status list the executor excludes. Both spans are
+  // resolved from `duration_mins` in SQL, so this preview and the commit-time
+  // recheck cannot disagree about how long a job lasts.
   const busyRes = await dbQuery.query(
-    `SELECT DISTINCT worker_uid FROM ${dbSchema}.bookings
-     WHERE schedule BETWEEN $1 AND $2
-       AND status NOT IN ('COMPLETED','CANCELLED','CANCELED')
-       AND worker_uid IS NOT NULL AND id != $3`,
-    [windowStart, windowEnd, bookingId]
+    BUSY_PROVIDERS_SQL(dbSchema),
+    [schedule, ends_at, bookingId]
   );
   const busyUids = new Set(busyRes.rows.map((r: any) => r.worker_uid));
 
@@ -972,7 +983,7 @@ export const getAssignmentCandidates = async (bookingId: number): Promise<any[]>
     distanceKm: null,
     eligibilityStatus: busyUids.has(p.uid) ? 'warning' : 'eligible',
     eligibilityReasons: busyUids.has(p.uid)
-      ? ['Provider has a conflicting booking within 2 hours']
+      ? ['Provider has a conflicting booking overlapping this job']
       : [],
   }));
 };

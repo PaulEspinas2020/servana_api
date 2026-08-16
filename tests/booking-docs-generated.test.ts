@@ -21,6 +21,15 @@ import path from 'path';
 import { staleFiles, generateAll } from '../scripts/generate-booking-docs';
 import { BOOKING_STATES, TRANSITIONS } from '../src/services/booking/canonicalState';
 import { BOOKING_ACTIONS } from '../src/services/booking/transitionExecutor';
+import {
+  ELIGIBILITY_PIPELINE,
+  COMMIT_CRITICAL_STAGES,
+  DEFAULT_SERVICE_DURATION_MINS,
+  NON_OCCUPYING_STATUSES,
+  LEGACY_AUTO_GAP,
+} from '../src/services/booking/eligibilityPipeline';
+import { ZERO_CANDIDATE_REASONS } from '../src/services/booking/candidateDiagnostics';
+import { V1_CONTRACT } from '../src/api/v1/contract';
 
 const read = (rel: string) => fs.readFileSync(
   path.join(__dirname, '..', rel), 'utf8',
@@ -34,13 +43,15 @@ describe('generated booking documentation', () => {
     ).toBe('up to date');
   });
 
-  it('emits all three documents', () => {
+  it('emits all five documents', () => {
     // A generator that silently stopped producing a file would pass the
     // staleness check above, because there would be nothing to compare.
     expect(generateAll().map((f) => f.relPath).sort()).toEqual([
       'docs/booking/BOOKING_ACTOR_PERMISSION_MATRIX.md',
+      'docs/booking/BOOKING_EXPERIENCES_V1_CONTRACT.md',
       'docs/booking/BOOKING_STATE_MACHINE.md',
       'docs/booking/BOOKING_STATUS_MIGRATION_MATRIX.md',
+      'docs/booking/JOB_MATCHING_V1_CONTRACT.md',
     ]);
   });
 
@@ -135,5 +146,102 @@ describe('the migration matrix is derived, not described', () => {
     const row = doc.split('\n').find((l) => l.includes('SOME_UNRECOGNISED_STATUS'));
     expect(row).toBeDefined();
     expect(row).toContain('AWAITING_ASSIGNMENT');
+  });
+});
+
+describe('the job + matching contract publishes what TAB 05 certifies on', () => {
+  const doc = read('docs/booking/JOB_MATCHING_V1_CONTRACT.md');
+
+  it('names every canonical job and assignment endpoint with its callers', () => {
+    // The cross-platform rule: every capability carries a caller matrix for all
+    // five clients, so two platforms doing the same business operation are
+    // visibly on the same endpoint or visibly not.
+    const entries = V1_CONTRACT.filter(
+      (e) => e.domain === 'provider-jobs'
+        || /^admin\.bookings\.(assign|reassign|assignmentCandidates)/.test(e.id),
+    );
+    expect(entries.length).toBeGreaterThanOrEqual(11);
+    for (const e of entries) {
+      expect(doc).toContain(`${e.method.toUpperCase()} /api/v1${e.path}`);
+      expect(doc).toContain(e.domainService);
+    }
+    for (const label of ['Customer Mobile', 'Customer Web', 'Provider Mobile', 'Provider Web', 'Admin']) {
+      expect(doc).toContain(label);
+    }
+  });
+
+  it('publishes every eligibility stage and marks the commit-critical ones', () => {
+    for (const stage of ELIGIBILITY_PIPELINE) {
+      expect(doc).toContain(`\`${stage.name}\``);
+    }
+    for (const stage of COMMIT_CRITICAL_STAGES) {
+      expect(doc).toContain(stage);
+    }
+  });
+
+  it('publishes the capability SQL the executor actually runs', () => {
+    // Not a description of it. A paraphrase is exactly how the three
+    // disagreeing predicates were able to look identical in prose.
+    expect(doc).toContain('employee_services');
+    expect(doc).toContain('worker_service_applications');
+    expect(doc).toContain("status = 'approved'");
+    // And the thing it deliberately does NOT consult.
+    expect(doc).toContain('catalog_provider_services');
+  });
+
+  it('publishes the overlap rule and the non-occupying statuses', () => {
+    // The rule a reader has to be able to apply by hand, not a description of
+    // one: the inequality, the half-open property and the duration fallback.
+    expect(doc).toContain('existing.start < candidate.end');
+    expect(doc).toContain('existing.end > candidate.start');
+    expect(doc).toContain(`${DEFAULT_SERVICE_DURATION_MINS} minutes`);
+    expect(doc).toContain('duration_mins');
+    for (const status of NON_OCCUPYING_STATUSES) {
+      expect(doc).toContain(`\`${status}\``);
+    }
+  });
+
+  it('states what the overlap rule replaced, and why', () => {
+    // A contract that only describes the current rule reads as if it were
+    // always this way, and the delta is what a reader needs when supply moves.
+    expect(doc).toContain('±2 hours');
+    expect(doc).toContain('30-minute job');
+    expect(doc).toContain('four-hour');
+  });
+
+  it('publishes every zero-candidate reason code with an action', () => {
+    for (const reason of ZERO_CANDIDATE_REASONS) {
+      expect(doc).toContain(`\`${reason.code}\``);
+      expect(doc).toContain(reason.actionable);
+    }
+  });
+
+  it('states the open auto-assignment gap rather than implying completeness', () => {
+    // A contract that only lists what works reads as a certification.
+    expect(doc).toContain(LEGACY_AUTO_GAP.status);
+    for (const stage of LEGACY_AUTO_GAP.missingStages) {
+      expect(doc).toContain(stage);
+    }
+  });
+
+  it('publishes the override audit model, derived from the action declaration', () => {
+    // Item 56: reason, actor, previous provider, new provider. The document
+    // must name every action that enforces a reason, so an override added
+    // without one is visible here rather than only in the executor.
+    const enforcing = Object.entries(BOOKING_ACTIONS)
+      .filter(([, spec]) => (spec as Record<string, unknown>).requiresReason)
+      .map(([name]) => name);
+
+    expect(enforcing).toContain('ADMIN_REASSIGN');
+    for (const action of enforcing) {
+      expect(doc).toContain(`\`${action}\` refuses to run without a non-empty`);
+    }
+    expect(doc).toContain('before any write');
+  });
+
+  it('explains why admin and provider assignment remain separate endpoints', () => {
+    expect(doc).toContain('authorization');
+    expect(doc).toContain('bookings.assign_provider');
+    expect(doc).toContain('transitionBooking');
   });
 });

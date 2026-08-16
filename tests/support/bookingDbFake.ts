@@ -30,6 +30,15 @@ export const store = {
   tracking: [] as Row[],
   timelineEvents: [] as Row[],
   payments: [] as Row[],
+  /**
+   * The TAB 06 booking-code audit log.
+   *
+   * `booking_otp_events` is not decoration here: the OTP service derives the
+   * code's issue time, its expiry, the resend cooldown and the attempt budget
+   * from these rows, so a fake that swallowed the inserts would report every
+   * code as never-issued and quietly disable the policy the suites check.
+   */
+  otpEvents: [] as Row[],
   /** Every statement issued, flattened. */
   sql: [] as string[],
   /** Statements issued between BEGIN and COMMIT. */
@@ -74,6 +83,7 @@ export const reset = (): void => {
   store.tracking = [];
   store.timelineEvents = [];
   store.payments = [];
+  store.otpEvents = [];
   store.sql = [];
   store.inTransaction = [];
   store.open = false;
@@ -140,6 +150,45 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
   }
   if (/SELECT id FROM servana\.bookings WHERE worker_uid = \$1 AND id <> \$2/i.test(flat)) {
     return done(store.providerBusy ? [{ id: 9999 }] : []);
+  }
+
+  // ── TAB 06 booking codes ──
+  //
+  // Placed before the generic booking reads: the OTP service's own load is a
+  // wider projection of the same table, and the looser `SELECT * FROM bookings`
+  // branch below would otherwise swallow it and return a row with no
+  // worker_status, deriving the wrong canonical state.
+  if (/SELECT b\.id, b\.user_id, b\.worker_uid, b\.status, b\.otp_code/i.test(flat)) {
+    if (!store.booking || store.booking.id !== Number(params[0])) return done([]);
+    const current = mine(Number(store.booking.id), store.booking.worker_uid);
+    return done([{
+      ...store.booking,
+      worker_status: current.length ? current[current.length - 1].status : null,
+      has_escalation: store.transitions.some((t) => t.to_state === 'DISPUTED'),
+      created_at: store.booking.created_at ?? new Date().toISOString(),
+    }]);
+  }
+  if (/SELECT event, created_at FROM servana\.booking_otp_events/i.test(flat)) {
+    return done(
+      store.otpEvents
+        .filter((e) => e.booking_id === Number(params[0]) && e.purpose === params[1])
+        .map((e) => ({ event: e.event, created_at: e.created_at })),
+    );
+  }
+  if (/INSERT INTO servana\.booking_otp_events/i.test(flat)) {
+    store.otpEvents.push({
+      booking_id: Number(params[0]), purpose: params[1], event: params[2],
+      actor_uid: params[3], actor_role: params[4],
+      created_at: new Date().toISOString(),
+    });
+    return done([]);
+  }
+  if (/UPDATE servana\.bookings SET (otp_code|worker_code) = \$1 WHERE id = \$2/i.test(flat)) {
+    const column = /otp_code/.test(flat) ? 'otp_code' : 'worker_code';
+    if (store.booking && store.booking.id === Number(params[1])) {
+      store.booking[column] = params[0];
+    }
+    return done([]);
   }
 
   // ── reads ──

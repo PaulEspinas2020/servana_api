@@ -1,7 +1,26 @@
 import { db } from "../config";
 import dbQuery from "../db/dbQuery";
+import {
+  CONVERSATION_STATUS,
+  WRITABLE_STATUSES,
+  type ConversationStatus,
+} from "../services/messaging/messagingPolicy";
 
 const dbSchema = db.schema;
+
+/**
+ * The lifecycle vocabulary now DECLARED in `services/messaging/messagingPolicy`
+ * and re-exported here, unchanged, because that is where every existing caller
+ * imports it from.
+ *
+ * The declaration moved for one reason: this module imports `../config`, so
+ * anything living here needs a database to be read at all — which put the
+ * conversation policy out of reach of the docs generator and forced every test
+ * that wanted to check a rule to mock pg first. The policy module has no
+ * imports, so it can be executed. Nothing about the values changed.
+ */
+export { CONVERSATION_STATUS, WRITABLE_STATUSES };
+export type { ConversationStatus };
 
 /**
  * All chat SQL lives here. Queries are parameterized ($1, $2 ...) and
@@ -203,9 +222,11 @@ export const setLastRead = async (
   userUid: string,
   lastReadMessageId: number
 ) => {
+  await ensureChatLifecycleSchema();
   const r = await dbQuery.query(
     `UPDATE ${dbSchema}.chat_participants p
-        SET last_read_message_id = $3
+        SET last_read_message_id = $3,
+            last_read_at = now()
       WHERE p.conversation_id = $1 AND p.user_uid = $2
         AND (p.last_read_message_id IS NULL OR p.last_read_message_id < $3)
         AND EXISTS (
@@ -395,18 +416,36 @@ export const listAttachments = async (messageId: number) => {
  * Two guards, deliberately: `left_at IS NULL` covers explicit removal, and
  * `can_read` covers policy-driven revocation without a removal.
  */
+/**
+ * THE unread expression. One string, two call sites, no second opinion.
+ *
+ * `UNREAD_DEFINITION` in `messagingPolicy` states these five clauses in prose;
+ * this is the same five in SQL. They were previously written out once inside
+ * the inbox query and nowhere else, which meant the badge had a definition and
+ * the thread had none — so nothing could disagree with it and nothing could
+ * check it either. `countUnreadFor` below computes the SAME number for a single
+ * conversation, and `messagingService` compares the two and reports drift.
+ *
+ * `$1` is the participant uid; `c`/`p` are the conversation and participant rows
+ * in scope at the call site.
+ */
+const UNREAD_COUNT_SQL = `
+  (SELECT COUNT(*) FROM ${dbSchema}.chat_messages m
+     WHERE m.conversation_id = c.id
+       AND m.deleted_at IS NULL
+       AND m.created_at >= p.joined_at
+       AND (p.last_read_message_id IS NULL OR m.id > p.last_read_message_id)
+       AND m.sender_uid IS DISTINCT FROM $1
+  )`;
+
 export const listConversationsForUser = async (userUid: string) => {
   const r = await dbQuery.query(
-    `SELECT c.*,
-            (SELECT COUNT(*) FROM ${dbSchema}.chat_messages m
-               WHERE m.conversation_id = c.id
-                 AND m.deleted_at IS NULL
-                 AND m.created_at >= p.joined_at
-                 AND (p.last_read_message_id IS NULL OR m.id > p.last_read_message_id)
-                 AND m.sender_uid IS DISTINCT FROM $1
-            ) AS unread_count
+    `SELECT c.*, ${UNREAD_COUNT_SQL} AS unread_count,
+            (b.user_id = $1)                AS viewer_is_client,
+            COALESCE(p.can_send, TRUE)      AS viewer_can_send
        FROM ${dbSchema}.chat_conversations c
        JOIN ${dbSchema}.chat_participants p ON p.conversation_id = c.id
+       LEFT JOIN ${dbSchema}.bookings b ON b.id = c.booking_id
       WHERE p.user_uid = $1
         AND p.left_at IS NULL
         AND COALESCE(p.can_read, TRUE) = TRUE
@@ -414,6 +453,74 @@ export const listConversationsForUser = async (userUid: string) => {
     [userUid]
   );
   return r.rows;
+};
+
+/**
+ * The unread count for ONE conversation, from the same expression the inbox uses.
+ *
+ * Returns null when the caller holds no readable participant row — an admin
+ * authorized by role has no pointer, and reporting a number for them would be
+ * inventing one. `UNREAD_FOR_NON_PARTICIPANT` is what the DTO publishes then.
+ */
+export const countUnreadFor = async (
+  conversationId: number,
+  userUid: string,
+): Promise<number | null> => {
+  const r = await dbQuery.query(
+    `SELECT ${UNREAD_COUNT_SQL} AS unread_count
+       FROM ${dbSchema}.chat_conversations c
+       JOIN ${dbSchema}.chat_participants p ON p.conversation_id = c.id
+      WHERE p.user_uid = $1
+        AND p.conversation_id = $2
+        AND p.left_at IS NULL
+        AND COALESCE(p.can_read, TRUE) = TRUE`,
+    [userUid, conversationId]
+  );
+  return r.rows.length ? Number(r.rows[0].unread_count) : null;
+};
+
+/**
+ * The raw material for an INDEPENDENT recount — ids and senders of every live
+ * message in the conversation, plus the caller's own pointer and join time.
+ *
+ * Deliberately not an aggregate. The point of the drift check is to arrive at
+ * the number a different way; asking the database to count it again with the
+ * same expression would prove only that COUNT is deterministic.
+ */
+export const unreadAuditRows = async (
+  conversationId: number,
+  userUid: string,
+): Promise<{
+  joinedAt: string | null;
+  lastReadMessageId: number | null;
+  messages: Array<{ id: number; senderUid: string | null; createdAt: string }>;
+} | null> => {
+  const p = await dbQuery.query(
+    `SELECT joined_at, last_read_message_id
+       FROM ${dbSchema}.chat_participants
+      WHERE conversation_id = $1 AND user_uid = $2 AND left_at IS NULL
+        AND COALESCE(can_read, TRUE) = TRUE`,
+    [conversationId, userUid]
+  );
+  if (!p.rows.length) return null;
+  const m = await dbQuery.query(
+    `SELECT id, sender_uid, created_at
+       FROM ${dbSchema}.chat_messages
+      WHERE conversation_id = $1 AND deleted_at IS NULL`,
+    [conversationId]
+  );
+  return {
+    joinedAt: p.rows[0].joined_at ?? null,
+    lastReadMessageId:
+      p.rows[0].last_read_message_id === null || p.rows[0].last_read_message_id === undefined
+        ? null
+        : Number(p.rows[0].last_read_message_id),
+    messages: m.rows.map((row: any) => ({
+      id: Number(row.id),
+      senderUid: row.sender_uid ?? null,
+      createdAt: String(row.created_at),
+    })),
+  };
 };
 
 /** Admin oversight view: every conversation. */
@@ -427,33 +534,6 @@ export const listAllConversations = async () => {
 };
 
 // ---- Lifecycle schema ------------------------------------------------------
-
-/**
- * Conversation lifecycle states.
- *
- * `is_closed` (the original boolean) is KEPT and kept correct: three consumers
- * read it — the Flutter customer app (`conversation_mapper.dart`), the provider
- * portal (`adaptBackendConversation` maps it to status 'closed'|'active') and
- * the admin portal. It is now maintained as a derived compatibility flag
- * meaning "customer and provider cannot write here", so a client that knows
- * nothing about `status` still renders and behaves correctly. Never drop it.
- */
-export const CONVERSATION_STATUS = {
-  ACTIVE: 'ACTIVE',
-  READ_ONLY: 'READ_ONLY',
-  ARCHIVED: 'ARCHIVED',
-  CLOSED: 'CLOSED',
-  SUPPORT_ESCALATED: 'SUPPORT_ESCALATED',
-} as const;
-
-export type ConversationStatus =
-  (typeof CONVERSATION_STATUS)[keyof typeof CONVERSATION_STATUS];
-
-/** States in which the customer and the assigned provider may still post. */
-export const WRITABLE_STATUSES: ConversationStatus[] = [
-  CONVERSATION_STATUS.ACTIVE,
-  CONVERSATION_STATUS.SUPPORT_ESCALATED,
-];
 
 let lifecycleSchemaReady: Promise<void> | null = null;
 
@@ -477,7 +557,8 @@ export const ensureChatLifecycleSchema = async (): Promise<void> => {
     await dbQuery.query(
       `ALTER TABLE ${dbSchema}.chat_participants
          ADD COLUMN IF NOT EXISTS can_read  BOOLEAN NOT NULL DEFAULT TRUE,
-         ADD COLUMN IF NOT EXISTS can_send  BOOLEAN NOT NULL DEFAULT TRUE`,
+         ADD COLUMN IF NOT EXISTS can_send  BOOLEAN NOT NULL DEFAULT TRUE,
+         ADD COLUMN IF NOT EXISTS last_read_at TIMESTAMPTZ`,
       []
     );
     await dbQuery.query(

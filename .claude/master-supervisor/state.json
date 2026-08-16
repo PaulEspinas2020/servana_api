@@ -1,0 +1,24 @@
+{
+  "masterCommand": "Servana Backend Centralization Command Book (15 TABs, priority-ordered)",
+  "currentTab": "TAB 15 — Database Baseline Capture + Fresh-DB Reproducibility",
+  "currentTabIndex": 15,
+  "totalTabs": 15,
+  "completedTabs": [
+    "TAB 01", "TAB 02", "TAB 03", "TAB 04", "TAB 05", "TAB 06", "TAB 07",
+    "TAB 08", "TAB 09", "TAB 10", "TAB 11", "TAB 12", "TAB 13", "TAB 14"
+  ],
+  "currentObjective": "Establish verified ground truth via npm run verify, then commit the 212-entry dirty tree as recovery checkpoints, then close every locally derivable part of TAB 15.",
+  "status": "RUNNING",
+  "supervisorCycleCount": 1,
+  "lastHourlyReportAt": null,
+  "lastCheckpointAt": "2026-08-16 session start",
+  "lastLocalCommit": "36ca152",
+  "workingTreeState": "DIRTY — 212 entries (76 tracked modified, ~136 untracked) spanning TAB 01-15 work",
+  "activeBlockers": [
+    "TAB 15 P0: no sanitized schema baseline — requires a production schema-only dump restored into a disposable instance (human boundary)",
+    "TAB 15 P0: no PostgreSQL engine reachable locally (no docker/psql/pg_dump/initdb) — verified this session"
+  ],
+  "pendingQuestions": [],
+  "researchDecisions": [],
+  "contextPressure": "NORMAL"
+}

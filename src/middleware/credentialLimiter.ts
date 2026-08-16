@@ -47,6 +47,7 @@
 import { rateLimit, ipKeyGenerator } from 'express-rate-limit';
 import { rateLimitBody } from '../helpers/rateLimitBody';
 import { normalizeEmail, toE164PhMobile, detectIdentifierType } from '../helpers/phoneIdentifier';
+import { BUCKETS } from '../api/v1/rateLimitPolicy';
 
 /**
  * A stable, non-reversible bucket name for whatever identifier was submitted.
@@ -78,18 +79,27 @@ const identifierOf = (req: any): unknown =>
   req?.body?.identifier ?? req?.body?.email ?? req?.body?.phone ?? req?.body?.phoneNumber;
 
 /**
- * Tight, per-account. Ten wrong passwords for ONE account in fifteen minutes.
+ * Budgets come from `BUCKETS`, not from literals here.
+ *
+ * The window and the ceiling are documented in `AUTH_V1_CONTRACT.md` §8, which
+ * renders from the same object. Two numbers kept equal by hand are two numbers
+ * that eventually are not.
+ */
+const spec = BUCKETS;
+
+/**
+ * Tight, per-account: wrong passwords for ONE account inside the window.
  *
  * `skipSuccessfulRequests` so somebody signing in correctly several times — a
  * provider switching devices, a test run — never approaches it. Only failures
  * count, which is the thing being limited.
  */
 export const perAccountLoginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
+  windowMs: spec.perAccountLogin.windowMs,
+  max: spec.perAccountLogin.max,
   standardHeaders: true,
   legacyHeaders: false,
-  skipSuccessfulRequests: true,
+  skipSuccessfulRequests: spec.perAccountLogin.skipSuccessfulRequests,
   keyGenerator: (req: any) => identifierBucket(identifierOf(req)) ?? ipKeyGenerator(req),
   message: rateLimitBody('Too many sign-in attempts for this account. Please wait 15 minutes or reset your password.'),
 });
@@ -97,9 +107,9 @@ export const perAccountLoginLimiter = rateLimit({
 /**
  * Loose, per-IP. A cost ceiling on a flood, not a credential control.
  *
- * Two hundred rather than ten: behind carrier-grade NAT this counter is shared
- * by unrelated people, so it has to be far above what any of them could
- * plausibly generate. The per-account limiter above is what actually stops
+ * Far above the per-account ceiling: behind carrier-grade NAT this counter is
+ * shared by unrelated people, so it has to be well clear of what any of them
+ * could plausibly generate. The per-account limiter above is what actually stops
  * guessing.
  *
  * `ipKeyGenerator` rather than a bare `req.ip`, which does not normalise IPv6 —
@@ -107,21 +117,22 @@ export const perAccountLoginLimiter = rateLimit({
  * distinct keys.
  */
 export const perIpLoginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 200,
+  windowMs: spec.perIp.windowMs,
+  max: spec.perIp.max,
   standardHeaders: true,
   legacyHeaders: false,
-  skipSuccessfulRequests: true,
+  skipSuccessfulRequests: spec.perIp.skipSuccessfulRequests,
   keyGenerator: (req: any) => ipKeyGenerator(req),
   message: rateLimitBody('Too many requests from this network. Please try again shortly.'),
 });
 
 /** Registration, per-identifier. Stops one address being used to farm accounts. */
 export const perAccountRegisterLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 5,
+  windowMs: spec.perAccountRegister.windowMs,
+  max: spec.perAccountRegister.max,
   standardHeaders: true,
   legacyHeaders: false,
+  skipSuccessfulRequests: spec.perAccountRegister.skipSuccessfulRequests,
   keyGenerator: (req: any) => identifierBucket(identifierOf(req)) ?? ipKeyGenerator(req),
   message: rateLimitBody('Too many registration attempts. Please try again in 1 hour.'),
 });
@@ -137,21 +148,22 @@ export const perAccountRegisterLimiter = rateLimit({
  * mobile in the same minute is not attacking anything.
  */
 export const perAccountOtpLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000,
-  max: 8,
+  windowMs: spec.perAccountOtp.windowMs,
+  max: spec.perAccountOtp.max,
   standardHeaders: true,
   legacyHeaders: false,
-  skipSuccessfulRequests: true,
+  skipSuccessfulRequests: spec.perAccountOtp.skipSuccessfulRequests,
   keyGenerator: (req: any) => identifierBucket(identifierOf(req)) ?? ipKeyGenerator(req),
   message: rateLimitBody('Too many incorrect codes. Please request a new one.'),
 });
 
 /** Recovery, per-identifier. Stops one address being mail-bombed via the reset form. */
 export const perAccountRecoveryLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 5,
+  windowMs: spec.perAccountRecovery.windowMs,
+  max: spec.perAccountRecovery.max,
   standardHeaders: true,
   legacyHeaders: false,
+  skipSuccessfulRequests: spec.perAccountRecovery.skipSuccessfulRequests,
   keyGenerator: (req: any) => identifierBucket(identifierOf(req)) ?? ipKeyGenerator(req),
   message: rateLimitBody('Too many recovery requests. Please try again in 1 hour.'),
 });

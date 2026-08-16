@@ -4,7 +4,6 @@ import path from 'path';
 import { formatJobCard } from '../src/controllers/jobCardView';
 import {
   NON_OCCUPYING_STATUSES,
-  CONFLICT_WINDOW_HOURS,
 } from '../src/services/booking/eligibilityPipeline';
 
 const read = (relative: string) => fs.readFileSync(
@@ -77,16 +76,24 @@ describe('canonical provider assignment transaction', () => {
     // Centralised in this slice; the policy change is a separate product
     // decision after TAB 05 certifies. Changing eligibility and centralising it
     // together would make any supply drop impossible to attribute.
-    expect(CONFLICT_WINDOW_HOURS).toBe(2);
-    expect(executor).toContain('conflictWindowFor');
+    // The window became the job's real span; what matters here is unchanged —
+    // the executor asks the SHARED predicate rather than a local copy.
+    expect(executor).toContain('CONFLICTING_BOOKING_SQL');
   });
 
-  it('a schedule conflict is still NON-throwing to the search loop', () => {
-    // `assignNearestWorker` walks a ranked candidate list and moves on when a
-    // provider is busy. Throwing would end the search at the first occupied
-    // candidate rather than trying the next.
-    expect(body).toContain("guard === 'provider_schedule_conflict'");
-    expect(body).toContain('kind: "busy"');
+  it('every provider-level refusal is NON-throwing to the search loop', () => {
+    /**
+     * `assignNearestWorker` walks a ranked candidate list and moves on when a
+     * provider cannot take the job. Throwing would end the search at the first
+     * refusal rather than trying the next candidate.
+     *
+     * Widened when AUTO_ASSIGN moved to the canonical strict validation: the
+     * executor now also refuses archived, wrong-role and unqualified providers,
+     * and every one of those refusals has to cost a candidate rather than the
+     * booking. That is the property that made the tightening safe.
+     */
+    expect(body).toContain('isSkippableRefusal(reasonCode)');
+    expect(body).toContain("reasonCode === 'BOOKING_CONFLICT' ? \"busy\" : \"ineligible\"");
   });
 
   it('worker_code is PRESERVED, never regenerated', () => {

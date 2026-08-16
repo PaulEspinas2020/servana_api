@@ -23,6 +23,23 @@ import {
   TransitionError,
   type TransitionResult,
 } from "./booking/transitionExecutor";
+import {
+  CAPABILITY_GRANT_EXISTS_SQL,
+  BUSY_PROVIDERS_SQL,
+  bookingSpan,
+  bookingEndSql,
+} from "./booking/eligibilityPipeline";
+import { providerRoleSqlPredicate } from "../constants/providerRoles";
+import {
+  projectFamilyGrantSafely,
+  setFamilyGrantStatusSafely,
+} from "./booking/capabilityProjection";
+import { READABLE_WORKER_STATUS_SQL } from "../controllers/providerDisclosure";
+import {
+  isSkippableRefusal,
+  noAssignmentDiagnosis,
+  recordAutoAssignExhausted,
+} from "./booking/autoAssignDiagnostics";
 
 const dbSchema = db.schema;
 
@@ -57,7 +74,17 @@ type AssignmentTravel = {
 };
 
 type AssignmentWriteResult = {
-  kind: "created" | "existing" | "busy";
+  /**
+   * `ineligible` is new, and distinct from `busy` on purpose.
+   *
+   * Both mean "not this provider, try the next one", but they answer different
+   * operational questions: `busy` is a diary that is full, `ineligible` is a
+   * provider who should not have been offered at all. Collapsing them would
+   * make a capability gap read as a scheduling problem.
+   */
+  kind: "created" | "existing" | "busy" | "ineligible";
+  /** Canonical blocker code, on `busy` and `ineligible`. */
+  reasonCode?: string;
   workerUid: string;
   bookingStatus?: string;
   customerUid?: string | null;
@@ -179,14 +206,24 @@ const persistWorkerAssignment = async (input: {
   } catch (error) {
     if (error instanceof TransitionError) {
       /**
-       * A schedule conflict is NOT an error to this caller.
+       * A refusal about the PROVIDER is not an error to this caller.
        *
        * `assignNearestWorker` walks a ranked candidate list and moves to the
-       * next one on `busy`. Throwing here would end the search at the first
-       * provider who happens to be occupied.
+       * next one. Throwing here would end the search at the first provider who
+       * happens to be occupied — or, since AUTO_ASSIGN moved to the canonical
+       * strict validation, at the first archived or unqualified one.
+       *
+       * That distinction is why the tightening is safe: the executor now
+       * refuses providers it used to accept, and every one of those refusals
+       * costs a candidate rather than a booking.
        */
-      if (error.detail?.guard === 'provider_schedule_conflict') {
-        return { kind: "busy", workerUid: input.workerUid };
+      const reasonCode = (error.detail as { reasonCode?: unknown } | undefined)?.reasonCode;
+      if (isSkippableRefusal(reasonCode)) {
+        return {
+          kind: reasonCode === 'BOOKING_CONFLICT' ? "busy" : "ineligible",
+          workerUid: input.workerUid,
+          reasonCode,
+        };
       }
       throw new BookingAssignmentError(
         "BOOKING_ALREADY_ASSIGNED",
@@ -828,21 +865,25 @@ export const assignNearestWorker = async (
   }
 
   const schedule = new Date(booking.schedule);
-  const windowStart = new Date(schedule.getTime() - 2 * 60 * 60 * 1000);
-  const windowEnd   = new Date(schedule.getTime() + 2 * 60 * 60 * 1000);
 
-  // 2. Find UIDs that are busy within ±2h of the booking schedule
+  /**
+   * 2. Providers already occupied during THIS booking's span.
+   *
+   * The span is resolved in SQL from `duration_mins`, exactly as the executor
+   * resolves it at commit. A selector that asked a different question from its
+   * own committer would offer providers the commit then refuses, which reads to
+   * operations as an intermittent assignment failure rather than a disagreement.
+   */
   const busyRes = await dbQuery.query(
-    `
-    SELECT DISTINCT worker_uid
-    FROM ${dbSchema}.bookings
-    WHERE worker_uid IS NOT NULL
-      AND schedule BETWEEN $1 AND $2
-      AND status NOT IN ('COMPLETED','CANCELED','CANCELLED','REFUNDED','FAILED','EXPIRED')
-      AND id != $3
-    `,
-    [windowStart, windowEnd, bookingId]
-  );
+    `SELECT b.schedule AS start_at, ${bookingEndSql('b', 'so')} AS end_at
+       FROM ${dbSchema}.bookings b
+       LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
+      WHERE b.id = $1`,
+    [bookingId],
+  ).then((span) => dbQuery.query(
+    BUSY_PROVIDERS_SQL(dbSchema),
+    [span.rows[0]?.start_at ?? schedule, span.rows[0]?.end_at ?? bookingSpan(schedule).to, bookingId],
+  ));
   const busyUids = new Set(busyRes.rows.map((r: any) => r.worker_uid));
 
   // 3. Get online workers qualified for this service, filter out busy ones
@@ -969,6 +1010,8 @@ export const assignNearestWorker = async (
     })
     .sort((a, b) => a.distanceKm - b.distanceKm);
 
+  /** Attributed refusals collected while walking the ranked list. */
+  const refusals: string[] = [];
   let selected: typeof ranked[number] | null = null;
   let persisted: AssignmentWriteResult | null = null;
   let etaMinutes = 0;
@@ -992,7 +1035,12 @@ export const assignNearestWorker = async (
         distanceKm: candidate.distanceKm,
       },
     });
-    if (result.kind === "busy") continue;
+    if (result.kind === "busy" || result.kind === "ineligible") {
+      // Attributed and remembered, so the end of the walk can say what stopped
+      // it rather than reporting an empty list.
+      if (result.reasonCode) refusals.push(result.reasonCode);
+      continue;
+    }
     if (result.kind === "existing") {
       return {
         assigned: true,
@@ -1009,7 +1057,17 @@ export const assignNearestWorker = async (
 
   if (!selected || !persisted) {
     await applyNearestWorkerTranspoFee(bookingId, userLat, userLon, serviceId);
-    return { assigned: false, reason: "NO_WORKER_AVAILABLE_AFTER_RECHECK" };
+    /**
+     * Nobody could be committed. `NO_WORKER_AVAILABLE_AFTER_RECHECK` was true
+     * and useless — it said the walk finished without saying what stopped it,
+     * so an operator could not tell a capability gap from a full diary.
+     *
+     * The legacy `reason` string is preserved because callers switch on it;
+     * the attribution travels beside it, in the same vocabulary the Admin
+     * candidate pool uses.
+     */
+    recordAutoAssignExhausted();
+    return { assigned: false, ...noAssignmentDiagnosis(refusals) };
   }
 
   const best = selected;
@@ -1200,7 +1258,15 @@ export const getJobCardsByWorker = async (workerId: string, bookingId?: number |
 
     WHERE b.worker_uid = $1
     AND ($2::int IS NULL OR b.id = $2)
-    AND bw.status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
+    -- LEAKAGE RULE. A provider who declined, cancelled or was reassigned away
+    -- gets the same answer as for a booking that does not exist. This list used
+    -- to include DECLINED, CANCELED and CANCELLED: the PII was staged out by
+    -- jobCardView, but the card still came back — an empty husk confirming the
+    -- booking exists and when it was scheduled.
+    --
+    -- Built from the same declaration that decides disclosure, so the two
+    -- cannot disagree about who has relinquished a job.
+    AND bw.status IN (${READABLE_WORKER_STATUS_SQL})
     ORDER BY b.schedule ASC
     `,
     [workerId, bookingId ?? null]
@@ -1224,33 +1290,43 @@ export const getAvailableWorkers = async (schedule: string, serviceId?: number) 
     throw new Error("Invalid schedule datetime");
   }
 
-  // Fetch workers: if serviceId provided, only those assigned to that service
+  // Fetch workers: if serviceId provided, only those qualified for that service.
+  //
+  // Both predicates were locally written and both were wrong in the same
+  // direction — they under-counted supply. `role::int = 2` excluded every
+  // role-4 provider, and the INNER JOIN on employee_services excluded providers
+  // holding only an approved application, whom the executor will happily
+  // commit. This function has NO route today; the correction is made anyway,
+  // because a divergent predicate sitting in a live service file is one `git
+  // grep` away from being wired up as if it were canonical.
   const workerQuery = serviceId
     ? `SELECT uc.uid, uc.email, uc.first_name, uc.last_name, uc.phone_number, uc.role
        FROM ${dbSchema}.user_credentials uc
-       JOIN ${dbSchema}.employee_services es ON es.employee_uid = uc.uid
-       WHERE es.service_id = $1 AND uc.is_archive = false`
+       WHERE uc.is_archive = false
+         AND ${providerRoleSqlPredicate('uc.role')}
+         AND ${CAPABILITY_GRANT_EXISTS_SQL(dbSchema, 'uc.uid', 'NULL', '$1')}`
     : `SELECT uid, email, first_name, last_name, phone_number, role
-       FROM ${dbSchema}.user_credentials
-       WHERE role::int = 2 AND is_archive = false`;
+       FROM ${dbSchema}.user_credentials uc
+       WHERE ${providerRoleSqlPredicate('uc.role')} AND is_archive = false`;
 
   const workerParams = serviceId ? [serviceId] : [];
   const { rows: allWorkers } = await dbQuery.query(workerQuery, workerParams);
 
   if (!allWorkers.length) return [];
 
-  // Find workers who are busy within ±2 hours of the requested time
-  const windowStart = new Date(requestedTime.getTime() - 2 * 60 * 60 * 1000); // -2h
-  const windowEnd   = new Date(requestedTime.getTime() + 2 * 60 * 60 * 1000); // +2h
-
-  const busyQuery = `
-    SELECT DISTINCT b.worker_uid
-    FROM ${dbSchema}.bookings b
-    WHERE b.worker_uid IS NOT NULL
-      AND b.schedule BETWEEN $1 AND $2
-      AND b.status NOT IN ('COMPLETED','CANCELED','CANCELLED','REFUNDED','FAILED','EXPIRED')
-  `;
-  const { rows: busyRows } = await dbQuery.query(busyQuery, [windowStart, windowEnd]);
+  /**
+   * Workers already occupied during the requested span.
+   *
+   * This entry point receives a schedule and, at most, a legacy FAMILY id — it
+   * never sees a service option, so the job's real duration is unknowable here
+   * and `bookingSpan` applies the declared default. Stated rather than hidden:
+   * a caller that knows the option should be asking through the booking.
+   */
+  const { from: windowStart, to: windowEnd } = bookingSpan(requestedTime);
+  const { rows: busyRows } = await dbQuery.query(
+    BUSY_PROVIDERS_SQL(dbSchema),
+    [windowStart, windowEnd, null],
+  );
   const busyUids = new Set(busyRows.map((r: any) => r.worker_uid));
 
   return allWorkers
@@ -2242,6 +2318,17 @@ export const assignServicesToEmployee = async (employeeUid: string, serviceIds: 
     [employeeUid, ...serviceIds]
   );
 
+  // Canonical projection, one family at a time. Fanned out to `services.id`,
+  // which is the grain matching keys on — the legacy row is per FAMILY and
+  // already implies every bookable service under it, so this widens nothing.
+  for (const familyId of serviceIds) {
+    await projectFamilyGrantSafely(
+      (sql, params) => dbQuery.query(sql, params as any[]),
+      dbSchema,
+      { providerUid: employeeUid, familyId: Number(familyId), origin: 'admin_grant' },
+    );
+  }
+
   return res.rows;
 };
 
@@ -2256,6 +2343,16 @@ export const removeServiceFromEmployee = async (employeeUid: string, serviceId: 
   );
 
   if (!res.rowCount) throw new Error("Service not found for this employee");
+
+  // ARCHIVED, never deleted: a removed row cannot answer "was this provider
+  // ever approved for that service, and when did it stop" — the question a
+  // payout dispute asks. Scoped by the family this grant came from, so a
+  // service the provider holds through another family is untouched.
+  await setFamilyGrantStatusSafely(
+    (sql, params) => dbQuery.query(sql, params as any[]),
+    dbSchema,
+    { providerUid: employeeUid, familyId: Number(serviceId), status: 'archived' },
+  );
 
   return res.rows[0];
 };
@@ -2286,7 +2383,16 @@ export const pauseService = async (workerUid: string, serviceId: number, reason?
      RETURNING *`,
     [workerUid, serviceId, reason ?? null],
   );
-  if (res.rowCount) return res.rows[0];
+  if (res.rowCount) {
+    // The canonical table tracks the pause too, or matching would keep offering
+    // a provider who has explicitly stepped back from this service.
+    await setFamilyGrantStatusSafely(
+      (sql, params) => dbQuery.query(sql, params as any[]),
+      dbSchema,
+      { providerUid: workerUid, familyId: Number(serviceId), status: 'paused' },
+    );
+    return res.rows[0];
+  }
 
   const check = await dbQuery.query(
     `SELECT COALESCE(status, 'active') AS status FROM ${dbSchema}.employee_services
@@ -2310,7 +2416,14 @@ export const reactivateService = async (workerUid: string, serviceId: number) =>
      RETURNING *`,
     [workerUid, serviceId],
   );
-  if (res.rowCount) return res.rows[0];
+  if (res.rowCount) {
+    await setFamilyGrantStatusSafely(
+      (sql, params) => dbQuery.query(sql, params as any[]),
+      dbSchema,
+      { providerUid: workerUid, familyId: Number(serviceId), status: 'active' },
+    );
+    return res.rows[0];
+  }
 
   const check = await dbQuery.query(
     `SELECT COALESCE(status, 'active') AS status FROM ${dbSchema}.employee_services

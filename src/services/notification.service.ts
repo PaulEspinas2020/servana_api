@@ -207,6 +207,13 @@ const SAFE_ROUTE_KEYS = new Set([
   'page', 'screen', 'bookingId', 'caseId', 'applicationId', 'routeKey',
   'resourceId', 'routeLabel', 'commandsRoute', 'queryParams',
   'requiresAccessCheck', 'contextType',
+  // `target` is the CANONICAL deep-link name (TAB 09). Added because without it
+  // the sanitiser stripped the one field that says unambiguously where a
+  // notification points, leaving the inbox to infer the target from the legacy
+  // route shape — and BOOKING_DETAIL and JOB_DETAIL render an identical provider
+  // projection, so the inference could not tell them apart. It is a bounded
+  // enum value from `DEEP_LINK_TARGETS` and matches SAFE_ROUTE_VALUE.
+  'target',
 ]);
 
 /** Route metadata is navigation intent, never arbitrary producer data. */

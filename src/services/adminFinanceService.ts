@@ -3,6 +3,12 @@ import { db } from '../config';
 import { providerShareOf, servanaShareOf, SERVANA_COMMISSION_RATE } from './revenueSplit';
 import { auditFire } from './adminAuditService';
 import { toCamel } from '../helpers/idGenerator';
+import {
+  ensureFinanceLedgerSchema,
+  eventKeys,
+  recordLedgerEventBestEffort,
+} from './finance/financeLedger';
+import { LEDGER_INTEGRITY_CHECKS } from './finance/financeReconciliationService';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -188,6 +194,11 @@ export async function ensureFinanceSchema(): Promise<void> {
   for (const [n, c] of excIdxes) {
     await dbQuery.query(`CREATE INDEX IF NOT EXISTS ${n} ON ${s}.finance_reconciliation_exceptions (${c})`);
   }
+
+  // The canonical event log ships with the rest of the finance schema, so a
+  // deployment cannot end up with the reconciliation tables present and the
+  // record they reconcile absent.
+  await ensureFinanceLedgerSchema();
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -463,6 +474,20 @@ export async function approveGcashPayment(
     createdBy: adminUid,
   });
 
+  // Also to the canonical event log. `finance_ledger_entries` remains the admin
+  // portal's revenue-recognition view; `finance_ledger_events` is the one record
+  // every surface reconciles against, and an admin approval must appear in it
+  // beside the online captures rather than only in the admin's own table.
+  await recordLedgerEventBestEffort({
+    eventKey: eventKeys.paymentCaptured(paymentId),
+    type: 'PAYMENT_CAPTURED',
+    bookingId: Number(updated.booking_id),
+    paymentId,
+    amount: toNum(updated.amount),
+    reasonCode: 'GCASH_ADMIN_APPROVAL',
+    detail: { approvedBy: adminUid },
+  });
+
   auditFire({
     action: 'finance_payment_gcash_approved',
     actionCategory: 'payment',
@@ -574,6 +599,16 @@ export async function adminConfirmCash(
     grossAmount: toNum(updated.amount),
     source: 'cash_admin_confirmation',
     createdBy: adminUid,
+  });
+
+  await recordLedgerEventBestEffort({
+    eventKey: eventKeys.paymentCaptured(paymentId),
+    type: 'PAYMENT_CAPTURED',
+    bookingId: Number(updated.booking_id),
+    paymentId,
+    amount: toNum(updated.amount),
+    reasonCode: 'CASH_ADMIN_CONFIRMATION',
+    detail: { confirmedBy: adminUid },
   });
 
   auditFire({
@@ -1405,6 +1440,15 @@ export async function runReconciliation(
         inserted++;
       }
     },
+    // 10-14. The ledger-integrity checks §78 requires.
+    //
+    // Appended to THIS engine rather than run by a second job: two reconciliation
+    // runs writing into one exceptions table with different run-date semantics is
+    // itself a reconciliation problem. They are declared in
+    // `finance/financeReconciliationService` beside the catalog they belong to.
+    ...LEDGER_INTEGRITY_CHECKS.map((check) => async () => {
+      inserted += await check.run(insertException);
+    }),
   ];
 
   for (const check of checks) {

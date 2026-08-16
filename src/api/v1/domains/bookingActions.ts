@@ -158,6 +158,17 @@ export const handlers: V1Handlers = {
   'provider.jobs.arrived': runAction('PROVIDER_ARRIVED', 'assigned_provider', 'provider.jobs.arrived'),
   'provider.jobs.start': runAction('PROVIDER_START', 'assigned_provider', 'provider.jobs.start'),
   'provider.jobs.complete': runAction('PROVIDER_COMPLETE', 'assigned_provider', 'provider.jobs.complete'),
+  /**
+   * Walking away from a job already accepted, subject to the 48-hour policy.
+   *
+   * Uses the SAME `runAction` as every other provider action, which is the point
+   * of it being here rather than in the experiences domain: the notice window,
+   * the reason-code vocabulary and the refusal detail all come from
+   * `providerCancellationWindow`, and the handler adds nothing. The live
+   * provider route already runs this guard through this executor — this gives it
+   * a canonical path, not a second implementation.
+   */
+  'provider.jobs.cancel': runAction('PROVIDER_CANCEL', 'assigned_provider', 'provider.jobs.cancel'),
 
   /**
    * The canonical event log.

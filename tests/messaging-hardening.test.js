@@ -29,7 +29,15 @@ describe('messaging privacy and integrity hardening', () => {
      * projection row meant no window at all. Reading both from one row makes
      * that unreachable.
      */
-    expect(service).toMatch(/visibleAfter = access\.assignedAt/);
+    /**
+     * TAB 08 moved the DECISION into `messagingPolicy.messageReadFloor` — the
+     * same pure function the generated messaging contract renders its
+     * visibility table from — so the document cannot describe a floor the code
+     * does not apply. The SOURCE of the timestamp is unchanged: still
+     * `access.assignedAt`, still from `booking_workers`.
+     */
+    expect(service).toMatch(/messageReadFloor\(seat, access\.assignedAt/);
+    expect(service).toMatch(/const visibleAfter: string \| null = floor\.since/);
     expect(repository).toMatch(/getProviderAssignmentWindow/);
     expect(repository).toMatch(/created_at >= \$4/);
     // The participant projection still resets joined_at on re-admission, which

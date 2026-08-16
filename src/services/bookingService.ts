@@ -283,54 +283,53 @@ export const createBooking = async (
  * Restricted to PENDING_OTP. Re-issuing against a booking that is already
  * confirmed, cancelled or completed would move it backwards, and an OTP for a
  * finished job is only useful to someone who should not have one.
+ *
+ * ── TAB 06: this is now a DELEGATION ──────────────────────────────────────────
+ *
+ * The rotation, the delivery and the response shape are unchanged. What is new
+ * is that the resend cooldown, the per-booking issue ceiling and the audit row
+ * come from `bookingOtpService`, which is also what the canonical
+ * `POST /api/v1/bookings/:id/otp/request` calls.
+ *
+ * That is the whole point of delegating rather than adding the policy twice: a
+ * cooldown only the v1 path applied would leave this route — the one the shipped
+ * customer app calls — as an unlimited rotation oracle, and the release gate
+ * would be met on paper and not in the field.
+ *
+ * Imported lazily because `bookingOtpService` imports this module back for the
+ * post-confirmation assignment step. Both directions are lazy, so neither is a
+ * load-order hazard.
  */
-export const resendBookingOtp = async (bookingId: number) => {
-  const res = await dbQuery.query(
-    `SELECT id, user_id, status, schedule, worker_uid FROM ${dbSchema}.bookings WHERE id = $1`,
-    [bookingId],
-  );
-  if (!res.rowCount) throw new Error('Booking not found');
+export const resendBookingOtp = async (
+  bookingId: number,
+  actor: { actorUid?: string | null; role?: 'customer' | 'admin' } = {},
+) => {
+  const { requestBookingOtp, BookingOtpError } = await import('./booking/bookingOtpService');
 
-  const booking = res.rows[0];
-  const status = String(booking.status).toUpperCase();
-  const awaitsOtp = status === 'PENDING_OTP' ||
-    (status === 'PAID' && !booking.worker_uid);
-  if (!awaitsOtp) {
-    throw Object.assign(
-      new Error('This booking is no longer awaiting verification.'),
-      { statusCode: 409 },
-    );
-  }
-
-  const otp = generateOTP();
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET otp_code = $1 WHERE id = $2`,
-    [otp, bookingId],
-  );
-
-  // Best-effort: the code IS rotated regardless of whether the mail goes out.
-  // Failing here would leave the customer holding a code that no longer works,
-  // which is worse than a missing email.
   try {
-    const email = await getEmailById(booking.user_id);
-    const firstName = await getNameByEmail(email);
-    send(email, 'verify_booking_otp', {
-      first_name: firstName,
-      otp_code: otp,
-      booking_id: bookingId,
-      booking_date: booking.schedule
-        ? new Date(booking.schedule).toLocaleDateString('en-US', {
-            year: 'numeric', month: 'long', day: 'numeric',
-          })
-        : '',
-      booking_time: booking.schedule
-        ? new Date(booking.schedule).toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit',
-          })
-        : '',
+    await requestBookingOtp({
+      bookingId,
+      purpose: 'BOOKING_CONFIRMATION',
+      actor: actor.role ?? 'customer',
+      actorUid: actor.actorUid ?? null,
+      deliver: async (id, code, row) => {
+        await deliverBookingOtpEmail(id, code, row.user_id);
+      },
     });
-  } catch {
-    // Swallowed deliberately — see above.
+  } catch (error) {
+    // The legacy contract: 404-ish "Booking not found" as a plain Error, and 409
+    // for "no longer awaiting verification". Both callers read `e.message` and
+    // branch on `e.statusCode`, so the new refusals are mapped onto that shape
+    // rather than changing it under a shipped client.
+    if (error instanceof BookingOtpError) {
+      if (error.code === 'BOOKING_NOT_FOUND') throw new Error('Booking not found');
+      throw Object.assign(new Error(error.message), {
+        statusCode: error.code === 'OTP_PURPOSE_NOT_APPLICABLE' ? 409 : 429,
+        code: error.code,
+        detail: error.detail,
+      });
+    }
+    throw error;
   }
 
   // The code itself is never returned: it travels by email only.
@@ -338,18 +337,67 @@ export const resendBookingOtp = async (bookingId: number) => {
 };
 
 /**
+ * The verification email, extracted so the canonical and legacy paths send the
+ * SAME message. Best-effort: the code IS rotated whether or not the mail goes
+ * out, because failing here would leave the customer holding a code that no
+ * longer works — worse than a missing email.
+ */
+export const deliverBookingOtpEmail = async (
+  bookingId: number,
+  code: string,
+  userId: string | null,
+): Promise<void> => {
+  try {
+    const res = await dbQuery.query(
+      `SELECT schedule FROM ${dbSchema}.bookings WHERE id = $1`,
+      [bookingId],
+    );
+    const schedule = res.rows[0]?.schedule ?? null;
+    const email = await getEmailById(userId as string);
+    const firstName = await getNameByEmail(email);
+    send(email, 'verify_booking_otp', {
+      first_name: firstName,
+      otp_code: code,
+      booking_id: bookingId,
+      booking_date: schedule
+        ? new Date(schedule).toLocaleDateString('en-US', {
+            year: 'numeric', month: 'long', day: 'numeric',
+          })
+        : '',
+      booking_time: schedule
+        ? new Date(schedule).toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit',
+          })
+        : '',
+    });
+  } catch {
+    // Swallowed deliberately — see above.
+  }
+};
+
+
+/**
  * ─── PHASE C · CUSTOMER_CONFIRM_OTP, on the canonical executor ───────────────
  *
  * The customer proves presence with the booking OTP, and the booking is
  * released to the assignment pool.
  *
- * ## What was preserved, deliberately and in full
+ * ## What Phase C preserved, and what TAB 06 deliberately changed
  *
- * The booking OTP has NO expiry, NO attempt limit and is NOT consumed — all
- * three absent by construction, not by oversight: `resendBookingOtp`'s own
- * docblock states the code has no expiry. Adding any of them here would be a
- * product-policy change wearing a refactor's clothes, so none was added. Replay
- * still errors rather than answering 200, because installed clients were built
+ * Phase C preserved the OTP's total absence of a lifecycle — no expiry, no
+ * attempt limit, not consumed — because a state-machine migration is the wrong
+ * place to change product policy.
+ *
+ * TAB 06 §63 changes it on purpose: purpose, issuer, recipient, expiry, resend
+ * cooldown, attempt limit and audit are now required. Those rules live in
+ * `booking/bookingOtpService` and this function DELEGATES to it, so the legacy
+ * route and `POST /api/v1/bookings/:id/otp/verify` enforce one policy. A limit
+ * only the canonical path applied would leave this one — which the shipped
+ * customer app calls — as an unlimited guessing oracle.
+ *
+ * Three things are still true and still deliberate: the code is NOT consumed on
+ * success, the credential comparison stays inside the mutating statement, and a
+ * replay errors rather than answering 200, because installed clients were built
  * against that.
  *
  * The credential predicate stays IN the write, exactly as the legacy
@@ -385,19 +433,29 @@ export const confirmOtp = async (
   otp: string,
   options: { actorUid?: string | null; correlationId?: string } = {},
 ) => {
+  const { verifyBookingOtp, BookingOtpError } = await import('./booking/bookingOtpService');
+
   try {
-    await transitionBooking({
-      action: 'CUSTOMER_CONFIRM_OTP',
+    await verifyBookingOtp({
       bookingId,
-      actorRole: options.actorUid ? 'customer' : 'admin',
+      purpose: 'BOOKING_CONFIRMATION',
+      code: otp,
+      actor: options.actorUid ? 'customer' : 'admin',
       actorUid: options.actorUid ?? null,
       correlationId: options.correlationId,
-      metadata: { otp },
+      // The post-commit assignment is run by THIS function, below, so the
+      // service is told not to run it again. One caller, one auto-assignment.
+      skipPostConfirmationAssignment: true,
     });
   } catch (error) {
     // The legacy message, byte for byte: both callers surface `e.message`
     // directly and answer 400 for every failure here.
-    if (error instanceof TransitionError) {
+    //
+    // The new policy refusals collapse into it too. That is not information
+    // thrown away — it is the shape this route has always had, and the caller
+    // that needs "expired" told apart from "wrong" is the canonical endpoint,
+    // which returns the specific code.
+    if (error instanceof TransitionError || error instanceof BookingOtpError) {
       throw new Error("Invalid OTP or booking is not in PENDING_OTP.");
     }
     throw error;
@@ -409,14 +467,25 @@ export const confirmOtp = async (
   );
   const booking = confirmed.rows[0];
 
-  /**
-   * Auto-assignment, AFTER the commit and unable to fail the confirmation.
-   *
-   * TAB 05 owns who gets assigned. What matters here is that the customer is
-   * told their booking is confirmed — because it is — and a booking left
-   * without a provider surfaces to an admin as awaiting assignment rather than
-   * as a 400 the customer cannot act on.
-   */
+  await runPostConfirmationAssignment(bookingId);
+
+  return booking;
+};
+
+/**
+ * Auto-assignment, AFTER the commit and unable to fail the confirmation.
+ *
+ * TAB 05 owns who gets assigned. What matters here is that the customer is told
+ * their booking is confirmed — because it is — and a booking left without a
+ * provider surfaces to an admin as awaiting assignment rather than as a 400 the
+ * customer cannot act on.
+ *
+ * Extracted and exported in TAB 06 so the canonical
+ * `POST /api/v1/bookings/:id/otp/verify` runs the SAME step. A confirmation that
+ * assigns a provider on one route and not on the other would be two products
+ * wearing one name.
+ */
+export const runPostConfirmationAssignment = async (bookingId: number): Promise<void> => {
   try {
     const bookingRes = await dbQuery.query(
       `
@@ -447,8 +516,6 @@ export const confirmOtp = async (
     // them otherwise is the defect this replaced.
     console.error(`auto-assignment after OTP confirm failed for booking ${bookingId}:`, assignErr);
   }
-
-  return booking;
 };
 
 

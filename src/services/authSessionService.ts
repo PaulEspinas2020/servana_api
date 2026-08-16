@@ -27,6 +27,7 @@
 
 import * as firebaseFunction from './firebaseFunctions.service';
 import { clearFcmToken } from './notification.service';
+import { evictUserEverywhere } from '../chat/chat.realtime';
 
 export type RevocationReason =
   | 'logout'
@@ -41,6 +42,8 @@ export interface RevocationOutcome {
   reason: RevocationReason;
   sessionsRevoked: boolean;
   pushCleared: boolean;
+  /** Live chat sockets closed for this uid. See the note in `endAllSessions`. */
+  realtimeSocketsClosed: number;
 }
 
 /**
@@ -64,11 +67,33 @@ export async function endAllSessions(
     clearFcmToken(uid),
   ]);
 
+  /**
+   * The chat socket outlives the token, and that is the gap this closes (§86).
+   *
+   * Revoking refresh tokens stops the NEXT request. A Socket.IO connection
+   * authenticated at handshake is already open: it stays in its conversation
+   * rooms and keeps receiving that account's messages after the person signed
+   * out or switched accounts — which is precisely the state in which a cached
+   * transcript gets rendered under somebody else's identity.
+   *
+   * Synchronous and in-process, so it cannot fail the revocation. Its counterpart
+   * is `SESSION_HYGIENE` in the messaging policy: the server evicts and says why,
+   * and the client drops its account-scoped chat state when told.
+   */
+  let realtimeSocketsClosed = 0;
+  try {
+    realtimeSocketsClosed = evictUserEverywhere(uid, reason);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('[auth-session] chat socket eviction failed:', (error as Error)?.message);
+  }
+
   const outcome: RevocationOutcome = {
     uid,
     reason,
     sessionsRevoked: revoke.status === 'fulfilled',
     pushCleared: push.status === 'fulfilled',
+    realtimeSocketsClosed,
   };
 
   if (!outcome.sessionsRevoked) {

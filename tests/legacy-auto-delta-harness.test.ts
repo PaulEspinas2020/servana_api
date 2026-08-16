@@ -275,7 +275,21 @@ describe('the harness changes no assignment behaviour', () => {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) { walk(full); continue; }
         if (!entry.name.endsWith('.ts')) continue;
-        if (fs.readFileSync(full, 'utf8').includes('measure-legacy-auto-delta')) {
+        /**
+         * Comment-stripped, deliberately.
+         *
+         * The property is "no application file IMPORTS or EXECUTES the
+         * harness", and a docblock that names it in prose does neither —
+         * `legacyAutoShadow.ts` explains why it measures the same question from
+         * inside the live path instead. Scanning raw text made a cross-reference
+         * indistinguishable from a dependency.
+         */
+        const code = fs.readFileSync(full, 'utf8')
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .split(String.fromCharCode(10))
+          .filter((line: string) => !line.trim().startsWith('//'))
+          .join(' ');
+        if (code.includes('measure-legacy-auto-delta')) {
           offenders.push(path.relative(src, full));
         }
       }
@@ -284,10 +298,22 @@ describe('the harness changes no assignment behaviour', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('AUTO_ASSIGN still uses LEGACY_AUTO — measuring is not correcting', () => {
+  it('AUTO_ASSIGN has since moved to the canonical FULL validation', () => {
+    /**
+     * This harness was written to measure the delta BEFORE the tightening. The
+     * tightening has happened — the refusal turned out to be skippable, since
+     * the caller walks a ranked candidate list, so a refused provider costs a
+     * candidate rather than a booking.
+     *
+     * The harness is kept: it still answers the retrospective question "how
+     * many past auto-assignments would this rule have refused", which is worth
+     * asking of production data even now. What it must not do is claim the gap
+     * is open.
+     */
     const executor = fs.readFileSync(
       path.join(__dirname, '..', 'src', 'services', 'booking', 'transitionExecutor.ts'), 'utf8',
     );
-    expect(executor).toContain("targetValidation: 'LEGACY_AUTO'");
+    expect(executor).toContain("targetValidation: 'FULL'");
+    expect(executor).not.toContain("targetValidation: 'LEGACY_AUTO'");
   });
 });

@@ -7,8 +7,14 @@ decisions; the endpoint list itself is generated — see
 
 **Source of truth:** [`src/api/v1/contract.ts`](../../src/api/v1/contract.ts).
 The router, the OpenAPI document, the registry and the migration matrix are all
-derived from that one array. Nothing in this directory is maintained by hand
-except this file.
+derived from that one array.
+
+The prose in this file is hand-written; every **countable** claim in it is not.
+Sections marked with `<!-- BEGIN GENERATED: ... -->` are rewritten by
+`npm run api:docs` and checked by `npm run api:docs:check`, because this
+document twice shipped a number that was true when written and false a command
+later — "six planned entries", naming two that had been live for months. The
+reasons stay hand-written. The counts are derived.
 
 ---
 
@@ -106,22 +112,30 @@ have different sane ceilings.
 
 `total: null` means the count is not cheaply knowable; use `hasMore`.
 
-Two v1 lists currently page **in the API layer** over a service that returns the
-whole set. That bounds the response, not the query. It is an honest improvement
-on the legacy routes, which bound neither, and it is recorded as follow-up work
-for the bookings and provider-jobs domain commands rather than hidden.
+Three v1 lists — `/bookings`, `/provider/jobs` and `/notifications` — currently
+page **in the API layer** over a service that returns the whole set. That bounds
+the response, not the query. It is an honest improvement on the legacy routes,
+which bound neither, and it is recorded as follow-up work for the bookings,
+provider-jobs and notifications domain commands rather than hidden.
+`/reviews/providers/:providerUid` pages in the query, which is where the other
+three should end up.
 
 ## 6. Idempotency
 
 Every entry declares `idempotent: true|false`. A GET is idempotent by
 definition; a mutation must say so explicitly.
 
-Every mutation shipped in this phase is naturally idempotent — a full-replace
-PUT, and a mark-read that reaches the same end state on a repeat. None needs an
-`Idempotency-Key`, and `tests/v1-contract.test.ts` asserts that no
-non-idempotent endpoint has been added without one.
+Two kinds of mutation live here now. The **naturally idempotent** ones — a
+full-replace PUT, a mark-read that reaches the same end state on a repeat —
+declare `idempotent: true` and need no key. The **booking lifecycle actions**
+declare `idempotent: false`, and every one of them names in `replayGuard` what
+bounds a replay: an `Idempotency-Key` returns the original result, and without
+one the state machine refuses the second attempt because the booking is no
+longer in the state the transition requires. `tests/v1-contract.test.ts` asserts
+that no non-idempotent endpoint has ever been added without that field, and that
+an idempotent one does not claim a guard it does not need.
 
-When one is: send `Idempotency-Key`, 8–128 characters of `A-Za-z0-9_.:-`.
+Sending one: `Idempotency-Key`, 8–128 characters of `A-Za-z0-9_.:-`.
 `readIdempotencyKey()` validates the **shape** and rejects a malformed key with
 `IDEMPOTENCY_KEY_INVALID` — silently ignoring a bad key is worse than rejecting
 it, because the caller believes it is protected against a retry and is not.
@@ -157,11 +171,33 @@ function. `/api/auth/me` was refactored in this command to call
 cannot drift — only the envelope differs.
 
 A role-specific route is allowed only when the authorization, action or payload
-genuinely differ, and the matrix has to say why. There are two today:
+genuinely differ, and the contract has to say why — the reason below is the
+`note` on the legacy mapping, not a second account of it written here.
 
-- `/api/user/profile` — the customer profile aggregate, not the identity record.
-- `/api/provider/bookings/:id/timeline` — the same timeline, voiced from the
-  provider's seat, where "YOU" means the provider.
+<!-- BEGIN GENERATED: v1-role-specific -->
+**13** today.
+
+| Role-specific route | Nearest canonical | Why it is not the same endpoint |
+|---|---|---|
+| `GET /api/user/profile` | `/api/v1/me` | Not a duplicate: returns the CUSTOMER profile aggregate (addresses, preferences), not the identity record. Retained; a v1 successor belongs in the customer-profile domain command, not here. |
+| `GET /api/provider/bookings/:bookingId/timeline` | `/api/v1/bookings/:bookingId/timeline` | Genuinely role-specific: the shared builder is written from the provider's seat, where "YOU" means the provider. Same domain service, different voicing. Documented rather than merged. |
+| `GET /api/user/:userId/addresses` | `/api/v1/customer/addresses` | The provider portal reading a booking customer's address. A genuinely different authorization question - it is answered from the booking relationship, not from ownership - and it stays on its own route rather than becoming a uid parameter here. |
+| `GET /api/provider/profile-center` | `/api/v1/provider/profile` | The compliance view: revision history, review state, field-level edit affordances. A genuinely different question, and it already reads the same field registry this entry projects from. |
+| `POST /api/support/tickets` | `/api/v1/bookings/:bookingId/support-cases` | The general customer contact surface. It carries no bookingId, so a quality complaint raised through it arrives with no way to see which visit it is about. Kept for contact that is genuinely not about a booking. |
+| `POST /api/auth/add-employees` | `/api/v1/auth/register` | Admin bulk-creates provider accounts with generated temporary passwords. Genuinely different: a different actor, a different credential origin, and a partial-success response shape. Retained; it is account PROVISIONING, not registration. |
+| `POST /api/auth/customer-firebase-login` | `/api/v1/auth/login` | NOT collapsed. Its link-collision contract is a 200 carrying `status: "failed"` and no token, because the installed customer app throws on any non-2xx before reading the body and fires onUnauthorized on 401 — either would show "session expired" to somebody who has no session yet. Changing that shape is a client release, so it stays until the customer app migrates. |
+| `GET /api/admin/communications/conversations` | `/api/v1/conversations` | The admin oversight list carries a named permission and a booking filter, and joins moderation state this route has no business publishing to a customer. Same tables, same conversation ids; a genuinely different question. |
+| `GET /api/admin/communications/conversations/:id` | `/api/v1/conversations/:conversationId` | The admin detail view, permissioned, and carrying report and moderation state. Different fields, different authorization, same conversation id. |
+| `GET /api/admin/communications/conversations/:id/messages` | `/api/v1/conversations/:conversationId/messages` | The permissioned admin transcript. It reads the whole thread by design — the audit trail is the point — where this route applies the caller's own read floor. |
+| `POST /api/admin/communications/conversations/:id/messages` | `/api/v1/conversations/:conversationId/messages` | The admin send. Permissioned and audited, and it already delegates to `chat.service.sendMessage`, so an admin message obeys the same idempotency, validation and attachment rules as anyone else's. |
+| `GET /api/provider/bookings/:bookingId/dispute-status` | `/api/v1/bookings/:bookingId/disputes` | Provider-facing eligibility summary, shipped as "entry point only; opening is later". It reads the same table and the same categories. It stays because it answers "may I open one" for a live client that has no other way to ask. |
+| `GET /api/admin/finance/ledger/booking/:bookingId` | `/api/v1/bookings/:bookingId/payment` | The admin revenue-recognition view over finance_ledger_entries. It answers a different question (what was recognised, when, by whom) and carries its own permission. Both now read the same underlying capture events. |
+<!-- END GENERATED: v1-role-specific -->
+
+Note what is *not* on that list: none of these is a second business truth. Each
+reaches the same domain service as its canonical neighbour; what differs is the
+actor, the payload shape a shipped client can survive, or whose seat the text is
+written from.
 
 ## 9. Versioning and change policy
 
@@ -196,7 +232,22 @@ the migration matrix can name the canonical successor of a legacy route before
 that successor is built — which is what makes the matrix useful to a client team
 planning its own release.
 
-Six exist today: `/auth/refresh`, `/search`, `/home`, `/conversations`,
-`/provider/earnings`, `/admin/bookings`. Each names the domain command that owns
-it and why it was not adapted here. `tests/v1-router.test.ts` asserts every one
-of them 404s, so "planned" cannot quietly become "half-built".
+Each names the legacy route it will replace and why it was not adapted here.
+`tests/v1-router.test.ts` asserts every one of them 404s, so "planned" cannot
+quietly become "half-built".
+
+<!-- BEGIN GENERATED: v1-planned -->
+**4 planned entries today**, against 95 implemented.
+
+| Path | Domain | Successor to | Why it is not built here |
+|---|---|---|---|
+| `/api/v1/admin/bookings` | admin-bookings | `GET /api/admin/bookings` | The admin portal is the only caller and deploys from git on every push, so it is the cheapest client to migrate — but it is also the only one whose list carries permission-scoped columns, so the DTO needs the permission model resolved first. |
+| `/api/v1/admin/bookings/:bookingId/assignment-candidates` | admin-bookings | `GET /api/admin/bookings/:id/assignment-candidates` | Read-only, but it is the preview of a mutation, so it must qualify providers with the predicate the assign call commits with. It does: both run PROVIDER_CAPABILITY_SQL. A preview narrower than its committer does not fail safe — it hides assignable providers. |
+| `/api/v1/admin/bookings/:bookingId/assign` | admin-bookings | `POST /api/admin/bookings/:id/assign` | Role-specific by AUTHORIZATION, not by truth: only an admin may name another actor as the provider. A provider accepting their own job goes through provider.jobs.accept, which derives identity from the token and can never name somebody else. |
+| `/api/v1/admin/bookings/:bookingId/reassign` | admin-bookings | `POST /api/admin/bookings/:id/reassign` | The override record — actor, reason, previous provider, new provider — is written by the executor, not by the controller, so it cannot be skipped by a caller that forgets to audit. Reassignment preserves the outgoing provider's progression rather than erasing it. |
+<!-- END GENERATED: v1-planned -->
+
+The count moves as domain commands land — `/auth/refresh` and `/search` were
+planned when this section was first written and are live now. It is generated
+from `V1_CONTRACT` for that reason: a hand-kept list of what does not exist yet
+is the first thing in an API document to become false.

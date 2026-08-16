@@ -332,7 +332,9 @@ describe('assign and reassign are not interchangeable', () => {
     seedAccepted(hoursFromNow(72));
     await transitionBooking({
       action: 'ADMIN_REASSIGN', bookingId: BOOKING, actorRole: 'admin', actorUid: 'admin-1',
-      metadata: { providerUid: 'provider-b' },
+      // The reason is REQUIRED by the action, not by the admin service:
+      // an override with no stated reason is refused before any write.
+      metadata: { providerUid: 'provider-b', reason: 'customer request' },
     });
 
     // The old provider's row survives as history; TAB 05 depends on an
@@ -358,7 +360,7 @@ describe('assign and reassign are not interchangeable', () => {
     });
     await transitionBooking({
       action: 'ADMIN_REASSIGN', bookingId: BOOKING, actorRole: 'admin', actorUid: 'admin-1',
-      metadata: { providerUid: 'provider-y' },
+      metadata: { providerUid: 'provider-y', reason: 'customer request' },
     });
 
     expect(store.transitions.map((t) => t.action)).toEqual(['ADMIN_ASSIGN', 'ADMIN_REASSIGN']);
@@ -586,11 +588,23 @@ describe('lock acquisition order is fixed', () => {
     expect(advisory).toBeGreaterThan(-1);
     expect(advisory).toBeLessThan(applyCall);
 
-    // And the conflict check is reachable only from inside applyState.
+    /**
+     * And the validation is reachable only from inside applyState.
+     *
+     * Two sites: the declaration, and the ONE deciding call. There is no
+     * longer a shadow copy — the canonical validation decides on every path,
+     * including auto-assignment, so a second non-deciding call would just be a
+     * duplicate query inside the transaction.
+     */
     const callSites = executor.split('\n').filter((l) => l.includes('assertAssignableProvider('));
-    expect(callSites).toHaveLength(2); // one declaration, one call
-    const call = callSites.find((l) => !l.includes('async function'))!;
-    expect(call).toContain('await assertAssignableProvider(client, loaded.id, nextProvider)');
+    expect(callSites).toHaveLength(2); // one declaration, one decider
+
+    const deciding = callSites.filter((l) => l.includes('loaded.id, nextProvider'));
+    expect(deciding).toHaveLength(1);
+    expect(deciding[0]).toContain('await assertAssignableProvider(client, loaded.id, nextProvider)');
+
+    // And it is not branched around: every profile reaches it.
+    expect(executor).not.toContain("profile === 'LEGACY_AUTO'");
 
     const applyState = executor.slice(executor.indexOf('async function applyState'));
     const assignBranch = applyState.slice(

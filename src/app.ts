@@ -50,6 +50,34 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
   (req as any).id = randomUUID();
   next();
 });
+
+/**
+ * ─── Observability (TAB 14, §140–§142) ──────────────────────────────────────
+ *
+ * Two middlewares, mounted as early as possible and in this order.
+ *
+ * `correlationMiddleware` runs AFTER the UUID stamp above and replaces that id
+ * when the caller supplied a usable one of their own, so a client's trace and
+ * ours become one trace. The inbound value is pattern-checked before it is
+ * adopted — a caller controls that header, and an unbounded string from the
+ * network would otherwise reach every log line and every error envelope. It
+ * also sets `X-Request-Id` on the response for EVERY route, not only v1: a
+ * customer reporting "it failed at 3:14" should be able to quote an id whatever
+ * they were calling.
+ *
+ * `requestLogMiddleware` records the metric for every request and emits one
+ * structured line on `res.finish`, so the status and latency are the real ones.
+ * It reads no body, no query string and no headers beyond the client label —
+ * the safe entity ids come from route parameters through a deny-by-default
+ * allow-list. A log that carries an address because somebody logged `req.body`
+ * is a breach with a retention period.
+ *
+ * Both are wrapped internally: an observability bug is a missing line, never a
+ * 500 on a live client.
+ */
+import { correlationMiddleware, requestLogMiddleware } from "./observability/requestLog";
+app.use(correlationMiddleware);
+app.use(requestLogMiddleware);
 app.use(
   "/api/paymongo/webhook",
   express.raw({ type: "application/json" })
@@ -169,6 +197,21 @@ app.use("/api/v1", cors(corsOptionsDelegate), v1Router);
  */
 import { legacyContractTelemetry } from "./api/v1/legacyTelemetry";
 app.use(legacyContractTelemetry);
+
+/**
+ * Deprecation signalling for legacy aliases (§149).
+ *
+ * Mounted immediately beside the telemetry so the route that is COUNTED is the
+ * route that is ANNOUNCED — one derivation from `V1_CONTRACT.legacy` feeds both,
+ * and a route cannot be advertised as superseded without also being measured.
+ *
+ * Response headers only: `Deprecation`, `Link rel="successor-version"`, and
+ * `Sunset` only where a date can honestly be kept. No status code, body or
+ * behaviour changes, because five live clients depend on these paths and a
+ * deprecation notice that alters a response is not a notice.
+ */
+import { deprecationHeaders } from "./api/v1/deprecation";
+app.use(deprecationHeaders);
 
 import authRoute from "./routes/auth.route";
 app.use("/api", cors(corsOptionsDelegate), authRoute);

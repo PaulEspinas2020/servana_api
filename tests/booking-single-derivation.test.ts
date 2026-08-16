@@ -140,6 +140,13 @@ describe('both legacy derivations delegate to the canonical machine', () => {
       'GENERATED from one branch list and proven equal to deriveCanonicalState over ' +
       'the full cross-product by tests/admin-ops-status-sql.test.ts. That proof is ' +
       'asserted to exist below, so the permission cannot outlive it.',
+    'services/booking/experiencePolicy.ts':
+      'The TAB 06 experience declaration. It names states to constrain WHEN a ' +
+      'booking-adjacent action may be attempted — which codes apply, when a ' +
+      'position may be disclosed, what may be rescheduled or disputed. It never ' +
+      'derives what state a booking is IN: every consumer calls ' +
+      'deriveCanonicalState first and passes the answer in, and the module holds ' +
+      'no database handle with which it could read the columns itself.',
     'controllers/providerDisclosure.ts':
       'PII staging. Decides how much of a CUSTOMER a provider may see, keyed by ' +
       'the assignment status — it never decides what state the booking is in. ' +

@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { pool } from '../src/db/dbQuery';
 import { db } from '../src/config';
+import { stripTransactionControl } from './lib/migrationSafety';
 
 const apply = process.argv.includes('--apply');
 const migrationsDir = path.resolve(__dirname, 'migrations');
@@ -61,9 +62,25 @@ async function main() {
   }
 }
 
-const stripTransaction = (sql: string) => sql
-  .replace(/^\s*BEGIN\s*;\s*/i, '')
-  .replace(/\s*COMMIT\s*;\s*$/i, '');
+/**
+ * The wrapper above owns the transaction, so the file's own must go.
+ *
+ * This used to be two anchored regexes — `/^\s*BEGIN\s*;/` and
+ * `/COMMIT\s*;\s*$/` — which matched nothing in 16 of the 36 migrations,
+ * because every file opens with a comment header and most close with a
+ * verification note. A surviving `COMMIT;` commits the wrapper's transaction
+ * mid-migration, so the ledger insert lands outside any transaction and the
+ * wrapper's own COMMIT fails with "no transaction in progress".
+ *
+ * `stripTransactionControl` masks comments, string literals and `$$` bodies
+ * first, so PL/pgSQL `BEGIN ... END` inside a `DO` block is left alone — eleven
+ * migrations here would become syntax errors otherwise.
+ *
+ * The checksum above is taken from the RAW file, so this changes no checksum
+ * and no migration file. `tests/migration-safety.test.ts` asserts the residue
+ * is empty for every file in the directory.
+ */
+const stripTransaction = stripTransactionControl;
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));

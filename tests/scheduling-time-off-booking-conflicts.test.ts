@@ -35,6 +35,7 @@ import {
   createTimeOff,
   findTimeOffBookingConflicts,
 } from "../src/services/providerAvailabilityEngine";
+import { NON_OCCUPYING_STATUSES } from "../src/services/booking/eligibilityPipeline";
 
 const query = (dbQuery as any).query as jest.Mock;
 
@@ -163,10 +164,25 @@ describe("the query finds what it must", () => {
     expect(sql).toMatch(/UNION/);
   });
 
-  it("ignores cancelled and completed work", async () => {
-    // Neither is a commitment the provider still holds.
+  it("ignores work the provider is no longer committed to", async () => {
+    /**
+     * Was `NOT IN ('CANCELLED', 'COMPLETED')`, written here by hand.
+     *
+     * That is the same "does this booking occupy the provider" question the
+     * assignment executor answers, and the two lists disagreed: this one
+     * treated a REFUNDED booking, or one cancelled under the one-L production
+     * spelling, as a live commitment. A provider could be refused time off
+     * because of a booking nobody expected them to work.
+     *
+     * The list now comes from the shared declaration, so this suite asserts
+     * against the same source the executor uses rather than a copy of it.
+     */
     const sql = await sqlOf(allDay);
-    expect(sql).toMatch(/NOT IN \('CANCELLED', 'COMPLETED'\)/);
+    for (const status of NON_OCCUPYING_STATUSES) {
+      expect(sql).toContain(`'${status}'`);
+    }
+    expect(sql).toContain('CANCELED');   // the one-L spelling this used to miss
+    expect(sql).toContain('REFUNDED');
   });
 
   it("compares dates in the operational timezone, not the server's", async () => {

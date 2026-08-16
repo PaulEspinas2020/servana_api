@@ -206,6 +206,11 @@ import { handlers as reviewHandlers } from './domains/reviews';
 import { handlers as settingsHandlers } from './domains/settings';
 import { handlers as authHandlers } from './domains/auth';
 import { handlers as bookingActionHandlers } from './domains/bookingActions';
+import { handlers as bookingExperienceHandlers } from './domains/bookingExperiences';
+import { handlers as financeHandlers } from './domains/finance';
+import { handlers as conversationHandlers } from './domains/conversations';
+import { handlers as accountHandlers } from './domains/account';
+import { handlers as homeHandlers } from './domains/home';
 import {
   perAccountLoginLimiter,
   perIpLoginLimiter,
@@ -213,6 +218,8 @@ import {
   perAccountOtpLimiter,
   perAccountRecoveryLimiter,
 } from '../../middleware/credentialLimiter';
+import { BucketName, V1_RATE_LIMITS } from './rateLimitPolicy';
+import { requirePermission } from '../../middleware/requirePermission';
 
 export const V1_HANDLERS: V1Handlers = {
   ...catalogHandlers,
@@ -224,26 +231,69 @@ export const V1_HANDLERS: V1Handlers = {
   ...settingsHandlers,
   ...authHandlers,
   ...bookingActionHandlers,
+  ...bookingExperienceHandlers,
+  ...financeHandlers,
+  ...conversationHandlers,
+  ...accountHandlers,
+  ...homeHandlers,
 };
 
 /**
- * Rate limits, per endpoint.
+ * The one `express-rate-limit` instance per declared bucket.
  *
- * Credential endpoints carry TWO limiters. Keyed on the identifier alone, an
- * attacker spraying one password across thousands of accounts from one host
- * gets a fresh budget per account and is never slowed; keyed on IP alone, one
- * carrier NAT locks out a city. Both must pass. See `middleware/credentialLimiter`.
+ * Instances, not factories: `express-rate-limit` counts per INSTANCE, so two
+ * endpoints sharing a bucket name deliberately share a counter — and building a
+ * fresh limiter per endpoint would silently give each one its own budget. This
+ * is the mistake `signInLimiter` makes in the other direction, where two routes
+ * that should NOT share a budget do.
  */
-export const V1_MIDDLEWARE: V1Middleware = {
-  'auth.login': [perAccountLoginLimiter, perIpLoginLimiter],
-  'auth.register': [perAccountRegisterLimiter, perIpLoginLimiter],
-  'auth.refresh': [perIpLoginLimiter],
-  'auth.verifyEmail': [perAccountOtpLimiter, perIpLoginLimiter],
-  'auth.verifyMobile': [perIpLoginLimiter],
-  'auth.forgotPassword': [perAccountRecoveryLimiter, perIpLoginLimiter],
-  'auth.resetPassword': [perAccountRecoveryLimiter, perIpLoginLimiter],
-  'auth.resendVerification': [perAccountRecoveryLimiter, perIpLoginLimiter],
+const BUCKET_MIDDLEWARE: Record<BucketName, RequestHandler> = {
+  perAccountLogin: perAccountLoginLimiter,
+  perAccountRegister: perAccountRegisterLimiter,
+  perAccountOtp: perAccountOtpLimiter,
+  perAccountRecovery: perAccountRecoveryLimiter,
+  perIp: perIpLoginLimiter,
 };
+
+/**
+ * Rate limits, per endpoint — derived from `rateLimitPolicy`, not restated here.
+ *
+ * Which endpoint gets which bucket, and the reason any endpoint has no
+ * per-account bucket, are declared in one place that the documentation and the
+ * tests read too. Endpoints whose policy is an empty list are omitted rather
+ * than mounted with an empty chain, so this map still contains exactly the
+ * endpoints that carry a limiter.
+ */
+/**
+ * Fine-grained admin permissions, per endpoint.
+ *
+ * `auth: 'admin'` proves role 1 and nothing more. The legacy admin finance
+ * routes additionally gate on a named permission from `adminPermissionService`,
+ * and a v1 successor that dropped that check would be a QUIETER route to the
+ * same data — the exact shape of privilege escalation a migration is supposed
+ * to avoid. Declared here rather than on the contract because permissions are
+ * an authorization detail the OpenAPI generator has no field for, and a
+ * permission key sitting unused in a data file reads as protection that is not
+ * mounted.
+ */
+const V1_PERMISSIONS: Record<string, string> = {
+  'admin.finance.reconciliation': 'reconciliation.view',
+};
+
+export const V1_MIDDLEWARE: V1Middleware = (() => {
+  const byId = new Map<string, RequestHandler[]>();
+
+  for (const [id, policy] of Object.entries(V1_RATE_LIMITS)) {
+    if (!policy.buckets.length) continue;
+    byId.set(id, policy.buckets.map((bucket) => BUCKET_MIDDLEWARE[bucket]));
+  }
+
+  for (const [id, permission] of Object.entries(V1_PERMISSIONS)) {
+    byId.set(id, [...(byId.get(id) ?? []), requirePermission(permission) as RequestHandler]);
+  }
+
+  return Object.fromEntries(byId);
+})();
 
 const built = buildV1Router(V1_HANDLERS, V1_MIDDLEWARE);
 

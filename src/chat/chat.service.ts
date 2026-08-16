@@ -4,6 +4,28 @@ import { toCamel } from "../helpers/idGenerator";
 import { notifyAdminsSafely } from '../services/adminNotificationService';
 import { createCustomerNotification, createNotification } from '../services/notification.service';
 import { firebaseConfig } from '../config';
+import {
+  ATTACHMENT_POLICY,
+  CLIENT_MESSAGE_ID,
+  MESSAGE_PAGE,
+  MESSAGE_BODY_MAX as POLICY_MESSAGE_BODY_MAX,
+  SEND_RATE_LIMIT,
+  SENDABLE_MESSAGE_TYPES,
+  SEAT_OF_ACCESS_ROLE,
+  mayWrite,
+  messageReadFloor,
+} from '../services/messaging/messagingPolicy';
+import {
+  recordDuplicateSuppressed,
+  recordSendFailure,
+} from '../services/messaging/messagingTelemetry';
+import {
+  buildMessageView,
+  readPointersOf,
+  type MessageView,
+} from '../services/messaging/conversationDto';
+import { publishEventSafely } from '../services/events/eventOutbox';
+import { dispatchSoon } from '../services/events/notificationProjector';
 
 /**
  * Transport-agnostic chat logic. Both the REST controller and the Socket.IO
@@ -35,6 +57,15 @@ export interface AccessResult {
   assignedAt?: string | null;
   /** Their assignment is CURRENTLY active. Governs send, never read. */
   assignmentActive?: boolean;
+  /**
+   * Why `canSend` is false, in words a client may show.
+   *
+   * Carried on the result rather than recomputed at the call site: the v1
+   * conversation DTO publishes it as `cannotSendReason`, and a transport layer
+   * that decides for itself why a write was refused is a second implementation
+   * of the rule that refused it.
+   */
+  sendRefusalReason?: string | null;
 }
 
 const deny = (wasParticipant = false): AccessResult => ({
@@ -148,10 +179,20 @@ export const resolveAccessForConversation = async (
   const rowCanSend = row ? row.can_send !== false : true;
   const stillPresent = row ? row.left_at == null : true;
 
+  /**
+   * Writability is DECIDED by the policy, not restated here.
+   *
+   * `mayWrite(status, seat)` is the same function the generated contract
+   * document builds its state table from, so the table is evidence of this
+   * behaviour rather than a description of it. `legacyIsClosed` carries the
+   * pre-`status` boolean, which may only refuse.
+   */
   const status = conversation.status || repo.CONVERSATION_STATUS.ACTIVE;
-  const statusWritable = repo.WRITABLE_STATUSES.includes(status);
-  // `is_closed` is still honoured for rows written before `status` existed.
-  const writable = statusWritable && conversation.is_closed !== true;
+  const seat = SEAT_OF_ACCESS_ROLE[base.role as 'client' | 'coworker'];
+  const writeDecision = mayWrite(status, seat, {
+    legacyIsClosed: conversation.is_closed === true,
+  });
+  const writable = writeDecision.allowed;
 
   const canRead = rowCanRead;
   /**
@@ -172,6 +213,12 @@ export const resolveAccessForConversation = async (
       allowed: true, role: base.role, canRead, canSend, wasParticipant: false,
       assignedAt: base.assignedAt ?? null,
       assignmentActive: base.assignmentActive === true,
+      sendRefusalReason: canSend
+        ? null
+        : writeDecision.reason
+          // The conversation is writable and this participant still cannot post:
+          // their assignment ended, or their participant row revoked it.
+          ?? 'You are no longer able to send messages in this conversation.',
     },
     conversation,
   };
@@ -179,17 +226,18 @@ export const resolveAccessForConversation = async (
 
 // ---- Conversations ---------------------------------------------------------
 
-/** Human-readable reason a write was refused, for the 409 body. */
-const conversationClosedMessage = (conversation: any): string => {
-  switch (conversation?.status) {
-    case repo.CONVERSATION_STATUS.READ_ONLY:
-      return "This booking conversation is read-only.";
-    case repo.CONVERSATION_STATUS.ARCHIVED:
-      return "This booking conversation has been archived.";
-    default:
-      return "Conversation is closed";
-  }
-};
+/**
+ * Human-readable reason a write was refused, for the 409 body.
+ *
+ * Asks the policy rather than switching on the status a second time. The strings
+ * are unchanged — the customer app and the provider portal both show them.
+ */
+const conversationClosedMessage = (conversation: any, access?: AccessResult): string =>
+  access?.sendRefusalReason
+  ?? mayWrite(conversation?.status ?? repo.CONVERSATION_STATUS.ACTIVE, 'customer', {
+    legacyIsClosed: conversation?.is_closed === true,
+  }).reason
+  ?? 'Conversation is closed';
 
 /**
  * Get the conversation for a booking, creating it (and the client/coworker
@@ -420,10 +468,34 @@ export const closeConversation = async (conversationId: number) => {
 
 // ---- Messages --------------------------------------------------------------
 
-/** Hydrate a message row with its attachments, camelCased. */
-const hydrateMessage = async (row: any) => {
+/**
+ * Hydrate a message row into THE message view.
+ *
+ * This used to be `toCamel(row)` with camelCased attachments stapled on, which
+ * meant the realtime payload, the REST body and the admin portal each got
+ * whatever columns the query happened to select. It now goes through
+ * `buildMessageView`, the single builder in `services/messaging/conversationDto`
+ * — the same one the canonical v1 DTO projects from. The legacy keys
+ * (`senderRole`, `createdAt`, the full attachment rows) are all still present
+ * and unchanged, because four shipped clients read them.
+ *
+ * `viewerUid`/`readPointers` are optional. When they are not supplied — the
+ * broadcast case, where there is no single viewer — `isMine` is false and the
+ * receipt counts are zero, which is the honest answer for a payload addressed
+ * to a room rather than a person. A client renders `isMine` from `senderUid`
+ * against its own identity anyway, which is the only place that comparison can
+ * be correct for a broadcast.
+ */
+const hydrateMessage = async (
+  row: any,
+  context: { viewerUid?: string | null; bookingId?: number | string | null; readPointers?: ReadonlyArray<{ uid: string; lastReadMessageId: number | null }> } = {},
+): Promise<MessageView> => {
   const attachments = await repo.listAttachments(row.id);
-  return { ...toCamel(row), attachments: attachments.map(toCamel) };
+  return buildMessageView(row, attachments, {
+    viewerUid: context.viewerUid ?? null,
+    bookingId: context.bookingId ?? null,
+    readPointers: context.readPointers,
+  });
 };
 
 /**
@@ -565,31 +637,41 @@ const notifyMessageRecipients = async (
   }
 };
 
-const MESSAGE_BODY_MAX = 4000;
-const ATTACHMENT_MAX = 5;
-const ATTACHMENT_BYTES_MAX = 10 * 1024 * 1024;
-const ALLOWED_ATTACHMENT_MIMES = new Set([
-  'image/jpeg', 'image/png', 'image/webp', 'application/pdf',
-]);
+/**
+ * The message limits, taken from the policy rather than restated.
+ *
+ * These four numbers previously lived here as literals and again in the
+ * hardening test as regexes, which is two places and no declaration. They are
+ * now one declaration with three readers — this module, the generated contract
+ * document, and the tests.
+ */
+const MESSAGE_BODY_MAX = POLICY_MESSAGE_BODY_MAX;
+const MESSAGE_PAGE_MAX = MESSAGE_PAGE.maxLimit;
+const ATTACHMENT_MAX = ATTACHMENT_POLICY.maxPerMessage;
+const ATTACHMENT_BYTES_MAX = ATTACHMENT_POLICY.maxBytes;
+const ALLOWED_ATTACHMENT_MIMES = new Set<string>(ATTACHMENT_POLICY.allowedMimeTypes);
 const sendWindows = new Map<string, number[]>();
 
 const assertSendRate = (uid: string) => {
   const now = Date.now();
-  const recent = (sendWindows.get(uid) ?? []).filter(t => now - t < 10_000);
-  if (recent.length >= 20) throw httpError(429, 'Too many messages. Please wait a moment and try again.');
+  const { windowMs, maxMessages } = SEND_RATE_LIMIT;
+  const recent = (sendWindows.get(uid) ?? []).filter(t => now - t < windowMs);
+  if (recent.length >= maxMessages) {
+    throw httpError(429, 'Too many messages. Please wait a moment and try again.', 'MESSAGE_RATE_LIMITED');
+  }
   recent.push(now);
   sendWindows.set(uid, recent);
   if (sendWindows.size > 10_000) {
     for (const [key, timestamps] of sendWindows) {
-      if (!timestamps.some(t => now - t < 10_000)) sendWindows.delete(key);
+      if (!timestamps.some(t => now - t < windowMs)) sendWindows.delete(key);
     }
   }
 };
 
 const normaliseAttachment = (actorUid: string, raw: any) => {
-  if (!raw || typeof raw !== 'object') throw httpError(422, 'Attachment is malformed');
+  if (!raw || typeof raw !== 'object') throw httpError(422, 'Attachment is malformed', 'ATTACHMENT_REJECTED');
   const url = typeof raw.url === 'string' ? raw.url.trim() : '';
-  if (!url || url.length > 2048) throw httpError(422, 'Attachment reference is invalid');
+  if (!url || url.length > 2048) throw httpError(422, 'Attachment reference is invalid', 'ATTACHMENT_REJECTED');
 
   const ownerPrefix = `${actorUid}_`;
   const legacyOwnedId = url.startsWith(ownerPrefix) && /^[A-Za-z0-9._:-]+$/.test(url);
@@ -610,16 +692,16 @@ const normaliseAttachment = (actorUid: string, raw: any) => {
     } catch { /* rejected below */ }
   }
   if (!legacyOwnedId && !ownedFirebaseUrl) {
-    throw httpError(422, 'Attachment must come from your Servana chat upload');
+    throw httpError(422, 'Attachment must come from your Servana chat upload', 'ATTACHMENT_REJECTED');
   }
 
   const mimeType = typeof raw.mimeType === 'string' ? raw.mimeType.trim().toLowerCase() : null;
   if (mimeType && !ALLOWED_ATTACHMENT_MIMES.has(mimeType)) {
-    throw httpError(422, 'Attachment type is not allowed');
+    throw httpError(422, 'Attachment type is not allowed', 'ATTACHMENT_REJECTED');
   }
   const sizeBytes = raw.sizeBytes == null ? null : Number(raw.sizeBytes);
   if (sizeBytes !== null && (!Number.isSafeInteger(sizeBytes) || sizeBytes < 1 || sizeBytes > ATTACHMENT_BYTES_MAX)) {
-    throw httpError(422, 'Attachment size is invalid');
+    throw httpError(422, 'Attachment size is invalid', 'ATTACHMENT_REJECTED');
   }
   const fileName = typeof raw.fileName === 'string'
     ? raw.fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100)
@@ -651,46 +733,66 @@ export const sendMessage = async (
   }
 ) => {
   const { access, conversation } = await resolveAccessForConversation(actor, conversationId);
-  if (!conversation) throw httpError(404, "Conversation not found");
-  if (!access.allowed) throw httpError(403, "Not a participant of this conversation");
+  if (!conversation) {
+    recordSendFailure('CONVERSATION_NOT_FOUND');
+    throw httpError(404, "Conversation not found", 'CONVERSATION_NOT_FOUND');
+  }
+  if (!access.allowed) {
+    recordSendFailure('CONVERSATION_ACCESS_DENIED');
+    throw httpError(403, "Not a participant of this conversation", 'CONVERSATION_ACCESS_DENIED');
+  }
   if (!access.canSend) {
     // 409 preserved for the closed case — the customer app and provider portal
     // both already branch on it. A read-only or archived conversation is the
     // same situation from the caller's point of view: the transcript is
     // readable, this write is not accepted.
-    throw httpError(409, conversationClosedMessage(conversation));
+    recordSendFailure('CONVERSATION_NOT_WRITABLE');
+    throw httpError(409, conversationClosedMessage(conversation, access), 'CONVERSATION_NOT_WRITABLE');
   }
 
   const type = input.type || "text";
-  const allowedTypes = new Set(["text", "image", "file"]);
-  if (!allowedTypes.has(type)) throw httpError(422, "Message type is not allowed");
+  if (!(SENDABLE_MESSAGE_TYPES as readonly string[]).includes(type)) {
+    recordSendFailure('MESSAGE_TYPE_NOT_ALLOWED');
+    throw httpError(422, "Message type is not allowed", 'MESSAGE_TYPE_NOT_ALLOWED');
+  }
 
   const body = typeof input.body === "string" ? input.body.trim() : "";
-  if (body.length > MESSAGE_BODY_MAX) throw httpError(422, "Message is too long");
-  if (/[^\t\n\r\x20-\uFFFF]/u.test(body)) throw httpError(422, 'Message contains unsupported control characters');
+  if (body.length > MESSAGE_BODY_MAX) throw httpError(422, "Message is too long", 'MESSAGE_TOO_LONG');
+  if (/[^\t\n\r\x20-\uFFFF]/u.test(body)) throw httpError(422, 'Message contains unsupported control characters', 'MESSAGE_CONTROL_CHARACTERS');
   const hasBody = body.length > 0;
   const hasAttachments = !!(input.attachments && input.attachments.length);
   if (type !== "system" && !hasBody && !hasAttachments) {
-    throw httpError(422, "Message must have a body or an attachment");
+    throw httpError(422, "Message must have a body or an attachment", 'MESSAGE_EMPTY');
   }
 
   const clientMsgId = input.clientMsgId?.trim();
-  if (!clientMsgId || clientMsgId.length < 16 || clientMsgId.length > 128) {
-    throw httpError(422, "A valid message idempotency key is required");
+  if (
+    !clientMsgId
+    || clientMsgId.length < CLIENT_MESSAGE_ID.minLength
+    || clientMsgId.length > CLIENT_MESSAGE_ID.maxLength
+  ) {
+    recordSendFailure('CLIENT_MSG_ID_INVALID');
+    throw httpError(422, "A valid message idempotency key is required", 'CLIENT_MSG_ID_INVALID');
   }
-  if (!/^[A-Za-z0-9._:-]+$/.test(clientMsgId)) {
-    throw httpError(422, 'Message idempotency key contains unsupported characters');
+  if (!new RegExp(CLIENT_MESSAGE_ID.pattern).test(clientMsgId)) {
+    recordSendFailure('CLIENT_MSG_ID_INVALID');
+    throw httpError(422, 'Message idempotency key contains unsupported characters', 'CLIENT_MSG_ID_INVALID');
   }
 
   // Idempotency: a retried send returns the original message.
   if (clientMsgId) {
     const existing = await repo.findMessageByClientId(conversationId, actor.uid, clientMsgId);
-    if (existing) return hydrateMessage(existing);
+    if (existing) {
+      // Counted, not treated as a failure — this is the retry path working. A
+      // rising rate means clients are timing out on writes that do succeed.
+      recordDuplicateSuppressed();
+      return hydrateMessage(existing);
+    }
   }
 
   assertSendRate(actor.uid);
   if ((input.attachments?.length ?? 0) > ATTACHMENT_MAX) {
-    throw httpError(422, `A message can include at most ${ATTACHMENT_MAX} attachments`);
+    throw httpError(422, `A message can include at most ${ATTACHMENT_MAX} attachments`, 'ATTACHMENT_REJECTED');
   }
   const attachments = (input.attachments ?? []).map(a => normaliseAttachment(actor.uid, a));
 
@@ -713,7 +815,13 @@ export const sendMessage = async (
     clientMsgId,
   });
 
-  if (!inserted.inserted) return hydrateMessage(inserted.message);
+  if (!inserted.inserted) {
+    // The pre-read above missed and the unique index caught it: two devices
+    // sending the same clientMsgId at the same moment. Same outcome, same
+    // counter — the original message, once.
+    recordDuplicateSuppressed();
+    return hydrateMessage(inserted.message);
+  }
   const message = inserted.message;
 
   if (attachments.length) {
@@ -738,6 +846,37 @@ export const sendMessage = async (
   // now the people actually talking to each other were not. See SW-03.
   void notifyMessageRecipients(conversation, message.id, actor.uid, access.role)
     .catch((e: any) => console.error('[chat] message notification failed:', e?.message));
+
+  /**
+   * The canonical domain event (TAB 09).
+   *
+   * Published BESIDE `notifyMessageRecipients`, not instead of it, and the
+   * projection uses the identical `chat_msg:{messageId}` key — so the
+   * owner-scoped unique index collapses the two producers into exactly one
+   * notification whichever wins the race. That is what lets the event layer
+   * become the producer without a flag day, and it is asserted in
+   * `tests/notification-dedup.test.ts` rather than assumed.
+   *
+   * `publishEventSafely` never throws: the message is already committed, and
+   * §45 says a committed fact must not fail because its announcement did.
+   */
+  void publishEventSafely({
+    name: 'MessageReceived',
+    refs: {
+      conversationId,
+      messageId: message.id,
+      bookingId: conversation.booking_id,
+    },
+    display: {
+      bookingCode: `SVN-${String(conversation.booking_id ?? 0).padStart(6, '0')}`,
+    },
+    // The sender, so the projector does not tell somebody they sent a message.
+    // The BODY never travels — a push payload is readable on a lock screen, and
+    // this is a conversation between a customer and someone in their home.
+    metadata: { actorUid: actor.uid, senderSeat: access.role },
+    dedupeKey: `MessageReceived:${message.id}`,
+  }).then(() => dispatchSoon());
+
   return full;
 };
 
@@ -776,45 +915,92 @@ export const postSystemMessage = async (
   return full;
 };
 
+export interface MessagePage {
+  messages: MessageView[];
+  nextCursor: number | null;
+  /** The resolved access, so a caller need not authorize a second time. */
+  access: AccessResult;
+  conversation: any;
+  /** The limit actually applied after clamping. */
+  limit: number;
+}
+
+/**
+ * The transcript read, once.
+ *
+ * `getMessages` below is the legacy projection of this — same authorization,
+ * same query, same builder, narrower return. The canonical v1 handler calls
+ * THIS, so the two endpoints cannot page differently, apply different floors, or
+ * disagree about what a message looks like.
+ */
+export const getMessagePage = async (
+  actor: ChatActor,
+  conversationId: number,
+  limit = MESSAGE_PAGE.defaultLimit,
+  before?: number
+): Promise<MessagePage> => {
+  const { access, conversation } = await resolveAccessForConversation(actor, conversationId);
+  if (!conversation) throw httpError(404, "Conversation not found", 'CONVERSATION_NOT_FOUND');
+  if (!access.allowed) throw httpError(403, "Not a participant of this conversation", 'CONVERSATION_ACCESS_DENIED');
+
+  if (!Number.isSafeInteger(limit) || limit < 1) throw httpError(422, 'limit must be a positive integer', 'PAGE_PARAMETER_INVALID');
+  if (before !== undefined && (!Number.isSafeInteger(before) || before <= 0)) {
+    throw httpError(422, 'before must be a positive message id', 'PAGE_PARAMETER_INVALID');
+  }
+  /**
+   * The read floor, DECIDED by the policy from the ASSIGNMENT.
+   *
+   * Admin and the customer read the whole thread: the audit trail is the point
+   * for one, and it is their own conversation for the other. A provider reads
+   * from their `assigned_at` onward, and a missing timestamp FAILS CLOSED —
+   * a null floor used to mean "no floor", which is how a provider with no
+   * participant row came to read the previous provider's entire conversation.
+   *
+   * `messageReadFloor` is the same function the generated document renders its
+   * visibility table from, so the table cannot describe a floor this code does
+   * not apply.
+   */
+  const seat = SEAT_OF_ACCESS_ROLE[(access.role ?? 'coworker') as 'client' | 'coworker' | 'admin'];
+  const floor = messageReadFloor(seat, access.assignedAt ?? null);
+  if (floor.mode === 'denied') {
+    throw httpError(403, floor.reason ?? 'Message history is not available for this assignment', 'MESSAGE_HISTORY_UNAVAILABLE');
+  }
+  const visibleAfter: string | null = floor.since;
+  const boundedLimit = Math.min(limit, MESSAGE_PAGE_MAX);
+  const rows = await repo.listMessages(conversationId, boundedLimit, before, visibleAfter);
+
+  // Read pointers come from the ACTIVE participants, so the receipt counts on
+  // every message in the page are derived from one load rather than one query
+  // per message.
+  const participants = await repo.listParticipants(conversationId, false);
+  const readPointers = readPointersOf(participants);
+
+  const messages = await Promise.all(
+    rows.map((row: any) =>
+      hydrateMessage(row, {
+        viewerUid: actor.uid,
+        bookingId: conversation.booking_id ?? null,
+        readPointers,
+      }),
+    ),
+  );
+  const nextCursor = rows.length === boundedLimit ? Number(rows[rows.length - 1].id) : null;
+  return { messages, nextCursor, access, conversation, limit: boundedLimit };
+};
+
+/**
+ * The legacy transcript shape. `{ messages, nextCursor }` and nothing else —
+ * `chat.controller` spreads this straight into its response body, so anything
+ * added here becomes a public field of a route four clients read.
+ */
 export const getMessages = async (
   actor: ChatActor,
   conversationId: number,
-  limit = 30,
+  limit = MESSAGE_PAGE.defaultLimit,
   before?: number
 ) => {
-  const { access, conversation } = await resolveAccessForConversation(actor, conversationId);
-  if (!conversation) throw httpError(404, "Conversation not found");
-  if (!access.allowed) throw httpError(403, "Not a participant of this conversation");
-
-  if (!Number.isSafeInteger(limit) || limit < 1) throw httpError(422, 'limit must be a positive integer');
-  if (before !== undefined && (!Number.isSafeInteger(before) || before <= 0)) {
-    throw httpError(422, 'before must be a positive message id');
-  }
-  /**
-   * The read floor, derived from the ASSIGNMENT.
-   *
-   * Admin and the customer read the whole thread: the audit trail is the point
-   * for one, and it is their own conversation for the other.
-   *
-   * A provider reads from their `assigned_at` onward. If the assignment carries
-   * no usable timestamp, this FAILS CLOSED — a null floor used to mean "no
-   * floor", which is how a provider with no participant row came to read the
-   * previous provider's entire conversation. Denying is the safe answer to
-   * "I cannot tell where your access starts".
-   */
-  const unbounded = access.role === 'admin' || access.role === 'client';
-  let visibleAfter: string | null = null;
-  if (!unbounded) {
-    visibleAfter = access.assignedAt ?? null;
-    if (!visibleAfter) {
-      throw httpError(403, 'Message history is not available for this assignment');
-    }
-  }
-  const boundedLimit = Math.min(limit, 100);
-  const rows = await repo.listMessages(conversationId, boundedLimit, before, visibleAfter);
-  const messages = await Promise.all(rows.map(hydrateMessage));
-  const nextCursor = rows.length === boundedLimit ? rows[rows.length - 1].id : null;
-  return { messages, nextCursor };
+  const page = await getMessagePage(actor, conversationId, limit, before);
+  return { messages: page.messages, nextCursor: page.nextCursor };
 };
 
 export const editMessage = async (
@@ -824,23 +1010,23 @@ export const editMessage = async (
   body: string
 ) => {
   const { access, conversation } = await resolveAccessForConversation(actor, conversationId);
-  if (!conversation) throw httpError(404, "Conversation not found");
-  if (!access.allowed) throw httpError(403, "Not allowed");
-  if (!access.canSend) throw httpError(409, conversationClosedMessage(conversation));
+  if (!conversation) throw httpError(404, "Conversation not found", 'CONVERSATION_NOT_FOUND');
+  if (!access.allowed) throw httpError(403, "Not allowed", 'CONVERSATION_ACCESS_DENIED');
+  if (!access.canSend) throw httpError(409, conversationClosedMessage(conversation, access), 'CONVERSATION_NOT_WRITABLE');
 
   const original = await repo.getMessageById(messageId);
-  if (!original || original.conversation_id !== conversation.id) throw httpError(404, "Message not found");
+  if (!original || original.conversation_id !== conversation.id) throw httpError(404, "Message not found", 'MESSAGE_NOT_FOUND');
   if (original.sender_uid !== actor.uid && access.role !== "admin") {
-    throw httpError(403, "Can only edit your own messages");
+    throw httpError(403, "Can only edit your own messages", 'MESSAGE_NOT_EDITABLE');
   }
-  if (original.type === 'system') throw httpError(409, 'System messages cannot be edited');
+  if (original.type === 'system') throw httpError(409, 'System messages cannot be edited', 'MESSAGE_NOT_EDITABLE');
   const cleanBody = typeof body === 'string' ? body.trim() : '';
-  if (!cleanBody) throw httpError(422, 'Message body is required');
+  if (!cleanBody) throw httpError(422, 'Message body is required', 'MESSAGE_EMPTY');
   if (cleanBody.length > MESSAGE_BODY_MAX) throw httpError(422, 'Message is too long');
-  if (/[^\t\n\r\x20-\uFFFF]/u.test(cleanBody)) throw httpError(422, 'Message contains unsupported control characters');
+  if (/[^\t\n\r\x20-\uFFFF]/u.test(cleanBody)) throw httpError(422, 'Message contains unsupported control characters', 'MESSAGE_CONTROL_CHARACTERS');
 
   const updated = await repo.editMessage(messageId, cleanBody);
-  if (!updated) throw httpError(409, "Message cannot be edited");
+  if (!updated) throw httpError(409, "Message cannot be edited", 'MESSAGE_NOT_EDITABLE');
   const full = await hydrateMessage(updated);
   emitToConversation(conversationId, "message:updated", full);
   return full;
@@ -852,13 +1038,13 @@ export const deleteMessage = async (
   messageId: number
 ) => {
   const { access, conversation } = await resolveAccessForConversation(actor, conversationId);
-  if (!conversation) throw httpError(404, "Conversation not found");
-  if (!access.allowed) throw httpError(403, "Not allowed");
+  if (!conversation) throw httpError(404, "Conversation not found", 'CONVERSATION_NOT_FOUND');
+  if (!access.allowed) throw httpError(403, "Not allowed", 'CONVERSATION_ACCESS_DENIED');
 
   const original = await repo.getMessageById(messageId);
-  if (!original || original.conversation_id !== conversation.id) throw httpError(404, "Message not found");
+  if (!original || original.conversation_id !== conversation.id) throw httpError(404, "Message not found", 'MESSAGE_NOT_FOUND');
   if (original.sender_uid !== actor.uid && access.role !== "admin") {
-    throw httpError(403, "Can only delete your own messages");
+    throw httpError(403, "Can only delete your own messages", 'MESSAGE_NOT_EDITABLE');
   }
 
   const deleted = await repo.softDeleteMessage(messageId);
@@ -873,15 +1059,15 @@ export const markRead = async (
   lastReadMessageId: number
 ) => {
   const { access, conversation } = await resolveAccessForConversation(actor, conversationId);
-  if (!conversation) throw httpError(404, "Conversation not found");
-  if (!access.allowed) throw httpError(403, "Not a participant of this conversation");
+  if (!conversation) throw httpError(404, "Conversation not found", 'CONVERSATION_NOT_FOUND');
+  if (!access.allowed) throw httpError(403, "Not a participant of this conversation", 'CONVERSATION_ACCESS_DENIED');
 
   if (!Number.isSafeInteger(lastReadMessageId) || lastReadMessageId <= 0) {
-    throw httpError(422, 'lastReadMessageId must be a positive message id');
+    throw httpError(422, 'lastReadMessageId must be a positive message id', 'READ_POINTER_INVALID');
   }
   const target = await repo.getMessageById(lastReadMessageId);
   if (!target || Number(target.conversation_id) !== conversationId) {
-    throw httpError(422, 'Read pointer must reference a message in this conversation');
+    throw httpError(422, 'Read pointer must reference a message in this conversation', 'READ_POINTER_INVALID');
   }
   const updated = await repo.setLastRead(conversationId, actor.uid, lastReadMessageId);
   if (updated) {
@@ -905,7 +1091,7 @@ export const reportMessage = async (
   description: string,
 ): Promise<{ reportId: string }> => {
   const { access } = await resolveAccessForConversation(actor, conversationId);
-  if (!access.allowed) throw httpError(403, "Not a participant of this conversation");
+  if (!access.allowed) throw httpError(403, "Not a participant of this conversation", 'CONVERSATION_ACCESS_DENIED');
   if (!Number.isSafeInteger(messageId) || messageId <= 0) throw httpError(422, 'Invalid message id');
   const message = await repo.getMessageById(messageId);
   if (!message || Number(message.conversation_id) !== conversationId) {
@@ -926,12 +1112,49 @@ export const reportMessage = async (
   return { reportId: String(report.id) };
 };
 
+/**
+ * The refusal vocabulary.
+ *
+ * The legacy chat routes answer `{ success: false, message }` and a status, and
+ * that is all four shipped clients have ever had to branch on. The canonical v1
+ * endpoints answer a CODE, and deriving one from an English message would be a
+ * transport layer re-deciding a domain question by string matching.
+ *
+ * So the refusal travels WITH the error. `status` and `message` are unchanged —
+ * the legacy responses are byte-identical — and `code` is additive, read only by
+ * `api/v1/domains/conversations.ts`, which renames it into the v1 enum and never
+ * re-evaluates the policy that produced it.
+ */
+export type MessagingRefusalCode =
+  | 'CONVERSATION_NOT_FOUND'
+  | 'CONVERSATION_ACCESS_DENIED'
+  | 'CONVERSATION_NOT_WRITABLE'
+  | 'MESSAGE_HISTORY_UNAVAILABLE'
+  | 'MESSAGE_INVALID'
+  | 'MESSAGE_TYPE_NOT_ALLOWED'
+  | 'MESSAGE_TOO_LONG'
+  | 'MESSAGE_CONTROL_CHARACTERS'
+  | 'MESSAGE_EMPTY'
+  | 'CLIENT_MSG_ID_INVALID'
+  | 'ATTACHMENT_REJECTED'
+  | 'MESSAGE_RATE_LIMITED'
+  | 'MESSAGE_NOT_FOUND'
+  | 'MESSAGE_NOT_EDITABLE'
+  | 'READ_POINTER_INVALID'
+  | 'PAGE_PARAMETER_INVALID';
+
 export interface HttpError extends Error {
   status: number;
+  code?: MessagingRefusalCode;
 }
 
-export const httpError = (status: number, message: string): HttpError => {
+export const httpError = (
+  status: number,
+  message: string,
+  code?: MessagingRefusalCode,
+): HttpError => {
   const e = new Error(message) as HttpError;
   e.status = status;
+  if (code) e.code = code;
   return e;
 };

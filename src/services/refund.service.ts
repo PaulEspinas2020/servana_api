@@ -3,6 +3,7 @@ import { db } from "../config";
 import dbQuery, { pool } from "../db/dbQuery";
 import { send } from "../helpers/mailer";
 import { getUserInfoByBookingId } from "./user.service";
+import { ensureFinanceLedgerSchema, recordPaymentRefunded } from "./finance/financeLedger";
 
 const dbSchema = db.schema;
 const PAYMONGO_REFUND_TIMEOUT_MS = 15_000;
@@ -45,6 +46,10 @@ const persistSuccessfulRefund = async (
   rawResponse: any,
   additionalRequestId?: number,
 ) => {
+  // Ensured before the transaction opens: the ledger write below runs on this
+  // transaction's client, and issuing DDL from a second connection while it is
+  // open is ordering nobody should have to reason about.
+  await ensureFinanceLedgerSchema();
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -53,10 +58,23 @@ const persistSuccessfulRefund = async (
           SET status = 'REFUNDED', refunded_at = NOW(), refunded_amount = amount,
               refund_reference = $2, raw_response = $3, updated_at = NOW()
         WHERE id = $1 AND status = 'REFUNDING'
-        RETURNING booking_id`,
+        RETURNING booking_id, amount, COALESCE(refund_attempt, 0) AS refund_attempt`,
       [payment.id, refundId, rawResponse],
     );
     if (!updated.rowCount) throw new Error("Refund state changed before settlement");
+
+    // The money went back. Recorded in the same transaction that records the
+    // state change, so the two can never disagree about whether it happened.
+    await recordPaymentRefunded(
+      {
+        bookingId: Number(updated.rows[0].booking_id),
+        paymentId: Number(payment.id),
+        refundAttempt: Number(updated.rows[0].refund_attempt),
+        amount: updated.rows[0].amount,
+        processorReference: refundId,
+      },
+      client,
+    );
     if (additionalRequestId) {
       await client.query(
         `UPDATE ${dbSchema}.booking_additional_requests

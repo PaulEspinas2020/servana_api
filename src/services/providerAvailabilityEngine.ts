@@ -19,8 +19,16 @@
 import dbQuery from '../db/dbQuery';
 import { pool } from '../db/dbQuery';
 import { db } from '../config';
+import {
+  NON_OCCUPYING_STATUSES,
+  OVERLAPS_SPAN_SQL,
+  serviceDurationMinsSql,
+} from './booking/eligibilityPipeline';
 
 const s = db.schema;
+
+/** The executor's occupancy list, as a SQL literal list. Built, never retyped. */
+const OCCUPANCY_EXCLUSION_SQL = NON_OCCUPYING_STATUSES.map((st) => `'${st}'`).join(', ');
 
 // ── Schema bootstrap ──────────────────────────────────────────────────────────
 
@@ -459,19 +467,22 @@ export const findTimeOffBookingConflicts = async (
   const to   = window.allDay ? '24:00' : (window.endTime   ?? '24:00');
 
   const res = await dbQuery.query(
+    // Same occupancy question as every other conflict query, so the same list:
+    // a booking cancelled under the one-L production spelling, or refunded, does
+    // not occupy the provider and must not block their time-off request.
     `WITH assigned AS (
        SELECT b.id, b.schedule, b.status, b.service_option_id
          FROM ${s}.bookings b
-        WHERE b.worker_uid = $1 AND b.status NOT IN ('CANCELLED', 'COMPLETED')
+        WHERE b.worker_uid = $1 AND b.status NOT IN (${OCCUPANCY_EXCLUSION_SQL})
        UNION
        SELECT b.id, b.schedule, b.status, b.service_option_id
          FROM ${s}.bookings b
          JOIN ${s}.booking_workers bw ON bw.booking_id = b.id
-        WHERE bw.worker_uid = $1 AND b.status NOT IN ('CANCELLED', 'COMPLETED')
+        WHERE bw.worker_uid = $1 AND b.status NOT IN (${OCCUPANCY_EXCLUSION_SQL})
      )
      SELECT a.id, a.schedule, a.status,
             sv.name AS service_name,
-            COALESCE(so.duration_mins, 120) AS duration_mins,
+            ${serviceDurationMinsSql('so')} AS duration_mins,
             to_char(a.schedule AT TIME ZONE $5, 'YYYY-MM-DD') AS local_date,
             to_char(a.schedule AT TIME ZONE $5, 'HH24:MI')    AS local_time
        FROM assigned a
@@ -483,9 +494,10 @@ export const findTimeOffBookingConflicts = async (
           OR (
             -- Half-open overlap against the booking's real span, so time off
             -- ending at 12:00 does not collide with a booking starting at 12:00.
+            -- Same duration expression as every other occupancy question.
             (a.schedule AT TIME ZONE $5)::time < $7::time
             AND ((a.schedule AT TIME ZONE $5)
-                 + (COALESCE(so.duration_mins, 120) || ' minutes')::interval)::time > $6::time
+                 + (${serviceDurationMinsSql('so')} || ' minutes')::interval)::time > $6::time
           )
         )
       ORDER BY a.schedule ASC
@@ -886,24 +898,36 @@ export const explainAvailability = async (
          )`,
       [providerUid, operationalDate(startAt), zonedParts(startAt).hhmm, zonedParts(endAt).hhmm]
     ),
-    // Booking conflict: active booking within ±2-hour window.
-    // Admin-created bookings set worker_uid on the bookings row AND write a
-    // booking_workers row — union both so admin bookings are caught too.
+    /**
+     * Booking conflict: half-open overlap against each job's real span.
+     *
+     * The predicate is the executor's, imported rather than restated, so this
+     * Admin answer and the assignment it previews cannot disagree about the
+     * same provider.
+     *
+     * Note `$3` is now genuinely the END of the window. Under the old fixed
+     * ±2h rule this query was passed `startAt` twice and the second value was
+     * inert — the padding did the work, and the caller's carefully computed end
+     * instant was thrown away.
+     *
+     * Admin-created bookings set worker_uid on the bookings row AND write a
+     * booking_workers row — union both so admin bookings are caught too.
+     */
     dbQuery.query(
-      `SELECT id FROM ${s}.bookings
-       WHERE worker_uid = $1
-         AND status NOT IN ('CANCELLED', 'COMPLETED')
-         AND schedule BETWEEN $2::timestamptz - INTERVAL '2 hours'
-                          AND $3::timestamptz + INTERVAL '2 hours'
+      `SELECT b.id FROM ${s}.bookings b
+       LEFT JOIN ${s}.service_options so ON so.id = b.service_option_id
+       WHERE b.worker_uid = $1
+         AND b.status NOT IN (${OCCUPANCY_EXCLUSION_SQL})
+         AND ${OVERLAPS_SPAN_SQL('$2::timestamptz', '$3::timestamptz')}
        UNION
        SELECT b.id FROM ${s}.bookings b
        JOIN ${s}.booking_workers bw ON bw.booking_id = b.id
+       LEFT JOIN ${s}.service_options so ON so.id = b.service_option_id
        WHERE bw.worker_uid = $1
-         AND b.status NOT IN ('CANCELLED', 'COMPLETED')
-         AND b.schedule BETWEEN $2::timestamptz - INTERVAL '2 hours'
-                            AND $3::timestamptz + INTERVAL '2 hours'
+         AND b.status NOT IN (${OCCUPANCY_EXCLUSION_SQL})
+         AND ${OVERLAPS_SPAN_SQL('$2::timestamptz', '$3::timestamptz')}
        LIMIT 1`,
-      [providerUid, startAt, startAt]
+      [providerUid, startAt, endAt]
     ),
   ]);
 
@@ -922,7 +946,7 @@ export const explainAvailability = async (
     reasons.push({
       code: 'BOOKING_CONFLICT',
       severity: 'blocker',
-      message: `Provider has an existing booking within the ±2-hour window (booking #${conflictRes.rows[0].id})`,
+      message: `Provider has an existing booking overlapping this window (booking #${conflictRes.rows[0].id})`,
     });
   }
 

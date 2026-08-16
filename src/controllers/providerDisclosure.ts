@@ -57,6 +57,48 @@ export const RELINQUISHED_WORKER_STATUSES: ReadonlySet<string> = new Set([
   'REASSIGNED',
 ]);
 
+/**
+ * Assignment statuses whose holder may still READ the job at all.
+ *
+ * ## Why this is not the same question as "how much may they see"
+ *
+ * `disclosureLevelFor` answers how much of a customer a provider sees. It
+ * returns `none` for a relinquished provider — which staged the PII correctly
+ * and still handed back a job card: an empty husk that confirmed the booking
+ * exists, when it exists, and roughly when it was scheduled.
+ *
+ * The Master Command's leakage rule is stronger than staging. A provider who
+ * has relinquished a job must get the SAME answer as for a booking that does
+ * not exist. So the read is scoped too, and both scopes come from one list:
+ * anything not relinquished.
+ *
+ * ## What this deliberately keeps
+ *
+ * `COMPLETED`. The provider did the work, is owed for it, and the payout window
+ * is 72 hours — a job that vanished from their list the moment it finished
+ * would be a support ticket, not a privacy improvement.
+ *
+ * `ASSIGNED`. That is the offer, before acceptance; withholding it would mean
+ * nobody could ever accept anything.
+ */
+export const READABLE_WORKER_STATUSES: readonly string[] = [
+  'ASSIGNED',
+  'ACCEPTED',
+  'EN_ROUTE',
+  'ARRIVED',
+  'IN_PROGRESS',
+  'COMPLETED',
+];
+
+/**
+ * The readable set as a SQL literal list.
+ *
+ * Built from the declaration, so a provider-facing query cannot widen the scope
+ * by retyping a status that the disclosure policy calls relinquished.
+ */
+export const READABLE_WORKER_STATUS_SQL: string =
+  READABLE_WORKER_STATUSES.map((status) => `'${status}'`).join(',');
+
 export type DisclosureLevel = 'full' | 'area' | 'none';
 
 /**

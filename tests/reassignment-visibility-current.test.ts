@@ -93,7 +93,8 @@ describe('the new provider does not inherit the old transcript', () => {
   it('message reads are floored at the ASSIGNMENT timestamp', () => {
     // Authorization and the window now come from one row, so they cannot
     // disagree — which is what let a missing projection row remove the floor.
-    expect(service).toContain('visibleAfter = access.assignedAt');
+    expect(service).toContain('messageReadFloor(seat, access.assignedAt');
+    expect(service).toContain('const visibleAfter: string | null = floor.since');
     expect(repo).toContain('($4::timestamptz IS NULL OR created_at >= $4)');
     expect(repo).toContain('getProviderAssignmentWindow');
   });
@@ -109,8 +110,13 @@ describe('the new provider does not inherit the old transcript', () => {
   it('admin and the customer keep the whole history', () => {
     // Deliberately unbounded: the audit trail is the point for one, and it is
     // their own conversation for the other.
-    expect(service).toContain("access.role === 'admin' || access.role === 'client'");
-    expect(service).toContain('const unbounded');
+    // TAB 08 moved the decision into `messagingPolicy.messageReadFloor`, so it
+    // is asserted against the real function rather than against the `if` that
+    // used to hold it. Same two seats, same unbounded answer.
+    const { messageReadFloor } = require('../src/services/messaging/messagingPolicy');
+    expect(messageReadFloor('customer', null).mode).toBe('full');
+    expect(messageReadFloor('support', null).mode).toBe('full');
+    expect(service).toContain('SEAT_OF_ACCESS_ROLE[');
   });
 
   it('the handover message does not say WHY the provider changed', () => {
@@ -138,12 +144,14 @@ describe('LEAK CLOSED: the floor no longer depends on the projection', () => {
      * It holds because the floor is read from the assignment, not from the
      * absent projection row, so the row's absence contributes nothing.
      */
-    expect(service).toContain('visibleAfter = access.assignedAt');
+    expect(service).toContain('messageReadFloor(seat, access.assignedAt');
+    expect(service).toContain('const visibleAfter: string | null = floor.since');
     expect(service).not.toContain('participant?.joined_at ?? null');
 
     // And when the assignment cannot supply a timestamp, it denies rather than
     // falling back to an unbounded read.
-    expect(service).toContain("throw httpError(403, 'Message history is not available for this assignment')");
+    expect(service).toContain("'Message history is not available for this assignment'");
+    expect(service).toContain("'MESSAGE_HISTORY_UNAVAILABLE'");
   });
 
   it('a stale can_send cannot outlive the assignment', () => {
@@ -244,7 +252,8 @@ describe('bounded historical read — the unblocked matrix', () => {
   const service = codeOf('chat/chat.service.ts');
 
   it('T1: the window starts at the provider OWN assigned_at', () => {
-    expect(service).toContain('visibleAfter = access.assignedAt');
+    expect(service).toContain('messageReadFloor(seat, access.assignedAt');
+    expect(service).toContain('const visibleAfter: string | null = floor.since');
     expect(codeOf('chat/chat.repository.ts')).toContain('getProviderAssignmentWindow');
   });
 
@@ -252,7 +261,8 @@ describe('bounded historical read — the unblocked matrix', () => {
     // The floor is read from the assignment, so the projection's absence
     // contributes nothing rather than removing the bound.
     expect(service).not.toContain('participant?.joined_at ?? null');
-    expect(service).toContain("throw httpError(403, 'Message history is not available for this assignment')");
+    expect(service).toContain("'Message history is not available for this assignment'");
+    expect(service).toContain("'MESSAGE_HISTORY_UNAVAILABLE'");
   });
 
   it('T5: reconciler failure widens NOBODY', () => {
@@ -271,16 +281,21 @@ describe('bounded historical read — the unblocked matrix', () => {
     expect(reconciler).not.toContain('UPDATE');
 
     // And the read path does not depend on it.
-    expect(service).toContain('visibleAfter = access.assignedAt');
+    expect(service).toContain('messageReadFloor(seat, access.assignedAt');
+    expect(service).toContain('const visibleAfter: string | null = floor.since');
     expect(service).toContain('const canSend = base.canSend &&');
   });
 
   it('T6: the customer keeps the full conversation', () => {
-    expect(service).toContain("access.role === 'admin' || access.role === 'client'");
+    const { messageReadFloor } = require('../src/services/messaging/messagingPolicy');
+    expect(messageReadFloor('customer', null)).toMatchObject({ mode: 'full', since: null });
   });
 
   it('T7: admin keeps the full conversation', () => {
-    expect(service).toContain("access.role === 'admin'");
+    const { messageReadFloor } = require('../src/services/messaging/messagingPolicy');
+    expect(messageReadFloor('support', null)).toMatchObject({ mode: 'full', since: null });
+    // Support is still authorized by ROLE, and that has not moved.
+    expect(service).toContain('base.role === "admin"');
   });
 
   it('T8: attachments follow the parent message exactly', () => {

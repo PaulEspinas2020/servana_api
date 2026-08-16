@@ -62,6 +62,23 @@ jest.mock('../src/middleware/requireProviderRole', () => ({
   },
 }));
 
+/**
+ * The admin permission gate. TAB 07's reconciliation route carries
+ * `requirePermission('reconciliation.view')` on top of its role check, so this
+ * suite has to have it WIRED for the route to answer at all — which is the
+ * property that matters: a v1 admin route mounted without the permission its
+ * legacy predecessor required would fail here.
+ */
+jest.mock('../src/middleware/requirePermission', () => ({
+  __esModule: true,
+  requirePermission: (permission: string) => (req: any, res: any, next: any) => {
+    if (req.headers['x-test-permission'] !== permission) {
+      return res.status(403).json({ status: 'failed', code: 'PERMISSION_REQUIRED' });
+    }
+    next();
+  },
+}));
+
 jest.mock('../src/middleware/verifyRoles', () => ({
   __esModule: true,
   default: () => (req: any, res: any, next: any) => {
@@ -145,6 +162,11 @@ jest.mock('../src/services/bookingAccessService', () => {
     assertBookingAccess: jest.fn(async (bookingId: number) => {
       if (bookingId === 404) throw new BookingAccessError('gone', 404, 'BOOKING_NOT_FOUND');
       if (bookingId === 403) throw new BookingAccessError('not yours', 403, 'BOOKING_ACCESS_DENIED');
+      // The experience handlers derive the ACTOR from this relationship rather
+      // than from a role claim, so the fixture needs a booking whose caller is
+      // the provider: additional work may only be raised by the provider
+      // working the job. Booking 8 is that booking.
+      if (bookingId === 8) return 'provider';
       return 'customer';
     }),
   };
@@ -152,6 +174,141 @@ jest.mock('../src/services/bookingAccessService', () => {
 jest.mock('../src/services/technicianService', () => ({
   getJobCardsByWorker: jest.fn().mockResolvedValue([{ id: 1 }, { id: 2 }]),
   getJobCardByWorker: jest.fn(async (_uid: string, bookingId: number) => (bookingId === 404 ? null : { id: bookingId })),
+}));
+// -- TAB 06 booking experiences. Mocked for the same reason every other domain
+//    service here is: the subject under test is routing and composition, and
+//    each of these is exercised against its own fake in its own suite.
+jest.mock('../src/services/booking/bookingOtpService', () => {
+  const actual = jest.requireActual('../src/services/booking/bookingOtpService');
+  return {
+    // `parsePurpose` is pure validation and part of what the route contract
+    // promises, so it is NOT faked.
+    parsePurpose: actual.parsePurpose,
+    BookingOtpError: actual.BookingOtpError,
+    requestBookingOtp: jest.fn(async ({ bookingId, purpose }: any) => ({
+      bookingId, purpose, delivery: 'email', recipient: 'customer',
+      expiresAt: '2026-08-20T10:00:00.000Z',
+      resendAvailableAt: '2026-08-20T09:01:00.000Z',
+      issuesRemaining: 9, attemptsRemaining: 5,
+    })),
+    verifyBookingOtp: jest.fn(async ({ bookingId, purpose }: any) => ({
+      bookingId, purpose, attemptsRemaining: 5,
+      transition: {
+        bookingId, action: 'CUSTOMER_CONFIRM_OTP',
+        fromState: 'PENDING_OTP', toState: 'AWAITING_ASSIGNMENT',
+        idempotentReplay: false, stateChanged: true,
+      },
+    })),
+    readCredentialState: jest.fn(async () => ({
+      purpose: 'BOOKING_CONFIRMATION', present: true,
+      issuedAt: new Date('2026-08-20T09:00:00.000Z'),
+      expiresAt: new Date('2026-08-20T10:00:00.000Z'),
+      expired: false, failedAttempts: 0, attemptsRemaining: 5,
+      issueCount: 1, cooldownRemainingSeconds: 0,
+    })),
+  };
+});
+jest.mock('../src/services/booking/bookingTrackingService', () => ({
+  getBookingTracking: jest.fn(async (bookingId: number) => ({
+    bookingId, state: 'EN_ROUTE', steps: [],
+    assignedProvider: { assigned: true, location: null },
+    visibility: {
+      visibility: 'WITHHELD', reason: 'NO_POSITION_REPORTED',
+      trackableStates: ['EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'], windowClosesAt: null,
+    },
+    policy: { trackableStates: ['EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'], maxHoursSinceMovement: 12 },
+  })),
+}));
+jest.mock('../src/services/booking/bookingRescheduleService', () => {
+  const actual = jest.requireActual('../src/services/booking/bookingRescheduleService');
+  return {
+    RescheduleError: actual.RescheduleError,
+    rescheduleBooking: jest.fn(async ({ bookingId, scheduledAt }: any) => ({
+      bookingId, requestId: 1, status: 'ACCEPTED',
+      previousSchedule: null, scheduledAt, reasonCode: null,
+      appliedImmediately: true,
+      verdict: { allowed: true, refusal: null, noticeCutoff: null, noticeHours: 24, reasons: [] },
+    })),
+    listRescheduleRequests: jest.fn(async () => []),
+  };
+});
+jest.mock('../src/services/booking/bookingDisputeService', () => {
+  const actual = jest.requireActual('../src/services/booking/bookingDisputeService');
+  return {
+    DisputeError: actual.DisputeError,
+    openDispute: jest.fn(async ({ bookingId, category }: any) => ({
+      id: 1, bookingId, category, severity: 'normal', state: 'OPEN',
+      openedByRole: 'customer', openedByYou: true,
+      openedAt: '2026-08-20T09:00:00.000Z', resolvedAt: null, stateSnapshot: null,
+    })),
+    listDisputes: jest.fn(async () => []),
+  };
+});
+jest.mock('../src/services/additional.service', () => ({
+  additionalService: {
+    createRequest: jest.fn(async (bookingId: number) => ({
+      id: 21, booking_id: bookingId, status: 'PENDING_ADMIN_APPROVAL', total_amount: 500,
+    })),
+    getByBooking: jest.fn(async () => []),
+  },
+}));
+jest.mock('../src/services/booking/experienceEvents', () => ({
+  emitExperienceEvent: jest.fn(async () => undefined),
+}));
+
+// -- TAB 07 finance. Same reasoning: each of these is exercised against its own
+//    fake in its own suite, and what this file proves is that the PATH reaches
+//    the handler with the right auth mode.
+jest.mock('../src/services/finance/bookingPaymentService', () => {
+  const actual = jest.requireActual('../src/services/finance/bookingPaymentService');
+  return {
+    // The error class and the per-actor projection are pure and are part of what
+    // the route contract promises, so they are NOT faked.
+    BookingPaymentError: actual.BookingPaymentError,
+    projectFor: actual.projectFor,
+    startPaymentIntent: jest.fn(async (bookingId: number) => ({
+      bookingId, checkoutUrl: 'https://checkout.paymongo.com/cs_test', reused: false,
+    })),
+    getBookingPayment: jest.fn(async (bookingId: number) => ({
+      bookingId, currency: 'PHP', state: 'PAID', captured: true,
+      method: 'paymongo', paidAt: '2026-08-20T09:00:00.000Z',
+      breakdown: { gross: 1500, grossMinor: 150000, basePrice: 1500, additionalWork: 0 },
+      refund: { refundedAmount: 0, refundedAt: null, refundable: 1500, refundableMinor: 150000 },
+    })),
+    refundBookingPayment: jest.fn(async ({ bookingId, trigger }: any) => ({
+      bookingId, outcome: 'requested', trigger, amount: 1500, amountMinor: 150000,
+      currency: 'PHP', reference: 'SVN-RF-B000007', refundReviewId: 3,
+      reversesProviderEarning: true,
+    })),
+  };
+});
+jest.mock('../src/services/finance/providerEarningsService', () => {
+  const actual = jest.requireActual('../src/services/finance/providerEarningsService');
+  return {
+    EarningsRangeError: actual.EarningsRangeError,
+    getEarningsSummary: jest.fn(async () => ({
+      economicModel: 'EXTERNAL_PROVIDER', withheldReason: null,
+      totalEarned: 1200, totalPaid: 1200, totalPending: 0, totalFailed: 0, totalRefunded: 0,
+      pendingRecordedAmount: 0, pendingEstimatedAmount: 0, pendingIsEstimate: false,
+      estimatedJobsCount: 0, jobsCount: 1, periodLabel: 'All time',
+      currency: 'PHP', payoutWindowHours: 72,
+    })),
+    listEarningsTransactions: jest.fn(async () => []),
+    listProviderPayouts: jest.fn(async () => []),
+  };
+});
+jest.mock('../src/services/finance/financeReconciliationService', () => ({
+  LEDGER_INTEGRITY_CHECKS: [],
+  getReconciliationReport: jest.fn(async () => ({
+    generatedAt: '2026-08-20T09:00:00.000Z',
+    checks: [], totals: {
+      openBreaks: 0, criticalBreaks: 0, capturedAmount: 0, refundedAmount: 0,
+      accruedProviderEarnings: 0, releasedPayouts: 0, internalFixerRevenue: 0,
+      outstandingProviderLiability: 0,
+    },
+    breaks: [], balanced: true,
+  })),
+  getBookingReconciliation: jest.fn(async () => null),
 }));
 jest.mock('../src/controllers/jobCardView', () => ({ formatJobCard: (j: any) => ({ ...j, card: true }) }));
 jest.mock('../src/services/notification.service', () => ({
@@ -170,7 +327,36 @@ jest.mock('../src/services/notification.service', () => ({
 jest.mock('../src/services/customerReviewService', () => ({
   listProviderReviews: jest.fn().mockResolvedValue({ reviews: [{ id: 'r1' }], total: 1 }),
   getProviderAggregate: jest.fn().mockResolvedValue({ providerUid: 'p', average: 4.5, count: 2 }),
+  // -- TAB 12. The eligibility and duplicate rules are exercised against a real
+  //    fake database in `review-eligibility.test.ts`; here the subject is routing.
+  createReview: jest.fn().mockResolvedValue({
+    reviewId: 'rev-1', bookingId: '7', overallRating: 5, dimensions: {},
+    publicComment: 'Great work.', privateFeedback: null, visibility: 'PUBLIC',
+    publicationState: 'PUBLISHED', createdAt: null, editedAt: null, editableUntil: null,
+  }),
+  getReviewByBooking: jest.fn().mockResolvedValue(null),
+  getReviewEligibility: jest.fn().mockResolvedValue({
+    bookingId: '7', eligible: true, reason: null, reviewId: null,
+    reviewWindow: { opensAt: '2026-08-01T00:00:00.000Z', closesAt: '2026-08-15T00:00:00.000Z' },
+    editableUntil: null, availableActions: ['create'],
+  }),
 }));
+jest.mock('../src/services/reviews/postServiceSupportService', () => {
+  const actual = jest.requireActual('../src/services/reviews/postServiceSupportService');
+  return {
+    SupportCaseError: actual.SupportCaseError,
+    ensureSupportSchema: jest.fn().mockResolvedValue(undefined),
+    createSupportCase: jest.fn(async (input: any) => ({
+      caseId: '1', bookingId: input.bookingId, category: input.category,
+      severity: 'normal', routedTo: input.category === 'BILLING' ? 'finance' : 'support',
+      state: 'OPEN', summary: input.summary, createdAt: null,
+      nextEndpoint: input.category === 'BILLING'
+        ? 'POST /api/v1/bookings/:bookingId/refunds' : null,
+    })),
+    listSupportCases: jest.fn().mockResolvedValue([]),
+    __resetSupportSchema: jest.fn(),
+  };
+});
 
 // ── Auth. `firebaseApp` initialises the Admin SDK from a service-account file
 //    at import time, so it has to be stubbed before anything in the auth chain
@@ -292,6 +478,229 @@ jest.mock('../src/services/booking/transitionExecutor', () => {
   };
 });
 
+// -- TAB 08 messaging. Mocked for the same reason as every other domain service
+//    here: the subject is routing and composition. The conversation handlers are
+//    driven against a real fake database in `messaging-contract.test.ts`.
+jest.mock('../src/services/messaging/messagingService', () => {
+  const actual = jest.requireActual('../src/services/messaging/messagingService');
+  const conversation = (id: number) => ({
+    id, kind: 'BOOKING', bookingId: 7, bookingCode: 'SVN-000007', status: 'ACTIVE',
+    isClosed: false, viewerSeat: 'customer', canSend: true, cannotSendReason: null,
+    unreadCount: 2, isParticipant: true,
+    createdAt: null, updatedAt: null, lastMessageAt: null,
+    participants: [], lastMessage: null,
+  });
+  return {
+    // The refusal class is real: the error translation in the domain module is
+    // part of what these routes promise, so faking it would prove nothing.
+    MessagingError: actual.MessagingError,
+    openConversation: jest.fn(async (_actor: any, bookingId: number) => ({
+      conversation: { ...conversation(11), bookingId },
+      created: true,
+    })),
+    listConversations: jest.fn(async () => [conversation(11), conversation(12)]),
+    getConversation: jest.fn(async (_actor: any, id: number) => conversation(id)),
+    listMessages: jest.fn(async (_actor: any, id: number, opts: any = {}) => ({
+      conversationId: id,
+      messages: [],
+      nextCursor: null,
+      hasMore: false,
+      limit: opts.limit ?? 30,
+    })),
+    sendMessage: jest.fn(async (_actor: any, id: number) => ({
+      id: 99, conversationId: id, bookingId: 7, type: 'text', body: 'hi',
+      senderSeat: 'customer', senderUid: 'uid-under-test', isMine: true, isSystem: false,
+      clientMsgId: 'client-message-id-0001', sentAt: '2026-08-13T00:00:00.000Z',
+      editedAt: null, deletedAt: null, isDeleted: false,
+      readByCount: 0, readByAll: false, attachments: [], metadata: {},
+    })),
+    markRead: jest.fn(async (_actor: any, id: number, lastReadMessageId: number) => ({
+      conversationId: id, lastReadMessageId, unreadCount: 0, isParticipant: true,
+    })),
+  };
+});
+
+// -- TAB 09 notifications. The inbox, preference and device services are
+//    exercised against a real fake database in their own suites.
+jest.mock('../src/services/events/notificationInbox', () => ({
+  storeForRole: jest.requireActual('../src/services/events/notificationInbox').storeForRole,
+  listNotifications: jest.fn().mockResolvedValue([
+    { notificationKey: 'n1', type: 'booking_created', severity: 'info', title: 'Booking received',
+      body: 'Placed.', contextLabel: 'SVN-000007', createdAt: null, readAt: null, isRead: false,
+      expiresAt: null, target: 'BOOKING_DETAIL', route: { routeKey: 'BOOKING_DETAILS', resourceId: '7' },
+      canOpenDetail: true, canMarkRead: true },
+  ]),
+  // The counts and the missing/locked keys mirror the legacy service mock above,
+  // because the assertions they feed are about ROUTE behaviour and are unchanged
+  // by the inbox moving behind one service.
+  countUnread: jest.fn().mockResolvedValue(4),
+  markRead: jest.fn(async (_actor: any, key: string) => ({
+    found: key !== 'missing',
+    allowed: key !== 'locked',
+    changed: key !== 'missing' && key !== 'locked',
+    unreadCount: 4,
+  })),
+  markAllRead: jest.fn().mockResolvedValue({ unreadCount: 0 }),
+}));
+jest.mock('../src/services/events/notificationPreferences', () => {
+  const actual = jest.requireActual('../src/services/events/notificationPreferences');
+  return {
+    PreferenceError: actual.PreferenceError,
+    getPreferences: jest.fn().mockResolvedValue({
+      jobAssigned: true, jobReminder: false, paymentReceived: true, newMessage: true,
+      promotions: false, requirementReview: true, support: true, accountSecurity: true, system: true,
+    }),
+    patchPreferences: jest.fn(async (_uid: string, patch: any) => ({
+      jobAssigned: true, jobReminder: false, paymentReceived: true, newMessage: true,
+      promotions: false, requirementReview: true, support: true, accountSecurity: true,
+      system: true, ...patch,
+    })),
+  };
+});
+jest.mock('../src/services/events/deviceTokenService', () => ({
+  registerDevice: jest.fn(async (_uid: string, token: unknown) =>
+    (typeof token === 'string' && token.length >= 10
+      ? { registered: true, deviceCount: 2 }
+      : { registered: false, deviceCount: 1 })),
+  releaseDevice: jest.fn().mockResolvedValue(undefined),
+  countDevices: jest.fn().mockResolvedValue(1),
+}));
+
+// -- TAB 10 account domain. Mocked for the same reason as every other domain
+//    service here: the subject is routing and composition. The account, address
+//    and provider-profile services are exercised against a real fake database in
+//    their own suites.
+jest.mock('../src/services/account/accountService', () => {
+  const actual = jest.requireActual('../src/services/account/accountService');
+  const account = {
+    uid: 'uid-under-test', email: 'a@b.c', phoneNumber: null,
+    firstName: 'A', lastName: 'B', displayName: 'A B', photoUrl: null,
+    role: 3, accountStatus: 'active', isEmailVerified: true, isPhoneVerified: false,
+    profiles: [{ kind: 'customer', endpoint: '/api/v1/customer/profile' }],
+  };
+  return {
+    AccountError: actual.AccountError,
+    seatFor: actual.seatFor,
+    roleKindOf: actual.roleKindOf,
+    getAccount: jest.fn().mockResolvedValue(account),
+    patchAccount: jest.fn().mockResolvedValue(account),
+    getCustomerProfile: jest.fn().mockResolvedValue({
+      uid: 'uid-under-test', birthDate: null, gender: null, photoUrl: null,
+      defaultAddressId: 'CAD001', addressCount: 1,
+    }),
+    patchCustomerProfile: jest.fn().mockResolvedValue({
+      uid: 'uid-under-test', birthDate: '1990-01-01', gender: null, photoUrl: null,
+      defaultAddressId: 'CAD001', addressCount: 1,
+    }),
+  };
+});
+jest.mock('../src/services/account/addressBookService', () => {
+  const actual = jest.requireActual('../src/services/account/addressBookService');
+  const address = {
+    addressId: 'CAD001', label: 'Home', addressOne: '1 Street', addressTwo: null,
+    postTown: 'Taytay', zipCode: null, country: 'PH', locationId: null,
+    isDefault: true, createdAt: null, coordinates: null,
+  };
+  return {
+    AddressError: actual.AddressError,
+    listAddresses: jest.fn().mockResolvedValue([address]),
+    getAddress: jest.fn().mockResolvedValue(address),
+    createAddress: jest.fn().mockResolvedValue(address),
+    updateAddress: jest.fn().mockResolvedValue(address),
+    deleteAddress: jest.fn().mockResolvedValue({ deleted: true, promotedAddressId: null }),
+    setDefaultAddress: jest.fn().mockResolvedValue(address),
+    countAddresses: jest.fn().mockResolvedValue(1),
+    countDefaults: jest.fn().mockResolvedValue(1),
+  };
+});
+jest.mock('../src/services/account/providerProfileService', () => {
+  const actual = jest.requireActual('../src/services/account/providerProfileService');
+  return {
+    ProviderProfileError: actual.ProviderProfileError,
+    getProviderProfile: jest.fn(async (uid: string, seat: string) => ({
+      uid, seat, visibleFields: ['displayName'], fields: { displayName: 'A Provider' },
+      verification: {
+        accountStatus: seat === 'otherCustomer' ? null : 'active',
+        isEmailVerified: true, documentsAccepted: 0, documentsRequired: 0, documentsComplete: false,
+      },
+    })),
+    patchProviderProfile: jest.fn().mockResolvedValue({ submitted: ['biography'], status: 'PENDING_REVIEW' }),
+    listDocuments: jest.fn().mockResolvedValue([
+      { requirementId: 'missing:valid_id', documentType: 'valid_id', name: 'Valid Government ID',
+        category: 'identity', required: true, status: 'missing',
+        submittedAt: null, expiresAt: null, reviewNote: null },
+    ]),
+    getAvailability: jest.fn().mockResolvedValue({
+      timezone: 'Asia/Manila', weeklySchedule: [], version: 1, updatedAt: null, hasUsableSchedule: false,
+    }),
+    listServices: jest.fn().mockResolvedValue([
+      { serviceId: 15, name: 'Pimple Facial', status: 'active', isActive: true },
+    ]),
+    PROVIDER_FIELD_COUNT: actual.PROVIDER_FIELD_COUNT,
+  };
+});
+jest.mock('../src/services/account/accountSettingsService', () => {
+  const actual = jest.requireActual('../src/services/account/accountSettingsService');
+  const settings = {
+    locale: { locale: 'en-PH', timeZone: 'Asia/Manila' },
+    privacy: { profileDiscoverable: true, shareUsageAnalytics: false },
+    security: { twoFactorEnabled: false },
+    notifications: { endpoint: '/api/v1/me/notification-preferences', categories: { jobAssigned: true } },
+  };
+  return {
+    SettingsError: actual.SettingsError,
+    ensureSettingsSchema: jest.fn().mockResolvedValue(undefined),
+    getSettings: jest.fn().mockResolvedValue(settings),
+    patchSettings: jest.fn().mockResolvedValue(settings),
+    getSecurity: jest.fn().mockResolvedValue({
+      emailVerified: true, phoneVerified: false, twoFactorEnabled: false,
+      passwordUpdatedAt: null, activeDeviceCount: 1, actions: {},
+    }),
+    __resetSettingsSchema: jest.fn(),
+  };
+});
+// The availability ENGINE, which the canonical PATCH delegates to. Mocked here
+// because the subject is routing; the engine has its own suites.
+jest.mock('../src/services/providerAvailabilityEngine', () => ({
+  getAvailabilityProfile: jest.fn().mockResolvedValue({
+    timezone: 'Asia/Manila', weeklySchedule: [], version: 1, updatedAt: null,
+  }),
+  saveWeeklySchedule: jest.fn().mockResolvedValue({ updatedAt: null, version: 2 }),
+}));
+jest.mock('../src/services/account/profileCompletionService', () => ({
+  getCompletion: jest.fn().mockResolvedValue({
+    uid: 'uid-under-test', role: 'customer', percent: 75, isComplete: false,
+    canProceed: true, satisfied: ['name', 'contact', 'address'], missing: ['photo'],
+    blockedBy: [], next: { photo: 'PATCH /api/v1/me' },
+  }),
+}));
+
+// -- TAB 11 home composition. Mocked for the same reason as every other domain
+//    service here: the subject is routing and composition-layer wiring. The
+//    composition itself is exercised against a real fake database in
+//    `home-composition.test.ts`.
+jest.mock('../src/services/home/homeService', () => {
+  const actual = jest.requireActual('../src/services/home/homeService');
+  return {
+    ...actual,
+    composeHome: jest.fn(async (_viewer: any, requested?: string[]) => {
+      const sections = requested ?? ['categories', 'activeBooking'];
+      return {
+        sections: sections.map((type: string) => ({
+          type, status: 'ok', items: [], reason: 'EMPTY', ttlSeconds: 0,
+        })),
+        meta: {
+          requested: sections,
+          unavailable: [],
+          personalized: sections.includes('activeBooking'),
+          generatedAt: '2026-08-14T00:00:00.000Z',
+        },
+      };
+    }),
+    describeSections: jest.fn(() => actual.describeSections()),
+  };
+});
+
 import v1Router from '../src/api/v1/register';
 import { startTestServer, request } from './support/httpTestServer';
 import { IMPLEMENTED, PLANNED, fullPath } from '../src/api/v1/contract';
@@ -325,11 +734,18 @@ type Call = { status: number; body: any; headers: Headers };
 const call = async (
   method: string,
   path: string,
-  opts: { auth?: boolean; role?: 'provider' | 'admin'; body?: unknown } = {},
+  opts: {
+    auth?: boolean;
+    role?: 'provider' | 'admin';
+    /** The fine-grained admin permission, for routes that carry one. */
+    permission?: string;
+    body?: unknown;
+  } = {},
 ): Promise<Call> => {
   const headers: Record<string, string> = {};
   if (opts.auth !== false) headers.authorization = 'Bearer test';
   if (opts.role) headers['x-test-role'] = opts.role;
+  if (opts.permission) headers['x-test-permission'] = opts.permission;
   if (opts.body !== undefined) headers['content-type'] = 'application/json';
 
   const res = await request(base, method, path, { headers, body: opts.body });
@@ -406,6 +822,115 @@ describe('every implemented contract entry is reachable at its declared path', (
     'provider.jobs.start': () =>
       call('POST', '/api/v1/provider/jobs/7/start', { role: 'provider', body: { workerCode: '123456' } }),
     'provider.jobs.complete': () => call('POST', '/api/v1/provider/jobs/7/complete', { role: 'provider', body: {} }),
+    'provider.jobs.cancel': () =>
+      call('POST', '/api/v1/provider/jobs/7/cancel', {
+        role: 'provider', body: { reason: 'Vehicle broke down', reasonCode: 'TRANSPORT_UNAVAILABLE' },
+      }),
+
+    // -- TAB 06 booking experiences --
+    'bookings.tracking': () => call('GET', '/api/v1/bookings/7/tracking'),
+    'bookings.otp.request': () =>
+      call('POST', '/api/v1/bookings/7/otp/request', { body: { purpose: 'BOOKING_CONFIRMATION' } }),
+    'bookings.otp.verify': () =>
+      call('POST', '/api/v1/bookings/7/otp/verify', { body: { code: '246813' } }),
+    'bookings.otp.status': () => call('GET', '/api/v1/bookings/7/otp/status'),
+    'bookings.reschedule': () =>
+      call('POST', '/api/v1/bookings/7/reschedule', { body: { scheduledAt: '2026-09-01T09:00:00.000Z' } }),
+    'bookings.reschedule.history': () => call('GET', '/api/v1/bookings/7/reschedule'),
+    // Booking 8 is the one whose caller is the assigned PROVIDER - only they may
+    // raise additional work on a job.
+    'bookings.additionalWork.create': () =>
+      call('POST', '/api/v1/bookings/8/additional-work', {
+        role: 'provider', body: { items: [{ quantity: 1, unitPrice: 500 }] },
+      }),
+    'bookings.additionalWork.list': () => call('GET', '/api/v1/bookings/7/additional-work'),
+    'bookings.disputes.open': () =>
+      call('POST', '/api/v1/bookings/7/disputes', {
+        body: { category: 'SERVICE_QUALITY', reason: 'The work was not finished.' },
+      }),
+    'bookings.disputes.list': () => call('GET', '/api/v1/bookings/7/disputes'),
+
+    // -- TAB 07 finance --
+    'bookings.payments.intent': () => call('POST', '/api/v1/bookings/7/payment-intents', { body: {} }),
+    'bookings.payments.get': () => call('GET', '/api/v1/bookings/7/payment'),
+    'bookings.refunds.create': () =>
+      call('POST', '/api/v1/bookings/7/refunds', { body: { trigger: 'CUSTOMER_CANCELLED' } }),
+    'provider.earnings.summary': () =>
+      call('GET', '/api/v1/provider/earnings/summary', { role: 'provider' }),
+    'provider.earnings.transactions': () =>
+      call('GET', '/api/v1/provider/earnings/transactions', { role: 'provider' }),
+    'provider.earnings.payouts': () =>
+      call('GET', '/api/v1/provider/earnings/payouts', { role: 'provider' }),
+    'admin.finance.reconciliation': () =>
+      call('GET', '/api/v1/admin/finance/reconciliation', {
+        role: 'admin', permission: 'reconciliation.view',
+      }),
+
+    // -- TAB 08 messaging --
+    'conversations.create': () => call('POST', '/api/v1/conversations', { body: { bookingId: 7 } }),
+    'conversations.list': () => call('GET', '/api/v1/conversations'),
+    'conversations.get': () => call('GET', '/api/v1/conversations/11'),
+    'conversations.messages.list': () => call('GET', '/api/v1/conversations/11/messages'),
+    'conversations.messages.create': () =>
+      call('POST', '/api/v1/conversations/11/messages', {
+        body: { body: 'hi', clientMsgId: 'client-message-id-0001' },
+      }),
+    'conversations.read': () =>
+      call('POST', '/api/v1/conversations/11/read', { body: { lastReadMessageId: 42 } }),
+
+    // -- TAB 09 notifications --
+    'me.notificationPreferences.get': () => call('GET', '/api/v1/me/notification-preferences'),
+    'me.notificationPreferences.patch': () =>
+      call('PATCH', '/api/v1/me/notification-preferences', { body: { promotions: true } }),
+    'me.devices.register': () =>
+      call('POST', '/api/v1/me/devices', { body: { token: 'a-device-token-value', platform: 'ios' } }),
+    'me.devices.release': () => call('DELETE', '/api/v1/me/devices', { body: {} }),
+
+    // -- TAB 10 account domain --
+    'me.patch': () => call('PATCH', '/api/v1/me', { body: { firstName: 'A' } }),
+    'me.settings.get': () => call('GET', '/api/v1/me/settings'),
+    'me.settings.patch': () => call('PATCH', '/api/v1/me/settings', { body: { locale: 'en-PH' } }),
+    'me.security.get': () => call('GET', '/api/v1/me/security'),
+    'me.completion.get': () => call('GET', '/api/v1/me/completion'),
+    'customer.profile.get': () => call('GET', '/api/v1/customer/profile'),
+    'customer.profile.patch': () =>
+      call('PATCH', '/api/v1/customer/profile', { body: { birthDate: '1990-01-01' } }),
+    'customer.addresses.list': () => call('GET', '/api/v1/customer/addresses'),
+    'customer.addresses.create': () =>
+      call('POST', '/api/v1/customer/addresses', { body: { addressOne: '1 Street' } }),
+    'customer.addresses.update': () =>
+      call('PATCH', '/api/v1/customer/addresses/CAD001', { body: { label: 'Home' } }),
+    'customer.addresses.delete': () => call('DELETE', '/api/v1/customer/addresses/CAD001'),
+    'customer.addresses.setDefault': () =>
+      call('POST', '/api/v1/customer/addresses/CAD001/default', { body: {} }),
+    'provider.profile.get': () => call('GET', '/api/v1/provider/profile', { role: 'provider' }),
+    'provider.profile.patch': () =>
+      call('PATCH', '/api/v1/provider/profile', {
+        role: 'provider',
+        body: { clientRequestId: 'client-request-id-000001', biography: 'Hello.' },
+      }),
+    'provider.publicProfile.get': () => call('GET', '/api/v1/providers/provider-uid-1/profile'),
+    'provider.documents.list': () => call('GET', '/api/v1/provider/documents', { role: 'provider' }),
+    'provider.availability.get': () => call('GET', '/api/v1/provider/availability', { role: 'provider' }),
+    'provider.availability.patch': () =>
+      call('PATCH', '/api/v1/provider/availability', { role: 'provider', body: { slots: [] } }),
+    'provider.services.list': () => call('GET', '/api/v1/provider/services', { role: 'provider' }),
+
+    // -- TAB 11 home composition --
+    'home.feed': () => call('GET', '/api/v1/home'),
+    'home.sections': () => call('GET', '/api/v1/home/sections'),
+
+    // -- TAB 12 post-service trust --
+    'bookings.review.create': () =>
+      call('POST', '/api/v1/bookings/7/review', {
+        body: { overallRating: 5, publicComment: 'Great work.' },
+      }),
+    'bookings.review.get': () => call('GET', '/api/v1/bookings/7/review'),
+    'bookings.supportCases.create': () =>
+      call('POST', '/api/v1/bookings/7/support-cases', {
+        body: { category: 'SERVICE_QUALITY', summary: 'The work was unfinished.' },
+      }),
+    'bookings.supportCases.list': () => call('GET', '/api/v1/bookings/7/support-cases'),
   };
 
   it('has a live request case for every implemented entry, and no more', () => {
@@ -452,9 +977,13 @@ describe('declared auth mode is the mounted auth mode', () => {
   const PUBLIC = IMPLEMENTED.filter((e) => e.auth === 'public');
   const AUTHED = IMPLEMENTED.filter((e) => e.auth === 'authenticated');
   const PROVIDER = IMPLEMENTED.filter((e) => e.auth === 'provider');
+  // TAB 07 mounted the first implemented `admin` entry. The totals assertion
+  // below is what forced this set to be added rather than letting a new auth
+  // mode ship unexercised.
+  const ADMIN = IMPLEMENTED.filter((e) => e.auth === 'admin');
 
   it('every entry falls into a mode this suite exercises', () => {
-    expect(PUBLIC.length + AUTHED.length + PROVIDER.length).toBe(IMPLEMENTED.length);
+    expect(PUBLIC.length + AUTHED.length + PROVIDER.length + ADMIN.length).toBe(IMPLEMENTED.length);
   });
 
   it('public routes answer without a token', async () => {
@@ -479,6 +1008,38 @@ describe('declared auth mode is the mounted auth mode', () => {
       expect(res.status).toBe(403);
     },
   );
+
+  it.each(ADMIN.map((e) => [e.id, e.method.toUpperCase(), fullPath(e)]))(
+    '%s — %s %s refuses a signed-in non-admin',
+    async (_id, method, path) => {
+      const concrete = String(path).replace(/:(\w+)/g, '7');
+      // A PROVIDER token, not merely an anonymous one: the interesting failure
+      // is an admin route that any authenticated caller can reach, and an
+      // anonymous request would be refused by verifyAuth before the role check.
+      const res = await call(String(method), concrete, { role: 'provider' });
+      expect(res.status).toBe(403);
+    },
+  );
+
+  /**
+   * Role 1 is not the whole of the admin authorization model.
+   *
+   * The legacy admin finance routes gate on a named permission as well as the
+   * role, and a v1 successor that dropped it would be a QUIETER route to the
+   * same data — privilege escalation by migration. `V1_PERMISSIONS` in
+   * `register.ts` carries the mapping; this proves it is mounted.
+   */
+  it('admin.finance.reconciliation refuses an admin without reconciliation.view', async () => {
+    const res = await call('GET', '/api/v1/admin/finance/reconciliation', { role: 'admin' });
+    expect(res.status).toBe(403);
+  });
+
+  it('admin.finance.reconciliation answers an admin who holds it', async () => {
+    const res = await call('GET', '/api/v1/admin/finance/reconciliation', {
+      role: 'admin', permission: 'reconciliation.view',
+    });
+    expect(res.status).toBe(200);
+  });
 });
 
 // ─── Planned entries are documented, not mounted ──────────────────────────────

@@ -185,18 +185,26 @@ describe('is_closed remains a maintained compatibility flag', function () {
     expect(fn).toMatch(/WRITABLE_STATUSES\.includes/);
   });
 
+  /**
+   * The DECLARATION moved to `services/messaging/messagingPolicy` in TAB 08 and
+   * `chat.repository` re-exports it, because the repository imports `../config`
+   * and anything declared there needs a database to be read at all — which put
+   * the conversation policy out of reach of the docs generator.
+   *
+   * So this asserts the RUNTIME value rather than a source literal. The list is
+   * now DERIVED from `partiesMayWrite` on each state spec, and a derived list
+   * asserted by regex would only prove the spelling of the filter.
+   */
   it('WRITABLE_STATUSES is exactly ACTIVE and SUPPORT_ESCALATED', function () {
-    // Match the array literal after `= [`, not the `ConversationStatus[]`
-    // type annotation in between — which has its own bracket pair.
-    var block = repoCode.match(/WRITABLE_STATUSES[^=]*=\s*\[([\s\S]*?)\]/)[1];
-    expect(block).toMatch(/ACTIVE/);
-    expect(block).toMatch(/SUPPORT_ESCALATED/);
-    expect(block).not.toMatch(/ARCHIVED/);
-    expect(block).not.toMatch(/READ_ONLY/);
+    var policy = require('../src/services/messaging/messagingPolicy');
+    expect(policy.WRITABLE_STATUSES.slice().sort())
+      .toEqual(['ACTIVE', 'SUPPORT_ESCALATED']);
+    // Still re-exported from where every existing caller imports it.
+    expect(repoCode).toMatch(/export \{ CONVERSATION_STATUS, WRITABLE_STATUSES \}/);
   });
 
   it('legacy rows with is_closed=TRUE are backfilled to CLOSED', function () {
-    var fn = repoCode.match(/ensureChatLifecycleSchema[\s\S]{0,2000}/)[0];
+    var fn = repoCode.match(/export const ensureChatLifecycleSchema[\s\S]{0,2000}/)[0];
     expect(fn).toMatch(/is_closed = TRUE/);
     expect(fn).toMatch(/status = 'CLOSED'/);
   });
@@ -207,7 +215,7 @@ describe('is_closed remains a maintained compatibility flag', function () {
   });
 
   it('all lifecycle DDL is additive (IF NOT EXISTS on every column)', function () {
-    var fn = repoCode.match(/ensureChatLifecycleSchema[\s\S]{0,2000}/)[0];
+    var fn = repoCode.match(/export const ensureChatLifecycleSchema[\s\S]{0,2000}/)[0];
     var adds = fn.match(/ADD COLUMN[^,\n]*/g) || [];
     expect(adds.length).toBeGreaterThan(0);
     adds.forEach(function (a) { expect(a).toMatch(/IF NOT EXISTS/); });
@@ -243,7 +251,7 @@ describe('is_closed remains a maintained compatibility flag', function () {
   });
 
   it('participant rows keep their original keys and only gain capabilities', function () {
-    var fn = repoCode.match(/ensureChatLifecycleSchema[\s\S]{0,2000}/)[0];
+    var fn = repoCode.match(/export const ensureChatLifecycleSchema[\s\S]{0,2000}/)[0];
     var participantDdl = fn.match(/chat_participants[\s\S]{0,300}/)[0];
     expect(participantDdl).toMatch(/ADD COLUMN IF NOT EXISTS can_read/);
     expect(participantDdl).toMatch(/ADD COLUMN IF NOT EXISTS can_send/);

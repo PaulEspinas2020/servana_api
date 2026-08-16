@@ -3,7 +3,8 @@ import * as svc from "../services/adminBookingService";
 import * as createSvc from "../services/adminCreateBookingService";
 import { adminServerError, adminNotFound, adminBadRequest } from "../helpers/adminError";
 import { auditFire, writeSuccess } from "../services/adminAuditService";
-import { listAssignmentCandidates } from "../services/providerEligibilityEngine";
+import { listAssignmentCandidatePool } from "../services/providerEligibilityEngine";
+import { auditSummaryOf } from "../services/booking/candidateDiagnostics";
 
 const actorUid = (req: any): string | null =>
   req.user?.uid ?? null;
@@ -141,7 +142,7 @@ export const getCandidates = async (req: Request, res: Response) => {
     if (!isPositiveId(id)) {
       return adminBadRequest(res, 'Invalid booking id');
     }
-    const candidates = await listAssignmentCandidates(String(id));
+    const { candidates, diagnostics } = await listAssignmentCandidatePool(String(id));
     auditFire({
       action: 'assignment_candidates_viewed',
       actionCategory: 'booking',
@@ -149,12 +150,21 @@ export const getCandidates = async (req: Request, res: Response) => {
       actorUid: actorUid(req) ?? '',
       entityType: 'booking',
       entityId: String(id),
-      after: { candidateCount: candidates.length, eligibleCount: candidates.filter(c => c.eligible).length },
+      // The pool's shape is recorded, not just its size. Reconstructing months
+      // later whether supply was healthy at the moment of an assignment is
+      // impossible from a count alone.
+      after: {
+        candidateCount: candidates.length,
+        eligibleCount: candidates.filter(c => c.eligible).length,
+        ...auditSummaryOf(diagnostics),
+      },
       requestId: (req as any).id ?? null,
       ipAddress: req.ip ?? null,
       userAgent: req.headers['user-agent'] ?? null,
     });
-    return res.json({ status: 'success', data: candidates });
+    // `data` stays the array live Admin clients already parse. Diagnostics are
+    // a sibling key — additive, ignorable by anything that has not migrated.
+    return res.json({ status: 'success', data: candidates, diagnostics });
   } catch (err: any) {
     return adminServerError(res, err);
   }

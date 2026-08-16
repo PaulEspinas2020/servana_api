@@ -4,9 +4,14 @@ Every auth-shaped route the app mounts, classified, with its canonical
 successor and the caller matrix across all five clients.
 
 The machine-generated matrix in
-[`LEGACY_ENDPOINT_MIGRATION_MATRIX.md`](LEGACY_ENDPOINT_MIGRATION_MATRIX.md)
-covers all 517 routes and is derived from `src/api/v1/contract.ts`. This file is
-the auth slice with the reasoning attached, and
+[`LEGACY_ENDPOINT_MIGRATION_MATRIX.md`](LEGACY_ENDPOINT_MIGRATION_MATRIX.md) is
+derived from `src/api/v1/contract.ts` and covers every route the app mounts.
+
+<!-- BEGIN GENERATED: legacy-route-total -->
+It classifies the **520 routes** mounted outside `/api/v1`, alongside the **95 canonical** ones.
+<!-- END GENERATED: legacy-route-total -->
+
+This file is the auth slice with the reasoning attached, and
 `tests/v1-auth-contract.test.ts` asserts that every route listed here is claimed
 by a canonical successor in the contract.
 

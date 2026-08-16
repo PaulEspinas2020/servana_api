@@ -12,8 +12,14 @@ import dbQuery from '../db/dbQuery';
 import { pool } from '../db/dbQuery';
 import { db } from '../config';
 import { createNotification } from './notification.service';
+import { publishEventSafely } from './events/eventOutbox';
+import { dispatchSoon } from './events/notificationProjector';
 import { ensureActivationSchema } from './providerActivationService';
 import { evaluateServicePolicy, ServicePolicyCode } from './providerServicePolicyService';
+import {
+  projectFamilyGrant,
+  projectFamilyGrantSafely,
+} from './booking/capabilityProjection';
 
 const dbSchema = db.schema;
 
@@ -386,6 +392,20 @@ export const approveApplicationAtomic = async (
        VALUES ($1, $2) ON CONFLICT (employee_uid, service_id) DO NOTHING`,
       [app.worker_uid, app.service_id],
     );
+    /**
+     * The canonical projection, in the SAME transaction as the legacy grant.
+     *
+     * This path already owns a transaction, so the two capability records
+     * cannot disagree: either the provider is approved in both tables or in
+     * neither. A failure here rolls the approval back, which is correct where
+     * atomicity is available — the alternative is an approval whose canonical
+     * row silently never existed.
+     */
+    await projectFamilyGrant(
+      (sql, params) => client.query(sql, params as any[]),
+      dbSchema,
+      { providerUid: app.worker_uid, familyId: Number(app.service_id), origin: 'application_approved' },
+    );
     const updated = await client.query(
       `UPDATE ${dbSchema}.worker_service_applications
        SET status = 'approved', approved_at = NOW(), reviewed_at = NOW(),
@@ -408,6 +428,25 @@ export const approveApplicationAtomic = async (
   } finally {
     client.release();
   }
+  /**
+   * The canonical fact (TAB 09).
+   *
+   * The five keyed producers in this module are KEPT: each carries the specific
+   * decision — approved, rejected, action required — and the event's own
+   * projection is a generic "your application has an update". Collapsing them
+   * would lose the decision, so the event carries the fact and the existing
+   * notifications carry the detail. Their keys differ, so both are delivered;
+   * that is the one place in this tab where two notifications for one fact is
+   * the intended outcome, and the registry records it under `supersedes`.
+   */
+  void publishEventSafely({
+    name: 'ProviderApplicationUpdated',
+    refs: { applicationId, providerUid: committed.worker_uid },
+    display: {},
+    metadata: { decision: 'approved', version: committed.version },
+    dedupeKey: `ProviderApplicationUpdated:${applicationId}:${committed.version}`,
+  }).then(() => dispatchSoon());
+
   createNotification(committed.worker_uid, {
     notificationKey: `svc_app_approved_${applicationId}_${committed.version}`,
     type: 'requirement_review', severity: 'info', title: 'Application approved',
@@ -756,6 +795,20 @@ export const approveApplication = async (applicationId: string, adminUid: string
     `INSERT INTO ${dbSchema}.employee_services (employee_uid, service_id)
      VALUES ($1, $2) ON CONFLICT (employee_uid, service_id) DO NOTHING`,
     [app.worker_uid, app.service_id],
+  );
+  /**
+   * The canonical projection, at the same durability as the legacy write it
+   * mirrors — this path has never been transactional.
+   *
+   * `Safely`, deliberately: failing a provider's approval because a projection
+   * statement errored would be worse than the drift it prevents. The matcher
+   * still falls back to the legacy grant, so the provider stays assignable, and
+   * the parity report plus `npm run capability:reconcile` close the gap.
+   */
+  await projectFamilyGrantSafely(
+    (sql, params) => dbQuery.query(sql, params as any[]),
+    dbSchema,
+    { providerUid: app.worker_uid, familyId: Number(app.service_id), origin: 'application_approved' },
   );
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.worker_service_applications

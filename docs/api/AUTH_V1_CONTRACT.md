@@ -200,12 +200,38 @@ address, an unknown one, a mobile number and a mailer failure.
 
 ## 8. Rate limiting
 
-Every credential endpoint carries **two** limiters and both must pass.
+Where a secret is submitted for checking, **two** limiters guard the endpoint
+and both must pass. Where only one applies, the declaration says why — the
+table below is rendered from
+[`rateLimitPolicy.ts`](../../src/api/v1/rateLimitPolicy.ts), which is also what
+`register.ts` builds the middleware chain from, so a limiter cannot be
+documented and not mounted.
 
-| | Key | Budget |
+<!-- BEGIN GENERATED: auth-rate-limits -->
+**Buckets.** One `express-rate-limit` instance each, so endpoints sharing a bucket share a counter.
+
+| Bucket | Key | Budget | Counts | What it stops |
+|---|---|---|---|---|
+| `perAccountLogin` | normalised identifier, hashed | 10 / 15 min | failures only | Password guessing against one account. |
+| `perAccountRegister` | normalised identifier, hashed | 5 / 1 h | every request | Farming accounts from one address. |
+| `perAccountOtp` | normalised identifier, hashed | 8 / 10 min | failures only | Guessing a six-digit code before it expires. |
+| `perAccountRecovery` | normalised identifier, hashed | 5 / 1 h | every request | Mail-bombing one address through the reset form. |
+| `perIp` | normalised IP | 200 / 15 min | failures only | A cost ceiling on a flood. Loose, because carrier NAT shares it. |
+
+**Per endpoint.** 6 of 9 carry a per-account bucket *and* the per-IP one; the rest say why they do not.
+
+| Endpoint | Buckets | Why no per-account bucket |
 |---|---|---|
-| Per account | normalised identifier, hashed | 10 failed sign-ins / 15 min |
-| Per IP | normalised IP | 200 / 15 min |
+| `auth.login` | `perAccountLogin` + `perIp` | — |
+| `auth.register` | `perAccountRegister` + `perIp` | — |
+| `auth.verifyEmail` | `perAccountOtp` + `perIp` | — |
+| `auth.forgotPassword` | `perAccountRecovery` + `perIp` | — |
+| `auth.resetPassword` | `perAccountRecovery` + `perIp` | — |
+| `auth.resendVerification` | `perAccountRecovery` + `perIp` | — |
+| `auth.refresh` | `perIp` | The body carries a refresh token and no identifier, so there is nothing to key an account bucket on. Keying on the unverified token's subject would let a caller pick their own counter — the objection `tokenExchangeLimiter` raises, and the one case where it holds. |
+| `auth.verifyMobile` | `perIp` | Same shape: the proof is a Firebase ID token, not an identifier. It also runs behind `verifyAuth`, so an anonymous caller never reaches it, and Firebase has already rate limited the SMS OTP that issued the token. |
+| `auth.logout` | **none** | Revokes the caller's own sessions behind `verifyAuth`. There is no secret to guess and nothing to enumerate: the worst a flood achieves is logging one account out repeatedly. |
+<!-- END GENERATED: auth-rate-limits -->
 
 Keyed on the identifier alone, an attacker spraying one password across
 thousands of accounts from one host gets a fresh budget per account and is never

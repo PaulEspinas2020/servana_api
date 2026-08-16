@@ -16,6 +16,19 @@
  * inventory lives in the migration matrix, which is generated from the same
  * contract plus a static read of the route tree — so every legacy route is
  * accounted for whether or not a v1 successor exists for it yet.
+ *
+ * It also rewrites the GENERATED REGIONS inside the two hand-written documents
+ *
+ *   docs/api/API_V1_CONTRACT.md
+ *   docs/api/CROSS_CLIENT_MIGRATION_PLAN.md
+ *
+ * Those files are prose — decisions, not data — and stay hand-written. But
+ * prose that restates a countable fact rots: both files shipped claims
+ * ("18 canonical endpoints live", "Six planned entries exist today") that were
+ * true when written and false four commands later, with the whole gate green,
+ * because nothing derived them. Every countable claim now lives inside a
+ * region and is regenerated from the contract; the sentences around it explain
+ * why, which is the part a generator cannot write.
  */
 
 import fs from 'fs';
@@ -23,6 +36,7 @@ import path from 'path';
 import { V1_CONTRACT, ContractEntry, IMPLEMENTED, PLANNED, fullPath, ClientName } from '../src/api/v1/contract';
 import { buildOpenApiDocument, allErrorsFor } from '../src/api/v1/openapi';
 import { RETIREMENT_CRITERIA } from '../src/api/v1/legacyTelemetry';
+import { ACCOUNT_BUCKETS, BUCKETS, V1_RATE_LIMITS } from '../src/api/v1/rateLimitPolicy';
 import { buildMountedRoutes, MountedRoute } from './lib/routeTable';
 
 const OUT_DIR = path.resolve(__dirname, '..', 'docs', 'api');
@@ -346,14 +360,310 @@ function catalogRegistryMarkdown(): string {
   return L.join('\n');
 }
 
+// ─── Generated regions inside the hand-written documents ──────────────────────
+
+/**
+ * The blocks that may appear between region markers, keyed by region name.
+ *
+ * Each returns the BODY only — the markers themselves stay in the document, so
+ * a reader editing the prose can see exactly where the machine writes.
+ */
+const REGION_BLOCKS: Record<string, () => string[]> = {
+  /** §11 of API_V1_CONTRACT.md — which entries are documented and not mounted. */
+  'v1-planned': () => {
+    const L: string[] = [];
+    L.push(
+      `**${PLANNED.length} planned ${PLANNED.length === 1 ? 'entry' : 'entries'} today**, ` +
+        `against ${IMPLEMENTED.length} implemented.`,
+    );
+    L.push('');
+    L.push('| Path | Domain | Successor to | Why it is not built here |');
+    L.push('|---|---|---|---|');
+    for (const e of PLANNED) {
+      const legacy = e.legacy.map((l) => `\`${l.method.toUpperCase()} ${l.path}\``).join(', ') || '—';
+      const why = e.notes ?? e.legacy[0]?.note ?? '';
+      L.push(`| \`${fullPath(e)}\` | ${e.domain} | ${legacy} | ${esc(why)} |`);
+    }
+    return L;
+  },
+
+  /** §8 of API_V1_CONTRACT.md — the routes that stay role-specific, and why. */
+  'v1-role-specific': () => {
+    const rows = V1_CONTRACT.flatMap((e) =>
+      e.legacy
+        .filter((l) => l.disposition === 'ROLE_SPECIFIC')
+        .map((l) => ({ legacy: l, canonical: fullPath(e) })),
+    );
+    const L: string[] = [];
+    L.push(`**${rows.length}** today.`);
+    L.push('');
+    L.push('| Role-specific route | Nearest canonical | Why it is not the same endpoint |');
+    L.push('|---|---|---|');
+    for (const r of rows) {
+      L.push(
+        `| \`${r.legacy.method.toUpperCase()} ${r.legacy.path}\` | \`${r.canonical}\` | ${esc(r.legacy.note)} |`,
+      );
+    }
+    return L;
+  },
+
+  /** Phase 0 of CROSS_CLIENT_MIGRATION_PLAN.md — the size of the surface. */
+  'v1-surface': () => {
+    const aliases = V1_CONTRACT.flatMap((e) => e.legacy.filter((l) => l.disposition === 'ALIAS_TEMPORARILY'));
+    const legacyRoutes = buildMountedRoutes().filter((r) => !r.fullPath.startsWith('/api/v1'));
+    return [
+      `- **${IMPLEMENTED.length} canonical endpoints live**, each driven end to end by \`tests/v1-router.test.ts\`.`,
+      `- **${PLANNED.length} planned**, documented and not mounted — see §11 of [\`API_V1_CONTRACT.md\`](API_V1_CONTRACT.md).`,
+      `- **${aliases.length} legacy aliases** counted by telemetry, derived from the contract.`,
+      `- **${legacyRoutes.length} routes** mounted outside \`/api/v1\`, every one classified in the matrix.`,
+    ];
+  },
+
+  /**
+   * Header of AUTH_ROUTE_MIGRATION_MATRIX.md — how much the generated matrix covers.
+   *
+   * This one shipped as "covers all 517 routes" while the matrix covered 520:
+   * the same rot as §11 and Phase 0, in the third hand-written document, found
+   * only because somebody counted. It is derived now.
+   */
+  'legacy-route-total': () => {
+    const routes = buildMountedRoutes();
+    const legacy = routes.filter((r) => !r.fullPath.startsWith('/api/v1')).length;
+    const v1 = routes.length - legacy;
+    return [
+      `It classifies the **${legacy} routes** mounted outside \`/api/v1\`, alongside the ` +
+        `**${v1} canonical** ones.`,
+    ];
+  },
+
+  /**
+   * "Admin writes — untouched" in CATALOG_LEGACY_MIGRATION_MAP.md.
+   *
+   * Two route families kept in bulk. Their sizes were hand-counted once
+   * (`29` against an actual 28) and are counted from the mounted tree now — a
+   * family's size changes every time somebody adds an admin route, which is
+   * exactly the kind of number no one revisits a prose document to correct.
+   */
+  'catalog-admin-route-families': () => {
+    const routes = buildMountedRoutes();
+    const size = (prefix: string): number =>
+      routes.filter((r) => r.fullPath === prefix || r.fullPath.startsWith(`${prefix}/`)).length;
+    const families: Array<[string, string]> = [
+      ['/api/admin/provider-catalog', '`KEEP`'],
+      ['/api/admin/catalog', '`KEEP` — already canonical'],
+    ];
+    const L: string[] = ['| Family | Routes mounted | Disposition |', '|---|---|---|'];
+    for (const [prefix, disposition] of families) {
+      L.push(`| \`${prefix}/*\` | ${size(prefix)} | ${disposition} |`);
+    }
+    return L;
+  },
+
+  /**
+   * Retirement criterion 4 in CATALOG_LEGACY_MIGRATION_MAP.md.
+   *
+   * "The canonical successor is `implemented`, not `planned`" is the one
+   * criterion the backend can settle by itself, so whether it is met is a fact
+   * about the contract rather than a claim to maintain. The document said
+   * "all four"; six catalog entries supersede a legacy route.
+   */
+  'catalog-successor-status': () => {
+    const successors = V1_CONTRACT.filter((e) => e.domain === 'catalog' && e.legacy.length > 0);
+    const planned = successors.filter((e) => e.status === 'planned');
+    if (planned.length) {
+      return [
+        `**${planned.length} of ${successors.length}** canonical catalog successors are still ` +
+          `\`planned\`, so criterion 4 is **not** met for the routes they supersede: ` +
+          `${planned.map((e) => `\`${fullPath(e)}\``).join(', ')}.`,
+      ];
+    }
+    return [
+      `All **${successors.length}** canonical catalog successors are \`implemented\`, so ` +
+        'criterion 4 is already met for every route above.',
+    ];
+  },
+
+  /**
+   * §8 of AUTH_V1_CONTRACT.md — which limiter guards which auth endpoint.
+   *
+   * This section carried the flattest claim of the three: "Every credential
+   * endpoint carries **two** limiters and both must pass." Six of nine do.
+   * `refresh` and `verify-mobile` carry the per-IP limiter alone and `logout`
+   * carries none — each correctly, each for a reason now declared beside the
+   * wiring in `rateLimitPolicy.ts` and rendered below. A security control is the
+   * worst place to keep a summary that was true once.
+   */
+  'auth-rate-limits': () => {
+    const window = (ms: number): string => {
+      const minutes = ms / 60_000;
+      return minutes >= 60 ? `${minutes / 60} h` : `${minutes} min`;
+    };
+
+    const L: string[] = [];
+    L.push('**Buckets.** One `express-rate-limit` instance each, so endpoints sharing a bucket share a counter.');
+    L.push('');
+    L.push('| Bucket | Key | Budget | Counts | What it stops |');
+    L.push('|---|---|---|---|---|');
+    for (const [name, spec] of Object.entries(BUCKETS)) {
+      const key = spec.key === 'identifier' ? 'normalised identifier, hashed' : 'normalised IP';
+      const counts = spec.skipSuccessfulRequests ? 'failures only' : 'every request';
+      L.push(`| \`${name}\` | ${key} | ${spec.max} / ${window(spec.windowMs)} | ${counts} | ${esc(spec.purpose)} |`);
+    }
+
+    const ids = Object.keys(V1_RATE_LIMITS);
+    const both = ids.filter((id) =>
+      V1_RATE_LIMITS[id].buckets.some((b) => ACCOUNT_BUCKETS.includes(b)),
+    );
+    L.push('');
+    L.push(
+      `**Per endpoint.** ${both.length} of ${ids.length} carry a per-account bucket *and* the per-IP one; ` +
+        'the rest say why they do not.',
+    );
+    L.push('');
+    L.push('| Endpoint | Buckets | Why no per-account bucket |');
+    L.push('|---|---|---|');
+    for (const id of ids) {
+      const policy = V1_RATE_LIMITS[id];
+      const buckets = policy.buckets.length
+        ? policy.buckets.map((b) => `\`${b}\``).join(' + ')
+        : '**none**';
+      L.push(`| \`${id}\` | ${buckets} | ${esc(policy.noAccountBucket ?? '—')} |`);
+    }
+    return L;
+  },
+};
+
+/**
+ * Per-client move table: what this client can migrate today, from the contract.
+ *
+ * Two things this table is careful NOT to claim.
+ *
+ * The contract records caller state **per capability**, not per legacy path —
+ * `auth.login` is one entry with four legacy forms, and no client calls all
+ * four. So the right-hand column is every legacy route the capability
+ * supersedes, of which this client calls one or more. Rendering it as "this
+ * client calls all of these" would send a provider-web team to migrate
+ * `/api/auth/customer-firebase-login`.
+ *
+ * And `ROLE_SPECIFIC` routes are excluded outright. They are the ones the
+ * matrix says must NOT be collapsed; listing them as a move would contradict
+ * the classification in the document next door.
+ */
+const clientMovesBlock = (client: ClientName): string[] => {
+  const movable = V1_CONTRACT.filter((e) => e.status === 'implemented' && e.callers[client] === 'legacy');
+  const L: string[] = [];
+  if (!movable.length) {
+    L.push(
+      '**Nothing yet.** No canonical endpoint this client calls on a legacy route is implemented, ' +
+        'so there is no move to make — the successors it needs are still `planned`.',
+    );
+    return L;
+  }
+  L.push(
+    `**${movable.length}** canonical ${movable.length === 1 ? 'capability is' : 'capabilities are'} live ` +
+      'that this client still reaches by a legacy route.',
+  );
+  L.push('');
+  L.push('| Move to (canonical) | Legacy routes it supersedes |');
+  L.push('|---|---|');
+  for (const e of movable) {
+    const supersedes = e.legacy.filter((l) => l.disposition === 'ALIAS_TEMPORARILY' || l.disposition === 'CANONICALIZE');
+    const from = supersedes.length
+      ? supersedes.map((l) => `\`${l.method.toUpperCase()} ${l.path}\``).join('<br>')
+      : '— (new capability)';
+    L.push(`| \`${e.method.toUpperCase()} ${fullPath(e)}\` | ${from} |`);
+  }
+  L.push('');
+  L.push(
+    'Caller state is recorded **per capability**, not per legacy path: this client calls one or ' +
+      'more of the routes on the right, not all of them. `ROLE_SPECIFIC` routes are excluded — ' +
+      'those are the ones that must not be collapsed.',
+  );
+  return L;
+};
+
+for (const client of CLIENTS) {
+  REGION_BLOCKS[`v1-moves:${client}`] = () => clientMovesBlock(client);
+}
+
+const BEGIN = (name: string) => `<!-- BEGIN GENERATED: ${name} -->`;
+const END = (name: string) => `<!-- END GENERATED: ${name} -->`;
+
+/** Documents that are hand-written prose with machine-written regions inside. */
+const REGION_FILES = [
+  'docs/api/API_V1_CONTRACT.md',
+  'docs/api/CROSS_CLIENT_MIGRATION_PLAN.md',
+  'docs/api/AUTH_ROUTE_MIGRATION_MATRIX.md',
+  'docs/api/CATALOG_LEGACY_MIGRATION_MAP.md',
+  'docs/api/AUTH_V1_CONTRACT.md',
+];
+
+/**
+ * Rewrites every generated region in one hand-written document.
+ *
+ * An unknown region name and an unclosed region are both throws. A marker that
+ * silently produced nothing would be worse than no marker at all: the document
+ * would read as machine-checked and not be.
+ */
+export function renderRegions(relPath: string): string {
+  const abs = path.resolve(__dirname, '..', relPath);
+  const source = fs.readFileSync(abs, 'utf8').replace(/\r\n/g, '\n');
+  const lines = source.split('\n');
+  const out: string[] = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const trimmed = lines[i].trim();
+    if (!trimmed.startsWith('<!-- BEGIN GENERATED:')) { out.push(lines[i]); continue; }
+
+    // A marker that does not parse is a throw, not a pass-through. Silently
+    // copying it is how `v1-moves:providerWeb` sat in this document with an
+    // empty body and the check green — the region LOOKED machine-written.
+    const open = /^<!-- BEGIN GENERATED: ([A-Za-z0-9:_-]+) -->$/.exec(trimmed);
+    if (!open) {
+      throw new Error(`${relPath}:${i + 1}: malformed region marker — ${trimmed}`);
+    }
+
+    const name = open[1];
+    const block = REGION_BLOCKS[name];
+    if (!block) {
+      throw new Error(`${relPath}: unknown generated region "${name}" — no block generator exists for it.`);
+    }
+    const close = lines.indexOf(END(name), i);
+    if (close === -1) {
+      throw new Error(`${relPath}: region "${name}" opens at line ${i + 1} and is never closed.`);
+    }
+
+    out.push(BEGIN(name), ...block(), END(name));
+    i = close;
+  }
+
+  return out.join('\n');
+}
+
 export function generateAll(): GeneratedFile[] {
   return [
     { relPath: 'docs/api/openapi.v1.json', content: openApiJson() },
     { relPath: 'docs/api/API_ENDPOINT_REGISTRY.md', content: registryMarkdown() },
     { relPath: 'docs/api/LEGACY_ENDPOINT_MIGRATION_MATRIX.md', content: matrixMarkdown() },
     { relPath: 'docs/api/CATALOG_ENDPOINT_REGISTRY.md', content: catalogRegistryMarkdown() },
+    ...REGION_FILES.map((relPath) => ({ relPath, content: renderRegions(relPath) })),
   ];
 }
+
+/** Region names a document must contain, for the drift test to assert against. */
+export const EXPECTED_REGIONS: Record<string, string[]> = {
+  'docs/api/API_V1_CONTRACT.md': ['v1-role-specific', 'v1-planned'],
+  'docs/api/CROSS_CLIENT_MIGRATION_PLAN.md': [
+    'v1-surface',
+    ...CLIENTS.map((c) => `v1-moves:${c}`),
+  ],
+  'docs/api/AUTH_ROUTE_MIGRATION_MATRIX.md': ['legacy-route-total'],
+  'docs/api/AUTH_V1_CONTRACT.md': ['auth-rate-limits'],
+  'docs/api/CATALOG_LEGACY_MIGRATION_MAP.md': [
+    'catalog-admin-route-families',
+    'catalog-successor-status',
+  ],
+};
 
 /** Compares generated content with what is on disk. Newline-normalised for Windows checkouts. */
 export function staleFiles(): string[] {

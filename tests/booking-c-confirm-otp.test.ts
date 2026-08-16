@@ -8,7 +8,8 @@
  *   STATE LEGALITY                             CANONICAL MACHINE ONLY
  *   CUSTOMER AUTHORIZATION                     EXECUTOR-ENFORCED
  *   LEGACY assertBookingAccess                 COMPATIBILITY_ONLY
- *   OTP EXPIRY / ATTEMPT LIMIT / CONSUMPTION   NONE — PRESERVED
+ *   OTP EXPIRY / ATTEMPT LIMIT                 TAB 06 §63 — NOW ENFORCED
+ *   OTP CONSUMPTION                            NONE — PRESERVED
  *   REPLAY                                     ERROR / ZERO SECOND TRANSITION
  *   WRONG OTP                                  NO MUTATION / NO TIMELINE
  *   CANONICAL TIMELINE                         TRANSACTIONAL
@@ -157,9 +158,23 @@ describe('OTP SQL PREDICATE: atomic with the write', () => {
 
   it('the old copy is gone from bookingService too', () => {
     const svc = codeOf('src/services/bookingService.ts');
-    const fn = svc.slice(svc.indexOf('export const confirmOtp'), svc.indexOf('export const getBookingById'));
+    const fn = svc.slice(svc.indexOf('export const confirmOtp'), svc.indexOf('export const runPostConfirmationAssignment'));
     expect(fn).not.toMatch(/UPDATE \$\{dbSchema\}\.bookings/);
-    expect(fn).toContain("action: 'CUSTOMER_CONFIRM_OTP'");
+    // TAB 06 inserted the credential-policy layer between this function and the
+    // executor, so it no longer names the action itself — it names the service
+    // that does. What must remain true is that there is exactly ONE path from
+    // here to a status write, and it is not a SQL statement in this file.
+    expect(fn).toContain('verifyBookingOtp');
+    expect(fn).toContain("purpose: 'BOOKING_CONFIRMATION'");
+  });
+
+  it('the delegated service still names the canonical action, and only that one', () => {
+    const otp = codeOf('src/services/booking/bookingOtpService.ts');
+    expect(otp).not.toMatch(/UPDATE \$\{s\}\.bookings SET status/);
+    // The action comes from the purpose registry, never from a caller.
+    expect(otp).toContain('action: spec.action');
+    expect(codeOf('src/services/booking/experiencePolicy.ts'))
+      .toContain("action: 'CUSTOMER_CONFIRM_OTP'");
   });
 });
 
@@ -281,14 +296,34 @@ describe('REPLAY: existing contract preserved', () => {
   });
 });
 
-describe('OTP semantics PRESERVED, not upgraded', () => {
-  it('CONSUMPTION: none — otp_code survives confirmation', async () => {
+/**
+ * ── Superseded by TAB 06 §63, deliberately ────────────────────────────────────
+ *
+ * This block used to assert that the booking OTP had NO expiry, NO attempt limit
+ * and NO resend cooldown, and that a wrong code could be retried forever. That
+ * was the correct thing for Phase C to pin: a state-machine migration is the
+ * wrong place to change product policy, so the absences were preserved and
+ * written down.
+ *
+ * TAB 06 §63 requires all three. The assertions below are therefore INVERTED
+ * where the policy changed, and kept where it did not — the change is visible in
+ * one diff rather than a guard quietly disappearing.
+ *
+ * What did NOT change, and is still asserted:
+ *
+ *   - the code is not consumed on success;
+ *   - no expiry COLUMN was added to `bookings`, and no attempt counter was added
+ *     to the executor. Both are derived from the `booking_otp_events` log, which
+ *     is why the source greps still hold.
+ */
+describe('OTP semantics: what TAB 06 changed, and what it did not', () => {
+  it('CONSUMPTION: still none — otp_code survives confirmation', async () => {
     seed();
     await confirmOtp(BOOKING, OTP, { actorUid: CUSTOMER });
     expect(store.booking?.otp_code).toBe(OTP);
   });
 
-  it('EXPIRY: none — no expiry column is read or written', () => {
+  it('no expiry COLUMN was added — the lifetime is derived from the event log', () => {
     const executor = codeOf('src/services/booking/transitionExecutor.ts');
     const svc = codeOf('src/services/bookingService.ts');
     for (const src of [executor, svc]) {
@@ -296,18 +331,63 @@ describe('OTP semantics PRESERVED, not upgraded', () => {
     }
   });
 
-  it('ATTEMPT LIMIT: none — no counter was introduced', () => {
+  it('no attempt counter was added to the executor', () => {
     const executor = codeOf('src/services/booking/transitionExecutor.ts');
     expect(executor).not.toMatch(/otp_attempts|attemptCount/);
   });
 
-  it('a wrong code can be retried, exactly as before', async () => {
+  it('the executor still decides whether the code MATCHES, inside the write', () => {
+    // The policy layer decides whether an attempt is ALLOWED. It must never
+    // compare the code itself — that would reopen the window between proving a
+    // credential and using it, which is the property Phase C was built on.
+    const otp = codeOf('src/services/booking/bookingOtpService.ts');
+    expect(otp).not.toMatch(/otp_code\s*(===|==|!==)/);
+    expect(otp).not.toMatch(/bcrypt|compare\(/);
+  });
+
+  it('ATTEMPT LIMIT: now enforced — five wrong codes exhaust the budget', async () => {
     seed();
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 5; i++) {
       await confirmOtp(BOOKING, '111111', { actorUid: CUSTOMER }).catch(() => undefined);
     }
-    // No lockout: the correct code still works.
+    // The CORRECT code is now refused: the budget belongs to the issued code,
+    // not to the attempt, so guessing cannot be resumed by getting it right.
+    await expect(confirmOtp(BOOKING, OTP, { actorUid: CUSTOMER })).rejects.toThrow();
+    expect(store.booking?.status).toBe('PENDING_OTP');
+  });
+
+  it('a wrong code below the limit can still be retried', async () => {
+    seed();
+    await confirmOtp(BOOKING, '111111', { actorUid: CUSTOMER }).catch(() => undefined);
     await confirmOtp(BOOKING, OTP, { actorUid: CUSTOMER });
+    expect(store.booking?.status).toBe('CONFIRMED');
+  });
+
+  it('only a WRONG CODE spends an attempt, never a mistimed call', async () => {
+    // Charging an attempt for an invalid transition would let anyone burn a
+    // customer's budget by calling at the wrong moment.
+    seed({ status: 'COMPLETED' });
+    for (let i = 0; i < 8; i++) {
+      await confirmOtp(BOOKING, OTP, { actorUid: CUSTOMER }).catch(() => undefined);
+    }
+    expect(store.otpEvents.filter((e) => e.event === 'FAILED')).toHaveLength(0);
+  });
+
+  it('a rotation restores the budget, because it is a new credential', async () => {
+    seed();
+    for (let i = 0; i < 5; i++) {
+      await confirmOtp(BOOKING, '111111', { actorUid: CUSTOMER }).catch(() => undefined);
+    }
+    await expect(confirmOtp(BOOKING, OTP, { actorUid: CUSTOMER })).rejects.toThrow();
+
+    const { requestBookingOtp } = require('../src/services/booking/bookingOtpService');
+    await requestBookingOtp({
+      bookingId: BOOKING, purpose: 'BOOKING_CONFIRMATION',
+      actor: 'customer', actorUid: CUSTOMER,
+    });
+
+    // The NEW code works. The old one is gone, which is the point of rotating.
+    await confirmOtp(BOOKING, String(store.booking?.otp_code), { actorUid: CUSTOMER });
     expect(store.booking?.status).toBe('CONFIRMED');
   });
 });

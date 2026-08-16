@@ -134,6 +134,36 @@ describe('contract integrity', () => {
       if (e.method === 'get') expect(e.idempotent).toBe(true);
     }
   });
+
+  it('no two canonical endpoints are the same business mutation', () => {
+    // The release gate this encodes: two paths that both write the same thing
+    // are two sets of rules about when that write is allowed, and they diverge
+    // the first time one of them gets a guard the other does not. Reads may
+    // legitimately share a service — /search and /catalog/search are one
+    // implementation behind two names, asserted in the catalog contract test —
+    // but a mutation may not.
+    const mutations = IMPLEMENTED.filter((e) => !e.idempotent);
+    const byService = new Map<string, string[]>();
+    for (const e of mutations) {
+      byService.set(e.domainService, [...(byService.get(e.domainService) ?? []), e.id]);
+    }
+    const shared = [...byService.entries()].filter(([, ids]) => ids.length > 1);
+    expect(shared).toEqual([]);
+  });
+
+  it('the mutation-uniqueness check would notice a duplicate', () => {
+    // Same grouping, run over a fixture, so a refactor that quietly turns the
+    // assertion above into a tautology is caught here.
+    const fixture = [
+      { id: 'a', domainService: 'svc.transition (X)' },
+      { id: 'b', domainService: 'svc.transition (X)' },
+    ];
+    const byService = new Map<string, string[]>();
+    for (const e of fixture) {
+      byService.set(e.domainService, [...(byService.get(e.domainService) ?? []), e.id]);
+    }
+    expect([...byService.entries()].filter(([, ids]) => ids.length > 1)).toHaveLength(1);
+  });
 });
 
 describe('planned entries are documented, not built', () => {

@@ -169,6 +169,11 @@ describe('no file may stage provider PII on its own', () => {
     'services/booking/eligibilityPipeline.ts': 'Assignment eligibility; not customer disclosure.',
     'services/booking/adminOpsStatusSql.ts': 'Admin state derivation; not customer disclosure.',
     'services/booking/transitionExecutor.ts': 'Writes the lifecycle; discloses nothing.',
+    'services/booking/experiencePolicy.ts':
+      'Names states to gate booking-adjacent ACTIONS, not to disclose a person. The ' +
+      'one disclosure decision it does hold — whether a provider position may be ' +
+      'shown — is a withhold-by-default rule keyed on state and elapsed time, and it ' +
+      'returns a verdict rather than any provider field.',
     'chat/chat.repository.ts': 'Chat membership from the assignment; discloses no address.',
     'services/providerCalendarService.ts':
       'Emits the CITY unconditionally and never more, so it sits at the area floor '
@@ -276,5 +281,112 @@ describe('consolidation did not change the wire', () => {
     const code = codeOf('controllers/providerController.ts');
     expect(code).toContain('bw.worker_uid = $2');
     expect(code).toContain("bw.status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED','IN_PROGRESS','COMPLETED')");
+  });
+});
+
+// ─── Reassignment, and the scoping every provider surface depends on ─────────
+
+describe('a reassigned provider loses disclosure by the same decision', () => {
+  /**
+   * `ADMIN_REASSIGN` closes the outgoing assignment as `DECLINED` — the word is
+   * deliberate (auto-assignment excludes providers whose row says DECLINED, so
+   * the more accurate `REASSIGNED` would make an admin's removal reversible by
+   * the matcher on the next pass).
+   *
+   * The consequence for PII is what matters here: the outgoing provider's
+   * status is now in the relinquished set, so the SAME staging decision that
+   * gave them the street address takes it back. No second rule, no cleanup job.
+   */
+  it('DECLINED and REASSIGNED both fall to nothing', () => {
+    for (const status of ['DECLINED', 'REASSIGNED']) {
+      expect(disclosureLevelFor(status)).toBe('none');
+      expect(hasFullDisclosure(status)).toBe(false);
+    }
+  });
+
+  it('the outgoing provider stops seeing the customer entirely', () => {
+    // Not merely the street: the name and the city go too. They are no longer
+    // on the job, so there is nothing they need.
+    const card = formatJobCard(row('DECLINED'));
+    expect(card.customer.uid).toBeNull();
+    expect(card.customer.name).toBe('');
+    expect(card.customer.phone).toBeNull();
+    expect(card.address.addressOne).toBeNull();
+    expect(card.address.city).toBeNull();
+  });
+
+  it('the INCOMING provider gets the area, not the street, until they accept', () => {
+    // Reassignment hands over at ASSIGNED, so the new provider starts at the
+    // same floor everybody else does — an admin action does not pre-authorise
+    // them to the customer's door.
+    const card = formatJobCard(row('ASSIGNED'));
+    expect(card.address.city).toBe('Makati');
+    expect(card.address.addressOne).toBeNull();
+    expect(card.customer.phone).toBeNull();
+  });
+});
+
+describe('every provider surface is scoped to the provider, in SQL', () => {
+  /**
+   * Disclosure staging answers "how much of this customer", and is only half
+   * the question. The other half is "whose jobs am I even reading" — and an
+   * account switch on a shared device is exactly when that half fails, because
+   * the token changes while the screen does not.
+   *
+   * All three surfaces answer it the same way: the provider uid is a bound
+   * parameter in the WHERE clause, so there is no per-account cache to clear
+   * and no request shape that can widen the scope.
+   */
+  const SURFACES: Array<[string, string, RegExp]> = [
+    ['job list / job card', 'services/technicianService.ts', /WHERE b\.worker_uid = \$1/],
+    ['booking detail', 'controllers/providerController.ts', /bw\.worker_uid = \$2/],
+    ['calendar', 'services/providerCalendarService.ts', /WHERE bw\.worker_uid = \$1/],
+  ];
+
+  it.each(SURFACES)('%s scopes on the provider uid', (_label, file, predicate) => {
+    expect(codeOf(file)).toMatch(predicate);
+  });
+
+  it('the calendar reads the ASSIGNMENT row, not the booking pointer', () => {
+    /**
+     * `bookings.worker_uid` is the CURRENT provider. After a reassignment it
+     * moves, so a calendar keyed on it would silently hand the incoming
+     * provider the outgoing one's history — and erase the outgoing provider's
+     * own past work from their calendar.
+     */
+    const code = codeOf('services/providerCalendarService.ts');
+    expect(code).toContain('FROM ${s}.booking_workers bw');
+    expect(code).toContain('JOIN ${s}.bookings b ON b.id = bw.booking_id');
+  });
+
+  it('the calendar excludes relinquished work, so it never needs a "none" level', () => {
+    // The reason it is not a third staging copy: a declined or cancelled job is
+    // not an appointment, so the case that would require withholding cannot
+    // arise. Asserted from the status lists rather than trusted.
+    const code = codeOf('services/providerCalendarService.ts');
+    // Asserted on the two status lists the booking query filters by, not on the
+    // whole file: `CANCELLED` also appears in the time-off query, where it means
+    // a cancelled time-off request and has nothing to do with an assignment.
+    const lists = code
+      .split(String.fromCharCode(10))
+      .filter((l: string) => /^const (CONFIRMED|AWAITING)_WORKER_STATUSES/.test(l))
+      .join(' ');
+    expect(lists).toContain('ACCEPTED');
+    expect(lists).toContain('ASSIGNED');
+    for (const relinquished of [...RELINQUISHED_WORKER_STATUSES]) {
+      expect(lists).not.toContain(relinquished);
+    }
+    expect(code).toContain('CONFIRMED_WORKER_STATUSES');
+    expect(code).toContain('AWAITING_WORKER_STATUSES');
+  });
+
+  it('no provider surface accepts a uid from the request', () => {
+    // §11: ids are identifiers, not authorization. A surface that read the
+    // subject from a query string would make the scoping above decorative.
+    for (const [, file] of SURFACES) {
+      const code = codeOf(file);
+      expect(code).not.toMatch(/req\.query\.(workerUid|providerUid|uid)/);
+      expect(code).not.toMatch(/req\.body\.(workerUid|providerUid)\b/);
+    }
   });
 });

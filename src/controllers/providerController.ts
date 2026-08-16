@@ -1,15 +1,15 @@
 ﻿import { Request, Response } from "express";
 import { db } from "../config";
-import { providerShareOf, PROVIDER_SHARE_RATE, PROVIDER_SHARE_PERCENT } from '../services/revenueSplit';
-import {
-  canonicalPayoutStatus,
-  earningsPayoutDialect,
-  payoutsPayoutDialect,
-  ledgerPayoutDialect,
-} from '../services/payoutStatus';
+import { PROVIDER_SHARE_PERCENT } from '../services/revenueSplit';
+import { ledgerDialectOf } from '../services/payoutStatus';
 import dbQuery from "../db/dbQuery";
-import { paidAdditionalWorkSql, earningsGross } from "../services/earningsBasis";
-import { PROVIDER_RELEASE_HOURS } from "../services/payoutStatus";
+import {
+  EarningsRangeError,
+  getEarningTransaction as canonicalEarningTransaction,
+  getEarningsSummary as canonicalEarningsSummary,
+  listEarningsTransactions as canonicalEarningsTransactions,
+  listProviderPayouts as canonicalProviderPayouts,
+} from "../services/finance/providerEarningsService";
 import * as technicianService from "../services/technicianService";
 import { getIdentity } from "../services/identityService";
 import * as userService from "../services/user.service";
@@ -262,10 +262,19 @@ const JOB_SELECT = (statusFilter: string) => `
     ORDER BY p1.id DESC
     LIMIT 1
   ) p ON TRUE
+  -- LEAKAGE RULE. The lateral join is INNER, so an assignment row that does not
+  -- qualify removes the booking from this list entirely — which is the point: a
+  -- provider who declined, cancelled or was reassigned away must get the same
+  -- answer as for a booking that does not exist, not an empty husk with the PII
+  -- staged out.
+  --
+  -- Same declaration as the job-card query and the disclosure policy, so the
+  -- three cannot disagree about who has relinquished a job.
   JOIN LATERAL (
     SELECT bw1.status AS worker_status
     FROM {SCHEMA}.booking_workers bw1
     WHERE bw1.booking_id = b.id AND bw1.worker_uid = $1
+      AND UPPER(COALESCE(bw1.status, '')) IN (${READABLE_WORKER_STATUS_SQL})
     ORDER BY bw1.assigned_at DESC NULLS LAST, bw1.id DESC
     LIMIT 1
   ) bw ON TRUE
@@ -380,385 +389,159 @@ export const getDashboard = async (req: Request, res: Response) => {
 
 // ─── Earnings ─────────────────────────────────────────────────────────────────
 
-// C20 F-03. This was one of three hand-written mappings over the same column,
-// each answering a different word. It now derives from `payoutStatus.ts`, which
-// emits exactly what this function always emitted — the point is that the three
-// dialects can no longer drift apart, not that any value changed.
-const normalizePayoutStatus = earningsPayoutDialect;
+/**
+ * The five legacy earnings endpoints, all delegating to ONE domain service.
+ *
+ * These paths are what Provider Web and ServanaWorker call today, and they are
+ * not being changed — the shapes below are the shapes those clients already
+ * parse. What changed is where the numbers come from: every one of them now
+ * projects from `services/finance/providerEarningsService`, which is the same
+ * domain service `/api/v1/provider/earnings/*` uses.
+ *
+ * That is the whole point of the tab's "Provider Web/Mobile earnings match
+ * exactly" gate. Before this, `getEarnings`, `getEarningsSummary` and
+ * `getLedger` each read the same four tables with their own SQL and their own
+ * fallbacks, and they disagreed: the ledger reported every completed booking as
+ * `settled` including failed payouts, the summary counted PROCESSING money in
+ * neither paid nor pending, and the list and the summary used different
+ * estimate fallbacks. Each was fixed separately, which is why the same class of
+ * defect kept reappearing in whichever endpoint nobody had looked at yet.
+ *
+ * The responses stay ADDITIVE. Every field these endpoints returned before is
+ * still returned, with the same name and the same meaning; the canonical DTO
+ * carries extra fields beside them (`economicModel`, `payoutBlockedBy`, minor
+ * units) that existing consumers ignore and a migrating client can adopt.
+ */
+
+const earningsRangeOf = (req: Request) => ({
+  startDate: typeof req.query.startDate === "string" ? req.query.startDate : undefined,
+  endDate: typeof req.query.endDate === "string" ? req.query.endDate : undefined,
+});
+
+/** The one refusal these endpoints can produce that is not a 500. */
+const sendEarningsError = (res: Response, error: unknown): Response => {
+  if (error instanceof EarningsRangeError) {
+    return res.status(400).json({ status: "failed", message: "Invalid date range" });
+  }
+  return res.status(500).json({ status: "failed", message: "Server error" });
+};
 
 export const getEarnings = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
-    const { startDate, endDate } = req.query;
-
-    let dateFilter = "";
-    const params: any[] = [uid];
-
-    if (startDate && endDate) {
-      if (isNaN(Date.parse(startDate as string)) || isNaN(Date.parse(endDate as string))) {
-        return res.status(400).json({ status: "failed", message: "Invalid date range" });
-      }
-      params.push(startDate, endDate);
-      dateFilter = `AND b.schedule >= $2 AND b.schedule <= $3`;
-    }
-
-    const result = await dbQuery.query(
-      // bw.completed_at is when the provider actually finished. It is joined
-      // because completedAt below used to be populated from b.schedule — the
-      // time the job was BOOKED for. On any job that ran late, started early or
-      // was rescheduled, the earnings history showed a completion time that
-      // never happened, and it silently agreed with scheduledAt on every row.
-      `SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
-              so.level_2 AS service_name,
-              p.status   AS payment_status,
-              d.status   AS payout_status,
-              d.released_at,
-              d.worker_share,
-              bw.completed_at,
-              -- The same expression the release scheduler uses, from the same
-              -- constant, so a date shown to a provider cannot disagree with the
-              -- job that actually moves the money. Clients previously had to
-              -- recompute it, and Provider Web recomputed it with a 48-hour
-              -- window against a 72-hour scheduler.
-              bw.completed_at + INTERVAL '${PROVIDER_RELEASE_HOURS} hours' AS release_after,
-              ${paidAdditionalWorkSql(dbSchema)} AS additional_paid
-       FROM ${dbSchema}.bookings b
-       LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-       LEFT JOIN ${dbSchema}.payments p ON p.booking_id = b.id
-         AND p.additional_request_id IS NULL
-       LEFT JOIN ${dbSchema}.disbursements d ON d.booking_id = b.id AND d.worker_uid = $1
-       LEFT JOIN ${dbSchema}.booking_workers bw
-              ON bw.booking_id = b.id AND bw.worker_uid = $1
-       WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
-       ${dateFilter}
-       ORDER BY b.schedule DESC`,
-      params
-    );
-
-    const data = result.rows.map((r: any) => {
-      // `final_price` alone is NOT the gross the provider's share comes from —
-      // paid on-site additional work is charged separately and never written
-      // back to it. `createDisbursement` has always included it, so showing
-      // `final_price` here put a booking amount on screen that the provider
-      // share was visibly not 80% of. See `earningsBasis.ts`.
-      const gross = earningsGross(r.final_price, r.additional_paid);
-      const workerShare = r.worker_share != null
-        ? Math.round(Number(r.worker_share) * 100) / 100
-        : providerShareOf(gross);
-      return {
-        id: String(r.id),
-        bookingId: String(r.id),
-        bookingCode: bookingCode(r.id),
-        serviceName: r.service_name || "",
-        // Falls back to the schedule only when the assignment row carries no
-        // completion time, so the field degrades to its old value rather than
-        // to null for any historical row written before completed_at was set.
-        completedAt: r.completed_at ?? r.schedule,
-        scheduledAt: r.schedule,
-        bookingAmount: gross,
-        providerShareAmount: workerShare,
-        providerSharePercent: PROVIDER_SHARE_PERCENT,
-        clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
-        bookingStatus: r.status ? r.status.toLowerCase() : "completed",
-        providerPayoutStatus: normalizePayoutStatus(r.payout_status),
-        // Additive (C20 F-03). Keeps PROCESSING distinct from PENDING, which
-        // the dialect above cannot express and §1 requires.
-        payoutStatusCanonical: canonicalPayoutStatus(r.payout_status),
-        disbursedAt: r.released_at || null,
-        // Backend-computed release date (§3). Additive — existing consumers
-        // ignore it. `disbursedAt` takes precedence for display: this is when
-        // the money BECOMES eligible, not proof it moved.
-        expectedArrivalAt: r.release_after ? new Date(r.release_after).toISOString() : null,
-        paymentMethod: (r.payment_method || "cash").toLowerCase(),
-        currency: "PHP",
-      };
-    });
-
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const data = await canonicalEarningsTransactions(uid, earningsRangeOf(req));
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
+    return sendEarningsError(res, error);
   }
 };
 
 export const getEarningById = async (req: Request, res: Response) => {
   try {
-    const uid  = req.user?.uid;
-    const id   = Number(req.params.id);
+    const uid = req.user?.uid;
+    const id = Number(req.params.id);
     if (!uid || !Number.isFinite(id)) {
       return res.status(400).json({ status: "failed", message: "Invalid request" });
     }
-    const result = await dbQuery.query(
-      `SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
-              so.level_2 AS service_name,
-              p.status   AS payment_status,
-              d.status   AS payout_status,
-              d.released_at,
-              d.worker_share,
-              bw.completed_at,
-              bw.completed_at + INTERVAL '${PROVIDER_RELEASE_HOURS} hours' AS release_after,
-              ${paidAdditionalWorkSql(dbSchema)} AS additional_paid
-       FROM ${dbSchema}.bookings b
-       LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-       -- additional_request_id IS NULL matches the list query. Without it a
-       -- booking carrying BOTH a base payment and an additional-work payment
-       -- fans out to several rows, and only rows[0] is read — so the detail
-       -- screen could report the additional charge's status as the booking's
-       -- payment status, and disagree with the list for the same booking.
-       LEFT JOIN ${dbSchema}.payments        p  ON p.booking_id = b.id
-         AND p.additional_request_id IS NULL
-       LEFT JOIN ${dbSchema}.disbursements   d  ON d.booking_id = b.id AND d.worker_uid = $1
-       LEFT JOIN ${dbSchema}.booking_workers bw ON bw.booking_id = b.id AND bw.worker_uid = $1
-       WHERE b.id = $2 AND b.worker_uid = $1`,
-      [uid, id]
-    );
-    if (!result.rowCount) {
+    const data = await canonicalEarningTransaction(uid, id);
+    if (!data) {
       return res.status(404).json({ status: "failed", message: "Earning not found" });
     }
-    const r = result.rows[0];
-    // Same basis as the list endpoint — see earningsBasis.ts.
-    const gross = earningsGross(r.final_price, r.additional_paid);
-    const workerShareDetail = r.worker_share != null
-      ? Math.round(Number(r.worker_share) * 100) / 100
-      : providerShareOf(gross);
-    const data = {
-      id:                  String(r.id),
-      bookingId:           String(r.id),
-      bookingCode:         bookingCode(r.id),
-      serviceName:         r.service_name || "",
-      completedAt:         r.completed_at ?? r.schedule,
-      scheduledAt:         r.schedule,
-      bookingAmount:       gross,
-      providerShareAmount: workerShareDetail,
-      providerSharePercent: PROVIDER_SHARE_PERCENT,
-      clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
-      bookingStatus:       r.status ? r.status.toLowerCase() : "completed",
-      providerPayoutStatus: normalizePayoutStatus(r.payout_status),
-      // Additive (C20 F-03). Keeps PROCESSING distinct from PENDING.
-      payoutStatusCanonical: canonicalPayoutStatus(r.payout_status),
-      disbursedAt:         r.released_at || null,
-      expectedArrivalAt:   r.release_after ? new Date(r.release_after).toISOString() : null,
-      paymentMethod:       (r.payment_method || "cash").toLowerCase(),
-      currency:            "PHP",
-    };
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
+    return sendEarningsError(res, error);
   }
 };
 
 export const getEarningsSummary = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
-    const { startDate, endDate } = req.query;
-
-    let dateFilter = "";
-    const params: any[] = [uid];
-
-    if (startDate && endDate) {
-      if (isNaN(Date.parse(startDate as string)) || isNaN(Date.parse(endDate as string))) {
-        return res.status(400).json({ status: "failed", message: "Invalid date range" });
-      }
-      params.push(startDate, endDate);
-      dateFilter = `AND b.schedule >= $2 AND b.schedule <= $3`;
-    }
-
-    // C20 F-04. This query had three defects, all of the same shape: it
-    // recomputed money that had already been calculated authoritatively.
-    //
-    //   1. `final_price * RATE` DROPPED ON-SITE UPSELL REVENUE. Disbursements
-    //      are computed from `final_price + additional_paid` (see
-    //      createDisbursement, whose own comment records fixing exactly this
-    //      bug at the writer). The fix never reached this reader, so a provider
-    //      who did approved additional work saw a total that omitted it.
-    //   2. `PROCESSING` WAS COUNTED NOWHERE. `total_paid` took RELEASED only
-    //      and `total_pending` took PENDING/FAILED/no-row, so money in flight
-    //      vanished from both — it left "pending" without arriving in "paid".
-    //   3. `FAILED` WAS COUNTED AS PENDING. That is the C20 F-01 defect in a
-    //      second endpoint: a payout that will not arrive without intervention,
-    //      presented as one that is on its way.
-    //
-    // The authoritative `d.worker_share` is now preferred wherever a
-    // disbursement row exists. The `final_price` fallback survives only for a
-    // completed booking that has no row yet — which is a genuine ESTIMATE, and
-    // is reported as one rather than sitting unlabelled beside settled fact.
-    const result = await dbQuery.query(
-      `SELECT
-         COUNT(*) AS total_jobs,
-         COALESCE(SUM(b.final_price + ${paidAdditionalWorkSql(dbSchema)}), 0) AS total_gross,
-         COALESCE(SUM(CASE WHEN d.status = 'RELEASED' THEN d.worker_share ELSE 0 END), 0) AS total_paid,
-         COALESCE(SUM(CASE WHEN d.status IN ('PENDING','PROCESSING') THEN d.worker_share ELSE 0 END), 0) AS pending_recorded,
-         -- The estimate fallback carried defect (1) too. It was the only branch
-         -- still multiplying final_price, so a completed booking with approved
-         -- extra work and no disbursement row yet was under-estimated by 80% of
-         -- that work — the same omission the comment above says was fixed, in
-         -- the one place the fix had not reached.
-         COALESCE(SUM(CASE WHEN d.id IS NULL
-                           THEN (b.final_price + ${paidAdditionalWorkSql(dbSchema)}) * ${PROVIDER_SHARE_RATE}
-                           ELSE 0 END), 0) AS pending_estimated,
-         COALESCE(SUM(CASE WHEN d.status = 'FAILED' THEN d.worker_share ELSE 0 END), 0) AS total_failed,
-         COUNT(*) FILTER (WHERE d.id IS NULL) AS estimated_jobs
-       FROM ${dbSchema}.bookings b
-       LEFT JOIN ${dbSchema}.disbursements d ON d.booking_id = b.id AND d.worker_uid = $1
-       WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
-       ${dateFilter}`,
-      params
-    );
-
-    const s = result.rows[0] || {};
-    const money = (v: any) => Math.round(Number(v ?? 0) * 100) / 100;
-
-    const totalPaid        = money(s.total_paid);
-    const pendingRecorded  = money(s.pending_recorded);
-    const pendingEstimated = money(s.pending_estimated);
-    const totalFailed      = money(s.total_failed);
-    const estimatedJobs    = Number(s.estimated_jobs ?? 0);
-
-    // Rounded after summing, not before: rounding each part and adding would
-    // let the displayed total drift from the parts by a centavo.
-    const totalPending = money(Number(s.pending_recorded ?? 0) + Number(s.pending_estimated ?? 0));
-
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
     return res.status(200).json({
       status: "success",
-      data: {
-        // Every peso of provider share for completed bookings, authoritative
-        // where a disbursement exists. The old value was
-        // `providerShareOf(total_gross)`, which carried defect (1) above.
-        totalEarned:  money(totalPaid + totalPending + totalFailed),
-        totalPaid,
-        totalPending,
-        totalRefunded: 0,
-        periodLabel: startDate ? "Custom range" : "All time",
-        currency: "PHP",
-        jobsCount: Number(s.total_jobs ?? 0),
-
-        // ── Additive: existing consumers ignore these ────────────────────
-        // Money owed whose payout FAILED. Split out of totalPending because a
-        // failed payout needs intervention rather than patience, and folding
-        // it into "pending" tells the provider it is coming.
-        totalFailed,
-        // The portion of totalPending that is a real recorded amount, and the
-        // portion still estimated from final_price because no disbursement
-        // row exists yet. §9 requires estimates to be labelled as estimates.
-        pendingRecordedAmount:  pendingRecorded,
-        pendingEstimatedAmount: pendingEstimated,
-        pendingIsEstimate:      estimatedJobs > 0,
-        estimatedJobsCount:     estimatedJobs,
-      },
+      data: await canonicalEarningsSummary(uid, earningsRangeOf(req)),
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
+    return sendEarningsError(res, error);
   }
 };
 
+/**
+ * The provider ledger — the same transactions, in the shape this endpoint has
+ * always emitted.
+ *
+ * Kept as a distinct SHAPE and not a distinct TRUTH. Servana.com.ph renders
+ * `type`/`direction`/`amountMinor` rows from this path, so the projection stays;
+ * the figures underneath it are now the canonical ones, which is what stops it
+ * reporting a failed payout as settled money.
+ */
 export const getLedger = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
 
-    const result = await dbQuery.query(
-      `SELECT b.id, b.schedule, b.final_price, b.payment_method, b.status,
-              so.level_2   AS service_name,
-              d.status     AS payout_status,
-              d.worker_share,
-              d.released_at
-       FROM ${dbSchema}.bookings b
-       LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-       LEFT JOIN ${dbSchema}.disbursements d
-              ON d.booking_id = b.id AND d.worker_uid = $1
-       WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
-       ORDER BY b.schedule DESC
-       LIMIT 50`,
-      [uid]
-    );
-
-    const data = result.rows.map((r: any) => {
-      const gross = Number(r.final_price || 0);
-      const code = bookingCode(r.id);
-
-      // C20 F-01. This used to hardcode `status: "settled"` for every completed
-      // booking and recompute the amount from final_price, without joining
-      // `disbursements` at all — so a payout that had FAILED, or had not been
-      // calculated yet, was reported to the provider as settled money.
-      //
-      // /provider/earnings/summary reads the same figures correctly, which meant
-      // two endpoints disagreed about one booking. §1 requires pending,
-      // available, held, processing, paid and reversed to stay distinct; one
-      // word for all of them is the opposite.
-      // C20 F-03. The third dialect, and the one this command introduced: the
-      // F-01 fix had to stop hardcoding `settled`, and added `settled` as a
-      // value in doing so. Derived from the same canonical source now.
-      const status = ledgerPayoutDialect(r.payout_status);
-      const payoutCanonical = canonicalPayoutStatus(r.payout_status);
-
-      // Prefer the authoritative disbursed amount. final_price × rate is only
-      // an ESTIMATE, used where no disbursement row exists yet, and it is
-      // labelled as one rather than presented as a settled figure.
-      const hasDisbursement = r.worker_share != null;
-      const amountMinor = hasDisbursement
-        ? Math.round(Number(r.worker_share) * 100)
-        : Math.round(providerShareOf(gross) * 100);
-
-      return {
-        id: `led-${r.id}`,
-        type: "booking_earning",
-        direction: "credit",
-        status,
-        payoutStatusCanonical: payoutCanonical,
-        isEstimate: !hasDisbursement,
-        amountMinor,
-        currency: "PHP",
-        description: `${r.service_name || "Service"} · ${code}`,
-        bookingId: String(r.id),
-        bookingCode: code,
-        additionalWorkRequestId: null,
-        payoutId: null,
-        reference: code,
-        occurredAt: r.schedule,
-        availableAt: null,
-        // Only a RELEASED disbursement has actually settled, and it settled
-        // when it was released — not when the booking was scheduled.
-        settledAt: payoutCanonical === "paid" ? (r.released_at ?? null) : null,
-      };
-    });
+    const transactions = await canonicalEarningsTransactions(uid);
+    const data = transactions.slice(0, 50).map((t) => ({
+      id: `led-${t.bookingId}`,
+      type: "booking_earning",
+      direction: "credit",
+      status: ledgerDialectOf(t.payoutStatusCanonical),
+      payoutStatusCanonical: t.payoutStatusCanonical,
+      isEstimate: t.isEstimate,
+      amountMinor: t.providerShareAmountMinor,
+      currency: t.currency,
+      description: `${t.serviceName || "Service"} · ${t.bookingCode}`,
+      bookingId: t.bookingId,
+      bookingCode: t.bookingCode,
+      additionalWorkRequestId: null,
+      payoutId: null,
+      reference: t.bookingCode,
+      occurredAt: t.scheduledAt,
+      availableAt: null,
+      // Only a RELEASED payout has actually settled, and it settled when it was
+      // released — not when the booking was scheduled.
+      settledAt: t.payoutStatusCanonical === "paid" ? t.disbursedAt : null,
+    }));
 
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
+    return sendEarningsError(res, error);
   }
 };
-
-// C20 F-03. Same column, second dialect — now derived rather than rewritten.
-// Note it still collapses PROCESSING into "pending", which §1 says must stay
-// distinct; that is preserved because consumers branch on these literals, and
-// the distinction is carried by `payoutStatusCanonical` alongside it.
-const _mapPayoutStatus = payoutsPayoutDialect;
 
 export const getPayouts = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
-    const rows = await disbursementService.listDisbursements({ workerUid: uid });
-    // Map to ProviderPayoutDto shape; exclude internal fields (servana_share, payout_error)
-    const data = rows.map((r: any) => ({
-      id:                String(r.id),
-      amountMinor:       Math.round(Number(r.worker_share || 0) * 100),
-      currency:          "PHP",
-      status:            _mapPayoutStatus(r.status),
-      payoutStatusCanonical: canonicalPayoutStatus(r.status),
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+
+    const payouts = await canonicalProviderPayouts(uid);
+    // The legacy ProviderPayoutDto shape. The four always-null fields are kept
+    // because both clients read them; the domain service does not invent them,
+    // and this projection does not invent values for them either.
+    const data = payouts.map((p) => ({
+      id: p.id,
+      amountMinor: p.amountMinor,
+      currency: p.currency,
+      status: p.status,
+      payoutStatusCanonical: p.payoutStatusCanonical,
       payoutMethodSummary: null,
-      initiatedAt:       r.created_at    ? new Date(r.created_at).toISOString()    : null,
-      expectedArrivalAt: r.release_after ? new Date(r.release_after).toISOString() : null,
-      completedAt:       r.released_at   ? new Date(r.released_at).toISOString()   : null,
-      failedAt:          null,
-      failureMessage:    null,
-      transactionCount:  1,
-      // Processor identifiers are internal reconciliation data. Providers get
-      // a stable Servana reference that support can safely discuss instead.
-      reference:         `SVP-${String(r.id).padStart(6, "0")}`,
-      events:            [],
+      initiatedAt: p.initiatedAt,
+      expectedArrivalAt: p.expectedArrivalAt,
+      completedAt: p.completedAt,
+      failedAt: null,
+      failureMessage: null,
+      transactionCount: 1,
+      // Processor identifiers are internal reconciliation data. Providers get a
+      // stable Servana reference that support can safely discuss instead.
+      reference: p.reference,
+      events: [],
       includedTransactionSummaries: [],
     }));
+
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
+    return sendEarningsError(res, error);
   }
 };
 
@@ -2463,7 +2246,7 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
 
 // Shared formatter to avoid duplication between list and single-card endpoints
 import { formatJobCard } from "./jobCardView";
-import { hasFullDisclosure } from "./providerDisclosure";
+import { hasFullDisclosure, READABLE_WORKER_STATUS_SQL } from "./providerDisclosure";
 import { validateDataUri, AllowedUploadMime } from "../helpers/fileSignature";
 import { stripImageMetadata } from "../helpers/stripImageMetadata";
 import * as evidenceService from "../services/bookingEvidenceService";

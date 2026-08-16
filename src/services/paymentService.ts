@@ -8,6 +8,15 @@ import { generateOTP } from "../helpers/otp";
 import { send } from "../helpers/mailer";
 import { getUserInfoByBookingId } from "./user.service";
 import { createCustomerNotification, createNotification } from "./notification.service";
+import { publishEventSafely } from './events/eventOutbox';
+import { dispatchSoon } from './events/notificationProjector';
+import {
+  ensureFinanceLedgerSchema,
+  eventKeys,
+  recordLedgerEventBestEffort,
+  recordPaymentCaptured,
+  recordPaymentRefunded,
+} from "./finance/financeLedger";
 
 const dbSchema = db.schema;
 
@@ -85,8 +94,17 @@ export const approvePayment = async (bookingId: number) => {
   );
   if (!r.rowCount) throw new Error("Only a GCash payment can be manually approved.");
 
-  // try { await createDisbursement(bookingId); }
-  // catch (e) { console.error("createDisbursement failed (approvePayment):", e); }
+  // Manual approval is a capture like any other. Recorded here so the ledger
+  // covers every route money can arrive by, not only the online one.
+  const approved = r.rows[0];
+  await recordLedgerEventBestEffort({
+    eventKey: eventKeys.paymentCaptured(Number(approved.id)),
+    type: "PAYMENT_CAPTURED",
+    bookingId: Number(approved.booking_id),
+    paymentId: Number(approved.id),
+    amount: approved.amount,
+    reasonCode: "GCASH_MANUAL_APPROVAL",
+  });
 
   const bRes = await dbQuery.query(
     `SELECT worker_uid, final_price FROM ${dbSchema}.bookings WHERE id = $1`,
@@ -96,6 +114,11 @@ export const approvePayment = async (bookingId: number) => {
   if (worker?.worker_uid) {
     const code = `SVN-${String(bookingId).padStart(6, "0")}`;
     createNotification(worker.worker_uid, {
+      // Deterministic key added by TAB 09. This call was keyless, so a retried
+      // approval produced a SECOND "Payment Received" row for one payment. It is
+      // the key `DOMAIN_EVENTS.PaymentUpdated` projects, so this producer and
+      // the event projector collapse onto one row rather than racing.
+      notificationKey: `payment_confirmed_${bookingId}`,
       type: "earnings_payout",
       severity: "info",
       title: "Payment Received",
@@ -104,6 +127,12 @@ export const approvePayment = async (bookingId: number) => {
       route: { page: "earnings", bookingId: String(bookingId) },
       canOpenDetail: true,
     }).catch((e) => console.error("createNotification (approvePayment):", e));
+    void publishEventSafely({
+      name: 'PaymentUpdated',
+      refs: { bookingId, providerUid: worker.worker_uid },
+      display: { bookingCode: code },
+      dedupeKey: `PaymentUpdated:approve:${bookingId}`,
+    }).then(() => dispatchSoon());
   }
 
   return r.rows[0];
@@ -122,8 +151,15 @@ export const markCashPaid = async (bookingId: number) => {
   );
   if (!r.rowCount) throw new Error("This booking is not configured for cash payment.");
 
-  // try { await createDisbursement(bookingId); }
-  // catch (e) { console.error("createDisbursement failed (markCashPaid):", e); }
+  const collected = r.rows[0];
+  await recordLedgerEventBestEffort({
+    eventKey: eventKeys.paymentCaptured(Number(collected.id)),
+    type: "PAYMENT_CAPTURED",
+    bookingId: Number(collected.booking_id),
+    paymentId: Number(collected.id),
+    amount: collected.amount,
+    reasonCode: "CASH_COLLECTED",
+  });
 
   const bRes = await dbQuery.query(
     `SELECT worker_uid, final_price FROM ${dbSchema}.bookings WHERE id = $1`,
@@ -133,6 +169,8 @@ export const markCashPaid = async (bookingId: number) => {
   if (worker?.worker_uid) {
     const code = `SVN-${String(bookingId).padStart(6, "0")}`;
     createNotification(worker.worker_uid, {
+      // As above: keyless until TAB 09, and now sharing the projector's key.
+      notificationKey: `payment_confirmed_${bookingId}`,
       type: "earnings_payout",
       severity: "info",
       title: "Payment Received",
@@ -141,6 +179,12 @@ export const markCashPaid = async (bookingId: number) => {
       route: { page: "earnings", bookingId: String(bookingId) },
       canOpenDetail: true,
     }).catch((e) => console.error("createNotification (markCashPaid):", e));
+    void publishEventSafely({
+      name: 'PaymentUpdated',
+      refs: { bookingId, providerUid: worker.worker_uid },
+      display: { bookingCode: code },
+      dedupeKey: `PaymentUpdated:cash:${bookingId}`,
+    }).then(() => dispatchSoon());
   }
 
   return r.rows[0];
@@ -616,6 +660,12 @@ export const processWebhook = async (req: Request, _res: Response) => {
   if (!handledEventTypes.has(eventType)) return;
   const providerPaymentId = eventData.id;
 
+  // Ensured once, BEFORE any transaction opens. The ledger writes below run on
+  // the transaction's own client, and issuing DDL from a second connection while
+  // that transaction is open is the kind of ordering nobody should have to
+  // reason about at three in the morning.
+  await ensureFinanceLedgerSchema();
+
   // The index below is what actually guarantees uniqueness; this SELECT is the
   // cheap path that avoids doing work before failing on it.
   if (eventType === "checkout_session.payment.paid") {
@@ -652,7 +702,7 @@ export const processWebhook = async (req: Request, _res: Response) => {
             AND provider = 'PAYMONGO'
             AND status IN ('PENDING', 'FAILED')
             AND ROUND(amount * 100) = $5
-          RETURNING booking_id, additional_request_id`,
+          RETURNING id, booking_id, additional_request_id, amount`,
         [checkoutSessionId, eventId, payload, processorPaymentId, paidAmount],
       );
 
@@ -681,6 +731,34 @@ export const processWebhook = async (req: Request, _res: Response) => {
       }
 
       payment = r.rows[0];
+
+      /**
+       * The capture event, inside the webhook's own transaction.
+       *
+       * §70 requires the ledger to be the record every surface reconciles to,
+       * and before this the ONLY ledger writes were the two admin paths —
+       * `approveGcashPayment` and `adminConfirmCash`. Online payments, which are
+       * the majority of Servana's volume, wrote nothing, so any reconciliation
+       * over the ledger was reconciling a minority of the money.
+       *
+       * In the transaction, not after it: a payment marked PAID whose capture
+       * event was lost to a crash between two statements is exactly the break
+       * reconciliation would then have to explain, and it is avoidable here for
+       * the cost of one INSERT. The event is keyed on the payment id, so a
+       * PayMongo retry that reaches this line produces no second row.
+       */
+      const captured = r.rows[0];
+      await recordPaymentCaptured(
+        {
+          bookingId: Number(captured.booking_id),
+          paymentId: Number(captured.id),
+          amount: captured.amount,
+          additionalRequestId: captured.additional_request_id ?? null,
+          processorReference: processorPaymentId,
+        },
+        client,
+      );
+
       if (payment?.additional_request_id) {
         await client.query(
           `UPDATE ${dbSchema}.booking_additional_requests
@@ -880,6 +958,18 @@ export const processWebhook = async (req: Request, _res: Response) => {
         `INSERT INTO ${dbSchema}.booking_tracking (booking_id, status, note)
          VALUES ($1, 'PAYMENT_REFUNDED', 'Payment refund confirmed')`,
         [payment.booking_id],
+      );
+      // Keyed on the payment and its refund attempt, so the processor retrying
+      // this webhook records one refund rather than two.
+      await recordPaymentRefunded(
+        {
+          bookingId: Number(payment.booking_id),
+          paymentId: Number(payment.id),
+          refundAttempt: Number(payment.refund_attempt),
+          amount: payment.amount,
+          processorReference: refundId,
+        },
+        client,
       );
       confirmedRefund = {
         bookingId: Number(payment.booking_id),

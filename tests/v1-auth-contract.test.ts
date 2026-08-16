@@ -41,6 +41,7 @@ import {
   AuthLoginError,
 } from '../src/services/authLoginService';
 import { V1_CONTRACT, IMPLEMENTED } from '../src/api/v1/contract';
+import { ACCOUNT_BUCKETS, BUCKETS, V1_RATE_LIMITS } from '../src/api/v1/rateLimitPolicy';
 import { V1_ERROR_STATUS, isV1ErrorCode } from '../src/api/v1/errors';
 import { AUTH_ERRORS } from '../src/errors/authErrors';
 
@@ -307,18 +308,55 @@ describe('the auth contract is complete', () => {
 });
 
 describe('the composition layer enforces what the contract declares', () => {
-  const register = fs
-    .readFileSync(path.resolve(__dirname, '..', 'src', 'api', 'v1', 'register.ts'), 'utf8')
-    .replace(/\r\n/g, '\n');
+  /**
+   * These assertions used to read `register.ts` as TEXT and check a hand-listed
+   * five ids. That enforced nothing about the sixth: an auth endpoint added with
+   * one limiter, or none, passed in silence — which is how `refresh`,
+   * `verify-mobile` and `logout` came to contradict the documented "every
+   * credential endpoint carries two limiters" with the whole suite green.
+   *
+   * Now they read the policy the router is actually built from, and the check is
+   * over every implemented auth endpoint rather than a list somebody remembered
+   * to extend.
+   */
+  const authEndpoints = IMPLEMENTED.filter((e) => e.domain === 'auth');
 
-  it('every credential endpoint carries both a per-account and a per-IP limiter', () => {
+  it('every implemented auth endpoint has a declared rate-limit policy', () => {
+    const undeclared = authEndpoints.map((e) => e.id).filter((id) => !V1_RATE_LIMITS[id]);
+    expect(undeclared).toEqual([]);
+  });
+
+  it('an endpoint with no per-account bucket states why', () => {
     // Per-account alone lets a spray across many accounts through; per-IP alone
-    // locks out a carrier NAT. Both, or neither is doing its job.
-    for (const id of ['auth.login', 'auth.register', 'auth.verifyEmail', 'auth.forgotPassword', 'auth.resetPassword']) {
-      const line = register.split('\n').find((l) => l.includes(`'${id}':`));
-      expect(line).toBeDefined();
-      expect(line).toMatch(/perAccount\w+Limiter/);
-      expect(line).toMatch(/perIpLoginLimiter/);
+    // locks out a carrier NAT. Where only one is present, the reason is part of
+    // the declaration — so leaving the account bucket off is a decision somebody
+    // wrote down, not an omission.
+    for (const e of authEndpoints) {
+      const policy = V1_RATE_LIMITS[e.id];
+      const hasAccountBucket = policy.buckets.some((b) => ACCOUNT_BUCKETS.includes(b));
+      if (!hasAccountBucket) {
+        expect(policy.noAccountBucket?.trim()).toBeTruthy();
+      } else {
+        expect(policy.noAccountBucket).toBeUndefined();
+      }
+    }
+  });
+
+  it('every password or code endpoint carries both a per-account and a per-IP bucket', () => {
+    // The endpoints where a secret is submitted for checking. These are the ones
+    // the pair of limiters exists for, and none may drop to a single bucket.
+    for (const id of [
+      'auth.login',
+      'auth.register',
+      'auth.verifyEmail',
+      'auth.forgotPassword',
+      'auth.resetPassword',
+      'auth.resendVerification',
+    ]) {
+      const policy = V1_RATE_LIMITS[id];
+      expect(policy).toBeDefined();
+      expect(policy.buckets.some((b) => ACCOUNT_BUCKETS.includes(b))).toBe(true);
+      expect(policy.buckets).toContain('perIp');
     }
   });
 
@@ -327,11 +365,18 @@ describe('the composition layer enforces what the contract declares', () => {
     // limiter that is configured and not mounted is worse than none, because it
     // reads as protection.
     const implemented = new Set(IMPLEMENTED.map((e) => e.id));
-    const declared = register
-      .split('\n')
-      .filter((l) => /^\s+'auth\.\w+': \[/.test(l))
-      .map((l) => l.trim().split("'")[1]);
+    const declared = Object.keys(V1_RATE_LIMITS);
     expect(declared.length).toBeGreaterThan(5);
     for (const id of declared) expect(implemented.has(id)).toBe(true);
+  });
+
+  it('every bucket a policy names is a bucket that exists', () => {
+    for (const [id, policy] of Object.entries(V1_RATE_LIMITS)) {
+      for (const bucket of policy.buckets) {
+        expect(Object.keys(BUCKETS)).toContain(bucket);
+        expect(BUCKETS[bucket].max).toBeGreaterThan(0);
+        expect(id).toBeTruthy();
+      }
+    }
   });
 });

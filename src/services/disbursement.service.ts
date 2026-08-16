@@ -2,6 +2,15 @@ import { db } from "../config";
 import { splitRevenue } from './revenueSplit';
 import { paidAdditionalWorkSql } from './earningsBasis';
 import { PROVIDER_RELEASE_HOURS } from './payoutStatus';
+import { PROVIDER_ECONOMIC_MODELS, economicModelFor } from './finance/financePolicy';
+import {
+  recordEarningOutcome,
+  recordPayoutFailed,
+  recordPayoutReleased,
+  recordLedgerEventBestEffort,
+  ensureFinanceLedgerSchema,
+  eventKeys,
+} from './finance/financeLedger';
 import dbQuery from "../db/dbQuery";
 import axios from "axios";
 import { getWorkerBankAccount } from "./technicianService";
@@ -47,13 +56,32 @@ const isDefinitivePayoutRejection = (err: any) => {
     && ![408, 409, 425, 429].includes(status);
 };
 
-const markPayoutFailure = async (id: number, code: string) => {
-  await dbQuery.query(
+const markPayoutFailure = async (id: number, code: string, context?: {
+  bookingId: number;
+  workerUid: string;
+  attempt: number;
+}) => {
+  const updated = await dbQuery.query(
     `UPDATE ${dbSchema}.disbursements
      SET status = 'FAILED', payout_error = $2, updated_at = NOW()
-     WHERE id = $1 AND status = 'PROCESSING'`,
+     WHERE id = $1 AND status = 'PROCESSING'
+     RETURNING id`,
     [id, code]
   );
+  // Only record a failure event if this call is the one that recorded the
+  // failure. Writing it unconditionally would log a failed attempt for a row
+  // another worker had already moved on.
+  if (updated.rowCount && context) {
+    await recordLedgerEventBestEffort({
+      eventKey: eventKeys.payoutFailed(id, context.attempt),
+      type: 'PROVIDER_PAYOUT_FAILED',
+      bookingId: context.bookingId,
+      disbursementId: id,
+      providerUid: context.workerUid,
+      amount: 0,
+      reasonCode: code,
+    });
+  }
 };
 
 const markPayoutForReconciliation = async (id: number, payoutId?: string) => {
@@ -89,15 +117,17 @@ export const createDisbursement = async (bookingId: number) => {
     `SELECT b.final_price,
             b.worker_uid,
             b.is_synthetic,
+            COALESCE(uc.is_internal_fixer, false) AS is_internal_fixer,
             ${paidAdditionalWorkSql(dbSchema)} AS additional_paid
      FROM ${dbSchema}.bookings b
+     LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = b.worker_uid
      WHERE b.id = $1`,
     [bookingId]
   );
 
   if (!r.rowCount) throw new Error("Booking not found");
 
-  const { final_price, worker_uid, additional_paid, is_synthetic } = r.rows[0];
+  const { final_price, worker_uid, additional_paid, is_synthetic, is_internal_fixer } = r.rows[0];
 
   /**
    * A release smoke must never send real money.
@@ -129,6 +159,42 @@ export const createDisbursement = async (bookingId: number) => {
 
   const payableBasis = Number(final_price) + Number(additional_paid || 0);
 
+  /**
+   * An internal fixer earns no per-job commission, and this is the only place
+   * that can stop one being created.
+   *
+   * The rule was already declared twice and enforced nowhere. Reconciliation
+   * check 7 (`INTERNAL_FIXER_JOB_WITH_PROVIDER_PAYOUT`, severity critical) has
+   * always looked for exactly this row with the description "should be
+   * NOT_APPLICABLE", and `internal_fixer_revenue.view` exists as a distinct
+   * sensitive permission because that revenue is Servana's to report. But this
+   * function had no internal-fixer branch, so every completed internal-fixer job
+   * created a PENDING disbursement that the hourly scheduler then released, and
+   * the reconciliation run flagged it afterwards as a break nobody could close —
+   * because nothing upstream would stop the next one.
+   *
+   * TAB 07 §73 resolves it: internal fixer service revenue belongs to Servana
+   * and compensation is payroll, which this backend does not model. So no
+   * disbursement row is created, and an explained zero is recorded in its place.
+   * The reconciliation check stays as the detector for rows written before this,
+   * and for a provider tagged as an internal fixer after their jobs completed.
+   */
+  const economicModel = economicModelFor({ isInternalFixer: is_internal_fixer === true });
+  if (!PROVIDER_ECONOMIC_MODELS[economicModel].earnsJobShare) {
+    await ensureFinanceLedgerSchema();
+    await recordEarningOutcome({
+      bookingId,
+      providerUid: worker_uid,
+      economicModel,
+      payable: 0,
+      gross: payableBasis,
+    });
+    console.log(
+      `[disbursement] Booking #${bookingId} is an internal fixer job — service revenue retained, no payout created`,
+    );
+    return null;
+  }
+
   const { totalAmount, servanaShare, workerShare } = computeSplit(payableBasis);
 
   const res = await dbQuery.query(
@@ -141,6 +207,28 @@ export const createDisbursement = async (bookingId: number) => {
     `,
     [bookingId, worker_uid, totalAmount, servanaShare, workerShare]
   );
+
+  /**
+   * The earning event, written whether or not this call created the row.
+   *
+   * `ON CONFLICT DO NOTHING` means a second completion returns no row, and the
+   * earning still exists — keying the event on the booking and provider rather
+   * than on the insert is what makes the log complete without making it
+   * duplicate. Best-effort because the disbursement is already committed: losing
+   * the request here would leave a caller believing completion failed, and the
+   * missing event is found by `COMPLETED_BOOKING_WITHOUT_EARNING` on the next
+   * reconciliation run.
+   */
+  await recordLedgerEventBestEffort({
+    eventKey: eventKeys.earningAccrued(bookingId, worker_uid),
+    type: 'PROVIDER_EARNING_ACCRUED',
+    bookingId,
+    providerUid: worker_uid,
+    disbursementId: res.rows[0]?.id ?? null,
+    amount: workerShare,
+    economicModel,
+    detail: { gross: totalAmount, servanaShare },
+  });
 
   return res.rows[0] || null;
 };
@@ -166,22 +254,29 @@ const releaseDisbursement = async (disbursement: any) => {
   }
 
   const attempt = Number(claim.rows[0].payout_attempt);
+  // Carried into every failure path so a rejected release is recorded against
+  // the booking and provider it belonged to, not just as a status column.
+  const payoutContext = {
+    bookingId: Number(disbursement.booking_id),
+    workerUid: String(disbursement.worker_uid),
+    attempt,
+  };
   let bank: any;
   try {
     bank = await getWorkerBankAccount(disbursement.worker_uid);
   } catch {
-    await markPayoutFailure(disbursement.id, "PAYOUT_PRECONDITION_CHECK_FAILED");
+    await markPayoutFailure(disbursement.id, "PAYOUT_PRECONDITION_CHECK_FAILED", payoutContext);
     return;
   }
 
   if (!bank) {
-    await markPayoutFailure(disbursement.id, "BANK_ACCOUNT_REQUIRED");
+    await markPayoutFailure(disbursement.id, "BANK_ACCOUNT_REQUIRED", payoutContext);
     console.warn("[disbursement] Payout precondition failed: bank account required");
     return;
   }
   const amountCentavos = Math.round(Number(disbursement.worker_share) * 100);
   if (!Number.isSafeInteger(amountCentavos) || amountCentavos <= 0) {
-    await markPayoutFailure(disbursement.id, "INVALID_PAYOUT_AMOUNT");
+    await markPayoutFailure(disbursement.id, "INVALID_PAYOUT_AMOUNT", payoutContext);
     return;
   }
 
@@ -189,7 +284,7 @@ const releaseDisbursement = async (disbursement: any) => {
   try {
     authorization = getAuthHeader();
   } catch {
-    await markPayoutFailure(disbursement.id, "PAYMONGO_NOT_CONFIGURED");
+    await markPayoutFailure(disbursement.id, "PAYMONGO_NOT_CONFIGURED", payoutContext);
     return;
   }
 
@@ -229,13 +324,23 @@ const releaseDisbursement = async (disbursement: any) => {
     const processorStatus = payoutStatus(response);
 
     if (PAYOUT_FAILED_STATUSES.has(processorStatus)) {
-      await dbQuery.query(
+      const rejected = await dbQuery.query(
         `UPDATE ${dbSchema}.disbursements
          SET status = 'FAILED', paymongo_payout_id = $2,
              payout_error = 'PAYMONGO_PAYOUT_REJECTED', updated_at = NOW()
-         WHERE id = $1 AND status = 'PROCESSING'`,
+         WHERE id = $1 AND status = 'PROCESSING'
+         RETURNING id`,
         [disbursement.id, payoutId]
       );
+      if (rejected.rowCount) {
+        await recordPayoutFailed({
+          bookingId: payoutContext.bookingId,
+          disbursementId: disbursement.id,
+          providerUid: payoutContext.workerUid,
+          attempt,
+          reasonCode: 'PAYMONGO_PAYOUT_REJECTED',
+        }).catch((e) => console.error('[disbursement] payout-failed event not recorded:', e));
+      }
       return;
     }
 
@@ -254,7 +359,7 @@ const releaseDisbursement = async (disbursement: any) => {
       return;
     }
 
-    await dbQuery.query(
+    const released = await dbQuery.query(
       `
       UPDATE ${dbSchema}.disbursements
       SET status             = 'RELEASED',
@@ -263,14 +368,28 @@ const releaseDisbursement = async (disbursement: any) => {
           released_at        = NOW(),
           updated_at         = NOW()
       WHERE id = $1 AND status = 'PROCESSING'
+      RETURNING id, worker_share
       `,
       [disbursement.id, payoutId]
     );
 
+    // The money has left. Recorded best-effort and keyed on the disbursement, so
+    // a lost write here is found by reconciliation rather than becoming a second
+    // release attempt.
+    if (released.rowCount) {
+      await recordPayoutReleased({
+        bookingId: payoutContext.bookingId,
+        disbursementId: disbursement.id,
+        providerUid: payoutContext.workerUid,
+        amount: released.rows[0].worker_share,
+        processorReference: payoutId,
+      }).catch((e) => console.error('[disbursement] payout-released event not recorded:', e));
+    }
+
     console.log(`[disbursement] Released booking #${disbursement.booking_id}`);
   } catch (err: any) {
     if (isDefinitivePayoutRejection(err)) {
-      await markPayoutFailure(disbursement.id, "PAYMONGO_PAYOUT_REJECTED");
+      await markPayoutFailure(disbursement.id, "PAYMONGO_PAYOUT_REJECTED", payoutContext);
       console.warn(`[disbursement] Processor rejected booking #${disbursement.booking_id}`);
       return;
     }

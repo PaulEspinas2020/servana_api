@@ -71,11 +71,19 @@ describe("PayMongo payout and retry boundaries", () => {
   });
 
   test("provider payout responses replace PayMongo ids with safe Servana references", () => {
-    const source = read("controllers/providerController.ts");
-    const start = source.indexOf("export const getPayouts");
-    const end = source.indexOf("// ─── Review Status", start);
-    const payoutResponse = source.slice(start, end);
-    expect(payoutResponse).toContain('`SVP-${String(r.id).padStart(6, "0")}`');
-    expect(payoutResponse).not.toContain("r.paymongo_payout_id");
+    // TAB 07 moved the payout projection into the canonical domain service, so
+    // BOTH /api/provider/payouts and /api/v1/provider/earnings/payouts build the
+    // reference the same way. The guarantee is now made in one place instead of
+    // being repeated per endpoint.
+    const source = read("services/finance/providerEarningsService.ts");
+    expect(source).toMatch(/SVP-\$\{String\(id\)\.padStart\(6, '0'\)\}/);
+    expect(source).not.toContain("paymongo_payout_id");
+
+    // And the controller still emits it, rather than having quietly dropped the
+    // field while delegating.
+    const controller = read("controllers/providerController.ts");
+    const start = controller.indexOf("export const getPayouts");
+    const end = controller.indexOf("// ─── Review Status", start);
+    expect(controller.slice(start, end)).toContain("reference: p.reference");
   });
 });

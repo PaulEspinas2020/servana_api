@@ -95,7 +95,7 @@ guards apply and who may perform it.
 | `PROVIDER_COMPLETE` | `COMPLETED` | Assigned provider | _any legal source_ | `cashPaymentSettledBeforeCompletion` | — | — | — | — | — |
 | `PROVIDER_CANCEL` | `AWAITING_ASSIGNMENT` | Assigned provider | `ACCEPTED` `EN_ROUTE` `ARRIVED` | `providerCancellationWindow` | — | — | — | — | — |
 | `ADMIN_ASSIGN` | `ASSIGNED` | Admin | `AWAITING_ASSIGNMENT` | — | — | `PROVIDER_ASSIGNMENT` | `FULL` | — | — |
-| `AUTO_ASSIGN` | `ASSIGNED` | System | `AWAITING_ASSIGNMENT` | — | — | `PROVIDER_ASSIGNMENT` | `LEGACY_AUTO` | — | — |
+| `AUTO_ASSIGN` | `ASSIGNED` | System | `AWAITING_ASSIGNMENT` | — | — | `PROVIDER_ASSIGNMENT` | `FULL` | — | — |
 | `ADMIN_REASSIGN` | `ASSIGNED` | Admin | `ASSIGNED` `ACCEPTED` `EN_ROUTE` `ARRIVED` | — | — | `PROVIDER_ASSIGNMENT` | `FULL` | `IDEMPOTENT_NO_OP` | — |
 | `ADMIN_CONFIRM_ASSIGNMENT` | `ACCEPTED` | Admin | `ASSIGNED` | — | — | — | — | — | — |
 | `ADMIN_CANCEL` | `CANCELLED` | Admin | `PENDING_OTP` `AWAITING_ASSIGNMENT` `ASSIGNED` `ACCEPTED` `EN_ROUTE` `ARRIVED` `IN_PROGRESS` `DISPUTED` | — | — | — | — | — | — |
@@ -113,9 +113,9 @@ Column meanings:
   statement that performs the write.
 - **Advisory lock** — `pg_advisory_xact_lock`, taken AFTER the booking row
   lock. One order for every producer, so the deadlock cannot form.
-- **Target validation** — how hard the assignment target is checked.
-  `LEGACY_AUTO` is deliberately weaker than `FULL`; see
-  `docs/TAB04_OPEN_GAPS.md`.
+- **Target validation** — how hard the assignment target is checked. One
+  profile, `FULL`: every producer of an assignment, including
+  auto-assignment, passes the same hard constraints under the same two locks.
 - **Same target** — what happens when the requested target is already the
   current one.
 - **Event only** — an administrative event recorded without a state change.

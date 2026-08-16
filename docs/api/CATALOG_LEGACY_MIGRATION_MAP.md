@@ -71,8 +71,17 @@ exist and both must stay until ServanaWorker moves.
 |---|---|
 | `POST /api/services`, `PUT /api/services/:serviceId` | `KEEP` |
 | `POST /api/branches/slots`, `POST /api/services/:serviceId/coverage-geo` | `KEEP` |
-| `/api/admin/provider-catalog/*` (29 routes) | `KEEP` |
-| `/api/admin/catalog/*` (20 routes) | `KEEP` — already canonical |
+
+Two admin families are kept in bulk rather than route by route. Their sizes are
+counted from the mounted route tree, because a family grows every time somebody
+adds an admin route and nobody comes back to this sentence to say so:
+
+<!-- BEGIN GENERATED: catalog-admin-route-families -->
+| Family | Routes mounted | Disposition |
+|---|---|---|
+| `/api/admin/provider-catalog/*` | 28 | `KEEP` |
+| `/api/admin/catalog/*` | 20 | `KEEP` — already canonical |
+<!-- END GENERATED: catalog-admin-route-families -->
 
 The public canonical surface is **read-only** and must stay that way: §12's
 server-side authorization is not satisfiable on an unauthenticated route.
@@ -101,8 +110,11 @@ so this list cannot drift from what is enforced:
 3. Every client the matrix lists reads `migrated`.
 4. The canonical successor is `implemented`, not `planned`.
 
-All four canonical catalog successors are implemented today, so criterion 4 is
-already met for every route above. The others are blocked on a deploy: traffic
+<!-- BEGIN GENERATED: catalog-successor-status -->
+All **6** canonical catalog successors are `implemented`, so criterion 4 is already met for every route above.
+<!-- END GENERATED: catalog-successor-status -->
+
+The others are blocked on a deploy: traffic
 counting starts when the contract is serving, and **today every number is zero
 because nothing is serving, which is not the same as nobody calling.**
 

@@ -16,6 +16,7 @@ import { db } from '../config';
 import { randomUUID } from 'crypto';
 import { uploadFileToStorage } from '../helpers/firebaseStorageUploader';
 import { evaluateProviderForSlot } from './providerEligibilityEngine';
+import { serviceDurationMinsSql } from './booking/eligibilityPipeline';
 import { generateOTP } from '../helpers/otp';
 
 const s = db.schema;
@@ -569,7 +570,7 @@ export const adminCreateBooking = async (
   // ── Pre-flight: verify service option exists ──────────────────────────────
   const svcRes = await dbQuery.query(
     `SELECT so.id, so.base_price, so.service_id, s.name AS service_name,
-            COALESCE(so.duration_mins, 120) AS duration_mins
+            ${serviceDurationMinsSql('so')} AS duration_mins
      FROM ${s}.service_options so
      JOIN ${s}.services s ON s.id = so.service_id
      WHERE so.id = $1 AND so.option_type = 'MAIN'`,

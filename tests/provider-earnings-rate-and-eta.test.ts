@@ -34,19 +34,32 @@ describe('PROVIDER_RELEASE_HOURS', () => {
 });
 
 describe('the earnings endpoints publish what clients previously guessed', () => {
-  const src = require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'src', 'controllers', 'providerController.ts'),
-    'utf8',
-  );
+  const read = (...parts: string[]) =>
+    require('fs').readFileSync(require('path').join(__dirname, '..', ...parts), 'utf8');
 
-  it('computes the release date in SQL from the shared constant', () => {
-    expect(src).toMatch(/INTERVAL '\$\{PROVIDER_RELEASE_HOURS\} hours'/);
-    // No literal hour count anywhere near the earnings queries.
-    expect(src).not.toMatch(/INTERVAL '(48|72) hours'/);
+  /**
+   * TAB 07 moved the earnings queries out of the controller into
+   * `services/finance/providerEarningsService`, and the expected-arrival date
+   * out of SQL into `evaluatePayoutEligibility`. The guarantee is unchanged and
+   * is now stronger: the date is computed ONCE, in the policy, from the same
+   * constant the release scheduler runs on.
+   */
+  const src = read('src', 'controllers', 'providerController.ts');
+  const earnings = read('src', 'services', 'finance', 'providerEarningsService.ts');
+  const policy = read('src', 'services', 'finance', 'financePolicy.ts');
+
+  it('computes the release date from the shared constant, never a literal', () => {
+    expect(earnings).toMatch(/INTERVAL '\$\{PROVIDER_PAYOUT_WINDOW_HOURS\} hours'/);
+    expect(earnings).not.toMatch(/INTERVAL '(48|72) hours'/);
+    // And the window itself is re-exported, not re-declared.
+    expect(policy).toMatch(/PROVIDER_PAYOUT_WINDOW_HOURS = PROVIDER_RELEASE_HOURS/);
+    expect(policy).not.toMatch(/PROVIDER_PAYOUT_WINDOW_HOURS\s*=\s*\d+/);
   });
 
   it('emits expectedArrivalAt on the list and the detail', () => {
-    const hits = src.match(/expectedArrivalAt/g) ?? [];
+    // One DTO now serves both, so the field is declared once and populated once
+    // - which is what stopped the list and the detail disagreeing.
+    const hits = earnings.match(/expectedArrivalAt/g) ?? [];
     expect(hits.length).toBeGreaterThanOrEqual(2);
   });
 
