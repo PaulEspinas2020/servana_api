@@ -191,19 +191,24 @@ describe('the repository cannot build the database from zero', () => {
     expect(byTable.get('worker_requirements')!.provenColumns).toContain('id');
   });
 
-  it('proves 43 columns across the missing tables', () => {
+  it('proves 46 columns across the missing tables', () => {
     /**
      * A number that moves when a migration adds a column to a foundational
      * table, so the requirement set cannot silently go stale.
      *
      * It is a LOWER bound and a weak one: it counts only columns the repository
      * proves — an `ADD COLUMN` that must land somewhere, or an inbound foreign
-     * key. Eighteen tables with 43 proven columns between them means most of
+     * key. Eighteen tables with 46 proven columns between them means most of
      * these tables have almost no proven shape at all, which is the honest
      * measure of how far a capture still has to go.
+     *
+     * 43 → 46 when migration 036 claimed the three `booking_workers`
+     * cancellation columns the application had been adding at runtime. It joins
+     * 016 and 027 as evidence for that table, which is the gate doing its job:
+     * the requirement set noticed a migration moving a foundational table.
      */
     const total = requirements().reduce((n, r) => n + r.provenColumns.length, 0);
-    expect(total).toBe(43);
+    expect(total).toBe(46);
   });
 
   it('ships a CAPTURED baseline, and says so in the artifact itself', () => {

@@ -24,20 +24,45 @@
  *
  * ## Why a budget rather than a fix
  *
- * TAB 02 estimates one to two weeks and requires the API to start with DDL
- * privileges revoked — every one of these statements has to move to a migration
- * before that can be true. That is not a change to make in passing.
+ * TAB 02 requires the API to start with DDL privileges revoked, so every one of
+ * these statements has to go before that can be true. That is not a change to
+ * make in passing.
  *
  * So the number is pinned. It may fall; it may not rise. Adding a new runtime
  * `CREATE TABLE` fails this test, which is the point: the debt is now bounded
  * and visible instead of growing quietly.
+ *
+ * ## This number is NOT the size of TAB 02
+ *
+ * It was read that way — 154 statements to move, "one to two weeks", the
+ * multi-week core of the command. That was wrong, and this test's own framing is
+ * how: it asks only whether a MIGRATION owns the object, and migrations stopped
+ * being the sole authority when TAB 15 added `scripts/baseline/000-baseline.sql`.
+ *
+ * `npm run schema:authority` splits this number against the baseline too. All 148
+ * touch an object the baseline already declares, and `db:verify:embedded` proves
+ * a fresh database reaches the current schema from it. They are REDUNDANT
+ * statements to delete, not schema to design. The genuine authoring gap was six
+ * statements and three columns, and migration 036 closed it.
+ *
+ * Both numbers are worth keeping. This one bounds the deletion backlog; the
+ * other bounds the authoring gap, and only the second one blocks anything.
  */
 
 import { runtimeDdl, migrationObjects } from '../scripts/runtime-ddl-inventory';
 
-/** Lower it as statements move into migrations. Never raise it. */
-const UNMANAGED_BUDGET = 154;
-const DISTINCT_OBJECT_BUDGET = 112;
+/**
+ * Lower it as statements move into migrations. Never raise it.
+ *
+ * 154 → 148 and 112 → 106 when migration 036 claimed the six objects that
+ * neither a migration nor the baseline declared. What remains is not an
+ * authoring backlog: `npm run schema:authority` shows all 148 touch an object
+ * `scripts/baseline/000-baseline.sql` already builds, so they are redundant
+ * statements awaiting DELETION rather than schema awaiting design. See
+ * `tests/schema-authority.test.ts` for why that distinction rescopes TAB 02.
+ */
+const UNMANAGED_BUDGET = 148;
+const DISTINCT_OBJECT_BUDGET = 106;
 
 describe('runtime schema authority is bounded and shrinking', () => {
   const ddl = runtimeDdl();

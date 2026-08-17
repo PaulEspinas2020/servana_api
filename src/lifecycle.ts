@@ -23,8 +23,15 @@
  * this application ALREADY starts with these bootstraps failing soft, so making
  * them fatal in the same change that introduces the phases would turn a logged
  * warning into a crash loop on the first deploy — against a production database
- * whose schema this repository does not yet fully own (154 unmanaged runtime DDL
- * statements, see TAB 02).
+ * whose schema this repository does not yet fully own (148 runtime DDL statements
+ * no migration mentions, see TAB 02).
+ *
+ * Since migration 036 all 148 touch an object `scripts/baseline/000-baseline.sql`
+ * already declares, so they are redundant statements awaiting deletion rather
+ * than schema this repository cannot build — `npm run schema:authority` reports
+ * the authoring gap at zero. That makes `exitOnRequiredFailure` flippable once
+ * the statements are removed, which is the last step of TAB 02 rather than a
+ * prerequisite for it.
  *
  * Gating traffic achieves the acceptance criterion that matters — no request is
  * served before readiness — without betting the deploy on a bootstrap that has
