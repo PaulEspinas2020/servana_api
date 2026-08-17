@@ -424,88 +424,34 @@ async function insertAdminUserRow(opts: {
   return res.rows?.[0] ?? null;
 }
 
-export async function ensurePermissionSchema(): Promise<void> {
+/**
+ * Seed the admin permission catalog and promote pre-existing role=1 accounts.
+ *
+ * -- Renamed from ensurePermissionSchema (TAB 02) -------------------------------
+ *
+ * It used to create `admin_users`, `admin_permission_definitions`,
+ * `admin_permission_grants`, `admin_permission_events` and four indexes, and THEN
+ * seed. The DDL is gone — all five objects come from
+ * `scripts/baseline/000-baseline.sql` — and the name went with it, because a
+ * function called `ensurePermissionSchema` that does not touch schema is a lie
+ * that the next reader has to discover by reading the body.
+ *
+ * What remains is DATA, and it is still required at boot for a real reason: an
+ * `admin_permission_grants` row is meaningless without the matching
+ * `admin_permission_definitions` row, so an unseeded database can hold grants
+ * that resolve to nothing. That is an AUTHORIZATION outcome decided by absence,
+ * which is why the startup entry stays `required`.
+ *
+ * Both halves are idempotent — `ON CONFLICT (admin_uid) DO NOTHING` for the
+ * promotion, `ON CONFLICT (permission_key) DO UPDATE` for the catalog — so this
+ * is safe on every boot and is what lets a definition's label or risk_level be
+ * corrected by editing PERMISSION_SEEDS rather than by a migration.
+ *
+ * The promotion is deliberately narrow: it only inserts, never revokes. Removing
+ * an admin is a decision with an actor and a reason, and this runs unattended.
+ */
+export async function seedAdminPermissions(): Promise<void> {
   const s = db.schema;
-
-  // admin_users
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.admin_users (
-      admin_uid       TEXT PRIMARY KEY,
-      email           TEXT NOT NULL,
-      display_name    TEXT,
-      is_super_admin  BOOLEAN NOT NULL DEFAULT FALSE,
-      account_status  TEXT NOT NULL DEFAULT 'active',
-      created_by      TEXT,
-      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_by      TEXT,
-      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      deactivated_at  TIMESTAMPTZ,
-      version         INTEGER NOT NULL DEFAULT 1
-    )
-  `);
-
-  // invited_at / accepted_at. Added here rather than lazily, because the admin
-  // user LIST query derives invitationState from them — a lazily-added column
-  // means the first page load after deploy fails on a database that has not yet
-  // sent an invitation, which is every database at the moment of deploy.
-
-  // admin_permission_definitions
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.admin_permission_definitions (
-      permission_key        TEXT PRIMARY KEY,
-      module                TEXT NOT NULL,
-      group_label           TEXT NOT NULL,
-      label                 TEXT NOT NULL,
-      description           TEXT,
-      action_type           TEXT NOT NULL,
-      risk_level            TEXT NOT NULL DEFAULT 'low',
-      requires              JSONB NOT NULL DEFAULT '[]',
-      conflicts_with        JSONB NOT NULL DEFAULT '[]',
-      is_dangerous          BOOLEAN NOT NULL DEFAULT FALSE,
-      is_hidden_from_normal_ui BOOLEAN NOT NULL DEFAULT FALSE,
-      is_active             BOOLEAN NOT NULL DEFAULT TRUE,
-      display_order         INTEGER NOT NULL DEFAULT 0,
-      created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  // admin_permission_grants
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.admin_permission_grants (
-      id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      admin_uid      TEXT NOT NULL,
-      permission_key TEXT NOT NULL,
-      granted        BOOLEAN NOT NULL,
-      granted_by     TEXT NOT NULL,
-      granted_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      revoked_by     TEXT,
-      revoked_at     TIMESTAMPTZ,
-      reason         TEXT,
-      version        INTEGER NOT NULL DEFAULT 1
-    )
-  `);
-  await dbQuery.query(`CREATE INDEX IF NOT EXISTS idx_perm_grants_uid ON ${s}.admin_permission_grants(admin_uid)`);
-  await dbQuery.query(`CREATE INDEX IF NOT EXISTS idx_perm_grants_key ON ${s}.admin_permission_grants(permission_key)`);
-  await dbQuery.query(`CREATE INDEX IF NOT EXISTS idx_perm_grants_uid_granted ON ${s}.admin_permission_grants(admin_uid) WHERE revoked_at IS NULL`);
-
-  // admin_permission_events (append-only)
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.admin_permission_events (
-      event_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      target_admin_uid    TEXT NOT NULL,
-      actor_admin_uid     TEXT NOT NULL,
-      event_type          TEXT NOT NULL,
-      added_permissions   JSONB NOT NULL DEFAULT '[]',
-      removed_permissions JSONB NOT NULL DEFAULT '[]',
-      before_permissions  JSONB,
-      after_permissions   JSONB,
-      reason              TEXT NOT NULL,
-      request_id          TEXT,
-      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-  await dbQuery.query(`CREATE INDEX IF NOT EXISTS idx_perm_events_target ON ${s}.admin_permission_events(target_admin_uid)`);
 
   // Bootstrap: promote existing role=1 users to Super Admin if no super admins exist
   await dbQuery.query(`

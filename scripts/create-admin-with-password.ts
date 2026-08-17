@@ -29,7 +29,7 @@ import dbQuery from "../src/db/dbQuery";
 import { db } from "../src/config";
 import { normalizeEmail } from "../src/helpers/phoneIdentifier";
 import {
-  ensurePermissionSchema,
+  seedAdminPermissions,
   getAdminUser,
   createAdminUser,
   getPermissionDefinitions,
@@ -338,7 +338,7 @@ async function main() {
     process.exit(2);
   }
 
-  await ensurePermissionSchema();
+  await seedAdminPermissions();
 
   console.log(APPLY ? "APPLYING\n" : "DRY RUN — nothing will be written\n");
   const done: Outcome[] = [];

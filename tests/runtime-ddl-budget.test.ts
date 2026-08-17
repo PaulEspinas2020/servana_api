@@ -86,9 +86,18 @@ import { runtimeDdl, migrationObjects } from '../scripts/runtime-ddl-inventory';
  * ⚠ This number understates what was removed. Fifteen of those statements were
  * `CREATE INDEX` with an interpolated NAME, which `ddl:inventory` cannot see at
  * all — see the interpolated-index block in `tests/schema-authority.test.ts`.
+ *
+ * 94 → 81 and 69 → 56 with `adminPermissionService` and `customerSupportService`.
+ * The first was SPLIT rather than deleted: it created four tables and four indexes
+ * AND seeded the permission catalog, so the DDL went and the seeding stayed —
+ * renamed `seedAdminPermissions`, because a function called
+ * `ensurePermissionSchema` that touches no schema is a lie the next reader has to
+ * find by reading the body. Its startup entry stays `required`: a grant row is
+ * meaningless without its definition row, so an unseeded database holds grants
+ * that resolve to nothing.
  */
-const UNMANAGED_BUDGET = 94;
-const DISTINCT_OBJECT_BUDGET = 69;
+const UNMANAGED_BUDGET = 81;
+const DISTINCT_OBJECT_BUDGET = 56;
 
 describe('runtime schema authority is bounded and shrinking', () => {
   const ddl = runtimeDdl();

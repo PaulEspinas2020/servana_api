@@ -4,48 +4,27 @@ import mongoDb from "../db/mongodbQuery";
 
 const dbSchema = db.schema;
 
-// ─── Lazy table init ──────────────────────────────────────────────────────────
-
-let tablesReady: Promise<void> | null = null;
-
-async function initTables(): Promise<void> {
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.customer_support_tickets (
-      id               BIGSERIAL    PRIMARY KEY,
-      ticket_key       VARCHAR(64)  UNIQUE NOT NULL DEFAULT gen_random_uuid()::varchar,
-      customer_uid     VARCHAR(128) NOT NULL,
-      client_request_id VARCHAR(128),
-      category         VARCHAR(64)  NOT NULL DEFAULT 'other',
-      status           VARCHAR(64)  NOT NULL DEFAULT 'submitted',
-      title            VARCHAR(200) NOT NULL,
-      description      TEXT         NOT NULL,
-      booking_id       VARCHAR(128),
-      created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-      updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_cst_client_req
-      ON ${dbSchema}.customer_support_tickets (customer_uid, client_request_id)
-      WHERE client_request_id IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS idx_cst_customer_uid
-      ON ${dbSchema}.customer_support_tickets (customer_uid, created_at DESC);
-
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.customer_support_ticket_replies (
-      id          BIGSERIAL    PRIMARY KEY,
-      ticket_key  VARCHAR(64)  NOT NULL,
-      sender_type VARCHAR(32)  NOT NULL DEFAULT 'customer',
-      safe_body   TEXT         NOT NULL,
-      is_read     BOOLEAN      NOT NULL DEFAULT false,
-      created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS idx_cstr_ticket_key
-      ON ${dbSchema}.customer_support_ticket_replies (ticket_key, created_at ASC);
-  `);
-}
-
-export function ensureCustomerSupportTables(): Promise<void> {
-  if (!tablesReady) tablesReady = initTables();
-  return tablesReady;
-}
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `customer_support_tickets`, `customer_support_ticket_replies` and their three
+// indexes were created here at runtime by `initTables`, memoised behind
+// `ensureCustomerSupportTables` and awaited at the top of eight operations, and
+// also declared as a startup dependency. All five objects come from
+// `scripts/baseline/000-baseline.sql`.
+//
+// Two constraints the removed DDL declared, both relied on below:
+//
+//   ticket_key UNIQUE, defaulted to gen_random_uuid()::varchar. It is the
+//     external handle every customer-facing call passes, distinct from the
+//     BIGSERIAL id, and replies join on it rather than on the id.
+//   idx_cst_client_req UNIQUE (customer_uid, client_request_id) WHERE
+//     client_request_id IS NOT NULL. This is the idempotency guard: a customer
+//     whose app retries a submission gets ONE ticket, not three. The partial
+//     predicate is what still allows many tickets with no client_request_id at
+//     all, which is every ticket raised before the field existed.
+//
+// The baseline carries both, as
+// `customer_support_tickets_ticket_key_key` and `idx_cst_client_req`.
 
 // ─── Status rules ─────────────────────────────────────────────────────────────
 
@@ -92,7 +71,6 @@ function mapReplyRow(row: Record<string, unknown>) {
 // ─── Service functions ────────────────────────────────────────────────────────
 
 export async function listCustomerTickets(customerUid: string) {
-  await ensureCustomerSupportTables();
   const { rows } = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.customer_support_tickets
      WHERE customer_uid = $1
@@ -111,7 +89,6 @@ export async function createCustomerTicket(
   clientRequestId?: string | null,
   bookingId?: string | null,
 ) {
-  await ensureCustomerSupportTables();
   // Idempotent: same customer + clientRequestId → return existing ticket
   if (clientRequestId) {
     const { rows: existing } = await dbQuery.query(
@@ -139,7 +116,6 @@ export async function createCustomerTicket(
 }
 
 export async function getCustomerTicketDetail(customerUid: string, ticketKey: string) {
-  await ensureCustomerSupportTables();
   const { rows } = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.customer_support_tickets
      WHERE ticket_key = $1 AND customer_uid = $2`,
@@ -161,7 +137,6 @@ export async function addCustomerTicketReply(
   ticketKey: string,
   message: string,
 ) {
-  await ensureCustomerSupportTables();
   const { rows } = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.customer_support_tickets
      WHERE ticket_key = $1 AND customer_uid = $2`,
@@ -189,7 +164,6 @@ export async function addCustomerTicketReply(
 }
 
 export async function markCustomerTicketRead(customerUid: string, ticketKey: string) {
-  await ensureCustomerSupportTables();
   // Verify ownership before mutating
   const { rows } = await dbQuery.query(
     `SELECT id FROM ${dbSchema}.customer_support_tickets
@@ -206,7 +180,6 @@ export async function markCustomerTicketRead(customerUid: string, ticketKey: str
 }
 
 export async function closeCustomerTicket(customerUid: string, ticketKey: string) {
-  await ensureCustomerSupportTables();
   const { rows } = await dbQuery.query(
     `UPDATE ${dbSchema}.customer_support_tickets
      SET status = 'closed', updated_at = NOW()
@@ -220,7 +193,6 @@ export async function closeCustomerTicket(customerUid: string, ticketKey: string
 }
 
 export async function reopenCustomerTicket(customerUid: string, ticketKey: string) {
-  await ensureCustomerSupportTables();
   const { rows } = await dbQuery.query(
     `UPDATE ${dbSchema}.customer_support_tickets
      SET status = 'open', updated_at = NOW()
@@ -234,7 +206,6 @@ export async function reopenCustomerTicket(customerUid: string, ticketKey: strin
 }
 
 export async function countUnreadCustomerReplies(customerUid: string): Promise<number> {
-  await ensureCustomerSupportTables();
   const { rows } = await dbQuery.query(
     `SELECT COUNT(r.id)::int AS count
      FROM ${dbSchema}.customer_support_ticket_replies r

@@ -56,11 +56,10 @@ import { seedReasonCodes, seedRequirementDefinitions } from './services/adminOnb
 import { ensureBookingOpsSchema } from './services/adminBookingService';
 import { ensureCommunicationSchema } from './services/adminCommunicationService';
 import { ensureDashboardSchema } from './services/adminDashboardService';
-import { ensurePermissionSchema } from './services/adminPermissionService';
+import { seedAdminPermissions } from './services/adminPermissionService';
 import { bootstrap as bootstrapAutoOnline } from './services/providerAutoOnlineEngine';
 import { ensureAdminCreateBookingSchema } from './services/adminCreateBookingService';
 import { ensureReviewTables } from './services/customerReviewService';
-import { ensureCustomerSupportTables } from './services/customerSupportService';
 
 /** Generous, but bounded. A hung bootstrap must not hold the boot open. */
 const SCHEMA_TIMEOUT_MS = 30_000;
@@ -76,13 +75,15 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
       'transition writes to.',
   },
   {
-    name: 'admin-permission-schema',
+    name: 'admin-permission-seed',
     kind: 'required',
     timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: ensurePermissionSchema,
+    start: seedAdminPermissions,
     why:
-      'Authorization. Named admin permissions are checked against these tables; ' +
-      'an absent grant table is an authorization decision made by accident.',
+      'Authorization, and DATA rather than schema since TAB 02 — the four tables ' +
+      'come from the baseline. Still required: a grant row is meaningless without ' +
+      'its definition row, so an unseeded database holds grants that resolve to ' +
+      'nothing, which is an authorization outcome decided by absence.',
   },
 
   {
@@ -102,13 +103,6 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
     timeoutMs: SCHEMA_TIMEOUT_MS,
     start: ensureReviewTables,
     why: 'Was executed at import of customerReviewController.',
-  },
-  {
-    name: 'customer-support-schema',
-    kind: 'optional',
-    timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: ensureCustomerSupportTables,
-    why: 'Was executed at import of a route module.',
   },
   {
     name: 'chat-lifecycle-schema',
