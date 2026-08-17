@@ -566,26 +566,65 @@ describe('adminAuditService.ts structural assertions', function () {
     expect(svcSrc).toContain('export async function exportEvents');
   });
 
-  it('exports ensureAuditSchema', function () {
-    expect(svcSrc).toContain('export async function ensureAuditSchema');
+  it('no longer exports a schema bootstrap (TAB 02)', function () {
+    // `ensureAuditSchema` created admin_audit_events and its seven indexes at
+    // boot. The baseline owns them now, so the export is gone rather than kept
+    // as a no-op that a future caller might await.
+    //
+    // Asserted on the DECLARATION, not the bare name: the comment that replaced
+    // the function names it, which is exactly what a substring check would trip on.
+    expect(svcSrc).not.toContain('export async function ensureAuditSchema');
+    expect(svcSrc).not.toContain('export const ensureAuditSchema');
   });
 
   it('exports getActionRegistry', function () {
     expect(svcSrc).toContain('export function getActionRegistry');
   });
 
-  it('creates admin_audit_events table in ensureAuditSchema', function () {
-    expect(svcSrc).toContain('CREATE TABLE IF NOT EXISTS');
-    expect(svcSrc).toContain('admin_audit_events');
+  it('admin_audit_events is declared by the baseline, not by the service', function () {
+    expect(svcSrc).not.toContain('CREATE TABLE IF NOT EXISTS');
+    var baseline = fs
+      .readFileSync(path.resolve(__dirname, '../scripts/baseline/000-baseline.sql'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(baseline).toContain('CREATE TABLE servana.admin_audit_events (');
+    // Seven indexes, created from a loop with an interpolated NAME — which is why
+    // `ddl:inventory` never counted them. All seven are in the baseline.
+    [
+      'admin_audit_events_occurred_at_idx',
+      'admin_audit_events_action_idx',
+      'admin_audit_events_category_idx',
+      'admin_audit_events_outcome_idx',
+      'admin_audit_events_actor_uid_idx',
+      'admin_audit_events_entity_idx',
+      'admin_audit_events_request_id_idx',
+    ].forEach(function (idx) {
+      expect(baseline).toContain(idx);
+    });
+    // event_id UNIQUE is what would catch a double-write of one logical event.
+    expect(baseline).toContain('admin_audit_events_event_id_key UNIQUE (event_id)');
   });
 
-  it('defines all required schema columns', function () {
+  it('every column the writer names exists in the baseline', function () {
+    /**
+     * This used to check the column names appeared in the SERVICE source, which
+     * they trivially did — the CREATE TABLE was right there. Checking them against
+     * the schema that will actually exist is the same intent without the tautology,
+     * and it is the 42703 class this repository has been bitten by twice.
+     */
+    var baseline = fs
+      .readFileSync(path.resolve(__dirname, '../scripts/baseline/000-baseline.sql'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    var table = /CREATE TABLE servana\.admin_audit_events \(([\s\S]*?)\n\);/.exec(baseline);
+    expect(table).not.toBeNull();
+
     var requiredCols = [
       'event_id', 'occurred_at', 'action', 'action_category', 'outcome',
       'actor_uid', 'entity_type', 'entity_id', 'before_json', 'after_json',
       'request_id', 'ip_address', 'user_agent', 'source',
     ];
     requiredCols.forEach(function (col) {
+      expect(table[1]).toMatch(new RegExp('^\\s+' + col + '\\s', 'm'));
+      // ...and the writer still names it, so the column is not dead weight.
       expect(svcSrc).toContain(col);
     });
   });
@@ -635,10 +674,13 @@ describe('app.ts audit integration', function () {
     expect(appSrc).toContain('adminAuditRoutes');
   });
 
-  it('calls ensureAuditSchema on startup', function () {
-    // TAB 03: moved into the startup dependency graph.
+  it('does not bootstrap the audit schema at startup (TAB 02)', function () {
+    // Was a required assertion under TAB 03, when the app created the schema.
+    // The entry is removed, not downgraded to optional — there is no DDL left to
+    // gate on.
     var startupSrc = fs.readFileSync(path.resolve(__dirname, '../src/startup.ts'), 'utf8').replace(/\r\n/g, '\n');
-    expect(startupSrc).toContain('ensureAuditSchema');
+    expect(startupSrc).not.toContain('ensureAuditSchema');
+    expect(startupSrc).not.toContain("name: 'admin-audit-schema'");
   });
 
   it('stamps request IDs via middleware', function () {

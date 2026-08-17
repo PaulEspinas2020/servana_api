@@ -212,6 +212,58 @@ export const declaredColumnsFromRepo = (): Map<string, Set<string>> =>
       .map((f) => fs.readFileSync(path.join(MIGRATIONS, f), 'utf8')),
   ]);
 
+// ─── Statements the inventory cannot see ──────────────────────────────────────
+
+/**
+ * `CREATE INDEX` whose NAME is interpolated — invisible to `ddl:inventory`.
+ *
+ * Its pattern captures the index name to identify the object. When the name is
+ * `${n}` from a loop, `$` cannot start an identifier, so the regex backtracks and
+ * captures the SQL keyword `IF` instead — which the keyword guard then discards.
+ * The statement is real runtime DDL and is silently absent from the count.
+ *
+ * That matters for TAB 02 specifically: the acceptance criterion is the API
+ * starting with DDL privileges revoked, and an index the inventory cannot see is
+ * still an index the application tries to create. Five of these exist, creating
+ * indexes on `admin_audit_events`, three finance tables and
+ * `finance_ledger_events`, so the deletion backlog is larger than
+ * `ddl:inventory` reports by exactly this number.
+ *
+ * Reported rather than folded into the total, because the OBJECT each one
+ * targets cannot be resolved statically either — the name and the columns both
+ * come from a loop variable. Resolve by reading the call site.
+ */
+export interface InvisibleIndex {
+  file: string;
+  line: number;
+  /** The table it indexes, when that part is not interpolated. */
+  table: string | null;
+  statement: string;
+}
+
+export const interpolatedIndexes = (): InvisibleIndex[] => {
+  const found: InvisibleIndex[] = [];
+  const re = new RegExp(
+    String.raw`CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?\$\{[^}]*\}\s+ON\s+${QUALIFIER}"?(\w+)"?`,
+    'i',
+  );
+  for (const file of walk(SRC)) {
+    const lines = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('\n');
+    lines.forEach((line, i) => {
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+      const m = re.exec(line);
+      if (!m) return;
+      found.push({
+        file: path.relative(REPO_ROOT, file).split(path.sep).join('/'),
+        line: i + 1,
+        table: m[1]?.toLowerCase() ?? null,
+        statement: line.trim().slice(0, 110),
+      });
+    });
+  }
+  return found;
+};
+
 // ─── Contested objects ────────────────────────────────────────────────────────
 
 /**
@@ -358,6 +410,13 @@ if (require.main === module) {
   if (indeterminate.length) {
     log('\n  Column name interpolated — resolve by reading the call site:\n');
     for (const a of indeterminate) log(`    ${a.table}.${a.raw}   ← ${a.file}:${a.line}`);
+  }
+
+  const invisible = interpolatedIndexes();
+  log(`\n  CREATE INDEX with an interpolated NAME  ${invisible.length}`);
+  log('    invisible to ddl:inventory, so its count understates the backlog by this much');
+  for (const i of invisible) {
+    log(`    ${i.file}:${i.line}  on ${i.table ?? '<interpolated>'}`);
   }
 
   const contested = contestedObjects();

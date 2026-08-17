@@ -1,5 +1,5 @@
 import dbQuery, { pool } from '../db/dbQuery';
-import { markInviteAccepted, ensureInviteColumns } from './adminInviteState';
+import { markInviteAccepted } from './adminInviteState';
 import { db } from '../config';
 import { auditFire } from './adminAuditService';
 import { toCamel } from '../helpers/idGenerator';
@@ -448,7 +448,6 @@ export async function ensurePermissionSchema(): Promise<void> {
   // user LIST query derives invitationState from them — a lazily-added column
   // means the first page load after deploy fails on a database that has not yet
   // sent an invitation, which is every database at the moment of deploy.
-  await ensureInviteColumns();
 
   // admin_permission_definitions
   await dbQuery.query(`

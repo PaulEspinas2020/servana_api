@@ -27,6 +27,25 @@
  *
  * `required` withholds readiness rather than killing the process. See
  * `lifecycle.ts` for why that is deliberate while TAB 02 is outstanding.
+ *
+ * ## The list is SHRINKING, and that is the goal (TAB 02)
+ *
+ * It was nineteen. Each entry existed because some object was created by the
+ * application at runtime; as the baseline takes ownership, the entry has no work
+ * left to do and is deleted rather than left as a no-op await before `listen`.
+ *
+ * Note what that does to the classification above. The `payment` slot
+ * (`finance-schema`) and the `identity` slot (`identity-columns`) are GONE — not
+ * downgraded to optional, which is what TAB 03 forbids, but removed, because
+ * `payments`, its trigger, the three finance tables and the normalized identifier
+ * columns all come from `scripts/baseline/000-baseline.sql` and no longer depend
+ * on a bootstrap having run. `booking` and `authorization` are still `required`
+ * and will go the same way.
+ *
+ * When this list reaches zero the API can start with DDL privileges revoked,
+ * which is TAB 02's acceptance criterion. Do NOT add an entry here to create
+ * schema; add a migration. `npm run schema:authority` fails if an object is
+ * created at runtime that neither a migration nor the baseline declares.
  */
 
 import type { Dependency } from './lifecycle';
@@ -35,11 +54,9 @@ import { ensureChatLifecycleSchema } from './chat/chat.repository';
 import { initProviderCatalogSchema, seedBuiltInOfferings } from './services/providerCatalogService';
 import { seedReasonCodes, seedRequirementDefinitions } from './services/adminOnboardingService';
 import { ensureBookingOpsSchema } from './services/adminBookingService';
-import { ensureAuditSchema } from './services/adminAuditService';
 import { ensureCommunicationSchema } from './services/adminCommunicationService';
 import { ensureDashboardSchema } from './services/adminDashboardService';
 import { ensurePermissionSchema } from './services/adminPermissionService';
-import { ensureFinanceSchema } from './services/adminFinanceService';
 import { bootstrap as bootstrapAutoOnline } from './services/providerAutoOnlineEngine';
 import { ensureAdminCreateBookingSchema } from './services/adminCreateBookingService';
 import { ensureReviewTables } from './services/customerReviewService';
@@ -49,15 +66,6 @@ import { ensureCustomerSupportTables } from './services/customerSupportService';
 const SCHEMA_TIMEOUT_MS = 30_000;
 
 export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
-  {
-    name: 'finance-schema',
-    kind: 'required',
-    timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: ensureFinanceSchema,
-    why:
-      'Payment. Serving finance endpoints against a half-built schema is how a ' +
-      'provider is shown an earnings figure that is missing rows.',
-  },
   {
     name: 'booking-ops-schema',
     kind: 'required',
@@ -130,16 +138,6 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
     why:
       'Onboarding reference DATA only — the schema comes from the baseline now ' +
       '(TAB 02). An incomplete seed shows fewer reason codes, not a wrong booking.',
-  },
-  {
-    name: 'admin-audit-schema',
-    kind: 'optional',
-    timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: ensureAuditSchema,
-    why:
-      'Admin audit trail. Optional ONLY because losing it degrades observability ' +
-      'rather than correctness — it is the first of these that should become ' +
-      'required once TAB 02 owns the DDL.',
   },
   {
     name: 'admin-communication-schema',

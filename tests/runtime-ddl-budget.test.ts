@@ -76,9 +76,19 @@ import { runtimeDdl, migrationObjects } from '../scripts/runtime-ddl-inventory';
  * which also took the contested-object count from 7 to 4: both duplicated tables
  * `technicianService` creates, and a second `CREATE TABLE IF NOT EXISTS` for one
  * object is a race with a silent loser.
+ *
+ * 105 → 94 and 73 → 69 with `adminProviderService`, `adminInviteState`,
+ * `adminAuditService`, `adminFinanceService` and `adminGuestService`. Two more
+ * startup dependencies went (the graph is 11), including the last `required`
+ * PAYMENT one — `ensureFinanceSchema`, which also created a FUNCTION and the only
+ * TRIGGER in the schema, plus a one-time DML backfill of `payments.updated_at`.
+ *
+ * ⚠ This number understates what was removed. Fifteen of those statements were
+ * `CREATE INDEX` with an interpolated NAME, which `ddl:inventory` cannot see at
+ * all — see the interpolated-index block in `tests/schema-authority.test.ts`.
  */
-const UNMANAGED_BUDGET = 105;
-const DISTINCT_OBJECT_BUDGET = 73;
+const UNMANAGED_BUDGET = 94;
+const DISTINCT_OBJECT_BUDGET = 69;
 
 describe('runtime schema authority is bounded and shrinking', () => {
   const ddl = runtimeDdl();

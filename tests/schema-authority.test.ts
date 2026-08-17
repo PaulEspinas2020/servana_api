@@ -59,6 +59,7 @@ import {
   classify,
   columnGaps,
   contestedObjects,
+  interpolatedIndexes,
   declaredColumnsFromRepo,
   runtimeAddColumns,
 } from '../scripts/schema-authority';
@@ -190,6 +191,55 @@ describe('schema authority is classified, not lumped', () => {
   });
 });
 
+describe('the DDL inventory admits what it cannot see', () => {
+  /**
+   * `ddl:inventory` identifies an index by capturing its NAME. When the name is
+   * `${n}` from a loop, `$` cannot start an identifier, the regex backtracks onto
+   * the keyword `IF`, and the keyword guard discards the match — so the statement
+   * is absent from the count entirely.
+   *
+   * That is not cosmetic for TAB 02, whose acceptance is the API starting with DDL
+   * privileges REVOKED. An index the inventory cannot see is still an index the
+   * application tries to create, and it will still fail when the privilege goes.
+   * So the number is tracked separately and named, rather than being quietly
+   * missing from a budget that claims to bound the debt.
+   */
+  const invisible = interpolatedIndexes();
+
+  it('finds the interpolated-name indexes (positive fixture)', () => {
+    expect(invisible.length).toBeGreaterThan(0);
+  });
+
+  it('names each one, so a new one has to be acknowledged', () => {
+    /**
+     * Was five. Four went with `adminAuditService` (7 indexes on
+     * `admin_audit_events`) and `adminFinanceService` (8 across three finance
+     * tables) when those bootstraps were deleted — which is worth noting because
+     * `ddl:inventory` could not see them going, either. Its count fell by less
+     * than the real number of statements removed.
+     */
+    expect(invisible.map((i) => `${i.file}:${i.line}`)).toEqual([
+      'src/services/finance/financeLedger.ts:144',
+    ]);
+  });
+
+  it('resolves the table each one indexes, even though the name is dynamic', () => {
+    // Enough to know which object is affected when the privilege is revoked.
+    expect(invisible.map((i) => i.table)).toEqual(['finance_ledger_events']);
+  });
+
+  it('ddl:inventory really does miss them — the reason this exists', () => {
+    /**
+     * Proof the blind spot is real rather than assumed. None of these lines
+     * appears in the inventory's output for its own file, at its own line.
+     */
+    const seen = new Set(runtimeDdl().map((d) => `${d.file}:${d.line}`));
+    for (const i of invisible) {
+      expect(seen.has(`${i.file}:${i.line}`)).toBe(false);
+    }
+  });
+});
+
 describe('no object is created by two runtime paths that disagree', () => {
   /**
    * `CREATE TABLE IF NOT EXISTS` run by two modules for one object is a RACE
@@ -228,7 +278,7 @@ describe('no object is created by two runtime paths that disagree', () => {
     expect(broken).toEqual([]);
   });
 
-  it('the known contested objects are the four that remain', () => {
+  it('the known contested objects are the three that remain', () => {
     /**
      * Named, so a NEW one has to be looked at rather than absorbed into a count.
      * Each was diffed against the baseline by hand: `chat_message_reports` and
@@ -238,9 +288,10 @@ describe('no object is created by two runtime paths that disagree', () => {
      * `guest_customers` agree exactly.
      *
      * Was seven. `worker_availability`, `worker_time_off` and
-     * `worker_service_areas` left the list when `providerAvailabilityEngine` and
-     * `providerServiceAreaEngine` stopped creating them, so `technicianService`
-     * is the single remaining runtime creator of each.
+     * `worker_service_areas` left when `providerAvailabilityEngine` and
+     * `providerServiceAreaEngine` stopped creating them; `guest_customers` left
+     * when `adminGuestService` did, whose definition existed purely as a
+     * defensive duplicate of `ensureAdminCreateBookingSchema`'s.
      *
      * Shrinking this list is progress. Growing it needs the same hand audit —
      * against the baseline, because the baseline is what says which definition
@@ -249,7 +300,6 @@ describe('no object is created by two runtime paths that disagree', () => {
     expect(contested.map((c) => c.object)).toEqual([
       'booking_escalations',
       'chat_message_reports',
-      'guest_customers',
       'user_profile',
     ]);
   });

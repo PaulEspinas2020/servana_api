@@ -275,60 +275,22 @@ function buildSummary(action: string, outcome: string, entityType: string, entit
   return `${actor} performed "${label}" on ${entityType}:${entityId}${ot}`;
 }
 
-// ── Schema bootstrap ──────────────────────────────────────────��───────────────
-
-export async function ensureAuditSchema(): Promise<void> {
-  const schema = db.schema;
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${schema}.admin_audit_events (
-      id              SERIAL PRIMARY KEY,
-      event_id        TEXT NOT NULL UNIQUE,
-      occurred_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      action          VARCHAR(100) NOT NULL,
-      action_category VARCHAR(30)  NOT NULL,
-      outcome         VARCHAR(20)  NOT NULL DEFAULT 'success',
-      actor_uid       TEXT,
-      actor_type      VARCHAR(20)  NOT NULL DEFAULT 'admin',
-      actor_role      VARCHAR(20),
-      actor_display_name TEXT,
-      actor_email     TEXT,
-      entity_type     VARCHAR(50)  NOT NULL,
-      entity_id       TEXT         NOT NULL,
-      entity_display_name TEXT,
-      related_entities JSONB,
-      before_json     JSONB,
-      after_json      JSONB,
-      changed_fields  TEXT[],
-      reason          TEXT,
-      note            TEXT,
-      request_id      TEXT,
-      client_request_id TEXT,
-      ip_address      TEXT,
-      user_agent      TEXT,
-      source          VARCHAR(30)  NOT NULL DEFAULT 'admin_portal',
-      metadata        JSONB,
-      schema_version  INTEGER      NOT NULL DEFAULT 1,
-      created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  // Indexes for efficient querying
-  const indexes: Array<[string, string]> = [
-    ['admin_audit_events_occurred_at_idx',    'occurred_at DESC'],
-    ['admin_audit_events_action_idx',          'action'],
-    ['admin_audit_events_category_idx',        'action_category'],
-    ['admin_audit_events_outcome_idx',         'outcome'],
-    ['admin_audit_events_actor_uid_idx',       'actor_uid'],
-    ['admin_audit_events_entity_idx',          'entity_type, entity_id'],
-    ['admin_audit_events_request_id_idx',      'request_id'],
-  ];
-
-  for (const [name, cols] of indexes) {
-    await dbQuery.query(
-      `CREATE INDEX IF NOT EXISTS ${name} ON ${schema}.admin_audit_events (${cols})`
-    );
-  }
-}
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `admin_audit_events` and its SEVEN indexes were created here at runtime by
+// `ensureAuditSchema`, declared as an optional startup dependency. All of it
+// comes from `scripts/baseline/000-baseline.sql` now.
+//
+// The indexes were issued from a loop with an INTERPOLATED NAME, which made
+// them invisible to `ddl:inventory`: its regex identifies an index by its name
+// and backtracks onto the keyword `IF` when the name is a template
+// substitution. So this file carried more runtime DDL than the count said.
+// `npm run schema:authority` now reports that blind spot explicitly.
+//
+// One constraint worth knowing, since the CREATE no longer states it: `event_id`
+// is UNIQUE (`admin_audit_events_event_id_key`). Every write below generates a
+// fresh randomUUID for it, so the constraint is what would catch a double-write
+// of one logical event rather than silently recording it twice.
 
 // ── Write ─────────────���─────────────────────────────���─────────────────────────
 

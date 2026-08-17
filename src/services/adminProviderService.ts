@@ -42,20 +42,15 @@ export interface ProviderListFilter {
 
 // ── Provider activity tracking ────────────────────────────────────────────────
 
-let _activityColReady = false;
-const ensureLastActivityColumn = async (): Promise<void> => {
-  if (_activityColReady) return;
-  await dbQuery.query(
-    `ALTER TABLE ${db.schema}.user_credentials ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ`,
-    []
-  );
-  _activityColReady = true;
-};
+// `user_credentials.last_activity_at` used to be added here at runtime by
+// `ensureLastActivityColumn`, awaited by both operations below. It comes from
+// `scripts/baseline/000-baseline.sql` now (TAB 02). Nullable with no default: a
+// provider who has never been seen reads as NULL rather than as active, which is
+// what `listProviders` sorts on.
 
 export const touchProviderActivity = async (workerUid: string): Promise<void> => {
   if (!workerUid) return;
   try {
-    await ensureLastActivityColumn();
     await dbQuery.query(
       `UPDATE ${db.schema}.user_credentials SET last_activity_at = NOW() WHERE uid = $1`,
       [workerUid]
@@ -66,7 +61,6 @@ export const touchProviderActivity = async (workerUid: string): Promise<void> =>
 };
 
 export const listProviders = async (filter: ProviderListFilter = {}) => {
-  await ensureLastActivityColumn();
 
   const {
     search,

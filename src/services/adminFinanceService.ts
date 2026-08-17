@@ -28,178 +28,50 @@ function normalizePagination(pageValue?: number, limitValue?: number): { page: n
   return { page, limit, offset: (page - 1) * limit };
 }
 
-// ── Schema bootstrap ──────────────────────────────────────────────────────────
-
-export async function ensureFinanceSchema(): Promise<void> {
-
-  // ── New columns on payments ────────────────────────────────────────────────
-  const paymentCols = [
-    `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ`,
-    `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS reviewed_by TEXT`,
-    `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ`,
-    `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS rejection_reason TEXT`,
-    `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ`,
-    // Two live queries have always referenced payments.updated_at, and the
-    // column never existed. scheduler.ts filters failed PayMongo payments on
-    // it, so the retry job raised 42703 on every run and no failed payment has
-    // ever been retried; the finance payments list selects it, so that query
-    // failed too. Backfilled from created_at so existing rows get a sane value
-    // rather than NULL, which would make every historical payment look eligible
-    // for retry the moment the job starts working.
-    `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
-    `ALTER TABLE ${s}.payments ADD COLUMN IF NOT EXISTS refunded_amount NUMERIC(12,2) NOT NULL DEFAULT 0`,
-    // Only columns confirmed to exist on payments — paid_at and the
-    // submitted_at added two lines above. `created_at` is NOT referenced
-    // anywhere else in this codebase, so naming it here would raise the very
-    // 42703 this change exists to fix. Falling back to NOW() leaves a
-    // backfilled row looking freshly touched, which is the safe direction: the
-    // retry job waits 6 hours rather than treating every historical payment as
-    // instantly eligible the moment it starts working.
-    `UPDATE ${s}.payments SET updated_at = COALESCE(paid_at, submitted_at, NOW())
-       WHERE updated_at IS NULL`,
-    `ALTER TABLE ${s}.payments ALTER COLUMN updated_at SET DEFAULT NOW()`,
-  ];
-  for (const sql of paymentCols) await dbQuery.query(sql);
-
-  // Keep updated_at honest without every writer having to remember it. A
-  // trigger is the only way that holds — the column drives retry eligibility,
-  // and a stale value silently means "retry this payment again".
-  await dbQuery.query(`
-    CREATE OR REPLACE FUNCTION ${s}.touch_payments_updated_at()
-    RETURNS TRIGGER AS $$
-    BEGIN
-      NEW.updated_at = NOW();
-      RETURN NEW;
-    END;
-    $$ LANGUAGE plpgsql
-  `);
-  await dbQuery.query(
-    `DROP TRIGGER IF EXISTS trg_payments_updated_at ON ${s}.payments`,
-  );
-  await dbQuery.query(`
-    CREATE TRIGGER trg_payments_updated_at
-    BEFORE UPDATE ON ${s}.payments
-    FOR EACH ROW EXECUTE FUNCTION ${s}.touch_payments_updated_at()
-  `);
-
-  // ── New column on user_credentials ────────────────────────────────────────
-  await dbQuery.query(
-    `ALTER TABLE ${s}.user_credentials ADD COLUMN IF NOT EXISTS is_internal_fixer BOOLEAN DEFAULT false`
-  );
-
-  // ── New columns on disbursements ──────────────────────────────────────────
-  const disburse = [
-    `ALTER TABLE ${s}.disbursements ADD COLUMN IF NOT EXISTS hold_reason TEXT`,
-    `ALTER TABLE ${s}.disbursements ADD COLUMN IF NOT EXISTS hold_until TIMESTAMPTZ`,
-    `ALTER TABLE ${s}.disbursements ADD COLUMN IF NOT EXISTS held_by TEXT`,
-    `ALTER TABLE ${s}.disbursements ADD COLUMN IF NOT EXISTS retry_count INT DEFAULT 0`,
-    `ALTER TABLE ${s}.disbursements ADD COLUMN IF NOT EXISTS last_retry_at TIMESTAMPTZ`,
-  ];
-  for (const sql of disburse) await dbQuery.query(sql);
-
-  // ── finance_ledger_entries ─────────────────────────────────────────────────
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.finance_ledger_entries (
-      id                  SERIAL PRIMARY KEY,
-      booking_id          INT NOT NULL REFERENCES ${s}.bookings(id) ON DELETE CASCADE,
-      payment_id          INT REFERENCES ${s}.payments(id) ON DELETE SET NULL,
-      provider_uid        TEXT,
-      is_internal_fixer   BOOLEAN NOT NULL DEFAULT false,
-      gross_amount        NUMERIC(12,2) NOT NULL,
-      servana_revenue     NUMERIC(12,2) NOT NULL DEFAULT 0,
-      provider_payable    NUMERIC(12,2) NOT NULL DEFAULT 0,
-      commission_rate     NUMERIC(5,4),
-      recognition_status  TEXT NOT NULL DEFAULT 'recognized',
-      source              TEXT NOT NULL,
-      created_by          TEXT,
-      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  const ledgerIdxes: Array<[string, string]> = [
-    ['fin_ledger_booking_idx', 'booking_id'],
-    ['fin_ledger_payment_idx', 'payment_id'],
-    ['fin_ledger_created_idx', 'created_at DESC'],
-  ];
-  for (const [n, c] of ledgerIdxes) {
-    await dbQuery.query(`CREATE INDEX IF NOT EXISTS ${n} ON ${s}.finance_ledger_entries (${c})`);
-  }
-
-  // ── finance_refund_reviews ─────────────────────────────────────────────────
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.finance_refund_reviews (
-      id                      SERIAL PRIMARY KEY,
-      booking_id              INT NOT NULL REFERENCES ${s}.bookings(id) ON DELETE CASCADE,
-      payment_id              INT REFERENCES ${s}.payments(id) ON DELETE SET NULL,
-      disbursement_id         INT REFERENCES ${s}.disbursements(id) ON DELETE SET NULL,
-      amount                  NUMERIC(12,2) NOT NULL,
-      currency                TEXT NOT NULL DEFAULT 'PHP',
-      status                  TEXT NOT NULL DEFAULT 'requested',
-      reason                  TEXT,
-      customer_uid            TEXT,
-      customer_name           TEXT,
-      requested_by            TEXT,
-      reviewed_by             TEXT,
-      reviewed_at             TIMESTAMPTZ,
-      refund_method           TEXT,
-      refund_reference        TEXT,
-      processed_at            TIMESTAMPTZ,
-      payout_reversal_needed  BOOLEAN NOT NULL DEFAULT false,
-      rejection_reason        TEXT,
-      notes                   TEXT,
-      created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  const refundIdxes: Array<[string, string]> = [
-    ['fin_refund_booking_idx', 'booking_id'],
-    ['fin_refund_status_idx',  'status'],
-    ['fin_refund_created_idx', 'created_at DESC'],
-  ];
-  for (const [n, c] of refundIdxes) {
-    await dbQuery.query(`CREATE INDEX IF NOT EXISTS ${n} ON ${s}.finance_refund_reviews (${c})`);
-  }
-
-  // ── finance_reconciliation_exceptions ─────────────────────────────────────
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.finance_reconciliation_exceptions (
-      id               SERIAL PRIMARY KEY,
-      run_date         DATE NOT NULL DEFAULT CURRENT_DATE,
-      exception_code   TEXT NOT NULL,
-      severity         TEXT NOT NULL DEFAULT 'warning',
-      booking_id       INT REFERENCES ${s}.bookings(id) ON DELETE SET NULL,
-      payment_id       INT REFERENCES ${s}.payments(id) ON DELETE SET NULL,
-      disbursement_id  INT REFERENCES ${s}.disbursements(id) ON DELETE SET NULL,
-      amount           NUMERIC(12,2),
-      description      TEXT NOT NULL,
-      status           TEXT NOT NULL DEFAULT 'open',
-      resolved_by      TEXT,
-      resolved_at      TIMESTAMPTZ,
-      resolution_reason TEXT,
-      ignored_by       TEXT,
-      ignored_at       TIMESTAMPTZ,
-      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  const excIdxes: Array<[string, string]> = [
-    ['fin_exc_code_idx',     'exception_code'],
-    ['fin_exc_status_idx',   'status'],
-    ['fin_exc_run_idx',      'run_date DESC'],
-    ['fin_exc_booking_idx',  'booking_id'],
-  ];
-  for (const [n, c] of excIdxes) {
-    await dbQuery.query(`CREATE INDEX IF NOT EXISTS ${n} ON ${s}.finance_reconciliation_exceptions (${c})`);
-  }
-
-  // The canonical event log ships with the rest of the finance schema, so a
-  // deployment cannot end up with the reconciliation tables present and the
-  // record they reconcile absent.
-  await ensureFinanceLedgerSchema();
-}
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `ensureFinanceSchema` was a REQUIRED startup dependency and the largest
+// bootstrap in the repository. It created, at runtime:
+//
+//   8 columns on `payments`, 1 on `user_credentials` (is_internal_fixer)
+//   `finance_ledger_entries`, `finance_refund_reviews`,
+//   `finance_reconciliation_exceptions` + 8 indexes
+//   the `touch_payments_updated_at()` FUNCTION and its
+//   `trg_payments_updated_at` TRIGGER
+//
+// Every one of those is in `scripts/baseline/000-baseline.sql` — including the
+// function and the trigger, which is the only trigger in the dump, and
+// `payments.updated_at` with its `DEFAULT now()`. Verified individually before
+// this was removed, because a trigger whose function is missing fails at the
+// first UPDATE rather than at creation.
+//
+// Three of its index loops used an INTERPOLATED index name, so
+// `ddl:inventory` could not see them at all — its regex identifies an index by
+// its name. `npm run schema:authority` reports that blind spot now.
+//
+// -- Why payments.updated_at is worth remembering ----------------------------
+//
+// The column did not exist while two live queries referenced it.
+// `scheduler.ts` filters failed PayMongo payments on it, so the retry job
+// raised 42703 on EVERY run and no failed payment was ever retried; the finance
+// payments list selected it and failed too.
+//
+// This bootstrap also carried a one-time DML backfill:
+//
+//   UPDATE payments SET updated_at = COALESCE(paid_at, submitted_at, NOW())
+//     WHERE updated_at IS NULL
+//
+// The COALESCE ORDER was the point, not incidental: seeding from paid_at means
+// the retry job waits its 6 hours from a real event, rather than treating every
+// historical payment as instantly eligible the moment it starts working.
+//
+// That backfill is gone with the rest, and deliberately not re-homed into a
+// migration: it is already applied in production (the baseline shows the column
+// populated and defaulted), its predicate makes it a no-op there now, and a
+// fresh database has no payment rows to backfill. If a NULL `updated_at` ever
+// reappears, that is a writer inserting one explicitly — the column is nullable
+// — and it should be fixed at that writer, not by a boot-time sweep over the
+// payments table.
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
