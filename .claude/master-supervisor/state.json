@@ -9,24 +9,24 @@
     "TAB 04 (rules + parity + audit)",
     "TAB 12 (credential + high CVEs)"
   ],
-  "currentObjective": "TAB 02 rescoped 2026-08-17. Authoring gap CLOSED by migration 036. Deletion phase: 148 -> 111 statements, 106 -> 73 objects, startup graph 19 -> 13 deps. Nine services no longer create their own schema. Remaining 111 target objects production already has. Recipe + traps in RESUME.md section 3.",
-  "status": "IN PROGRESS - TAB 02 deletion phase 148 -> 111; only 036 own objects are gated on applying it",
+  "currentObjective": "TAB 02 rescoped 2026-08-17. Authoring gap CLOSED by migration 036. Deletion phase: 148 -> 105 statements, 106 -> 73 objects, startup graph 19 -> 13 deps, across eleven services. The lost-race defect class is now GATED by schema:authority (contested objects 7 -> 4, 0 unsatisfiable). Recipe + traps in RESUME.md section 3.",
+  "status": "IN PROGRESS - TAB 02 deletion phase 148 -> 105; lost-race class gated; only 036 own objects await the apply",
   "supervisorCycleCount": 15,
   "lastHourlyReportAt": null,
-  "lastCheckpointAt": "2026-08-18 - TAB 02 deletion pass, nine services, 148 -> 111",
+  "lastCheckpointAt": "2026-08-18 - TAB 02: lost-race gate + 148 -> 105",
   "lastLocalCommit": "see git log — do not trust a recorded SHA, two handoffs running recorded a stale one",
   "workingTreeState": "CLEAN — check `git rev-list --count origin/main..HEAD` for the real number",
   "activeBlockers": [
     "No real boot has been performed since app.ts startup was rewritten (14 fire-and-forget IIFEs -> a dependency graph awaited before listen). It was 19 dependencies; the TAB 02 deletion pass has since removed 6, so it is 13. Both the rewrite AND the removals are unverified against a running server.",
     "Deploy decision: a push to main IS the deploy, and conflicts with the standing local-only rule (0 of 108 endpoints migrated)",
-    "Migration 036 is authored, gated and committed but NOT applied. Production lacks four tables its own booking code writes to. This gates deletion of the runtime DDL for THOSE SIX OBJECTS ONLY — the other 111 statements target objects production already has and are safe to delete now.",
+    "Migration 036 is authored, gated and committed but NOT applied. Production lacks four tables its own booking code writes to. This gates deletion of the runtime DDL for THOSE SIX OBJECTS ONLY — the other 105 statements target objects production already has and are safe to delete now.",
     "booking-postgres-races needs a disposable PostgreSQL; PGlite cannot substitute (single-connection)",
     "9 moderate CVEs need npm audit fix --force: major bumps of firebase-admin (auth path) and node-cron (every scheduled job)"
   ],
   "openItems": [
     "P0 apply migration 036 to production, then delete the runtime DDL it replaces (separate commit, in that order)",
     "P1 DEFECT provider_source_attribution had TWO incompatible runtime definitions behind CREATE TABLE IF NOT EXISTS. Production has the providerOnboardingService shape (PK uid), so GET /admin/providers/:uid/attribution and POST /admin/providers/attribution/backfill fail with 42703 today. Needs a decision on the canonical shape plus a migration; admin portal reads one shape, provider-web writes the other.",
-    "P1 111 runtime DDL statements left to delete. Remaining test coupling: audit, finance, permissions, invite-state, chat lifecycle, provider-catalog, communication. Do NOT estimate coupling by grep - it under-reports; delete then run the gate.",
+    "P1 105 runtime DDL statements left to delete across ~14 services. Remaining test coupling: audit, finance, permissions, invite-state, chat lifecycle, provider-catalog, communication. Do NOT estimate coupling by grep - it under-reports; delete then run the gate. Watch for call-order test doubles that absorb bootstrap DDL, not just source-text assertions.",
     "P1 ownership unverified on a real engine — PGlite has no role separation; the `fresh` CI job activates but has never been observed running",
     "P1 9 moderate CVEs need major bumps of firebase-admin and node-cron",
     "P2 scripts/** is typechecked by neither tsconfig",
@@ -40,14 +40,15 @@
     "baseline-version ledger (Flyway/Sqitch pattern) rather than replaying a chain that is spent",
     "pending count read back OUT of the database, not derived from the SQL that wrote it",
     "the baseline counts as a schema AUTHORITY, not just a test fixture — db:verify:embedded restores it and applies pending on top, so what it declares is reproducible without runtime DDL. This is what rescoped TAB 02.",
-    "classification checked against the ENGINE (restore baseline into PGlite, ask PostgreSQL) rather than trusting the regex that produced it"
+    "classification checked against the ENGINE (restore baseline into PGlite, ask PostgreSQL) rather than trusting the regex that produced it",
+    "two CREATE TABLE IF NOT EXISTS for one object is a race with a silent loser, not idempotence - gated by contestedObjects() in schema-authority; all 7 audited against the baseline, 0 unsatisfiable beyond the provider_source_attribution P1"
   ],
   "contextPressure": "moderate",
   "gates": {
-    "npm run verify": "PASS - 265 suites, 5771 tests (exit code checked directly, not through a pipe)",
+    "npm run verify": "PASS - 265 suites, 5775 tests (exit code checked directly, not through a pipe)",
     "npm run db:verify:embedded": "PASS — 121 restored + 7 applied = 132 tables",
-    "npm run schema:authority": "PASS — UNMANAGED 0, missing columns 0, 2 interpolated and read by hand",
-    "npm run ddl:inventory": "111 unmanaged / 73 objects - exits 1 BY DESIGN",
+    "npm run schema:authority": "PASS - UNMANAGED 0, missing columns 0, contested 4 / 0 unsatisfiable, 2 interpolated and read by hand",
+    "npm run ddl:inventory": "105 unmanaged / 73 objects - exits 1 BY DESIGN",
     "npm run authz:legacy": "615 legacy routes, 0 v1 loosenings",
     "npm run migrations:baseline:plan": "exits 1 BY DESIGN — 14 DML migrations need human judgement"
   },
