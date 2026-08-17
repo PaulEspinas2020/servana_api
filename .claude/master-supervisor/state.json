@@ -1,6 +1,6 @@
 {
-  "masterCommand": "SERVANA API MASTER COMMAND (12 TABs, from repo state 9016e7e) \u2014 supersedes the 15-TAB Backend Centralization Command Book",
-  "currentTab": "TAB 02 \u2014 Make migrations the sole schema authority",
+  "masterCommand": "SERVANA API MASTER COMMAND (12 TABs, from repo state 9016e7e) — supersedes the 15-TAB Backend Centralization Command Book",
+  "currentTab": "TAB 02 — Make migrations the sole schema authority",
   "currentTabIndex": 2,
   "totalTabs": 12,
   "completedTabs": [
@@ -10,12 +10,12 @@
     "TAB 12 (credential + high CVEs)"
   ],
   "currentObjective": "Move 154 unmanaged runtime DDL statements into migrations, one object at a time, until the API starts with DDL privileges revoked.",
-  "status": "HANDOFF \u2014 see .claude/master-supervisor/RESUME.md",
+  "status": "HANDOFF — see .claude/master-supervisor/RESUME.md",
   "supervisorCycleCount": 14,
   "lastHourlyReportAt": null,
-  "lastCheckpointAt": "2026-08-16 \u2014 TAB 15 certified",
+  "lastCheckpointAt": "2026-08-17 — handoff",
   "lastLocalCommit": "66d14b2",
-  "workingTreeState": "CLEAN \u2014 82 commits unpushed",
+  "workingTreeState": "CLEAN — 82 commits unpushed",
   "activeBlockers": [
     "No real boot has been performed since app.ts startup was rewritten (14 IIFEs -> 19-dependency graph awaited before listen)",
     "Deploy decision: a push to main IS the deploy, and conflicts with the standing local-only rule (0 of 108 endpoints migrated)",
@@ -23,29 +23,31 @@
     "9 moderate CVEs need npm audit fix --force: major bumps of firebase-admin (auth path) and node-cron (every scheduled job)"
   ],
   "openItems": [
-    "P0 production has NO servana.schema_migrations ledger \u2014 migrations applied by hand, deploy.yml never invokes the runner. `migrations:apply` there today would find all 36 pending and fail on 001. Marking it is a PRODUCTION WRITE and was not performed.",
-    "P1 a 4MB+ banner upload can throw RangeError instead of a clean 400 \u2014 product-code regex over a multi-MB data URI; outside TAB 15, deliberately not fixed",
-    "P1 ownership unverified on a real engine \u2014 PGlite has no role separation; the `fresh` CI job now activates but has not been observed running",
-    "P2 scripts/** is typechecked by neither tsconfig"
+    "P1 a 4MB+ banner upload threw RangeError instead of a clean 400 — FIXED 2026-08-16 (indexOf/slice parse)",
+    "P1 ownership unverified on a real engine — PGlite has no role separation; the `fresh` CI job activates but has never been observed running",
+    "P1 9 moderate CVEs need major bumps of firebase-admin and node-cron",
+    "P2 scripts/** is typechecked by neither tsconfig",
+    "P2 runtime DDL in chat.repository.ts is invisible to the migration ledger",
+    "P3 v1-mount-parity.test.ts is deletable once v1-router migrates to the composed app"
   ],
   "pendingQuestions": [],
   "researchDecisions": [
-    "PGlite over pg-mem or a server install \u2014 real PostgreSQL source compiled to WASM, so disagreements are meaningful",
-    "engine-proven asserted as a SUBSET of model-reported \u2014 the engine stops each file at its first error",
+    "PGlite over pg-mem or a server install — real PostgreSQL source compiled to WASM, so disagreements are meaningful",
+    "engine-proven asserted as a SUBSET of model-reported — the engine stops each file at its first error",
     "baseline-version ledger (Flyway/Sqitch pattern) rather than replaying a chain that is spent",
     "pending count read back OUT of the database, not derived from the SQL that wrote it"
   ],
-  "contextPressure": "ELEVATED",
+  "contextPressure": "HANDOFF",
   "gates": {
-    "npm run verify": "PASS \u2014 264 suites, 5754 tests",
-    "npm run db:verify:embedded": "PASS \u2014 121 restored + 6 applied = 128 tables",
-    "npm run ddl:inventory": "154 unmanaged / 112 objects \u2014 exits 1 BY DESIGN",
+    "npm run verify": "PASS — 264 suites, 5754 tests",
+    "npm run db:verify:embedded": "PASS — 121 restored + 6 applied = 128 tables",
+    "npm run ddl:inventory": "154 unmanaged / 112 objects — exits 1 BY DESIGN",
     "npm run authz:legacy": "615 legacy routes, 0 v1 loosenings"
   },
   "productionActions": {
-    "reads": "one \u2014 pg_dump --schema-only over SSH, explicitly authorised",
-    "writes": "none",
-    "deploys": "none",
+    "reads": "one — pg_dump --schema-only over SSH, explicitly authorised",
+    "writes": "TWO, explicitly authorised 2026-08-16: created servana.schema_migrations (30 rows) and applied migrations 030-035. Verified: 36 ledger rows, 128 tables, 0 not owned by admin, servana-prod 0 restarts.",
+    "deploys": "none — 82 commits unpushed",
     "credentialChanges": "none"
   }
 }
