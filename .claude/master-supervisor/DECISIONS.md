@@ -3,6 +3,77 @@
 ---
 
 DECISION:
+Treat `scripts/baseline/000-baseline.sql` as a schema AUTHORITY alongside the
+migration chain, and rescope TAB 02 accordingly — from "move 154 runtime DDL
+statements into migrations" to "author the 6 statements and 3 columns nothing
+declares, then delete the 148 that are redundant".
+
+CONTEXT:
+TAB 02 was budgeted at one to two weeks and called "the multi-week core of the
+command", entirely off `ddl:inventory`'s count of 154. That script asks only
+whether a MIGRATION owns an object. It was written before TAB 15 added the
+baseline, and never learned about it — so it reported the union of two unrelated
+problems as one number.
+
+OPTIONS:
+1. Teach `runtime-ddl-inventory.ts` about the baseline, changing what the
+   existing 154 budget means.
+2. Add a second, separately named gate that classifies against migrations AND
+   the baseline, and leave the existing budget measuring what it always did.
+3. Take the 154 at face value and write ~112 no-op migrations.
+
+SELECTED:
+Option 2. `scripts/schema-authority.ts` + `tests/schema-authority.test.ts`,
+with `ddl:inventory`'s budget lowered 154 → 148 and 112 → 106 only because
+migration 036 genuinely claimed six objects.
+
+WHY:
+Both numbers are real and they bound different things. `ddl:inventory` bounds the
+DELETION backlog — every one of those statements still has to go before the API
+can start with DDL privileges revoked. `schema:authority` bounds the AUTHORING
+gap, and only that one blocks: an object nothing in the repository declares
+exists solely where the code has already run. Redefining the first number in
+place would have destroyed the ability to compare against every prior report,
+and Option 3 is a week of no-op SQL for objects a fresh database already builds.
+
+EVIDENCE:
+- `npm run schema:authority`: 214 runtime statements — 66 migration-owned, 148
+  baseline-owned, 6 unmanaged. After 036: 0 unmanaged, 0 missing columns.
+- Checked against the ENGINE, not the regex that found it: restoring the
+  baseline into PGlite and asking PostgreSQL which tables exist confirms all 51
+  baseline-owned CREATE TABLE targets and all 39 ALTER targets. 0 disagreements.
+- 036 proven idempotent on real PostgreSQL in three orderings —
+  migration-first, runtime-DDL-first, and double-apply — all converging on 132
+  tables. The runtime-DDL-first case is the one that matters: it is what a
+  deploy hits on a host where the app already bootstrapped the tables.
+- Both new gates mutation-tested. A probe adding one runtime `CREATE TABLE` and
+  one undeclared column turned 4 assertions red; removing it returned them to
+  green.
+- `npm run verify` exit 0 — 265 suites, 5768 tests, exit code read directly
+  rather than through a pipe.
+
+LOCAL IMPACT:
+`scripts/schema-authority.ts`, `tests/schema-authority.test.ts`,
+`scripts/migrations/036-booking-transition-evidence-onboarding.sql`, budget and
+narrative updates in `runtime-ddl-budget.test.ts`, `schema-baseline.test.ts`
+(43 → 46 proven columns), `suite-inventory.test.ts` (264 → 265), `lifecycle.ts`.
+
+BACKWARD COMPATIBILITY:
+None affected. 036 is additive and every table is `IF NOT EXISTS`; the three
+`booking_workers` columns are nullable with no backfill, so a row predating them
+reads as never cancelled. No runtime DDL was removed, so no code path gained a
+dependency on a migration having run.
+
+PRODUCTION IMPACT:
+None yet, and the sequencing is load-bearing: 036 must be APPLIED before the
+runtime DDL it replaces is deleted. Reversing that order makes booking
+transitions depend on a migration that has not run.
+
+DATE: 2026-08-17
+
+---
+
+DECISION:
 Commit the entire 212-entry TAB 06–15 dirty tree as ONE local checkpoint rather
 than decomposing it into per-TAB commits.
 

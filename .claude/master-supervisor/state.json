@@ -9,25 +9,27 @@
     "TAB 04 (rules + parity + audit)",
     "TAB 12 (credential + high CVEs)"
   ],
-  "currentObjective": "Move 154 unmanaged runtime DDL statements into migrations, one object at a time, until the API starts with DDL privileges revoked.",
-  "status": "HANDOFF — see .claude/master-supervisor/RESUME.md",
-  "supervisorCycleCount": 14,
+  "currentObjective": "TAB 02 rescoped 2026-08-17. The authoring gap is CLOSED by migration 036 (6 statements + 3 columns that neither a migration nor the baseline declared). What remains is DELETION: 148 runtime DDL statements whose objects the baseline already declares, plus the lazy bootstraps that await them. Blocked on 036 being applied to production first — deleting before that makes booking transitions depend on an unapplied migration.",
+  "status": "IN PROGRESS — TAB 02 authoring gap closed, deletion phase gated on applying 036",
+  "supervisorCycleCount": 15,
   "lastHourlyReportAt": null,
-  "lastCheckpointAt": "2026-08-17 — handoff",
-  "lastLocalCommit": "66d14b2",
-  "workingTreeState": "CLEAN — 82 commits unpushed",
+  "lastCheckpointAt": "2026-08-17 — TAB 02 rescope + migration 036",
+  "lastLocalCommit": "see git log — do not trust a recorded SHA, two handoffs running recorded a stale one",
+  "workingTreeState": "CLEAN — check `git rev-list --count origin/main..HEAD` for the real number",
   "activeBlockers": [
     "No real boot has been performed since app.ts startup was rewritten (14 IIFEs -> 19-dependency graph awaited before listen)",
     "Deploy decision: a push to main IS the deploy, and conflicts with the standing local-only rule (0 of 108 endpoints migrated)",
+    "Migration 036 is authored, gated and committed but NOT applied. Production lacks four tables its own booking code writes to, and the TAB 02 deletion phase cannot start until it is applied.",
     "booking-postgres-races needs a disposable PostgreSQL; PGlite cannot substitute (single-connection)",
     "9 moderate CVEs need npm audit fix --force: major bumps of firebase-admin (auth path) and node-cron (every scheduled job)"
   ],
   "openItems": [
-    "P1 a 4MB+ banner upload threw RangeError instead of a clean 400 — FIXED 2026-08-16 (indexOf/slice parse)",
+    "P0 apply migration 036 to production, then delete the runtime DDL it replaces (separate commit, in that order)",
+    "P1 148 runtime DDL statements to delete; ~191 lazy-ensure call sites across 37 files indicate where (a count, not a finding)",
     "P1 ownership unverified on a real engine — PGlite has no role separation; the `fresh` CI job activates but has never been observed running",
     "P1 9 moderate CVEs need major bumps of firebase-admin and node-cron",
     "P2 scripts/** is typechecked by neither tsconfig",
-    "P2 runtime DDL in chat.repository.ts is invisible to the migration ledger",
+    "P2 two call sites interpolate the ADD COLUMN name from a loop, so no static scan can resolve them; both were read and are covered (adminBookingService:170, experienceStore:156)",
     "P3 v1-mount-parity.test.ts is deletable once v1-router migrates to the composed app"
   ],
   "pendingQuestions": [],
@@ -35,19 +37,23 @@
     "PGlite over pg-mem or a server install — real PostgreSQL source compiled to WASM, so disagreements are meaningful",
     "engine-proven asserted as a SUBSET of model-reported — the engine stops each file at its first error",
     "baseline-version ledger (Flyway/Sqitch pattern) rather than replaying a chain that is spent",
-    "pending count read back OUT of the database, not derived from the SQL that wrote it"
+    "pending count read back OUT of the database, not derived from the SQL that wrote it",
+    "the baseline counts as a schema AUTHORITY, not just a test fixture — db:verify:embedded restores it and applies pending on top, so what it declares is reproducible without runtime DDL. This is what rescoped TAB 02.",
+    "classification checked against the ENGINE (restore baseline into PGlite, ask PostgreSQL) rather than trusting the regex that produced it"
   ],
-  "contextPressure": "HANDOFF",
+  "contextPressure": "moderate",
   "gates": {
-    "npm run verify": "PASS — 264 suites, 5754 tests",
-    "npm run db:verify:embedded": "PASS — 121 restored + 6 applied = 128 tables",
-    "npm run ddl:inventory": "154 unmanaged / 112 objects — exits 1 BY DESIGN",
-    "npm run authz:legacy": "615 legacy routes, 0 v1 loosenings"
+    "npm run verify": "PASS — 265 suites, 5768 tests (exit code checked directly, not through a pipe)",
+    "npm run db:verify:embedded": "PASS — 121 restored + 7 applied = 132 tables",
+    "npm run schema:authority": "PASS — UNMANAGED 0, missing columns 0, 2 interpolated and read by hand",
+    "npm run ddl:inventory": "148 unmanaged / 106 objects — exits 1 BY DESIGN",
+    "npm run authz:legacy": "615 legacy routes, 0 v1 loosenings",
+    "npm run migrations:baseline:plan": "exits 1 BY DESIGN — 14 DML migrations need human judgement"
   },
   "productionActions": {
     "reads": "one — pg_dump --schema-only over SSH, explicitly authorised",
-    "writes": "TWO, explicitly authorised 2026-08-16: created servana.schema_migrations (30 rows) and applied migrations 030-035. Verified: 36 ledger rows, 128 tables, 0 not owned by admin, servana-prod 0 restarts.",
-    "deploys": "none — 82 commits unpushed",
+    "writes": "TWO, explicitly authorised 2026-08-16: created servana.schema_migrations (30 rows) and applied migrations 030-035. Verified: 36 ledger rows, 128 tables, 0 not owned by admin, servana-prod 0 restarts. NOTHING since.",
+    "deploys": "none",
     "credentialChanges": "none"
   }
 }

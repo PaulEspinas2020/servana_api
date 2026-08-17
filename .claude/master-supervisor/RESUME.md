@@ -1,7 +1,9 @@
 # RESUME — Servana API MASTER COMMAND (12 TABs)
 
-Repo state at handoff: branch `main`, HEAD `66d14b2`, working tree **clean**,
-**82 commits unpushed**, nothing deployed.
+Repo state at handoff: branch `main`, working tree **clean**, nothing deployed.
+Check the commit count yourself — `git rev-list --count origin/main..HEAD` — the
+last two handoffs both recorded a number that was already stale by the time the
+next session read it.
 
 Read this, then `MEMORY.md`, `state.json`, `DECISIONS.md`, and
 `docs/PRODUCTION_READINESS.md`. Everything below was measured, not remembered.
@@ -11,15 +13,21 @@ Read this, then `MEMORY.md`, `state.json`, `DECISIONS.md`, and
 ## 1. Prove the baseline before changing anything
 
 ```
-npm run verify              expect PASS — 264 suites, 5754 tests
-npm run db:verify:embedded  expect PASS — 121 restored + 6 applied = 128 tables
-npm run ddl:inventory       expect 154 unmanaged, 112 objects  (exits 1 BY DESIGN)
+npm run verify              expect PASS — 265 suites, 5768 tests
+npm run db:verify:embedded  expect PASS — 121 restored + 7 applied = 132 tables
+npm run schema:authority    expect UNMANAGED 0, MISSING columns 0  (exits 0)
+npm run ddl:inventory       expect 148 unmanaged, 106 objects  (exits 1 BY DESIGN)
 npm run authz:legacy        expect 615 routes, 0 loosenings
 npm run release:summary     writes reports/release-summary.json
 ```
 
-`db:verify` and `ddl:inventory` exit non-zero deliberately. They are not part of
-`npm run verify` and must not be added to it.
+**THREE gates exit non-zero deliberately**, not two as this file previously said:
+`db:verify`, `ddl:inventory` and `migrations:baseline:plan`. None of them belongs
+in `npm run verify`.
+
+Read the numbers as a pair. `ddl:inventory` counts what no MIGRATION owns;
+`schema:authority` counts what NOTHING in the repository owns. The second is the
+one that blocks.
 
 ---
 
@@ -28,7 +36,7 @@ npm run release:summary     writes reports/release-summary.json
 | TAB | Priority | State |
 | --- | --- | --- |
 | 01 Establish the release gate | P0 | **Done** except the concurrency suite |
-| 02 Migrations the sole schema authority | P0 | Measured + budgeted. **The work itself remains** |
+| 02 Migrations the sole schema authority | P0 | **Rescoped and half-done — see §3** |
 | 03 Atomic startup lifecycle | P0 | Done except tests needing a real boot |
 | 04 Centralize authorization policy | P0 | Rules derived, parity gated, audit wired |
 | 05 Converge clients onto v1 | P1 | Not started — 0 of 108 migrated |
@@ -42,29 +50,56 @@ npm run release:summary     writes reports/release-summary.json
 
 ---
 
-## 3. The next action
+## 3. TAB 02 was scoped from a number that meant something else
 
-**TAB 02's real work: move 154 runtime DDL statements into migrations.**
+The previous handoff said: *"move 154 runtime DDL statements into migrations …
+this is the multi-week core of the command and the thing everything else waits
+on."* That was wrong, and `npm run schema:authority` now shows why.
 
-The acceptance criterion is the API starting with **DDL privileges revoked**, so
-every statement has to move first. This is the multi-week core of the command
-and the thing everything else waits on.
+`ddl:inventory` asks only whether a **migration** owns an object. Migrations
+stopped being the only schema authority here when TAB 15 added
+`scripts/baseline/000-baseline.sql` — production's own `pg_dump`, which
+`db:verify:embedded` restores and then applies pending migrations on top of. The
+154 was the union of two unrelated problems:
 
-Per object, never as a sweep:
+- **148 statements** touch an object the baseline already declares. Verified
+  against the real engine, not a regex: restore the baseline into PGlite, ask
+  PostgreSQL which tables exist, and all 51 tables and 39 ALTER targets are
+  there. These are **redundant statements to DELETE**. Nothing to author.
+- **6 statements and 3 columns** were declared by nothing in the repository.
+  That was the whole authoring gap, and it was booking-critical:
+  `booking_transitions`, `idx_booking_transitions_booking`,
+  `booking_transition_idempotency` (the ONE canonical transition writer),
+  `booking_evidence`, `idx_booking_evidence_booking_worker`,
+  `worker_onboarding`, and `booking_workers.{cancelled_at,
+  cancellation_reason_code, cancellation_note}`.
 
-1. `npm run ddl:inventory` names the object and its call site.
-2. Write a migration whose `CREATE TABLE IF NOT EXISTS` matches what runtime
-   builds — production already HAS the object, so the migration must be a no-op
-   there.
-3. Verify the structural fingerprint against `scripts/baseline/000-baseline.sql`.
-4. Only then delete the runtime call.
-5. Lower the budget in `tests/runtime-ddl-budget.test.ts`. It may fall, never
-   rise, and it fails if it drifts more than 5 above the real count.
+They are absent from production's dump, so they exist only where this unreleased
+code has already run. On deploy the application would create them itself, at
+runtime, on the booking write path — and would fail outright once DDL privileges
+are revoked.
 
-Five of these were already moved this way — the module-scope bootstraps in
-`providerActivationService`, `providerOperationalAvailabilityService`,
-`accountDeletion.routes`, `customerSupport.routes` and
-`customerReviewController` — see `src/startup.ts` for the pattern.
+`scripts/migrations/036-booking-transition-evidence-onboarding.sql` closes that
+gap. Every definition is a fingerprint of the runtime statement it replaces, and
+that is proven rather than asserted — three orderings on real PostgreSQL
+(migration-first, runtime-DDL-first, double-apply) all converge on 132 tables.
+
+### What is actually left
+
+**Delete 148 runtime DDL statements and the lazy bootstraps that await them.**
+Mechanical and broad, not a design exercise. Two things to know before starting:
+
+1. A grep for lazy-ensure patterns (`await ensure*(`, `schemaReady ??=`) counts
+   191 occurrences across 37 files. That is a count, not a finding — it says
+   where to look. Most DDL here is awaited on a REQUEST path, not only at
+   startup, so deleting the DDL means removing those awaits too.
+2. ⚠ **Sequencing.** The runtime DDL for 036's objects is deliberately STILL IN
+   PLACE. Deleting it before 036 is applied to production makes booking
+   transitions depend on a migration that has not run — the failure mode
+   migration 034's header warns about, on the booking write path. Order is:
+   **apply 036 → verify → then delete, in a separate commit.**
+
+Acceptance is unchanged: the API starts with DDL privileges revoked.
 
 ---
 
@@ -73,11 +108,16 @@ Five of these were already moved this way — the module-scope bootstraps in
 1. **One real boot.** Nobody has started the actual server since `app.ts`
    startup was rewritten: 14 fire-and-forget bootstraps became a 19-dependency
    graph awaited before `listen`, plus `/healthz`, `/readyz` and SIGTERM
-   draining. Verified as far as tests allow; not against reality.
+   draining. Verified as far as tests allow; not against reality. This remains
+   the single largest unverified assumption in the whole body of work.
 2. **The deploy decision.** A push to `main` **IS** the deploy. It also
    conflicts with the standing local-only rule, and 0 of 108 endpoints have
    migrated, so that rule is unsatisfied.
-3. **`race go`.** A disposable `servana_race_test` database on the Linode host
+3. **Apply migration 036.** Authored, gated, committed, NOT applied. Until it
+   is, production lacks four tables its own booking code writes to, and the
+   deletion work in §3 cannot start. Applying it is a production write and needs
+   the same explicit authorisation 030–035 got.
+4. **`race go`.** A disposable `servana_race_test` database on the Linode host
    unblocks `tests/booking-postgres-races.test.ts`, which currently reports
    `BLOCKED_BY_TEST_DATABASE`. Measured as safe: the harness caps at 8
    connections and 2 concurrent transactions; the server is idle with 481 MB
@@ -88,11 +128,23 @@ Five of these were already moved this way — the module-scope bootstraps in
 
 ## 5. Working rules that were earned the hard way
 
-- **Mutation-test every gate, and confirm the mutation landed.** Six checks in
-  the last session passed while broken; three were hunting that exact class.
-- **Grep counts are not findings.** Four false leads, each dissolved on reading
-  the code. `isDisputeCategory` looked unused and is called next door;
-  `ADDITIONAL_WORK_CAPTURED` looked producerless and is emitted by a ternary.
+- **A number is not a scope.** TAB 02 was budgeted at one to two weeks from a
+  count that answered a different question than the one being asked. Before
+  costing work off a metric, read what the metric actually measures.
+- **Check a classification against the engine, not the regex.** The
+  baseline-owned claim was re-derived by restoring the baseline into PGlite and
+  asking PostgreSQL. Regex and engine agreed — but that agreement is the
+  evidence, and it was cheap.
+- **Mutation-test every gate, and confirm the mutation landed.** Both new gates
+  here were mutation-tested: a probe file adding one runtime `CREATE TABLE` and
+  one undeclared column turned 4 assertions red. Six checks in an earlier
+  session passed while broken; three were hunting that exact class.
+- **Pipelines hide exit codes.** `npm run verify | tail` reported `exited with
+  code 0` over a run with 2 failed suites. Redirect and check `$?`, or read the
+  summary line — never trust the pipe.
+- **Grep counts are not findings.** `ensureAccountDeletionTable` looked like a
+  live route-module bootstrap and is a dead import; the "5 missing columns" were
+  3, two being the SQL keyword `IF` captured by a backtracking regex.
 - **Never let observability change a decision.** The authz audit threw inside a
   denial branch and turned a 403 into a bypass in a test.
 - **Prefer the Edit tool to shell heredocs for code.** Heredocs mangled
@@ -118,3 +170,7 @@ servana-prod              online, 0 restarts through the change
 Production has the schema for the finance ledger, outbox, account settings and
 support cases — and not the code that writes to them. Harmless until v1 traffic
 exists, but not a steady state.
+
+It does **not** have 036's four tables. A fresh database built from this
+repository now reaches **132** tables; production is at 128. That difference is
+the one open schema gap, and it is on the booking write path.
