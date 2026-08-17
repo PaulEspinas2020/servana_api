@@ -17,7 +17,7 @@ npm run verify              expect PASS — 265 suites, 5769 tests
 npm run db:verify:embedded  expect PASS — 121 restored + 7 applied = 132 tables
 npm run schema:authority    expect UNMANAGED 0, MISSING 0, contested 2 / 0
                             unsatisfiable, 1 invisible index  (exits 0)
-npm run ddl:inventory       expect 65 unmanaged, 44 objects  (exits 1 BY DESIGN)
+npm run ddl:inventory       expect 41 unmanaged, 32 objects  (exits 1 BY DESIGN)
                             ⚠ UNDERSTATES the backlog — it cannot see a
                             CREATE INDEX whose name is interpolated
 npm run authz:legacy        expect 615 routes, 0 loosenings
@@ -89,9 +89,9 @@ that is proven rather than asserted — three orderings on real PostgreSQL
 
 ### What is actually left
 
-**Delete 65 runtime DDL statements and the lazy bootstraps that await them.**
-Mechanical and broad, not a design exercise. 148 → 65 is done (objects 106 → 44,
-startup graph 19 → 9 dependencies), across twenty services:
+**Delete 41 runtime DDL statements and the lazy bootstraps that await them.**
+Mechanical and broad, not a design exercise. 148 → 41 is done (objects 106 → 32,
+startup graph 19 → 9 dependencies), across twenty-two services:
 
 - `accountDeletionService`, `providerOperationalAvailabilityService`
 - `adminNotificationService`, `adminMobileAttributionService`,
@@ -102,6 +102,7 @@ startup graph 19 → 9 dependencies), across twenty services:
   `adminFinanceService`, `adminGuestService`
 - `adminPermissionService` (**split**, not deleted), `customerSupportService`
 - `adminCommunicationService`, `providerCatalogService`
+- `serviceApplicationService`, `technicianService` (six of its seven bootstraps)
 
 `adminPermissionService` is the pattern for a bootstrap that does DDL **and**
 seeding: the DDL goes, the seeding stays, and the function gets RENAMED —
@@ -113,6 +114,12 @@ that resolve to nothing.
 
 `providerCatalogService` needed NO split — its seeding was already a separate
 export, so the DDL half came out on its own. That is the shape to aim for.
+
+⛔ **`technicianService.ensureOnboardingTable` is the LAST gated deletion.** It
+creates `worker_onboarding`, which migration 036 claims and production lacks. Six
+sibling bootstraps in that same file were removed and this one was deliberately
+left — which is exactly what a sweep would have taken along with the rest. When 036
+is applied, this comes out with the other five 036 objects.
 
 ⛔ **`chat.repository` is DEFERRED, not overlooked.** `ensureChatLifecycleSchema`
 also runs a DML derivation — `UPDATE chat_conversations SET status = 'CLOSED'
@@ -149,7 +156,7 @@ safe ONLY because the baseline owns the full table; do not promote the subset.
 different PRIMARY KEY over the same columns, passes it. `db:verify:embedded` is
 the real guarantee.
 
-⚠ **The 036 objects are the exception, and they are NOT part of this 65.**
+⚠ **The 036 objects are the exception, and they are NOT part of this 41.**
 Their runtime DDL stays until 036 is applied to production — deleting it first
 makes booking transitions depend on a migration that has not run. Everything
 else targets an object production already has, so it is safe now.
