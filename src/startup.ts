@@ -51,10 +51,9 @@
 import type { Dependency } from './lifecycle';
 
 import { ensureChatLifecycleSchema } from './chat/chat.repository';
-import { initProviderCatalogSchema, seedBuiltInOfferings } from './services/providerCatalogService';
+import { seedBuiltInOfferings } from './services/providerCatalogService';
 import { seedReasonCodes, seedRequirementDefinitions } from './services/adminOnboardingService';
 import { ensureBookingOpsSchema } from './services/adminBookingService';
-import { ensureCommunicationSchema } from './services/adminCommunicationService';
 import { ensureDashboardSchema } from './services/adminDashboardService';
 import { seedAdminPermissions } from './services/adminPermissionService';
 import { bootstrap as bootstrapAutoOnline } from './services/providerAutoOnlineEngine';
@@ -115,11 +114,10 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
     name: 'provider-catalog',
     kind: 'optional',
     timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: async () => {
-      await initProviderCatalogSchema();
-      await seedBuiltInOfferings();
-    },
-    why: 'Seeds built-in offerings. The canonical catalog is Catalog V2, which migrations own.',
+    start: seedBuiltInOfferings,
+    why:
+      'Seeds built-in offerings — DATA only since TAB 02, the schema comes from ' +
+      'the baseline. The canonical catalog is Catalog V2, which migrations own.',
   },
   {
     name: 'provider-onboarding',
@@ -132,13 +130,6 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
     why:
       'Onboarding reference DATA only — the schema comes from the baseline now ' +
       '(TAB 02). An incomplete seed shows fewer reason codes, not a wrong booking.',
-  },
-  {
-    name: 'admin-communication-schema',
-    kind: 'optional',
-    timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: ensureCommunicationSchema,
-    why: 'Admin messaging surface.',
   },
   {
     name: 'admin-dashboard-schema',

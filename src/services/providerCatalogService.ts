@@ -5,110 +5,28 @@ import { auditFire } from "./adminAuditService";
 import { evaluateApplicationEligibility } from "./serviceApplicationService";
 const dbSchema = db.schema;
 
-// ─── Schema init ─────────────────────────────────────────────────────────────
-// Runs once at startup. All operations are additive and idempotent (IF NOT EXISTS,
-// ADD COLUMN IF NOT EXISTS). No existing table, column, or data is ever dropped here.
-
-export const initProviderCatalogSchema = async (): Promise<void> => {
-  // 1. Provider Catalog Offerings — the canonical provider-facing catalog entity
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_catalog_offerings (
-      id                         SERIAL PRIMARY KEY,
-      catalog_key                VARCHAR(100) NOT NULL UNIQUE,
-      name                       VARCHAR(200) NOT NULL,
-      short_description          TEXT,
-      provider_description       TEXT,
-      icon_key                   VARCHAR(100),
-      banner_path                TEXT,
-      display_order              INT NOT NULL DEFAULT 0,
-      is_builtin                 BOOLEAN NOT NULL DEFAULT false,
-      status                     VARCHAR(20) NOT NULL DEFAULT 'draft'
-                                   CHECK (status IN ('draft','active','archived')),
-      provider_web_visible       BOOLEAN NOT NULL DEFAULT true,
-      customer_web_visible       BOOLEAN NOT NULL DEFAULT false,
-      legacy_provider_mobile_visible  BOOLEAN NOT NULL DEFAULT false,
-      legacy_customer_mobile_visible  BOOLEAN NOT NULL DEFAULT false,
-      created_by                 TEXT,
-      updated_by                 TEXT,
-      created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      archived_at                TIMESTAMPTZ,
-      version                    INT NOT NULL DEFAULT 1
-    )
-  `, []);
-
-  // 2. Offering → Service Family + Option Group mappings (legacy compat layer)
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_catalog_offering_mappings (
-      id            SERIAL PRIMARY KEY,
-      offering_id   INT NOT NULL REFERENCES ${dbSchema}.provider_catalog_offerings(id),
-      service_id    INT NOT NULL,
-      level_2       VARCHAR(100) NOT NULL,
-      display_order INT NOT NULL DEFAULT 0,
-      is_active     BOOLEAN NOT NULL DEFAULT true,
-      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (offering_id, service_id, level_2)
-    )
-  `, []);
-
-  // 3. Add description column to service_option_meta (nullable, backward-compatible)
-  await dbQuery.query(`
-    ALTER TABLE ${dbSchema}.service_option_meta
-    ADD COLUMN IF NOT EXISTS description TEXT
-  `, []);
-
-  // 4. Add is_active column to service_options (defaults true for all existing rows)
-  await dbQuery.query(`
-    ALTER TABLE ${dbSchema}.service_options
-    ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true
-  `, []);
-
-  // 5. Employee Catalog Capabilities — offering-specific provider qualification
-  //    (more granular than employee_services which only tracks service_id)
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.employee_catalog_capabilities (
-      id             SERIAL PRIMARY KEY,
-      employee_uid   TEXT NOT NULL,
-      offering_id    INT NOT NULL REFERENCES ${dbSchema}.provider_catalog_offerings(id),
-      service_id     INT NOT NULL,
-      level_2        VARCHAR(100) NOT NULL,
-      status         VARCHAR(20) NOT NULL DEFAULT 'active'
-                       CHECK (status IN ('active','suspended','archived')),
-      application_id UUID,
-      approved_at    TIMESTAMPTZ,
-      suspended_at   TIMESTAMPTZ,
-      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      version        INT NOT NULL DEFAULT 1,
-      UNIQUE (employee_uid, offering_id)
-    )
-  `, []);
-
-  // 6. account_status on user_credentials — added in code but not yet migrated in prod
-  await dbQuery.query(`
-    ALTER TABLE ${dbSchema}.user_credentials
-    ADD COLUMN IF NOT EXISTS account_status TEXT NOT NULL DEFAULT 'pending'
-  `, []);
-
-  // 7. updated_at on service_options — tracks when a specific service was last modified
-  //    (DEFAULT NOW() fills existing rows with the migration timestamp, which is accurate enough)
-  await dbQuery.query(`
-    ALTER TABLE ${dbSchema}.service_options
-    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  `, []);
-
-  // 8. banner_url on service_options — the marketing image for one specific service.
-  //    Nullable with no default, so every existing row keeps its current meaning and
-  //    every consumer that does `SELECT so.*` simply gains one more key. Public
-  //    Firebase download URL (not a private storage path): a catalog banner is public
-  //    marketing content, unlike a provider document, so §44's private/signed rule
-  //    does not apply. Admin-written only — see setSpecificServiceBanner.
-  await dbQuery.query(`
-    ALTER TABLE ${dbSchema}.service_options
-    ADD COLUMN IF NOT EXISTS banner_url TEXT
-  `, []);
-};
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `initProviderCatalogSchema` created `provider_catalog_offerings`,
+// `provider_catalog_offering_mappings` and `employee_catalog_capabilities`, and
+// added columns to `service_options`, `service_option_meta` and
+// `user_credentials`. All of it comes from `scripts/baseline/000-baseline.sql`.
+//
+// No split was needed here: the seeding was ALREADY a separate export
+// (`seedBuiltInOfferings`), so the DDL half could go on its own. That is the
+// shape to aim for — compare `adminPermissionService`, where the two were fused
+// in one function and had to be prised apart and renamed.
+//
+// Three UNIQUE constraints the removed DDL declared, all load-bearing and all
+// present in the baseline:
+//
+//   provider_catalog_offerings.catalog_key UNIQUE — the seed is idempotent
+//     BECAUSE of this: it inserts only when catalog_key is absent, so a repeated
+//     boot does not duplicate the built-in catalog.
+//   provider_catalog_offering_mappings UNIQUE (offering_id, service_id, level_2)
+//     — one mapping per (offering, service, level).
+//   employee_catalog_capabilities UNIQUE (employee_uid, offering_id) — a provider
+//     holds a capability once, not once per grant attempt.
 
 // ─── Seed ────────────────────────────────────────────────────────────────────
 // Idempotent: inserts only when catalog_key is absent. Never deletes or updates.

@@ -95,9 +95,13 @@ import { runtimeDdl, migrationObjects } from '../scripts/runtime-ddl-inventory';
  * find by reading the body. Its startup entry stays `required`: a grant row is
  * meaningless without its definition row, so an unseeded database holds grants
  * that resolve to nothing.
+ *
+ * 81 → 65 and 56 → 44 with `adminCommunicationService` and
+ * `providerCatalogService`. The catalog one needed no split — its seeding was
+ * already a separate export, which is the shape to aim for.
  */
-const UNMANAGED_BUDGET = 81;
-const DISTINCT_OBJECT_BUDGET = 56;
+const UNMANAGED_BUDGET = 65;
+const DISTINCT_OBJECT_BUDGET = 44;
 
 describe('runtime schema authority is bounded and shrinking', () => {
   const ddl = runtimeDdl();
@@ -139,11 +143,14 @@ describe('runtime schema authority is bounded and shrinking', () => {
      * in the same change."
      *
      * That is now happening, by the other route the note did not anticipate: the
-     * deletion pass. `provider_onboarding_cases` and `provider_onboarding_drafts`
-     * are no longer created by anything at runtime — the baseline supplies them and
-     * `adminOnboardingService` / `providerOnboardingService` no longer issue DDL. So
-     * they are absent from this scan entirely, which is the goal rather than a
-     * regression.
+     * deletion pass. Four of the seven are no longer created by anything at
+     * runtime — the baseline supplies them, and `adminOnboardingService`,
+     * `providerOnboardingService` and `providerCatalogService` no longer issue
+     * DDL. They are absent from this scan entirely, which is the goal rather than
+     * a regression.
+     *
+     * `service_options` is still here on ONE statement, down from four: the three
+     * that `providerCatalogService` issued are gone and a fourth lives elsewhere.
      *
      * The list therefore splits: still runtime-created, and retired. Moving a name
      * from one array to the other is the correct diff when a bootstrap is deleted.
@@ -153,8 +160,6 @@ describe('runtime schema authority is bounded and shrinking', () => {
 
     const stillRuntimeCreated = [
       'service_options',
-      'service_option_meta',
-      'provider_catalog_offerings',
       'worker_service_applications',
       'employee_services',
     ];
@@ -162,7 +167,12 @@ describe('runtime schema authority is bounded and shrinking', () => {
       expect(objects).toContain(table);
     }
 
-    const retired = ['provider_onboarding_cases', 'provider_onboarding_drafts'];
+    const retired = [
+      'provider_onboarding_cases',
+      'provider_onboarding_drafts',
+      'provider_catalog_offerings',
+      'service_option_meta',
+    ];
     for (const table of retired) {
       expect(objects).not.toContain(table);
     }

@@ -278,7 +278,7 @@ describe('no object is created by two runtime paths that disagree', () => {
     expect(broken).toEqual([]);
   });
 
-  it('the known contested objects are the three that remain', () => {
+  it('the known contested objects are the two that remain', () => {
     /**
      * Named, so a NEW one has to be looked at rather than absorbed into a count.
      * Each was diffed against the baseline by hand: `chat_message_reports` and
@@ -293,13 +293,22 @@ describe('no object is created by two runtime paths that disagree', () => {
      * when `adminGuestService` did, whose definition existed purely as a
      * defensive duplicate of `ensureAdminCreateBookingSchema`'s.
      *
+     * `chat_message_reports` left when `adminCommunicationService` did — and that
+     * one is worth remembering, because the definition that WENT was the SUPERSET.
+     * `chat/chat.repository.ts` still creates the table without `status`,
+     * `resolved_by`, `resolved_at` or `resolution_note`, the four moderation
+     * columns the admin service reads. Had that subset ever won the race on a
+     * fresh database, every moderation query would have failed with 42703. It
+     * never did, because the baseline creates the full table and both statements
+     * were no-ops against it — which is exactly why the subset must not be
+     * promoted to "the" definition now that it is the only one left.
+     *
      * Shrinking this list is progress. Growing it needs the same hand audit —
      * against the baseline, because the baseline is what says which definition
      * actually won.
      */
     expect(contested.map((c) => c.object)).toEqual([
       'booking_escalations',
-      'chat_message_reports',
       'user_profile',
     ]);
   });
