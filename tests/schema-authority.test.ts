@@ -97,10 +97,18 @@ describe('schema authority is classified, not lumped', () => {
   const gap = rows.filter((r) => r.authority === 'UNMANAGED');
 
   it('finds runtime DDL and a real baseline (positive fixtures)', () => {
-    // A scan that found nothing would satisfy every budget below forever.
-    expect(rows.length).toBeGreaterThan(200);
+    /**
+     * A scan that found nothing would satisfy every budget below forever.
+     *
+     * The floor is deliberately well BELOW the current count, because the whole
+     * point of TAB 02 is that this number falls — it was 214, and pinning the
+     * fixture just under it failed the moment the deletion pass removed 37
+     * statements. A positive fixture proves the scan works; it must not double as
+     * a budget, or it fails on progress.
+     */
+    expect(rows.length).toBeGreaterThan(50);
     expect(baselineObjects().size).toBeGreaterThan(200);
-    expect(runtimeAddColumns().length).toBeGreaterThan(50);
+    expect(runtimeAddColumns().length).toBeGreaterThan(20);
   });
 
   it('every statement lands in exactly one authority', () => {

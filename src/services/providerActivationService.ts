@@ -18,13 +18,23 @@
  * before it commits, mirroring `calculateReadiness` in the approval path. A
  * caller cannot pass a stale "I checked already".
  *
- * ── Schema bootstrap ────────────────────────────────────────────────────────
- * `ensureActivationSchema` is called at module load AND awaited at the top of
- * every entry point. That is the pattern `providerOperationalAvailabilityService`
- * uses, and it is deliberately not the app.ts pattern: `ensureIdentityColumns`
- * was written, added to no boot path, and every Firebase sign-in failed with
- * 42703 until it was noticed. Awaiting at the entry point is self-healing and
- * does not depend on boot ordering.
+ * ── Schema (TAB 02) ─────────────────────────────────────────────────────────
+ * `provider_activation`, `provider_activation_events` and
+ * `idx_activation_events_provider` used to be created here by
+ * `ensureActivationSchema`, awaited at the top of every entry point. That
+ * function is gone; all three come from `scripts/baseline/000-baseline.sql`.
+ *
+ * The pattern it replaced was chosen for a real reason worth preserving in the
+ * record: `ensureIdentityColumns` was written, added to no boot path, and every
+ * Firebase sign-in failed with 42703 until somebody noticed. Awaiting at the
+ * entry point was self-healing where boot ordering was not.
+ *
+ * What makes removing it safe now is NOT that the risk went away — it is that
+ * the object no longer depends on any application code running. The baseline is
+ * production's own dump, and `npm run db:verify:embedded` proves a fresh database
+ * reaches the same schema. If you ever add a table that the baseline and the
+ * migrations both lack, `npm run schema:authority` fails, and that is the guard
+ * standing where the runtime bootstrap used to.
  */
 
 import dbQuery from "../db/dbQuery";
@@ -60,49 +70,9 @@ export type ActivationRequirement = {
   route: string;
 };
 
-let schemaReady: Promise<void> | null = null;
-
-export const ensureActivationSchema = (): Promise<void> => {
-  if (schemaReady) return schemaReady;
-  schemaReady = (async () => {
-    await dbQuery.query(
-      `CREATE TABLE IF NOT EXISTS ${s}.provider_activation (
-         provider_uid       VARCHAR(128) PRIMARY KEY,
-         activation_status  VARCHAR(32)  NOT NULL DEFAULT 'NOT_ELIGIBLE',
-         version            INTEGER      NOT NULL DEFAULT 1,
-         policy_acknowledged_at TIMESTAMPTZ,
-         activated_at       TIMESTAMPTZ,
-         activated_by       VARCHAR(128),
-         created_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
-         updated_at         TIMESTAMPTZ  NOT NULL DEFAULT now()
-       )`,
-      []
-    );
-    await dbQuery.query(
-      `CREATE TABLE IF NOT EXISTS ${s}.provider_activation_events (
-         id            BIGSERIAL PRIMARY KEY,
-         provider_uid  VARCHAR(128) NOT NULL,
-         prev_state    VARCHAR(32),
-         next_state    VARCHAR(32)  NOT NULL,
-         actor_type    VARCHAR(16)  NOT NULL,
-         actor_uid     VARCHAR(128),
-         reason        TEXT,
-         created_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
-       )`,
-      []
-    );
-    await dbQuery.query(
-      `CREATE INDEX IF NOT EXISTS idx_activation_events_provider
-         ON ${s}.provider_activation_events (provider_uid, created_at DESC)`,
-      []
-    );
-  })().catch((e) => {
-    // Reset so a transient failure does not permanently poison the cache.
-    schemaReady = null;
-    throw e;
-  });
-  return schemaReady;
-};
+// `provider_activation.version` is the optimistic-concurrency counter every
+// transition below increments; `activation_status` defaults to 'NOT_ELIGIBLE', so
+// a provider with no row reads as the initial state rather than as missing.
 
 // Startup: declared in src/startup.ts (TAB 03). Running DDL at import
 // meant every importer issued it, including tests and CLI scripts.
@@ -120,7 +90,6 @@ export const ensureActivationSchema = (): Promise<void> => {
 export async function peekActivation(
   providerUid: string
 ): Promise<{ status: ActivationStatus; version: number; activatedAt: string | null } | null> {
-  await ensureActivationSchema();
   const { rows } = await dbQuery.query(
     `SELECT activation_status, version, activated_at
        FROM ${s}.provider_activation
@@ -141,7 +110,6 @@ export async function peekActivation(
 export async function getActivation(
   providerUid: string
 ): Promise<{ status: ActivationStatus; version: number; activatedAt: string | null }> {
-  await ensureActivationSchema();
   const { rows } = await dbQuery.query(
     `INSERT INTO ${s}.provider_activation (provider_uid)
      VALUES ($1)
@@ -192,7 +160,6 @@ export async function acknowledgeProviderPolicy(
   providerUid: string,
   meta: { version: string | null }
 ): Promise<{ acknowledgedAt: string; policyVersion: string | null }> {
-  await ensureActivationSchema();
 
   // Creates the row on first sight — a provider acknowledges before anything
   // else has had reason to insert one, which is why this cannot assume it
@@ -237,7 +204,6 @@ export async function acknowledgeProviderPolicy(
 export async function getActivationRequirements(
   providerUid: string
 ): Promise<ActivationRequirement[]> {
-  await ensureActivationSchema();
 
   const count = async (sql: string): Promise<number> => {
     try {
@@ -311,7 +277,6 @@ export async function transitionActivation(opts: {
   actorUid?: string | null;
   reason?: string;
 }): Promise<{ status: ActivationStatus; version: number }> {
-  await ensureActivationSchema();
   const { providerUid, to, expectedVersion, actorType, actorUid = null, reason } = opts;
 
   const current = await getActivation(providerUid);
@@ -473,7 +438,6 @@ export async function refreshActivationEligibility(
   providerUid: string,
   applicationApproved: boolean
 ): Promise<ActivationStatus> {
-  await ensureActivationSchema();
   const current = await getActivation(providerUid);
 
   if (current.status === "ACTIVE" || current.status === "TEMPORARILY_RESTRICTED") {

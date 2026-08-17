@@ -1,93 +1,41 @@
-import dbQuery from "../db/dbQuery";
-import { db } from "../config";
 import { toE164PhMobile, normalizeEmail } from "../helpers/phoneIdentifier";
-
-const s = db.schema;
 
 /**
  * Normalized identifier columns on `user_credentials` (Command 5 §3, §15).
  *
- * The platform already solved this — for guests. `guest_customers` carries
- * `phone_normalized` with a UNIQUE index, precisely so two spellings of one
- * number cannot become two guest records. `user_credentials` carried a raw
- * `phone_number` with no normalized form and no constraint at all, so the same
- * protection was absent for the accounts that can actually sign in.
+ * ── Schema (TAB 02) ──────────────────────────────────────────────────────────
  *
- * Additive and nullable. Nothing reads these yet; adding the columns and the
- * indexes first means the backfill and the sign-in work can land separately and
- * be reverted separately.
+ * `ensureIdentityColumns` used to add `email_normalized`, `phone_normalized` and
+ * `is_mobile_verified`, then create four indexes. It is gone. All of it comes
+ * from `scripts/baseline/000-baseline.sql`, which carries the three columns and
+ * ALL FOUR indexes — including the two UNIQUE ones this code could only attempt.
  *
- * ── Why the indexes are PARTIAL ──────────────────────────────────────────────
- * `WHERE ... IS NOT NULL`. Postgres treats NULLs as distinct in a unique index,
- * so plain unique indexes would already permit many NULL rows — but stating the
- * predicate makes the intent explicit and keeps the index small, since most
- * rows will carry one identifier and not the other.
+ * That is the load-bearing detail. The removed function tried
+ * `CREATE UNIQUE INDEX` inside a try/catch because a unique index over existing
+ * data FAILS when duplicates are already present, and §16 says ambiguous
+ * ownership is quarantined for review rather than merged by a script. The
+ * baseline HAS `idx_uc_email_normalized_unique` and
+ * `idx_uc_phone_normalized_unique`, so in production that attempt already
+ * succeeded: no duplicate identifiers exist there. The diagnostic is not lost,
+ * it is answered.
  *
- * ── Why they are created CONCURRENTLY-safe rather than blindly ───────────────
- * A unique index over existing data FAILS if duplicates are already present.
- * That is the correct behaviour and must not be swallowed: a failure here means
- * two accounts already share an identifier, which is exactly the conflict §16
- * says to quarantine for manual review rather than resolve by guessing. The
- * error is logged with a count and no personal data, and the rest of the schema
- * work continues.
+ * The partial predicate on every one of them is `WHERE … IS NOT NULL`. Postgres
+ * treats NULLs as distinct in a unique index anyway, but the predicate keeps the
+ * index small, since most rows carry one identifier and not the other.
+ *
+ * ── Why this function existing at all was a hazard ───────────────────────────
+ *
+ * It was written, added to no boot path, and every Firebase sign-in failed with
+ * 42703 until somebody noticed — the incident `providerActivationService` cites.
+ * Sign-in resolves an account through these columns, so their absence tells a
+ * caller their credentials are wrong when they are not. Deleting the bootstrap
+ * removes that failure mode rather than re-arming it: the columns no longer
+ * depend on any application code having run, and `npm run schema:authority`
+ * fails if a future change reintroduces a runtime-only object.
+ *
+ * If you need the duplicate audit, it still exists:
+ * `scripts/audit-identifier-conflicts.ts`.
  */
-export const ensureIdentityColumns = async (): Promise<void> => {
-  await dbQuery.query(
-    `ALTER TABLE ${s}.user_credentials
-       ADD COLUMN IF NOT EXISTS email_normalized  VARCHAR(254),
-       ADD COLUMN IF NOT EXISTS phone_normalized  VARCHAR(20),
-       ADD COLUMN IF NOT EXISTS is_mobile_verified BOOLEAN NOT NULL DEFAULT false`,
-    []
-  );
-
-  // Non-unique lookup indexes first: sign-in needs these regardless of whether
-  // the uniqueness constraints can be applied yet.
-  await dbQuery.query(
-    `CREATE INDEX IF NOT EXISTS idx_uc_email_normalized
-       ON ${s}.user_credentials (email_normalized)
-       WHERE email_normalized IS NOT NULL`,
-    []
-  );
-  await dbQuery.query(
-    `CREATE INDEX IF NOT EXISTS idx_uc_phone_normalized
-       ON ${s}.user_credentials (phone_normalized)
-       WHERE phone_normalized IS NOT NULL`,
-    []
-  );
-
-  for (const [name, column] of [
-    ["idx_uc_email_normalized_unique", "email_normalized"],
-    ["idx_uc_phone_normalized_unique", "phone_normalized"],
-  ]) {
-    try {
-      await dbQuery.query(
-        `CREATE UNIQUE INDEX IF NOT EXISTS ${name}
-           ON ${s}.user_credentials (${column})
-           WHERE ${column} IS NOT NULL`,
-        []
-      );
-    } catch (e: any) {
-      // Do NOT swallow this into silence and do NOT resolve it automatically.
-      // A duplicate here means two accounts already claim one identifier, and
-      // §16 is explicit that ambiguous ownership is quarantined for review
-      // rather than merged by a script.
-      const { rows } = await dbQuery.query(
-        `SELECT COUNT(*)::int AS n FROM (
-           SELECT ${column} FROM ${s}.user_credentials
-           WHERE ${column} IS NOT NULL
-           GROUP BY ${column} HAVING COUNT(*) > 1
-         ) d`,
-        []
-      ).catch(() => ({ rows: [{ n: -1 }] }));
-      console.error(
-        `[identity] UNIQUE index ${name} could not be created: ` +
-          `${rows[0]?.n ?? "unknown"} duplicate value(s) exist. ` +
-          `Run scripts/audit-identifier-conflicts.ts — do not resolve these by hand ` +
-          `without evidence of ownership.`
-      );
-    }
-  }
-};
 
 /**
  * Derive the normalized forms for one account.

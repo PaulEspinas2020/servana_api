@@ -14,7 +14,6 @@ import { db } from '../config';
 import { createNotification } from './notification.service';
 import { publishEventSafely } from './events/eventOutbox';
 import { dispatchSoon } from './events/notificationProjector';
-import { ensureActivationSchema } from './providerActivationService';
 import { evaluateServicePolicy, ServicePolicyCode } from './providerServicePolicyService';
 import {
   projectFamilyGrant,
@@ -310,7 +309,6 @@ export const getApplicationByWorker = async (applicationId: string, workerUid: s
 
 export const getProviderServicesOverview = async (workerUid: string) => {
   await ensureTable();
-  await ensureActivationSchema();
   const [services, applications, account] = await Promise.all([
     dbQuery.query(
       `SELECT es.service_id, s.name, s.category, es.created_at AS approved_at,

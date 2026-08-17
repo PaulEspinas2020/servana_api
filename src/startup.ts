@@ -33,24 +33,15 @@ import type { Dependency } from './lifecycle';
 
 import { ensureChatLifecycleSchema } from './chat/chat.repository';
 import { initProviderCatalogSchema, seedBuiltInOfferings } from './services/providerCatalogService';
-import {
-  ensureOnboardingSchema,
-  seedReasonCodes,
-  seedRequirementDefinitions,
-} from './services/adminOnboardingService';
-import { ensureAttributionSchema } from './services/adminMobileAttributionService';
-import { ensureProviderWebSchema } from './services/providerOnboardingService';
+import { seedReasonCodes, seedRequirementDefinitions } from './services/adminOnboardingService';
 import { ensureBookingOpsSchema } from './services/adminBookingService';
 import { ensureAuditSchema } from './services/adminAuditService';
 import { ensureCommunicationSchema } from './services/adminCommunicationService';
 import { ensureDashboardSchema } from './services/adminDashboardService';
 import { ensurePermissionSchema } from './services/adminPermissionService';
 import { ensureFinanceSchema } from './services/adminFinanceService';
-import { ensureIdentityColumns } from './services/identityColumns';
 import { bootstrap as bootstrapAutoOnline } from './services/providerAutoOnlineEngine';
 import { ensureAdminCreateBookingSchema } from './services/adminCreateBookingService';
-import { ensureAdminBookingDraftSchema } from './services/adminBookingDraftService';
-import { ensureActivationSchema } from './services/providerActivationService';
 import { ensureReviewTables } from './services/customerReviewService';
 import { ensureCustomerSupportTables } from './services/customerSupportService';
 
@@ -58,16 +49,6 @@ import { ensureCustomerSupportTables } from './services/customerSupportService';
 const SCHEMA_TIMEOUT_MS = 30_000;
 
 export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
-  {
-    name: 'identity-columns',
-    kind: 'required',
-    timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: ensureIdentityColumns,
-    why:
-      'Identity. Sign-in resolves an account through the normalized identifier ' +
-      'columns this creates; without them a caller can be told their credentials ' +
-      'are wrong when they are not.',
-  },
   {
     name: 'finance-schema',
     kind: 'required',
@@ -108,15 +89,6 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
 
   // ── Optional: degraded, reported, and not a reason to withhold traffic ──
   {
-    name: 'provider-activation-schema',
-    kind: 'optional',
-    timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: ensureActivationSchema,
-    why:
-      'Was executed at import of providerActivationService, so every importer ' +
-      'issued DDL — including tests and CLI scripts.',
-  },
-  {
     name: 'customer-review-schema',
     kind: 'optional',
     timeoutMs: SCHEMA_TIMEOUT_MS,
@@ -129,13 +101,6 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
     timeoutMs: SCHEMA_TIMEOUT_MS,
     start: ensureCustomerSupportTables,
     why: 'Was executed at import of a route module.',
-  },
-  {
-    name: 'admin-booking-draft-schema',
-    kind: 'optional',
-    timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: ensureAdminBookingDraftSchema,
-    why: 'Draft storage for a half-filled admin form. Losing it loses a draft, not a booking.',
   },
   {
     name: 'chat-lifecycle-schema',
@@ -159,18 +124,12 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
     kind: 'optional',
     timeoutMs: SCHEMA_TIMEOUT_MS,
     start: async () => {
-      await ensureOnboardingSchema();
       await seedReasonCodes();
       await seedRequirementDefinitions();
     },
-    why: 'Onboarding reference data. An incomplete seed shows fewer reason codes, not a wrong booking.',
-  },
-  {
-    name: 'provider-web-schema',
-    kind: 'optional',
-    timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: ensureProviderWebSchema,
-    why: 'Provider web surface tables; the mobile surface is unaffected.',
+    why:
+      'Onboarding reference DATA only — the schema comes from the baseline now ' +
+      '(TAB 02). An incomplete seed shows fewer reason codes, not a wrong booking.',
   },
   {
     name: 'admin-audit-schema',
@@ -195,13 +154,6 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
     timeoutMs: SCHEMA_TIMEOUT_MS,
     start: ensureDashboardSchema,
     why: 'Read-only aggregates for the admin dashboard.',
-  },
-  {
-    name: 'admin-attribution-schema',
-    kind: 'optional',
-    timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: ensureAttributionSchema,
-    why: 'Mobile attribution analytics.',
   },
   {
     name: 'provider-auto-online',

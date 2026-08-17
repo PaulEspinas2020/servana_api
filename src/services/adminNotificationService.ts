@@ -13,31 +13,24 @@ export interface AdminNotificationInput {
   notificationKey: string;
 }
 
-let ready: Promise<void> | null = null;
-export const ensureAdminNotifications = (): Promise<void> => {
-  ready ??= dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.admin_notifications (
-      id BIGSERIAL PRIMARY KEY,
-      admin_uid TEXT NOT NULL,
-      notification_key VARCHAR(160) NOT NULL,
-      type VARCHAR(80) NOT NULL,
-      severity VARCHAR(20) NOT NULL DEFAULT 'info',
-      title VARCHAR(180) NOT NULL,
-      body TEXT NOT NULL,
-      booking_id INTEGER,
-      conversation_id INTEGER,
-      read_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (admin_uid, notification_key)
-    );
-    CREATE INDEX IF NOT EXISTS idx_admin_notifications_inbox
-      ON ${s}.admin_notifications (admin_uid, created_at DESC);
-  `, []).then(() => undefined).catch(error => { ready = null; throw error; });
-  return ready;
-};
+/**
+ * ── Schema (TAB 02) ──────────────────────────────────────────────────────────
+ *
+ * `admin_notifications` and `idx_admin_notifications_inbox` were created here at
+ * runtime by `ensureAdminNotifications`, memoised and awaited at the top of all
+ * four exported operations. That function is gone, and so are those awaits.
+ *
+ * The table comes from `scripts/baseline/000-baseline.sql:332`.
+ *
+ * ⚠ The UNIQUE (admin_uid, notification_key) constraint the removed DDL declared
+ * is what `ON CONFLICT (admin_uid, notification_key) DO NOTHING` below resolves
+ * against — it is the whole idempotency mechanism for admin fan-out, and without
+ * it every re-notification inserts a duplicate row into every admin's inbox. The
+ * baseline carries it as `admin_notifications_admin_uid_notification_key_key`
+ * (line 4261). Do not drop that constraint believing it to be incidental.
+ */
 
 export async function notifyAllAdmins(input: AdminNotificationInput): Promise<number> {
-  await ensureAdminNotifications();
   const result = await dbQuery.query(`
     INSERT INTO ${s}.admin_notifications
       (admin_uid, notification_key, type, severity, title, body, booking_id, conversation_id)
@@ -53,7 +46,6 @@ export async function notifyAllAdmins(input: AdminNotificationInput): Promise<nu
 }
 
 export async function listForAdmin(adminUid: string, limit = 30) {
-  await ensureAdminNotifications();
   const result = await dbQuery.query(`
     SELECT id, type, severity, title, body, booking_id, conversation_id, read_at, created_at
       FROM ${s}.admin_notifications
@@ -68,7 +60,6 @@ export async function listForAdmin(adminUid: string, limit = 30) {
 }
 
 export async function unreadCount(adminUid: string): Promise<number> {
-  await ensureAdminNotifications();
   const result = await dbQuery.query(
     `SELECT COUNT(*) AS count FROM ${s}.admin_notifications WHERE admin_uid = $1 AND read_at IS NULL`,
     [adminUid],
@@ -77,7 +68,6 @@ export async function unreadCount(adminUid: string): Promise<number> {
 }
 
 export async function markRead(adminUid: string, id?: number): Promise<number> {
-  await ensureAdminNotifications();
   const result = await dbQuery.query(
     `UPDATE ${s}.admin_notifications SET read_at = COALESCE(read_at, NOW())
       WHERE admin_uid = $1 AND read_at IS NULL ${id ? 'AND id = $2' : ''}`,

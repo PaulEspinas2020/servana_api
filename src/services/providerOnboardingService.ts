@@ -2,8 +2,8 @@
  * Provider Web Onboarding Service
  *
  * Handles:
- *   - provider_onboarding_drafts table (lazy-init) — per-step wizard state
- *   - provider_source_attribution table (lazy-init) — registration channel tracking
+ *   - provider_onboarding_drafts — per-step wizard state (schema from the baseline)
+ *   - provider_source_attribution — registration channel tracking (ditto)
  *   - Full onboarding aggregate (draft + requirements + service applications + services)
  *   - Final onboarding submit validation
  *   - Reconciliation diagnostics (admin)
@@ -17,53 +17,20 @@ import { markCaseSubmitted } from './adminOnboardingService';
 
 const dbSchema = db.schema;
 
-// ── Schema ────────────────────────────────────────────────────────────────────
-
-let schemaReady = false;
-
-export const ensureProviderWebSchema = async (): Promise<void> => {
-  if (schemaReady) return;
-  try {
-    await dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_onboarding_drafts (
-        uid            TEXT        PRIMARY KEY,
-        current_step   TEXT        NOT NULL DEFAULT 'welcome',
-        personal_info  JSONB,
-        service_ids    JSONB,
-        service_area   JSONB,
-        availability   JSONB,
-        payout         JSONB,
-        guidelines     JSONB,
-        submitted      BOOLEAN     NOT NULL DEFAULT FALSE,
-        submitted_at   TIMESTAMPTZ,
-        source_client  TEXT        NOT NULL DEFAULT 'provider_web',
-        version        INTEGER     NOT NULL DEFAULT 1,
-        created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-    await dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_source_attribution (
-        uid                           TEXT        PRIMARY KEY,
-        registration_source           TEXT        NOT NULL DEFAULT 'unknown',
-        first_seen_source             TEXT        NOT NULL DEFAULT 'unknown',
-        last_seen_source              TEXT        NOT NULL DEFAULT 'unknown',
-        first_provider_web_seen_at    TIMESTAMPTZ,
-        last_provider_web_seen_at     TIMESTAMPTZ,
-        first_provider_mobile_seen_at TIMESTAMPTZ,
-        last_provider_mobile_seen_at  TIMESTAMPTZ,
-        registration_context          TEXT,
-        confidence                    TEXT        NOT NULL DEFAULT 'unknown',
-        created_at                    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at                    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-    schemaReady = true;
-  } catch (err) {
-    console.error('[provider-web-onboarding] schema error:', err);
-    throw err;
-  }
-};
+// ── Schema (TAB 02) ───────────────────────────────────────────────────────────
+//
+// `provider_onboarding_drafts` and `provider_source_attribution` were created here
+// at runtime by `ensureProviderWebSchema`, declared as an optional startup
+// dependency and also awaited at the top of five operations. That function is
+// gone; both come from `scripts/baseline/000-baseline.sql`.
+//
+// ⚠ `provider_source_attribution` is the object TWO services used to define
+// incompatibly — see the P1 note in `adminMobileAttributionService`. THIS file's
+// shape is the one production actually has (PK `uid`, first_seen_source,
+// last_seen_source, first/last_provider_web_seen_at, …), because this definition
+// won the CREATE-TABLE-IF-NOT-EXISTS race. The admin attribution endpoints read
+// the other shape and fail. Do not "align" this file to them without a migration:
+// the columns below are the live ones.
 
 // ── Source Attribution ────────────────────────────────────────────────────────
 
@@ -74,7 +41,6 @@ export const upsertSourceAttribution = async (
   registrationContext?: string,
 ): Promise<void> => {
   try {
-    await ensureProviderWebSchema();
     const now = new Date().toISOString();
     const webCols = sourceClient === 'provider_web'
       ? `, first_provider_web_seen_at = COALESCE(provider_source_attribution.first_provider_web_seen_at, $3::timestamptz)
@@ -132,7 +98,6 @@ export const saveDraftStep = async (
   step: string,
   payload: Record<string, unknown>,
 ): Promise<{ version: number }> => {
-  await ensureProviderWebSchema();
 
   const safeStep = VALID_STEPS.find(s => s === step);
   if (!safeStep) {
@@ -186,7 +151,6 @@ export const saveDraftStep = async (
 // ── Onboarding Aggregate ─────────────────────────────────────────────────────
 
 export const getOnboardingAggregate = async (uid: string) => {
-  await ensureProviderWebSchema();
 
   const [workerRes, reqsRes, appsRes, servicesRes, draftRes] = await Promise.all([
     dbQuery.query(
@@ -339,7 +303,6 @@ export const getOnboardingAggregate = async (uid: string) => {
 // ── Submit Onboarding ─────────────────────────────────────────────────────────
 
 export const submitOnboarding = async (uid: string) => {
-  await ensureProviderWebSchema();
 
   const aggregate = await getOnboardingAggregate(uid);
 
@@ -389,7 +352,6 @@ export const submitOnboarding = async (uid: string) => {
 // ── Reconciliation Report ─────────────────────────────────────────────────────
 
 export const getReconciliationReport = async () => {
-  await ensureProviderWebSchema();
 
   const [totalRes, attrRes, draftRes, activeNoAppRes, pendingAppsRes, activeServicesRes] = await Promise.all([
     dbQuery.query(

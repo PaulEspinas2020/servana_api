@@ -421,8 +421,25 @@ describe('adminBookingDraftService — DRAFT-002: customerName storage (2026-07-
     require('path').join(__dirname, '../src/services/adminBookingDraftService.ts'), 'utf-8'
   ).replace(/\r\n/g, '\n');
 
-  it('ensureAdminBookingDraftSchema adds customer_name column via additive ALTER TABLE', () => {
-    expect(draftSrc).toContain('ADD COLUMN IF NOT EXISTS customer_name VARCHAR(256)');
+  it('customer_name is supplied by the baseline, not by runtime DDL (TAB 02)', () => {
+    /**
+     * This asserted `ADD COLUMN IF NOT EXISTS customer_name VARCHAR(256)` in
+     * `ensureAdminBookingDraftSchema`. That bootstrap is gone — the application
+     * no longer creates its own schema — so the guarantee is now checked where
+     * the column actually comes from: production's own dump, which is also what
+     * a fresh database is built from.
+     */
+    // Normalised, like every other source read in this suite: a fixed-window or
+    // anchored regex over raw CRLF fails on Windows and passes in CI, which is the
+    // exact trap `source-reads-normalise-line-endings.test.ts` exists to catch.
+    const baseline = require('fs').readFileSync(
+      require('path').join(__dirname, '../scripts/baseline/000-baseline.sql'), 'utf-8'
+    ).replace(/\r\n/g, '\n');
+    const table = /CREATE TABLE servana\.admin_booking_drafts \(([\s\S]*?)\n\);/.exec(baseline);
+    expect(table).not.toBeNull();
+    expect(table[1]).toMatch(/customer_name character varying\(256\)/);
+    // And the service must not have quietly regained a DDL path.
+    expect(draftSrc).not.toMatch(/CREATE TABLE|ADD COLUMN|CREATE INDEX/);
   });
 
   it('DraftPatchSections includes customerName field', () => {

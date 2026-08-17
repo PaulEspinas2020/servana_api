@@ -61,13 +61,19 @@ import { runtimeDdl, migrationObjects } from '../scripts/runtime-ddl-inventory';
  * redundant statements awaiting DELETION rather than schema awaiting design. See
  * `tests/schema-authority.test.ts` for why that distinction rescopes TAB 02.
  *
- * 148 → 144 and 106 → 102 as the deletion pass began:
- * `accountDeletionService` (table + 2 partial indexes) and
- * `providerOperationalAvailabilityService` (1 table, plus three lazy awaits at
- * the top of setOnline/setOffline/the admin override).
+ * 148 → 144 as the deletion pass began: `accountDeletionService` (table + 2
+ * partial indexes) and `providerOperationalAvailabilityService` (1 table, plus
+ * three lazy awaits).
+ *
+ * 144 → 111 and 102 → 73 with the eight bootstraps no test pinned in source text:
+ * adminNotificationService, adminMobileAttributionService, adminBookingDraftService,
+ * providerOnboardingService, providerActivationService, identityColumns and
+ * adminOnboardingService (seven tables and eight indexes in one function).
+ * 34 lazy awaits and 6 startup dependencies went with them — the startup graph is
+ * 13 dependencies now, down from 19.
  */
-const UNMANAGED_BUDGET = 144;
-const DISTINCT_OBJECT_BUDGET = 102;
+const UNMANAGED_BUDGET = 111;
+const DISTINCT_OBJECT_BUDGET = 73;
 
 describe('runtime schema authority is bounded and shrinking', () => {
   const ddl = runtimeDdl();
@@ -100,23 +106,44 @@ describe('runtime schema authority is bounded and shrinking', () => {
     expect(DISTINCT_OBJECT_BUDGET - distinct.size).toBeLessThanOrEqual(5);
   });
 
-  it('names the seven TAB 15 called missing — they are runtime-created', () => {
+  it('the seven TAB 15 called missing were runtime-created, and are being retired', () => {
     /**
-     * Pinned because it is the load-bearing correction. If these ever become
-     * migration-owned this fails, and TAB 15's baseline requirements should
-     * shrink in the same change.
+     * TAB 15 concluded these seven were "altered or read by migrations and created
+     * by none". They were never missing — they were created at RUNTIME. This test
+     * pinned that correction, and its original note said: "If these ever become
+     * migration-owned this fails, and TAB 15's baseline requirements should shrink
+     * in the same change."
+     *
+     * That is now happening, by the other route the note did not anticipate: the
+     * deletion pass. `provider_onboarding_cases` and `provider_onboarding_drafts`
+     * are no longer created by anything at runtime — the baseline supplies them and
+     * `adminOnboardingService` / `providerOnboardingService` no longer issue DDL. So
+     * they are absent from this scan entirely, which is the goal rather than a
+     * regression.
+     *
+     * The list therefore splits: still runtime-created, and retired. Moving a name
+     * from one array to the other is the correct diff when a bootstrap is deleted.
+     * Both arrays are asserted, so a name cannot silently vanish from both.
      */
     const objects = new Set(unmanaged.map((d) => d.object));
-    for (const table of [
+
+    const stillRuntimeCreated = [
       'service_options',
-      'provider_catalog_offerings',
-      'provider_onboarding_cases',
-      'provider_onboarding_drafts',
-      'worker_service_applications',
       'service_option_meta',
+      'provider_catalog_offerings',
+      'worker_service_applications',
       'employee_services',
-    ]) {
+    ];
+    for (const table of stillRuntimeCreated) {
       expect(objects).toContain(table);
     }
+
+    const retired = ['provider_onboarding_cases', 'provider_onboarding_drafts'];
+    for (const table of retired) {
+      expect(objects).not.toContain(table);
+    }
+
+    // All seven are still accounted for, so none was dropped from the record.
+    expect(stillRuntimeCreated.length + retired.length).toBe(7);
   });
 });
