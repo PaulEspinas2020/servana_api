@@ -30,67 +30,30 @@ const s = db.schema;
 /** The executor's occupancy list, as a SQL literal list. Built, never retyped. */
 const OCCUPANCY_EXCLUSION_SQL = NON_OCCUPYING_STATUSES.map((st) => `'${st}'`).join(', ');
 
-// ── Schema bootstrap ──────────────────────────────────────────────────────────
-
-const ensureAvailabilityColumns = async () => {
-  await dbQuery.query(
-    `CREATE TABLE IF NOT EXISTS ${s}.worker_availability (
-       worker_uid TEXT PRIMARY KEY,
-       schedule   JSONB NOT NULL DEFAULT '[]',
-       timezone   TEXT NOT NULL DEFAULT 'Asia/Manila',
-       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-     )`,
-    []
-  );
-  // Additive columns — safe for mobile (nullable / have defaults)
-  await dbQuery.query(
-    `ALTER TABLE ${s}.worker_availability
-       ADD COLUMN IF NOT EXISTS updated_by TEXT,
-       ADD COLUMN IF NOT EXISTS version    INTEGER NOT NULL DEFAULT 1`,
-    []
-  );
-};
-
-const ensureTimeOffColumns = async () => {
-  await dbQuery.query(
-    `CREATE TABLE IF NOT EXISTS ${s}.worker_time_off (
-       id         SERIAL PRIMARY KEY,
-       worker_uid TEXT NOT NULL,
-       start_date DATE NOT NULL,
-       end_date   DATE NOT NULL,
-       reason     TEXT,
-       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-     )`,
-    []
-  );
-  // Additive columns
-  await dbQuery.query(
-    `ALTER TABLE ${s}.worker_time_off
-       ADD COLUMN IF NOT EXISTS created_by   TEXT,
-       ADD COLUMN IF NOT EXISTS status       TEXT NOT NULL DEFAULT 'active',
-       ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ,
-       ADD COLUMN IF NOT EXISTS cancelled_by TEXT,
-       -- C22 §17. The provider web portal has shipped a partial-day time-off
-       -- form since before this table existed: an "All day" checkbox that,
-       -- when cleared, collects a start and end time. The route destructured
-       -- those fields and passed only the dates on, and there were no columns
-       -- to hold them — so a provider asking for two hours off lost the whole
-       -- day, silently, and the response echoed allDay: true.
-       ADD COLUMN IF NOT EXISTS all_day    BOOLEAN NOT NULL DEFAULT TRUE,
-       ADD COLUMN IF NOT EXISTS start_time TIME,
-       ADD COLUMN IF NOT EXISTS end_time   TIME,
-       ADD COLUMN IF NOT EXISTS note       TEXT`,
-    []
-  );
-};
-
-// Bootstrap is called lazily on first use
-let _bootstrapped = false;
-const bootstrap = async () => {
-  if (_bootstrapped) return;
-  await Promise.all([ensureAvailabilityColumns(), ensureTimeOffColumns()]);
-  _bootstrapped = true;
-};
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `worker_availability` and `worker_time_off` were created here at runtime by
+// `ensureAvailabilityColumns` / `ensureTimeOffColumns`, behind a memoised
+// `bootstrap()` awaited at the top of seven operations. All of it is gone; both
+// tables come from `scripts/baseline/000-baseline.sql`.
+//
+// `technicianService` ALSO created both tables. Two CREATE TABLE IF NOT EXISTS
+// for one object is a race with a silent loser, so removing this one leaves a
+// single runtime definition -- see `npm run schema:authority`, which now counts
+// contested objects and fails when a losing definition names a column the
+// repository does not have.
+//
+// Two details the removed DDL carried that are NOT obvious from the queries:
+//
+//   worker_time_off.all_day / start_time / end_time (C22 §17) exist because the
+//     provider web portal shipped a partial-day form before the columns did: a
+//     provider asking for two hours off lost the whole day, silently, and the
+//     response echoed allDay: true. The baseline has all three.
+//
+//   worker_availability.schedule defaults to '{}' in production but this code
+//     declared '[]'. Inert today -- both writers list `schedule` explicitly, so
+//     the default never applies -- but a future INSERT that omits it would store
+//     an empty OBJECT where every reader expects an ARRAY. Supply it explicitly.
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -197,7 +160,6 @@ export const validateWeeklySchedule = (slots: WeeklyScheduleSlot[]): string[] =>
 // ── Read ──────────────────────────────────────────────────────────────────────
 
 export const getAvailabilityProfile = async (providerUid: string): Promise<ProviderAvailabilityProfile> => {
-  await bootstrap();
 
   const [availRes, timeOffRes] = await Promise.all([
     dbQuery.query(
@@ -284,7 +246,6 @@ export const saveWeeklySchedule = async (
   actorUid: string,
   expectedVersion?: number,
 ): Promise<{ version: number; updatedAt: string }> => {
-  await bootstrap();
 
   const errors = validateWeeklySchedule(schedule);
   if (errors.length > 0) {
@@ -356,7 +317,6 @@ export const saveWeeklySchedule = async (
 // ── Time-off CRUD ─────────────────────────────────────────────────────────────
 
 export const listTimeOff = async (providerUid: string): Promise<ProviderTimeOff[]> => {
-  await bootstrap();
   const res = await dbQuery.query(
     `SELECT id, start_date, end_date, reason, created_at,
               COALESCE(all_day, TRUE) AS all_day,
@@ -529,7 +489,6 @@ export const createTimeOff = async (
   },
   actorUid: string,
 ): Promise<ProviderTimeOff & { bookingConflicts: TimeOffBookingConflict[] }> => {
-  await bootstrap();
 
   if (!isCalendarDate(payload.startDate) || !isCalendarDate(payload.endDate)) {
     const err: any = new Error('startDate and endDate must be real dates in YYYY-MM-DD format');
@@ -673,7 +632,6 @@ export const cancelTimeOff = async (
   actorUid: string,
   reason?: string,
 ): Promise<ProviderTimeOff> => {
-  await bootstrap();
 
   const res = await dbQuery.query(
     `UPDATE ${s}.worker_time_off
@@ -807,7 +765,6 @@ export const filterUidsAvailableAt = async (
   opts: { missingScheduleIsAvailable: boolean },
 ): Promise<{ eligible: string[]; excluded: Array<{ uid: string; reason: string }> }> => {
   if (!uids.length) { return { eligible: [], excluded: [] }; }
-  await bootstrap();
 
   const { dow, startTime, endTime } = windowParts(startAt, endAt);
   // C22 §5. Was toISOString().slice(0, 10) — the UTC date, which in Manila is
@@ -866,7 +823,6 @@ export const explainAvailability = async (
   startAt: string,
   endAt: string,
 ): Promise<AvailabilityExplanation> => {
-  await bootstrap();
 
   const reasons: AvailabilityExplanation['reasons'] = [];
   const bookingStart = new Date(startAt);

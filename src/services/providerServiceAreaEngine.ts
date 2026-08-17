@@ -18,35 +18,17 @@ import { db } from '../config';
 
 const s = db.schema;
 
-// ── Schema bootstrap ──────────────────────────────────────────────────────────
-
-const ensureServiceAreaColumns = async () => {
-  await dbQuery.query(
-    `CREATE TABLE IF NOT EXISTS ${s}.worker_service_areas (
-       worker_uid TEXT PRIMARY KEY,
-       city_ids   JSONB NOT NULL DEFAULT '[]',
-       label      TEXT,
-       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-     )`,
-    []
-  );
-  await dbQuery.query(
-    `ALTER TABLE ${s}.worker_service_areas
-       ADD COLUMN IF NOT EXISTS coverage_mode TEXT NOT NULL DEFAULT 'city',
-       ADD COLUMN IF NOT EXISTS branch_ids    JSONB NOT NULL DEFAULT '[]',
-       ADD COLUMN IF NOT EXISTS radius_km     NUMERIC(6,2),
-       ADD COLUMN IF NOT EXISTS updated_by    TEXT,
-       ADD COLUMN IF NOT EXISTS version       INTEGER NOT NULL DEFAULT 1`,
-    []
-  );
-};
-
-let _bootstrapped = false;
-const bootstrap = async () => {
-  if (_bootstrapped) return;
-  await ensureServiceAreaColumns();
-  _bootstrapped = true;
-};
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `worker_service_areas` was created here at runtime, behind a memoised
+// `bootstrap()` awaited at the top of three operations. It now comes from
+// `scripts/baseline/000-baseline.sql`, which carries every column and default
+// this code declared -- including coverage_mode, branch_ids, radius_km,
+// updated_by and version, which were added by a follow-up ALTER.
+//
+// `technicianService` also created this table. Removing this definition leaves
+// one runtime creator; `npm run schema:authority` tracks the remaining contested
+// objects and fails if a losing definition names a column the repository lacks.
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -120,7 +102,6 @@ export const validateServiceArea = (payload: ServiceAreaSavePayload): string[] =
 // ── Read ──────────────────────────────────────────────────────────────────────
 
 export const getServiceAreaProfile = async (providerUid: string): Promise<ProviderServiceAreaProfile> => {
-  await bootstrap();
 
   const res = await dbQuery.query(
     `SELECT worker_uid, city_ids, label, updated_at,
@@ -176,7 +157,6 @@ export const saveServiceArea = async (
   actorUid: string,
   expectedVersion?: number,
 ): Promise<{ version: number; updatedAt: string }> => {
-  await bootstrap();
 
   const errors = validateServiceArea(payload);
   if (errors.length > 0) {
@@ -253,7 +233,6 @@ export const explainCoverage = async (
   queryCityId: string | null,
   queryBranchId: string | null = null,
 ): Promise<CoverageExplanation> => {
-  await bootstrap();
 
   const reasons: CoverageExplanation['reasons'] = [];
   const profile = await getServiceAreaProfile(providerUid);

@@ -212,6 +212,97 @@ export const declaredColumnsFromRepo = (): Map<string, Set<string>> =>
       .map((f) => fs.readFileSync(path.join(MIGRATIONS, f), 'utf8')),
   ]);
 
+// ─── Contested objects ────────────────────────────────────────────────────────
+
+/**
+ * Objects created by MORE THAN ONE runtime code path.
+ *
+ * Two `CREATE TABLE IF NOT EXISTS` for one object is not idempotence — it is a
+ * race with a SILENT loser. Whichever runs first creates the table; the other
+ * does nothing and reports nothing. If their definitions differ, the loser's
+ * service then reads columns that do not exist.
+ *
+ * That is not hypothetical. `provider_source_attribution` had two definitions,
+ * one keyed on `provider_uid` and one on `uid`, with near-disjoint columns.
+ * Production has the second, so `GET /admin/providers/:uid/attribution` and
+ * `POST /admin/providers/attribution/backfill` failed with 42703 — for however
+ * long both definitions had coexisted, with nothing in any log to say so.
+ *
+ * Only `CREATE TABLE` counts here. Two `ALTER TABLE … ADD COLUMN` statements
+ * adding different columns to one table compose correctly; two CREATEs are
+ * mutually exclusive.
+ */
+export interface Contested {
+  object: string;
+  files: string[];
+  /** Columns each file declares that the baseline does NOT have. */
+  unsatisfiable: Array<{ file: string; columns: string[] }>;
+}
+
+/** Column names declared by the runtime CREATE TABLE at `file`:`line`. */
+const runtimeCreateColumns = (file: string, line: number): Set<string> => {
+  const lines = fs
+    .readFileSync(path.join(REPO_ROOT, file), 'utf8')
+    .replace(/\r\n/g, '\n')
+    .split('\n');
+
+  let depth = 0;
+  let started = false;
+  const body: string[] = [];
+  for (let i = line - 1; i < lines.length && i < line + 200; i++) {
+    const text = lines[i];
+    for (const ch of text) {
+      if (ch === '(') { depth++; started = true; }
+      else if (ch === ')') depth--;
+    }
+    body.push(started && body.length === 0 ? text.slice(text.indexOf('(') + 1) : text);
+    if (started && depth <= 0) break;
+  }
+
+  const columns = new Set<string>();
+  for (const entry of body.join('\n').split(/,\s*\n|\n/)) {
+    const m = /^\s*"?([a-z_][a-z0-9_]*)"?\s+[A-Za-z]/.exec(entry);
+    if (m && !/^(constraint|primary|unique|foreign|check|references|on|where)$/i.test(m[1])) {
+      columns.add(m[1].toLowerCase());
+    }
+  }
+  return columns;
+};
+
+export const contestedObjects = (): Contested[] => {
+  const creates = runtimeDdl().filter((d) => d.kind === 'CREATE TABLE');
+
+  const byObject = new Map<string, Map<string, number[]>>();
+  for (const d of creates) {
+    if (!byObject.has(d.object)) byObject.set(d.object, new Map());
+    const files = byObject.get(d.object)!;
+    files.set(d.file, [...(files.get(d.file) ?? []), d.line]);
+  }
+
+  const declared = declaredColumnsFromRepo();
+  const out: Contested[] = [];
+
+  for (const [object, files] of byObject) {
+    if (files.size < 2) continue;
+    const known = declared.get(object) ?? new Set<string>();
+    const unsatisfiable: Contested['unsatisfiable'] = [];
+
+    for (const [file, lineNumbers] of files) {
+      const missing = new Set<string>();
+      for (const line of lineNumbers) {
+        for (const column of runtimeCreateColumns(file, line)) {
+          if (!known.has(column)) missing.add(column);
+        }
+      }
+      if (missing.size) unsatisfiable.push({ file, columns: [...missing].sort() });
+    }
+
+    out.push({ object, files: [...files.keys()].sort(), unsatisfiable });
+  }
+
+  return out.sort((a, b) => a.object.localeCompare(b.object));
+};
+
 export interface ColumnGaps {
   missing: AddColumn[];
   indeterminate: AddColumn[];
@@ -269,6 +360,22 @@ if (require.main === module) {
     for (const a of indeterminate) log(`    ${a.table}.${a.raw}   ← ${a.file}:${a.line}`);
   }
 
+  const contested = contestedObjects();
+  const broken = contested.filter((c) => c.unsatisfiable.length > 0);
+  log(`\n  objects created by MORE THAN ONE runtime path  ${contested.length}`);
+  log(`    ...whose definition production cannot satisfy  ${broken.length}`);
+  if (contested.length) {
+    log('\n  One definition won the CREATE-TABLE-IF-NOT-EXISTS race; the rest did nothing:\n');
+    for (const c of contested) {
+      const mark = c.unsatisfiable.length ? '  ⛔' : '    ';
+      log(`${mark}${c.object}`);
+      for (const f of c.files) log(`        ${f}`);
+      for (const u of c.unsatisfiable) {
+        log(`        ⛔ ${u.file} declares columns nothing in the repo has: ${u.columns.join(', ')}`);
+      }
+    }
+  }
+
   log('');
-  process.exitCode = gap.length || missing.length ? 1 : 0;
+  process.exitCode = gap.length || missing.length || broken.length ? 1 : 0;
 }

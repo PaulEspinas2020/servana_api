@@ -37,7 +37,15 @@ import { createTimeOff, filterUidsAvailableAt } from "../src/services/providerAv
 
 const query = (dbQuery as any).query as jest.Mock;
 
-/** Bootstrap issues DDL; every test needs those to resolve first. */
+/**
+ * An empty result. Used as the fallback for any query a test does not route.
+ *
+ * It was named for the DDL that `bootstrap()` used to issue before every
+ * operation. TAB 02 removed that bootstrap — `worker_time_off` comes from
+ * `scripts/baseline/000-baseline.sql` now — so there is no DDL to absorb, and the
+ * two `mockResolvedValueOnce(ddlOk)` calls that used to swallow it were making
+ * the first REAL query return no rows.
+ */
 const ddlOk = { rows: [], rowCount: 0 };
 
 const storedRow = (over: Record<string, any> = {}) => ({
@@ -67,13 +75,11 @@ beforeEach(() => {
   query.mockResolvedValue(ddlOk);
 });
 
-/** The INSERT is the last call; bootstrap DDL comes first. */
+/** The INSERT … RETURNING is the last call the operation makes. */
 const lastCall = () => query.mock.calls[query.mock.calls.length - 1];
 
 describe("the times are persisted, not dropped", () => {
   it("stores allDay, start, end and note", async () => {
-    query.mockResolvedValue(ddlOk);
-    query.mockResolvedValueOnce(ddlOk).mockResolvedValueOnce(ddlOk);
     query.mockResolvedValue(storedRow());
 
     await createTimeOff(

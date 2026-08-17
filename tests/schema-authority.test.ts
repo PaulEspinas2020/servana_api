@@ -58,6 +58,7 @@ import {
   baselineObjects,
   classify,
   columnGaps,
+  contestedObjects,
   declaredColumnsFromRepo,
   runtimeAddColumns,
 } from '../scripts/schema-authority';
@@ -186,6 +187,88 @@ describe('schema authority is classified, not lumped', () => {
     expect(addColumns.length).toBe(CLAIMED_COLUMNS.length);
     expect(addColumns.every((c) => /IF\s+NOT\s+EXISTS/i.test(c))).toBe(true);
     expect(sql).not.toMatch(/ADD\s+COLUMN[^,;]*NOT\s+NULL/i);
+  });
+});
+
+describe('no object is created by two runtime paths that disagree', () => {
+  /**
+   * `CREATE TABLE IF NOT EXISTS` run by two modules for one object is a RACE
+   * WITH A SILENT LOSER, not idempotence. Whichever runs first creates the
+   * table; the other does nothing and logs nothing. If the definitions differ,
+   * the loser's service then queries columns that do not exist.
+   *
+   * `provider_source_attribution` was exactly this: PK `provider_uid` in
+   * `adminMobileAttributionService`, PK `uid` in `providerOnboardingService`,
+   * near-disjoint columns. Production has the second, so
+   * `GET /admin/providers/:uid/attribution` and
+   * `POST /admin/providers/attribution/backfill` returned 500s carrying
+   * `42703 undefined_column` — and had done for as long as both existed,
+   * because the failure mode of IF NOT EXISTS is silence.
+   *
+   * Seven objects still have two definitions. All fourteen declare only columns
+   * the baseline actually has, so every one is currently satisfiable. This test
+   * keeps it that way: a NEW contested definition naming a column nothing in the
+   * repository declares fails here rather than in production.
+   */
+  const contested = contestedObjects();
+
+  it('finds the contested objects at all (positive fixture)', () => {
+    // A scan returning zero would pass the assertion below forever.
+    expect(contested.length).toBeGreaterThan(0);
+    expect(contested.every((c) => c.files.length > 1)).toBe(true);
+  });
+
+  it('every contested definition is satisfiable against the repository schema', () => {
+    // THE assertion. The message names the object, the file and the columns.
+    const broken = contested
+      .filter((c) => c.unsatisfiable.length > 0)
+      .flatMap((c) =>
+        c.unsatisfiable.map((u) => `${c.object}: ${u.file} declares ${u.columns.join(', ')}`),
+      );
+    expect(broken).toEqual([]);
+  });
+
+  it('the known contested objects are the four that remain', () => {
+    /**
+     * Named, so a NEW one has to be looked at rather than absorbed into a count.
+     * Each was diffed against the baseline by hand: `chat_message_reports` and
+     * `user_profile` have one definition that is a strict superset of the other
+     * (4 moderation columns, and `updated_at`), and production carries the union
+     * — so both services' queries resolve. `booking_escalations` and
+     * `guest_customers` agree exactly.
+     *
+     * Was seven. `worker_availability`, `worker_time_off` and
+     * `worker_service_areas` left the list when `providerAvailabilityEngine` and
+     * `providerServiceAreaEngine` stopped creating them, so `technicianService`
+     * is the single remaining runtime creator of each.
+     *
+     * Shrinking this list is progress. Growing it needs the same hand audit —
+     * against the baseline, because the baseline is what says which definition
+     * actually won.
+     */
+    expect(contested.map((c) => c.object)).toEqual([
+      'booking_escalations',
+      'chat_message_reports',
+      'guest_customers',
+      'user_profile',
+    ]);
+  });
+
+  it('compares column NAMES only — it cannot see a type or key mismatch', () => {
+    /**
+     * Stated as a test so the limitation is not mistaken for coverage. Two
+     * definitions with identical column names but different types, or a different
+     * PRIMARY KEY over the same columns, pass this check. The attribution defect
+     * happened to differ in names too, which is the only reason a name-level scan
+     * would have caught it.
+     *
+     * The real guarantee lives in `db:verify:embedded`: it applies the baseline
+     * and every migration to a real PostgreSQL and fails on a genuine conflict.
+     */
+    for (const c of contested) {
+      expect(Array.isArray(c.files)).toBe(true);
+    }
+    expect(contested.every((c) => c.files.every((f) => f.endsWith('.ts')))).toBe(true);
   });
 });
 

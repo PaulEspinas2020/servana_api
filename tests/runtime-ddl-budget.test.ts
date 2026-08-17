@@ -71,8 +71,13 @@ import { runtimeDdl, migrationObjects } from '../scripts/runtime-ddl-inventory';
  * adminOnboardingService (seven tables and eight indexes in one function).
  * 34 lazy awaits and 6 startup dependencies went with them — the startup graph is
  * 13 dependencies now, down from 19.
+ *
+ * 111 → 105 with `providerAvailabilityEngine` and `providerServiceAreaEngine`,
+ * which also took the contested-object count from 7 to 4: both duplicated tables
+ * `technicianService` creates, and a second `CREATE TABLE IF NOT EXISTS` for one
+ * object is a race with a silent loser.
  */
-const UNMANAGED_BUDGET = 111;
+const UNMANAGED_BUDGET = 105;
 const DISTINCT_OBJECT_BUDGET = 73;
 
 describe('runtime schema authority is bounded and shrinking', () => {
