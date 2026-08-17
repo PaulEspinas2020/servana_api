@@ -13,11 +13,13 @@ Read this, then `MEMORY.md`, `state.json`, `DECISIONS.md`, and
 ## 1. Prove the baseline before changing anything
 
 ```
-npm run verify              expect PASS — 265 suites, 5775 tests
+npm run verify              expect PASS — 265 suites, 5773 tests
 npm run db:verify:embedded  expect PASS — 121 restored + 7 applied = 132 tables
-npm run schema:authority    expect UNMANAGED 0, MISSING 0, contested 4 / 0
-                            unsatisfiable  (exits 0)
-npm run ddl:inventory       expect 105 unmanaged, 73 objects  (exits 1 BY DESIGN)
+npm run schema:authority    expect UNMANAGED 0, MISSING 0, contested 3 / 0
+                            unsatisfiable, 1 invisible index  (exits 0)
+npm run ddl:inventory       expect 94 unmanaged, 69 objects  (exits 1 BY DESIGN)
+                            ⚠ UNDERSTATES the backlog — it cannot see a
+                            CREATE INDEX whose name is interpolated
 npm run authz:legacy        expect 615 routes, 0 loosenings
 npm run release:summary     writes reports/release-summary.json
 ```
@@ -87,15 +89,25 @@ that is proven rather than asserted — three orderings on real PostgreSQL
 
 ### What is actually left
 
-**Delete 105 runtime DDL statements and the lazy bootstraps that await them.**
-Mechanical and broad, not a design exercise. 148 → 105 is done (objects 106 → 73,
-startup graph 19 → 13 dependencies), across eleven services:
+**Delete 94 runtime DDL statements and the lazy bootstraps that await them.**
+Mechanical and broad, not a design exercise. 148 → 94 is done (objects 106 → 69,
+startup graph 19 → 11 dependencies), across sixteen services:
 
 - `accountDeletionService`, `providerOperationalAvailabilityService`
 - `adminNotificationService`, `adminMobileAttributionService`,
   `adminBookingDraftService`, `providerOnboardingService`,
   `providerActivationService`, `identityColumns`, `adminOnboardingService`
 - `providerAvailabilityEngine`, `providerServiceAreaEngine`
+- `adminProviderService`, `adminInviteState`, `adminAuditService`,
+  `adminFinanceService`, `adminGuestService`
+
+The `finance-schema` (payment) and `identity-columns` (identity) entries are the
+notable removals: TAB 03 classified both `required`. They are REMOVED, not
+downgraded to optional — there is no DDL left to gate on. `ensureFinanceSchema`
+also carried a FUNCTION, the schema's only TRIGGER, and a one-time DML backfill of
+`payments.updated_at`; all three were verified in the baseline individually,
+because a trigger whose function is missing fails at the first UPDATE rather than
+at creation.
 
 ⛔ **A P1 defect surfaced doing this — see the note at the top of
 `adminMobileAttributionService`.** Two services defined
@@ -107,16 +119,17 @@ startup graph 19 → 13 dependencies), across eleven services:
 **That class is now GATED rather than stumbled upon.** `schema:authority` lists
 every object created by more than one runtime path and fails when a losing
 definition names a column nothing in the repo declares. All seven contested
-objects were audited against the baseline: **no second 42703**. Three have since
-been cleared (the two engines above), leaving four — `booking_escalations`,
-`chat_message_reports`, `guest_customers`, `user_profile`. Two of those are benign
-supersets where production carries the union.
+objects were audited against the baseline: **no second 42703**. Four have since
+been cleared — three by the two engines above, and `guest_customers` when
+`adminGuestService` went — leaving three: `booking_escalations`,
+`chat_message_reports`, `user_profile`. Two of those are benign supersets where
+production carries the union.
 
 ⚠ The check compares column NAMES only. Same names with different types, or a
 different PRIMARY KEY over the same columns, passes it. `db:verify:embedded` is
 the real guarantee.
 
-⚠ **The 036 objects are the exception, and they are NOT part of this 144.**
+⚠ **The 036 objects are the exception, and they are NOT part of this 94.**
 Their runtime DDL stays until 036 is applied to production — deleting it first
 makes booking transitions depend on a migration that has not run. Everything
 else targets an object production already has, so it is safe now.
@@ -138,7 +151,21 @@ else targets an object production already has, so it is safe now.
 6. Lower `UNMANAGED_BUDGET` / `DISTINCT_OBJECT_BUDGET` in
    `tests/runtime-ddl-budget.test.ts` in the same commit.
 
-#### Two traps, both hit on the first pass
+#### The traps, every one of them hit for real
+
+Two more, added after the finance/audit batch:
+
+- **A heredoc turns `\b` into a BACKSPACE.** Three regexes in
+  `admin-finance.test.js` ended up containing literal 0x08 and silently matched
+  nothing. `cat -A` finds them. Backticks in a shell string run as COMMANDS and
+  silently delete words — that mangled a RESUME.md edit in the same session. Use
+  the Edit tool for code and for prose containing backticks; it does not
+  interpret either.
+- **Assert on the DECLARATION, not the bare name.**
+  `expect(src).not.toContain('ensureAuditSchema')` fails against the comment that
+  replaces the function, because the comment names it. Match
+  `export async function ensureAuditSchema` instead.
+
 
 - **Source-introspection tests pin the DDL, and grep UNDER-REPORTS which ones.**
   Tests assert on source TEXT that a bootstrap exists and creates a table — e.g.
