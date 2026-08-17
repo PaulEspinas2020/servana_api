@@ -86,10 +86,23 @@ that is proven rather than asserted — three orderings on real PostgreSQL
 
 ### What is actually left
 
-**Delete 144 runtime DDL statements and the lazy bootstraps that await them.**
-Mechanical and broad, not a design exercise. 148 → 144 is done:
-`accountDeletionService` (table + 2 partial indexes) and
-`providerOperationalAvailabilityService` (1 table + 3 lazy awaits).
+**Delete 111 runtime DDL statements and the lazy bootstraps that await them.**
+Mechanical and broad, not a design exercise. 148 → 111 is done (objects 106 → 73,
+startup graph 19 → 13 dependencies):
+
+- `accountDeletionService`, `providerOperationalAvailabilityService`
+- `adminNotificationService`, `adminMobileAttributionService`,
+  `adminBookingDraftService`, `providerOnboardingService`,
+  `providerActivationService`, `identityColumns`, `adminOnboardingService`
+
+⛔ **A P1 defect surfaced doing this — see the note at the top of
+`adminMobileAttributionService`.** Two services defined
+`provider_source_attribution` with incompatible shapes behind
+`CREATE TABLE IF NOT EXISTS`; production has the provider-web shape, so
+`GET /admin/providers/:uid/attribution` and
+`POST /admin/providers/attribution/backfill` fail with 42703 today. Expect more of
+this class: wherever two runtime authorities defined one object, one of them lost
+a race silently, and removing the DDL is what makes it visible.
 
 ⚠ **The 036 objects are the exception, and they are NOT part of this 144.**
 Their runtime DDL stays until 036 is applied to production — deleting it first
@@ -115,17 +128,39 @@ else targets an object production already has, so it is safe now.
 
 #### Two traps, both hit on the first pass
 
-- **Source-introspection tests pin the DDL.** ~10 assertions across 5 files
-  assert on source TEXT that a bootstrap exists and creates a table — e.g.
+- **Source-introspection tests pin the DDL, and grep UNDER-REPORTS which ones.**
+  Tests assert on source TEXT that a bootstrap exists and creates a table — e.g.
   `admin-audit.test.js` expects `svcSrc` to contain
-  `export async function ensureAuditSchema` and `startupSrc` to mention it.
-  Deleting the function turns those red, and they have to be rewritten in the
-  same commit. **Do the eight uncoupled ones first:**
-  `ensureAdminNotifications`, `ensureDashboardSchema`, `ensureAttributionSchema`,
-  `ensureAdminBookingDraftSchema`, `ensureOnboardingSchema`,
-  `ensureIdentityColumns`, `ensureActivationSchema`, `ensureProviderWebSchema`.
-  Coupled: audit, finance, permissions, create-booking, invite-state, chat
-  lifecycle, provider-catalog.
+  `export async function ensureAuditSchema`. Deleting the function turns those
+  red and they must be rewritten in the same commit.
+
+  ⚠ Do NOT estimate this with a grep. Mine matched only
+  `toContain('CREATE TABLE'|'CREATE INDEX'|'export … ensure')` and so missed
+  `toContain('ADD COLUMN IF NOT EXISTS …')`, `toMatch(/is_mobile_verified …/)`
+  and `toContain('CREATE UNIQUE INDEX IF NOT EXISTS ${name}')` — two suites went
+  red that the list said were clean. **Delete the bootstrap, then run the full
+  gate, and let jest tell you.** That is faster and honest; the grep is a hint.
+
+  Known remaining coupling, by service: audit, finance, permissions,
+  invite-state, chat lifecycle, provider-catalog, communication.
+
+  When rewriting one, do not delete the assertion — **repoint it at the
+  baseline**. `identity-normalization-wiring.test.ts` and
+  `admin-create-booking.test.js` in commit `5666a64` are the worked examples.
+  Asserting the column exists in `000-baseline.sql` is STRONGER than asserting
+  some code meant to create it.
+
+- **Your own gates can be the thing that breaks.** `schema-authority`'s positive
+  fixture was pinned at `> 200` statements, just under the then-current 214, and
+  failed the moment the deletion pass worked. A positive fixture proves the scan
+  functions; it must not double as a budget or it fails on progress.
+
+- **A new source read must normalise line endings.**
+  `source-reads-normalise-line-endings.test.ts` catches a `readFileSync` without
+  `.replace(/\r\n/g, '\n')` in any fixed-window suite. This repo has MIXED line
+  endings — `adminNotificationService.ts` is CRLF, `providerOperationalAvailabilityService.ts`
+  is LF — so a `perl -0pi -e 's/…\n//'` that works on one file silently does
+  nothing on the next. Use `\r?\n`.
 - **Removing a line from a ROUTE file breaks a doc gate.** `api:docs:check`
   records `src/routes/*.ts:NN`, so deleting one dead import shifted three line
   numbers and failed `verify` BEFORE jest ran. Fix with `npm run api:docs` and
