@@ -13,11 +13,11 @@ Read this, then `MEMORY.md`, `state.json`, `DECISIONS.md`, and
 ## 1. Prove the baseline before changing anything
 
 ```
-npm run verify              expect PASS — 265 suites, 5773 tests
+npm run verify              expect PASS — 265 suites, 5769 tests
 npm run db:verify:embedded  expect PASS — 121 restored + 7 applied = 132 tables
 npm run schema:authority    expect UNMANAGED 0, MISSING 0, contested 3 / 0
                             unsatisfiable, 1 invisible index  (exits 0)
-npm run ddl:inventory       expect 94 unmanaged, 69 objects  (exits 1 BY DESIGN)
+npm run ddl:inventory       expect 81 unmanaged, 56 objects  (exits 1 BY DESIGN)
                             ⚠ UNDERSTATES the backlog — it cannot see a
                             CREATE INDEX whose name is interpolated
 npm run authz:legacy        expect 615 routes, 0 loosenings
@@ -89,9 +89,9 @@ that is proven rather than asserted — three orderings on real PostgreSQL
 
 ### What is actually left
 
-**Delete 94 runtime DDL statements and the lazy bootstraps that await them.**
-Mechanical and broad, not a design exercise. 148 → 94 is done (objects 106 → 69,
-startup graph 19 → 11 dependencies), across sixteen services:
+**Delete 81 runtime DDL statements and the lazy bootstraps that await them.**
+Mechanical and broad, not a design exercise. 148 → 81 is done (objects 106 → 56,
+startup graph 19 → 10 dependencies), across eighteen services:
 
 - `accountDeletionService`, `providerOperationalAvailabilityService`
 - `adminNotificationService`, `adminMobileAttributionService`,
@@ -100,6 +100,21 @@ startup graph 19 → 11 dependencies), across sixteen services:
 - `providerAvailabilityEngine`, `providerServiceAreaEngine`
 - `adminProviderService`, `adminInviteState`, `adminAuditService`,
   `adminFinanceService`, `adminGuestService`
+- `adminPermissionService` (**split**, not deleted), `customerSupportService`
+
+`adminPermissionService` is the pattern for a bootstrap that does DDL **and**
+seeding: the DDL goes, the seeding stays, and the function gets RENAMED —
+`seedAdminPermissions`, because a function called `ensurePermissionSchema` that
+touches no schema is a lie the next reader has to find by reading the body. Its
+startup entry stays `required` for a reason that is now stated on it: a grant row
+is meaningless without its definition row, so an unseeded database holds grants
+that resolve to nothing. Expect the same split for `providerCatalogService`
+(`initProviderCatalogSchema` + `seedBuiltInOfferings`).
+
+⛔ **`chat.repository` is DEFERRED, not overlooked.** `ensureChatLifecycleSchema`
+also runs a DML derivation — `UPDATE chat_conversations SET status = 'CLOSED'
+WHERE is_closed = TRUE` — and `is_closed` has three consumers. Whether that can be
+dropped needs the writers traced. See `project_servana_booking_conversation`.
 
 The `finance-schema` (payment) and `identity-columns` (identity) entries are the
 notable removals: TAB 03 classified both `required`. They are REMOVED, not
@@ -129,7 +144,7 @@ production carries the union.
 different PRIMARY KEY over the same columns, passes it. `db:verify:embedded` is
 the real guarantee.
 
-⚠ **The 036 objects are the exception, and they are NOT part of this 94.**
+⚠ **The 036 objects are the exception, and they are NOT part of this 81.**
 Their runtime DDL stays until 036 is applied to production — deleting it first
 makes booking transitions depend on a migration that has not run. Everything
 else targets an object production already has, so it is safe now.
