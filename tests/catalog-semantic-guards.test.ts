@@ -112,15 +112,34 @@ describe('semantic guard: canonical provider capability points at services', () 
 describe('semantic guard: worker_service_applications is a LEGACY family relationship', () => {
   const src = readSrc('services', 'serviceApplicationService.ts');
 
-  it('its bootstrap DDL references service_families, not services', () => {
-    // This is the fresh-database defect closed in Deploy 2. On an existing database
-    // CREATE TABLE IF NOT EXISTS skips it, so only this test can catch a regression.
-    const ddl = src.slice(
-      src.indexOf('CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_service_applications'),
-      src.indexOf('CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_service_applications') + 900,
+  it('the FK references service_families, not services', () => {
+    /**
+     * The fresh-database defect closed in Deploy 2: `service_id` on this table is
+     * a LEGACY family id, so pointing it at `services(id)` would resolve a
+     * four-way-ambiguous id to the wrong entity.
+     *
+     * This used to read the bootstrap DDL in `serviceApplicationService`, with the
+     * note that "on an existing database CREATE TABLE IF NOT EXISTS skips it, so
+     * only this test can catch a regression". TAB 02 deleted that bootstrap, and
+     * the note's premise with it: the constraint now comes from
+     * `scripts/baseline/000-baseline.sql`, which is production's own dump.
+     *
+     * So this asserts the FK that ACTUALLY EXISTS rather than the one some code
+     * intended to create — which is what the guard was always reaching for.
+     */
+    const baseline = fs
+      .readFileSync(path.join(__dirname, '..', 'scripts', 'baseline', '000-baseline.sql'), 'utf8')
+      .replace(/\r\n/g, '\n');
+
+    expect(baseline).toContain(
+      'ADD CONSTRAINT worker_service_applications_service_id_fkey FOREIGN KEY (service_id) ' +
+        'REFERENCES servana.service_families(id)',
     );
-    expect(ddl).toContain('REFERENCES ${dbSchema}.service_families(id)');
-    expect(ddl).not.toMatch(/REFERENCES \$\{dbSchema\}\.services\(id\)/);
+    expect(baseline).not.toMatch(
+      /worker_service_applications_service_id_fkey FOREIGN KEY \(service_id\) REFERENCES servana\.services\(id\)/,
+    );
+    // And the service must not have quietly regained a competing definition.
+    expect(src).not.toContain('CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_service_applications');
   });
 });
 

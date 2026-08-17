@@ -2279,27 +2279,7 @@ export const completeJob = async (
 
 let _esColumnsReady: Promise<void> | null = null;
 
-const ensureEmployeeServicesColumns = (): Promise<void> => {
-  if (_esColumnsReady) return _esColumnsReady;
-  _esColumnsReady = (async () => {
-    await dbQuery.query(`ALTER TABLE ${dbSchema}.employee_services ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`);
-    await dbQuery.query(`ALTER TABLE ${dbSchema}.employee_services ADD COLUMN IF NOT EXISTS pause_reason TEXT`);
-    await dbQuery.query(`ALTER TABLE ${dbSchema}.employee_services ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-    await dbQuery.query(`
-      DO $$ BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM pg_constraint
-          WHERE conname = 'employee_services_status_check'
-        ) THEN
-          ALTER TABLE ${dbSchema}.employee_services
-          ADD CONSTRAINT employee_services_status_check
-          CHECK (status IN ('active', 'paused'));
-        END IF;
-      END $$
-    `);
-  })().catch((err) => { _esColumnsReady = null; throw err; });
-  return _esColumnsReady;
-};
+// TAB 02 — schema removed from here. employee_services: status (NOT NULL DEFAULT active), pause_reason, updated_at. The status default is what lets pause/resume be a state change rather than a delete.
 
 export const assignServicesToEmployee = async (employeeUid: string, serviceIds: number[]) => {
   if (!serviceIds.length) throw new Error("serviceIds must not be empty");
@@ -2358,7 +2338,6 @@ export const removeServiceFromEmployee = async (employeeUid: string, serviceId: 
 };
 
 export const getServicesByEmployee = async (employeeUid: string) => {
-  await ensureEmployeeServicesColumns();
   const res = await dbQuery.query(
     `
     SELECT s.id, s.name, s.category, es.created_at AS assigned_at,
@@ -2375,7 +2354,6 @@ export const getServicesByEmployee = async (employeeUid: string) => {
 };
 
 export const pauseService = async (workerUid: string, serviceId: number, reason?: string) => {
-  await ensureEmployeeServicesColumns();
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.employee_services
      SET status = 'paused', pause_reason = $3, updated_at = NOW()
@@ -2408,7 +2386,6 @@ export const pauseService = async (workerUid: string, serviceId: number, reason?
 };
 
 export const reactivateService = async (workerUid: string, serviceId: number) => {
-  await ensureEmployeeServicesColumns();
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.employee_services
      SET status = 'active', pause_reason = NULL, updated_at = NOW()
@@ -2464,24 +2441,12 @@ export const getWorkersByService = async (serviceId: number) => {
 // Worker Bank Account CRUD
 // ---------------------------------------------------------------------------
 
-const ensureWorkerBankAccountsTable = async () => {
-  await dbQuery.query(
-    `CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_bank_accounts (
-       worker_uid     TEXT PRIMARY KEY,
-       bank_code      TEXT NOT NULL,
-       account_number TEXT NOT NULL,
-       account_name   TEXT NOT NULL,
-       updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-     )`,
-    []
-  );
-};
+// TAB 02 — schema removed from here. worker_bank_accounts, keyed on worker_uid as its PRIMARY KEY — which is what the ON CONFLICT (worker_uid) DO UPDATE upsert below resolves against. One payout destination per provider, enforced by the database.
 
 export const upsertWorkerBankAccount = async (
   workerUid: string,
   payload: { bankCode: string; accountNumber: string; accountName: string }
 ) => {
-  await ensureWorkerBankAccountsTable();
   const res = await dbQuery.query(
     `
     INSERT INTO ${dbSchema}.worker_bank_accounts
@@ -2501,7 +2466,6 @@ export const upsertWorkerBankAccount = async (
 };
 
 export const getWorkerBankAccount = async (workerUid: string) => {
-  await ensureWorkerBankAccountsTable();
   const res = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.worker_bank_accounts WHERE worker_uid = $1`,
     [workerUid]
@@ -2511,7 +2475,6 @@ export const getWorkerBankAccount = async (workerUid: string) => {
 };
 
 export const deleteWorkerBankAccount = async (workerUid: string) => {
-  await ensureWorkerBankAccountsTable();
   const res = await dbQuery.query(
     `DELETE FROM ${dbSchema}.worker_bank_accounts WHERE worker_uid = $1 RETURNING *`,
     [workerUid]
@@ -2681,20 +2644,9 @@ export const setWorkerOnlineStatus = async (uid: string, isOnline: boolean) => {
 // Worker Availability (PostgreSQL)
 // ---------------------------------------------------------------------------
 
-const ensureAvailabilityTable = async () => {
-  await dbQuery.query(
-    `CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_availability (
-       worker_uid TEXT PRIMARY KEY,
-       schedule   JSONB NOT NULL DEFAULT '{}',
-       timezone   TEXT NOT NULL DEFAULT 'Asia/Manila',
-       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-     )`,
-    []
-  );
-};
+// TAB 02 — schema removed from here. worker_availability. providerAvailabilityEngine also created it until TAB 02 removed that copy; this was the other side of that race.
 
 export const getWorkerAvailability = async (uid: string) => {
-  await ensureAvailabilityTable();
   const res = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.worker_availability WHERE worker_uid = $1`,
     [uid]
@@ -2714,7 +2666,6 @@ export const saveWorkerAvailability = async (
   uid: string,
   payload: { schedule: object; timezone?: string }
 ) => {
-  await ensureAvailabilityTable();
   const { schedule, timezone = "Asia/Manila" } = payload;
   await dbQuery.query(
     `INSERT INTO ${dbSchema}.worker_availability (worker_uid, schedule, timezone, updated_at)
@@ -2730,22 +2681,9 @@ export const saveWorkerAvailability = async (
 // Worker Time-Off (PostgreSQL)
 // ---------------------------------------------------------------------------
 
-const ensureTimeOffTable = async () => {
-  await dbQuery.query(
-    `CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_time_off (
-       id         SERIAL PRIMARY KEY,
-       worker_uid TEXT NOT NULL,
-       start_date DATE NOT NULL,
-       end_date   DATE NOT NULL,
-       reason     TEXT,
-       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-     )`,
-    []
-  );
-};
+// TAB 02 — schema removed from here. worker_time_off. Same story — providerAvailabilityEngine held the other definition.
 
 export const getWorkerTimeOff = async (uid: string) => {
-  await ensureTimeOffTable();
   const res = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.worker_time_off WHERE worker_uid = $1 ORDER BY start_date ASC`,
     [uid]
@@ -2757,7 +2695,6 @@ export const createWorkerTimeOff = async (
   uid: string,
   payload: { startDate: string; endDate: string; reason?: string }
 ) => {
-  await ensureTimeOffTable();
   const res = await dbQuery.query(
     `INSERT INTO ${dbSchema}.worker_time_off (worker_uid, start_date, end_date, reason)
      VALUES ($1, $2, $3, $4) RETURNING *`,
@@ -2779,20 +2716,9 @@ export const deleteWorkerTimeOff = async (uid: string, id: string) => {
 // Worker Service Area (PostgreSQL)
 // ---------------------------------------------------------------------------
 
-const ensureServiceAreaTable = async () => {
-  await dbQuery.query(
-    `CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_service_areas (
-       worker_uid TEXT PRIMARY KEY,
-       city_ids   JSONB NOT NULL DEFAULT '[]',
-       label      TEXT,
-       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-     )`,
-    []
-  );
-};
+// TAB 02 — schema removed from here. worker_service_areas. providerServiceAreaEngine held the other definition.
 
 export const getWorkerServiceArea = async (uid: string) => {
-  await ensureServiceAreaTable();
   const res = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.worker_service_areas WHERE worker_uid = $1`,
     [uid]
@@ -2804,7 +2730,6 @@ export const saveWorkerServiceArea = async (
   uid: string,
   payload: { cityIds: string[]; label?: string }
 ) => {
-  await ensureServiceAreaTable();
   const label = payload.label ?? payload.cityIds.slice(0, 3).join(", ") ?? null;
   await dbQuery.query(
     `INSERT INTO ${dbSchema}.worker_service_areas (worker_uid, city_ids, label, updated_at)
@@ -2973,24 +2898,9 @@ export const submitWorkerForReview = async (uid: string) => {
 // Worker Notification Preferences (PostgreSQL)
 // ---------------------------------------------------------------------------
 
-const ensureNotificationPrefsTable = async () => {
-  await dbQuery.query(
-    `CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_notification_prefs (
-       worker_uid        TEXT PRIMARY KEY,
-       job_assigned      BOOLEAN NOT NULL DEFAULT TRUE,
-       job_reminder      BOOLEAN NOT NULL DEFAULT TRUE,
-       payment_received  BOOLEAN NOT NULL DEFAULT TRUE,
-       new_message       BOOLEAN NOT NULL DEFAULT TRUE,
-       promotions        BOOLEAN NOT NULL DEFAULT FALSE,
-       quiet_hours       JSONB NOT NULL DEFAULT '{}',
-       updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
-     )`,
-    []
-  );
-};
+// TAB 02 — schema removed from here. worker_notification_prefs. Every flag is NOT NULL with a default, and promotions defaults FALSE while the rest default TRUE — an absent row means "notify, except marketing", which is the safe reading of no preference.
 
 export const getWorkerNotificationPrefs = async (uid: string) => {
-  await ensureNotificationPrefsTable();
   const res = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.worker_notification_prefs WHERE worker_uid = $1`,
     [uid]
@@ -3008,7 +2918,6 @@ export const saveWorkerNotificationPrefs = async (
     newMessage?: boolean; promotions?: boolean; quietHours?: object;
   }
 ) => {
-  await ensureNotificationPrefsTable();
   await dbQuery.query(
     `INSERT INTO ${dbSchema}.worker_notification_prefs
        (worker_uid, job_assigned, job_reminder, payment_received, new_message, promotions, quiet_hours, updated_at)

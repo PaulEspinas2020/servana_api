@@ -99,9 +99,14 @@ import { runtimeDdl, migrationObjects } from '../scripts/runtime-ddl-inventory';
  * 81 → 65 and 56 → 44 with `adminCommunicationService` and
  * `providerCatalogService`. The catalog one needed no split — its seeding was
  * already a separate export, which is the shape to aim for.
+ *
+ * 65 → 41 and 44 → 32 with `serviceApplicationService` and six bootstraps in
+ * `technicianService`. NOT `ensureOnboardingTable`: it creates `worker_onboarding`,
+ * which migration 036 claims and production does NOT have, so deleting it before
+ * 036 is applied would make worker onboarding depend on an unapplied migration.
  */
-const UNMANAGED_BUDGET = 65;
-const DISTINCT_OBJECT_BUDGET = 44;
+const UNMANAGED_BUDGET = 41;
+const DISTINCT_OBJECT_BUDGET = 32;
 
 describe('runtime schema authority is bounded and shrinking', () => {
   const ddl = runtimeDdl();
@@ -109,8 +114,15 @@ describe('runtime schema authority is bounded and shrinking', () => {
   const unmanaged = ddl.filter((d) => !owned.has(d.object));
 
   it('finds runtime DDL at all (positive fixture)', () => {
-    // A broken scan would find none and pass the budget forever.
-    expect(ddl.length).toBeGreaterThan(100);
+    /**
+     * A broken scan would find none and pass the budget forever.
+     *
+     * The floor sits well BELOW the current count on purpose. It was 100 and the
+     * count fell to 94 — the fixture failed because the work SUCCEEDED, which is
+     * the second time that has happened in this pass. A positive fixture proves
+     * the scan functions; it must never double as a budget.
+     */
+    expect(ddl.length).toBeGreaterThan(20);
     expect(owned.size).toBeGreaterThan(20);
   });
 
@@ -143,14 +155,16 @@ describe('runtime schema authority is bounded and shrinking', () => {
      * in the same change."
      *
      * That is now happening, by the other route the note did not anticipate: the
-     * deletion pass. Four of the seven are no longer created by anything at
+     * deletion pass. FIVE of the seven are no longer created by anything at
      * runtime — the baseline supplies them, and `adminOnboardingService`,
-     * `providerOnboardingService` and `providerCatalogService` no longer issue
-     * DDL. They are absent from this scan entirely, which is the goal rather than
-     * a regression.
+     * `providerOnboardingService`, `providerCatalogService` and
+     * `serviceApplicationService` no longer issue DDL. They are absent from this
+     * scan entirely, which is the goal rather than a regression.
      *
-     * `service_options` is still here on ONE statement, down from four: the three
-     * that `providerCatalogService` issued are gone and a fourth lives elsewhere.
+     * The two survivors are down to ONE statement each: `service_options` from
+     * four, `employee_services` from eight, as `providerCatalogService`,
+     * `serviceApplicationService` and `technicianService` each stopped altering
+     * them.
      *
      * The list therefore splits: still runtime-created, and retired. Moving a name
      * from one array to the other is the correct diff when a bootstrap is deleted.
@@ -158,11 +172,7 @@ describe('runtime schema authority is bounded and shrinking', () => {
      */
     const objects = new Set(unmanaged.map((d) => d.object));
 
-    const stillRuntimeCreated = [
-      'service_options',
-      'worker_service_applications',
-      'employee_services',
-    ];
+    const stillRuntimeCreated = ['service_options', 'employee_services'];
     for (const table of stillRuntimeCreated) {
       expect(objects).toContain(table);
     }
@@ -172,6 +182,7 @@ describe('runtime schema authority is bounded and shrinking', () => {
       'provider_onboarding_drafts',
       'provider_catalog_offerings',
       'service_option_meta',
+      'worker_service_applications',
     ];
     for (const table of retired) {
       expect(objects).not.toContain(table);

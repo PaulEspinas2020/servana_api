@@ -345,11 +345,26 @@ describe('PAYMENT / EARNINGS / DISBURSEMENT: behaviour-compatible, not redesigne
   });
 
   it('no revenue split, earnings or review logic was touched', () => {
+    /**
+     * The window is self-delimiting: `completeJob` to the next top-level export.
+     *
+     * It used to end at `const ensureEmployeeServicesColumns`, which TAB 02
+     * deleted. `indexOf` then returned -1 and `slice(start, -1)` silently widened
+     * to nearly the whole file, so this guard was scanning every line of a
+     * 3000-line service and matching /review/ somewhere unrelated. A window
+     * anchored on an unrelated symbol fails open the moment that symbol moves.
+     */
     const service = codeOf('src/services/technicianService.ts');
-    const body = service.slice(
-      service.indexOf('export const completeJob'),
-      service.indexOf('const ensureEmployeeServicesColumns'),
-    );
+    const start = service.indexOf('export const completeJob');
+    expect(start).toBeGreaterThan(-1);
+
+    const next = service.indexOf('\nexport ', start + 1);
+    const body = service.slice(start, next > -1 ? next : undefined);
+
+    // The window must be a function, not the rest of the file.
+    expect(body.length).toBeGreaterThan(200);
+    expect(body.length).toBeLessThan(8000);
+
     expect(body).not.toMatch(/splitRevenue|revenueSplit|earnings|review/i);
     expect(body).toContain('createDisbursement(bookingId)');
   });
