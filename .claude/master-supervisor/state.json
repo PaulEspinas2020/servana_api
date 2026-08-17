@@ -1,42 +1,49 @@
 {
-  "masterCommand": "Servana Backend Centralization Command Book (15 TABs, priority-ordered)",
-  "currentTab": "TAB 15 — Database Baseline Capture + Fresh-DB Reproducibility",
-  "currentTabIndex": 15,
-  "totalTabs": 15,
+  "masterCommand": "SERVANA API MASTER COMMAND (12 TABs, from repo state 9016e7e) \u2014 supersedes the 15-TAB Backend Centralization Command Book",
+  "currentTab": "TAB 02 \u2014 Make migrations the sole schema authority",
+  "currentTabIndex": 2,
+  "totalTabs": 12,
   "completedTabs": [
-    "TAB 01", "TAB 02", "TAB 03", "TAB 04", "TAB 05", "TAB 06", "TAB 07",
-    "TAB 08", "TAB 09", "TAB 10", "TAB 11", "TAB 12", "TAB 13", "TAB 14",
-    "TAB 15"
+    "TAB 01 (bar the concurrency suite)",
+    "TAB 03 (bar real-boot tests)",
+    "TAB 04 (rules + parity + audit)",
+    "TAB 12 (credential + high CVEs)"
   ],
-  "currentObjective": "All 15 TABs certified. TAB 15 gap closed: baseline captured, sanitised, and proven to bootstrap a fresh database with zero pending migrations.",
-  "status": "COMPLETE",
+  "currentObjective": "Move 154 unmanaged runtime DDL statements into migrations, one object at a time, until the API starts with DDL privileges revoked.",
+  "status": "HANDOFF \u2014 see .claude/master-supervisor/RESUME.md",
   "supervisorCycleCount": 14,
   "lastHourlyReportAt": null,
-  "lastCheckpointAt": "2026-08-16 — TAB 15 certified",
-  "lastLocalCommit": "pending — see git log",
-  "workingTreeState": "committing",
-  "activeBlockers": [],
+  "lastCheckpointAt": "2026-08-16 \u2014 TAB 15 certified",
+  "lastLocalCommit": "66d14b2",
+  "workingTreeState": "CLEAN \u2014 82 commits unpushed",
+  "activeBlockers": [
+    "No real boot has been performed since app.ts startup was rewritten (14 IIFEs -> 19-dependency graph awaited before listen)",
+    "Deploy decision: a push to main IS the deploy, and conflicts with the standing local-only rule (0 of 108 endpoints migrated)",
+    "booking-postgres-races needs a disposable PostgreSQL; PGlite cannot substitute (single-connection)",
+    "9 moderate CVEs need npm audit fix --force: major bumps of firebase-admin (auth path) and node-cron (every scheduled job)"
+  ],
   "openItems": [
-    "P0 production has NO servana.schema_migrations ledger — migrations applied by hand, deploy.yml never invokes the runner. `migrations:apply` there today would find all 36 pending and fail on 001. Marking it is a PRODUCTION WRITE and was not performed.",
-    "P1 a 4MB+ banner upload can throw RangeError instead of a clean 400 — product-code regex over a multi-MB data URI; outside TAB 15, deliberately not fixed",
-    "P1 ownership unverified on a real engine — PGlite has no role separation; the `fresh` CI job now activates but has not been observed running",
+    "P0 production has NO servana.schema_migrations ledger \u2014 migrations applied by hand, deploy.yml never invokes the runner. `migrations:apply` there today would find all 36 pending and fail on 001. Marking it is a PRODUCTION WRITE and was not performed.",
+    "P1 a 4MB+ banner upload can throw RangeError instead of a clean 400 \u2014 product-code regex over a multi-MB data URI; outside TAB 15, deliberately not fixed",
+    "P1 ownership unverified on a real engine \u2014 PGlite has no role separation; the `fresh` CI job now activates but has not been observed running",
     "P2 scripts/** is typechecked by neither tsconfig"
   ],
   "pendingQuestions": [],
   "researchDecisions": [
-    "PGlite over pg-mem or a server install — real PostgreSQL source compiled to WASM, so disagreements are meaningful",
-    "engine-proven asserted as a SUBSET of model-reported — the engine stops each file at its first error",
+    "PGlite over pg-mem or a server install \u2014 real PostgreSQL source compiled to WASM, so disagreements are meaningful",
+    "engine-proven asserted as a SUBSET of model-reported \u2014 the engine stops each file at its first error",
     "baseline-version ledger (Flyway/Sqitch pattern) rather than replaying a chain that is spent",
     "pending count read back OUT of the database, not derived from the SQL that wrote it"
   ],
   "contextPressure": "ELEVATED",
   "gates": {
-    "npm run verify": "PASS exit 0 — 251 suites, 5656 tests (3 consecutive clean runs)",
-    "npm run db:verify": "PASS exit 0",
-    "npm run db:verify:embedded": "PASS exit 0 — 121 tables, 0 pending"
+    "npm run verify": "PASS \u2014 264 suites, 5754 tests",
+    "npm run db:verify:embedded": "PASS \u2014 121 restored + 6 applied = 128 tables",
+    "npm run ddl:inventory": "154 unmanaged / 112 objects \u2014 exits 1 BY DESIGN",
+    "npm run authz:legacy": "615 legacy routes, 0 v1 loosenings"
   },
   "productionActions": {
-    "reads": "one — pg_dump --schema-only over SSH, explicitly authorised",
+    "reads": "one \u2014 pg_dump --schema-only over SSH, explicitly authorised",
     "writes": "none",
     "deploys": "none",
     "credentialChanges": "none"
