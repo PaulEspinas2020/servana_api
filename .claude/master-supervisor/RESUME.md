@@ -15,9 +15,9 @@ Read this, then `MEMORY.md`, `state.json`, `DECISIONS.md`, and
 ```
 npm run verify              expect PASS — 265 suites, 5769 tests
 npm run db:verify:embedded  expect PASS — 121 restored + 7 applied = 132 tables
-npm run schema:authority    expect UNMANAGED 0, MISSING 0, contested 3 / 0
+npm run schema:authority    expect UNMANAGED 0, MISSING 0, contested 2 / 0
                             unsatisfiable, 1 invisible index  (exits 0)
-npm run ddl:inventory       expect 81 unmanaged, 56 objects  (exits 1 BY DESIGN)
+npm run ddl:inventory       expect 65 unmanaged, 44 objects  (exits 1 BY DESIGN)
                             ⚠ UNDERSTATES the backlog — it cannot see a
                             CREATE INDEX whose name is interpolated
 npm run authz:legacy        expect 615 routes, 0 loosenings
@@ -89,9 +89,9 @@ that is proven rather than asserted — three orderings on real PostgreSQL
 
 ### What is actually left
 
-**Delete 81 runtime DDL statements and the lazy bootstraps that await them.**
-Mechanical and broad, not a design exercise. 148 → 81 is done (objects 106 → 56,
-startup graph 19 → 10 dependencies), across eighteen services:
+**Delete 65 runtime DDL statements and the lazy bootstraps that await them.**
+Mechanical and broad, not a design exercise. 148 → 65 is done (objects 106 → 44,
+startup graph 19 → 9 dependencies), across twenty services:
 
 - `accountDeletionService`, `providerOperationalAvailabilityService`
 - `adminNotificationService`, `adminMobileAttributionService`,
@@ -101,6 +101,7 @@ startup graph 19 → 10 dependencies), across eighteen services:
 - `adminProviderService`, `adminInviteState`, `adminAuditService`,
   `adminFinanceService`, `adminGuestService`
 - `adminPermissionService` (**split**, not deleted), `customerSupportService`
+- `adminCommunicationService`, `providerCatalogService`
 
 `adminPermissionService` is the pattern for a bootstrap that does DDL **and**
 seeding: the DDL goes, the seeding stays, and the function gets RENAMED —
@@ -108,8 +109,10 @@ seeding: the DDL goes, the seeding stays, and the function gets RENAMED —
 touches no schema is a lie the next reader has to find by reading the body. Its
 startup entry stays `required` for a reason that is now stated on it: a grant row
 is meaningless without its definition row, so an unseeded database holds grants
-that resolve to nothing. Expect the same split for `providerCatalogService`
-(`initProviderCatalogSchema` + `seedBuiltInOfferings`).
+that resolve to nothing.
+
+`providerCatalogService` needed NO split — its seeding was already a separate
+export, so the DDL half came out on its own. That is the shape to aim for.
 
 ⛔ **`chat.repository` is DEFERRED, not overlooked.** `ensureChatLifecycleSchema`
 also runs a DML derivation — `UPDATE chat_conversations SET status = 'CLOSED'
@@ -136,15 +139,17 @@ every object created by more than one runtime path and fails when a losing
 definition names a column nothing in the repo declares. All seven contested
 objects were audited against the baseline: **no second 42703**. Four have since
 been cleared — three by the two engines above, and `guest_customers` when
-`adminGuestService` went — leaving three: `booking_escalations`,
-`chat_message_reports`, `user_profile`. Two of those are benign supersets where
-production carries the union.
+`adminGuestService` went — leaving two: `booking_escalations` and
+`user_profile`. `chat_message_reports` left when `adminCommunicationService` did —
+and the definition that WENT was the SUPERSET. `chat.repository` still declares it
+without the four moderation columns, and is now the only runtime creator. That is
+safe ONLY because the baseline owns the full table; do not promote the subset.
 
 ⚠ The check compares column NAMES only. Same names with different types, or a
 different PRIMARY KEY over the same columns, passes it. `db:verify:embedded` is
 the real guarantee.
 
-⚠ **The 036 objects are the exception, and they are NOT part of this 81.**
+⚠ **The 036 objects are the exception, and they are NOT part of this 65.**
 Their runtime DDL stays until 036 is applied to production — deleting it first
 makes booking transitions depend on a migration that has not run. Everything
 else targets an object production already has, so it is safe now.
