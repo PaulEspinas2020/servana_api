@@ -9,23 +9,23 @@
     "TAB 04 (rules + parity + audit)",
     "TAB 12 (credential + high CVEs)"
   ],
-  "currentObjective": "TAB 02 rescoped 2026-08-17. The authoring gap is CLOSED by migration 036 (6 statements + 3 columns that neither a migration nor the baseline declared). What remains is DELETION: 148 runtime DDL statements whose objects the baseline already declares, plus the lazy bootstraps that await them. Blocked on 036 being applied to production first — deleting before that makes booking transitions depend on an unapplied migration.",
-  "status": "IN PROGRESS — TAB 02 authoring gap closed, deletion phase gated on applying 036",
+  "currentObjective": "TAB 02 rescoped 2026-08-17. Authoring gap CLOSED by migration 036. Deletion phase STARTED: 148 -> 144 statements, 106 -> 102 objects (accountDeletionService, providerOperationalAvailabilityService). Remaining 144 all target objects production already has, so they are safe to delete now; only 036 own objects are gated on applying it. Recipe and the two traps are in RESUME.md section 3.",
+  "status": "IN PROGRESS — TAB 02 authoring gap closed, deletion phase begun (148 -> 144); only 036's own objects are gated on applying it",
   "supervisorCycleCount": 15,
   "lastHourlyReportAt": null,
-  "lastCheckpointAt": "2026-08-17 — TAB 02 rescope + migration 036",
+  "lastCheckpointAt": "2026-08-17 - TAB 02 rescope, migration 036, deletion pass begun",
   "lastLocalCommit": "see git log — do not trust a recorded SHA, two handoffs running recorded a stale one",
   "workingTreeState": "CLEAN — check `git rev-list --count origin/main..HEAD` for the real number",
   "activeBlockers": [
     "No real boot has been performed since app.ts startup was rewritten (14 IIFEs -> 19-dependency graph awaited before listen)",
     "Deploy decision: a push to main IS the deploy, and conflicts with the standing local-only rule (0 of 108 endpoints migrated)",
-    "Migration 036 is authored, gated and committed but NOT applied. Production lacks four tables its own booking code writes to, and the TAB 02 deletion phase cannot start until it is applied.",
+    "Migration 036 is authored, gated and committed but NOT applied. Production lacks four tables its own booking code writes to. This gates deletion of the runtime DDL for THOSE SIX OBJECTS ONLY — the other 144 statements target objects production already has and are safe to delete now.",
     "booking-postgres-races needs a disposable PostgreSQL; PGlite cannot substitute (single-connection)",
     "9 moderate CVEs need npm audit fix --force: major bumps of firebase-admin (auth path) and node-cron (every scheduled job)"
   ],
   "openItems": [
     "P0 apply migration 036 to production, then delete the runtime DDL it replaces (separate commit, in that order)",
-    "P1 148 runtime DDL statements to delete; ~191 lazy-ensure call sites across 37 files indicate where (a count, not a finding)",
+    "P1 144 runtime DDL statements left to delete. Do the 8 test-uncoupled bootstraps first; 7 others have source-introspection assertions to rewrite. See RESUME.md section 3.",
     "P1 ownership unverified on a real engine — PGlite has no role separation; the `fresh` CI job activates but has never been observed running",
     "P1 9 moderate CVEs need major bumps of firebase-admin and node-cron",
     "P2 scripts/** is typechecked by neither tsconfig",
@@ -46,7 +46,7 @@
     "npm run verify": "PASS — 265 suites, 5768 tests (exit code checked directly, not through a pipe)",
     "npm run db:verify:embedded": "PASS — 121 restored + 7 applied = 132 tables",
     "npm run schema:authority": "PASS — UNMANAGED 0, missing columns 0, 2 interpolated and read by hand",
-    "npm run ddl:inventory": "148 unmanaged / 106 objects — exits 1 BY DESIGN",
+    "npm run ddl:inventory": "144 unmanaged / 102 objects - exits 1 BY DESIGN",
     "npm run authz:legacy": "615 legacy routes, 0 v1 loosenings",
     "npm run migrations:baseline:plan": "exits 1 BY DESIGN — 14 DML migrations need human judgement"
   },

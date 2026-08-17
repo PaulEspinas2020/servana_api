@@ -32,32 +32,20 @@ export type AvailabilitySource =
   | 'system_override'
   | 'migrated';
 
-// ── Schema bootstrap ──────────────────────────────────────────────────────────
-
-let _schemaReady: Promise<void> | null = null;
-
-export const ensureAvailabilitySchema = (): Promise<void> => {
-  if (_schemaReady) { return _schemaReady; }
-  _schemaReady = (async () => {
-    await dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${s}.provider_operational_availability (
-        provider_uid       TEXT        PRIMARY KEY,
-        availability_status TEXT       NOT NULL DEFAULT 'offline',
-        availability_source TEXT       NOT NULL DEFAULT 'provider_explicit',
-        changed_by_uid     TEXT,
-        changed_by_role    TEXT,
-        changed_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        reason             TEXT,
-        version            INTEGER     NOT NULL DEFAULT 1,
-        updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-  })();
-  return _schemaReady;
-};
-
-// Warm up on module load (fire-and-forget; callers await their own ops)
-// Startup: declared in src/startup.ts (TAB 03).
+// ── Schema (TAB 02) ───────────────────────────────────────────────────────────
+//
+// `provider_operational_availability` was created here at runtime by
+// `ensureAvailabilitySchema`, memoised in a module-level promise and awaited at
+// the top of `setOnline`, `setOffline` and the admin override. That function is
+// gone, and so are those three awaits.
+//
+// The table comes from `scripts/baseline/000-baseline.sql:2506` — production's own
+// dump. `npm run db:verify:embedded` proves a fresh database reaches it.
+//
+// Worth knowing since this file no longer states the shape: `version` is an
+// optimistic-concurrency counter and `changed_at` is what the auto-online engine
+// compares against. Neither is nullable, and both have defaults, so a write that
+// omits them is still correct.
 
 // ── Audit helper ──────────────────────────────────────────────────────────────
 
@@ -100,8 +88,6 @@ export const setOnline = async (
   reason: string | null,
   coords: { latitude: number; longitude: number } | null,
 ): Promise<void> => {
-  await ensureAvailabilitySchema();
-
   // 1. MongoDB write — preserve existing loc if present, apply coords only if
   //    no real location exists yet.
   const col = (await mongoDb).collection('worker_locations');
@@ -192,8 +178,6 @@ export const setOffline = async (
   actorRole: string,
   reason: string | null,
 ): Promise<void> => {
-  await ensureAvailabilitySchema();
-
   // 1. MongoDB write.
   const col = (await mongoDb).collection('worker_locations');
 
@@ -267,8 +251,6 @@ export const getStatus = async (
   version: number;
   updatedAt: Date | null;
 }> => {
-  await ensureAvailabilitySchema();
-
   // MongoDB is authoritative for the live flag.
   const col = (await mongoDb).collection('worker_locations');
   const doc = await col.findOne(

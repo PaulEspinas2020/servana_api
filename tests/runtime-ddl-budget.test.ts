@@ -56,13 +56,18 @@ import { runtimeDdl, migrationObjects } from '../scripts/runtime-ddl-inventory';
  *
  * 154 → 148 and 112 → 106 when migration 036 claimed the six objects that
  * neither a migration nor the baseline declared. What remains is not an
- * authoring backlog: `npm run schema:authority` shows all 148 touch an object
- * `scripts/baseline/000-baseline.sql` already builds, so they are redundant
- * statements awaiting DELETION rather than schema awaiting design. See
+ * authoring backlog: `npm run schema:authority` shows every one of them touches
+ * an object `scripts/baseline/000-baseline.sql` already builds, so they are
+ * redundant statements awaiting DELETION rather than schema awaiting design. See
  * `tests/schema-authority.test.ts` for why that distinction rescopes TAB 02.
+ *
+ * 148 → 144 and 106 → 102 as the deletion pass began:
+ * `accountDeletionService` (table + 2 partial indexes) and
+ * `providerOperationalAvailabilityService` (1 table, plus three lazy awaits at
+ * the top of setOnline/setOffline/the admin override).
  */
-const UNMANAGED_BUDGET = 148;
-const DISTINCT_OBJECT_BUDGET = 106;
+const UNMANAGED_BUDGET = 144;
+const DISTINCT_OBJECT_BUDGET = 102;
 
 describe('runtime schema authority is bounded and shrinking', () => {
   const ddl = runtimeDdl();

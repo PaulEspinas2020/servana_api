@@ -3,10 +3,11 @@ import { rateLimit } from "express-rate-limit";
 import { rateLimitBody } from "../helpers/rateLimitBody";
 import verifyAuth from "../middleware/verifyAuth";
 import * as ctrl from "../controllers/accountDeletionController";
-import { ensureAccountDeletionTable } from "../services/accountDeletionService";
 
-// Startup: declared in src/startup.ts (TAB 03). A route module is an
-// especially bad place for DDL — it runs on import of the router.
+// No schema bootstrap here, and none in startup either (TAB 02). This module
+// used to issue DDL at import — the worst place for it, since it ran whenever
+// the router was loaded. `account_deletion_requests` now comes from the
+// baseline; see the schema note in services/accountDeletionService.
 
 /**
  * Tighter than the sign-in limiter. The public form is unauthenticated and

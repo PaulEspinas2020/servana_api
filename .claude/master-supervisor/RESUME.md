@@ -86,18 +86,51 @@ that is proven rather than asserted — three orderings on real PostgreSQL
 
 ### What is actually left
 
-**Delete 148 runtime DDL statements and the lazy bootstraps that await them.**
-Mechanical and broad, not a design exercise. Two things to know before starting:
+**Delete 144 runtime DDL statements and the lazy bootstraps that await them.**
+Mechanical and broad, not a design exercise. 148 → 144 is done:
+`accountDeletionService` (table + 2 partial indexes) and
+`providerOperationalAvailabilityService` (1 table + 3 lazy awaits).
 
-1. A grep for lazy-ensure patterns (`await ensure*(`, `schemaReady ??=`) counts
-   191 occurrences across 37 files. That is a count, not a finding — it says
-   where to look. Most DDL here is awaited on a REQUEST path, not only at
-   startup, so deleting the DDL means removing those awaits too.
-2. ⚠ **Sequencing.** The runtime DDL for 036's objects is deliberately STILL IN
-   PLACE. Deleting it before 036 is applied to production makes booking
-   transitions depend on a migration that has not run — the failure mode
-   migration 034's header warns about, on the booking write path. Order is:
-   **apply 036 → verify → then delete, in a separate commit.**
+⚠ **The 036 objects are the exception, and they are NOT part of this 144.**
+Their runtime DDL stays until 036 is applied to production — deleting it first
+makes booking transitions depend on a migration that has not run. Everything
+else targets an object production already has, so it is safe now.
+
+#### The recipe, per object
+
+1. `npm run schema:authority` — confirm the object is `baseline`-owned, never
+   `UNMANAGED`.
+2. `grep -c '<object>' scripts/baseline/000-baseline.sql` — see the definition
+   you are relying on, and cite its line in the replacement comment.
+3. Delete the `ensure*` function. Replace it with a comment saying where the
+   schema comes from **and what the deleted DDL guaranteed** — a partial unique
+   index that an `ON CONFLICT DO NOTHING` depends on is invisible once the
+   `CREATE INDEX` is gone.
+4. Remove every caller: the `startup.ts` import and entry, AND the lazy
+   `await ensure*()` at the top of each operation. Most of this DDL is awaited on
+   a REQUEST path, not only at startup.
+5. `npm run typecheck`, then `npm run verify`.
+6. Lower `UNMANAGED_BUDGET` / `DISTINCT_OBJECT_BUDGET` in
+   `tests/runtime-ddl-budget.test.ts` in the same commit.
+
+#### Two traps, both hit on the first pass
+
+- **Source-introspection tests pin the DDL.** ~10 assertions across 5 files
+  assert on source TEXT that a bootstrap exists and creates a table — e.g.
+  `admin-audit.test.js` expects `svcSrc` to contain
+  `export async function ensureAuditSchema` and `startupSrc` to mention it.
+  Deleting the function turns those red, and they have to be rewritten in the
+  same commit. **Do the eight uncoupled ones first:**
+  `ensureAdminNotifications`, `ensureDashboardSchema`, `ensureAttributionSchema`,
+  `ensureAdminBookingDraftSchema`, `ensureOnboardingSchema`,
+  `ensureIdentityColumns`, `ensureActivationSchema`, `ensureProviderWebSchema`.
+  Coupled: audit, finance, permissions, create-booking, invite-state, chat
+  lifecycle, provider-catalog.
+- **Removing a line from a ROUTE file breaks a doc gate.** `api:docs:check`
+  records `src/routes/*.ts:NN`, so deleting one dead import shifted three line
+  numbers and failed `verify` BEFORE jest ran. Fix with `npm run api:docs` and
+  check the diff is line numbers only. Service files are not affected — no
+  generated doc cites a `src/services/**` line.
 
 Acceptance is unchanged: the API starts with DDL privileges revoked.
 
