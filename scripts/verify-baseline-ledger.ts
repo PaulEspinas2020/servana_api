@@ -39,6 +39,7 @@
 import { migrationInputs, baselineInput } from './lib/schemaBaseline';
 import { replay, splitStatements, type SchemaCatalog } from './lib/schemaModel';
 
+import { declaresDestructive } from './lib/migrationSafety';
 type Verdict = 'present' | 'ABSENT' | 'no-schema-effect';
 
 interface MigrationCheck {
@@ -125,6 +126,32 @@ export const checkAll = (): MigrationCheck[] => {
 
   return migrationInputs().map(({ file, sql }) => {
     const expects = effectsOf(sql);
+
+    /**
+     * A REMOVAL migration is invisible to a presence check, and treating it as
+     * "no schema effect" marks it applied — so it never runs.
+     *
+     * `effectsOf` lists the objects a migration should CREATE, then asks whether
+     * the baseline has them. A migration that only DROPS creates nothing, so the
+     * list is empty and the old code concluded "no DDL, must have run". For 037
+     * that is exactly backwards: the baseline carries all 39 stale
+     * `notification_key` constraints it exists to remove, so a fresh database
+     * would keep them AND skip the migration, permanently, with this gate
+     * reporting PASS.
+     *
+     * That is the same defect the comment in `ledgerAtBaselineSql` describes for
+     * 030-035, arriving from the other direction: there, present-but-unapplied;
+     * here, absent-effect-mistaken-for-no-effect.
+     *
+     * Proving a removal needs the opposite question — is the dropped object GONE
+     * — which this checker cannot ask, because `effectsOf` only parses creations.
+     * So a declared-destructive migration is never auto-marked. It reports
+     * ABSENT, which is the honest answer: its effect is not in the baseline.
+     */
+    if (declaresDestructive(sql)) {
+      return { file, verdict: 'ABSENT' as Verdict, expects, missing: ['(removal — not provable from the baseline)'] };
+    }
+
     if (!expects.length) {
       return { file, verdict: 'no-schema-effect' as Verdict, expects, missing: [] };
     }
