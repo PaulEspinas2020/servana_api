@@ -125,7 +125,7 @@ shows `admin=` counts.
 The cheapest real migration, and the one that proves the contract under load.
 
 <!-- BEGIN GENERATED: v1-moves:providerWeb -->
-**22** canonical capabilities are live that this client still reaches by a legacy route.
+**21** canonical capabilities are live that this client still reaches by a legacy route.
 
 | Move to (canonical) | Legacy routes it supersedes |
 |---|---|
@@ -145,7 +145,6 @@ The cheapest real migration, and the one that proves the contract under load.
 | `POST /api/v1/auth/register` | `POST /api/auth/signup`<br>`POST /api/auth/provider/register` |
 | `POST /api/v1/auth/login` | `POST /api/auth/signin`<br>`POST /api/auth/admin-signin`<br>`POST /api/auth/firebase-login` |
 | `POST /api/v1/auth/refresh` | `POST /api/auth/refresh` |
-| `POST /api/v1/auth/logout` | `POST /api/auth/logout` |
 | `POST /api/v1/auth/forgot-password` | `POST /api/auth/forgot-password` |
 | `POST /api/v1/auth/reset-password` | `POST /api/auth/reset-password` |
 | `POST /api/v1/auth/resend-verification` | `POST /api/auth/resend-email-otp`<br>`GET /api/auth/resendverification` |

@@ -12,7 +12,7 @@
 >
 > **Status legend:** `OPEN` · `DONE` · `SUPERSEDED`
 
-Last updated: 2026-08-18 (TAB 09)
+Last updated: 2026-08-18 (TAB 10)
 
 ---
 
@@ -106,6 +106,16 @@ Last updated: 2026-08-18 (TAB 09)
 | 09.3 | Extend `smoke:admin` with the portal-side half of the coverage assertion: every portal call resolves to a live route | `NO-REPO` | Assertion runs in CI and has been seen red |
 | 09.4 | Execute the CONVERGE deletions once 09.2 confirms silence — `/admin/workers/:uid/archive` (weaker door than `/admin/users/:uid/archive`), `/admin/provider/reconciliation`, and the four disbursement routes | `PROD-ACCESS`, `HUMAN-JUDGEMENT` | Surfaces removed behind deprecation headers and a sunset window |
 | 09.5 | Surface `eligibility-preview` and `evaluate-booking` inside the assignment flow, or retire them. They are decision-support calls with no decision screen | `NO-REPO` | Either wired into the assignment view or retired with telemetry |
+
+## TAB 10 — RBAC end to end
+
+| # | Task | Why blocked | Closes when |
+| --- | --- | --- | --- |
+| 10.1 | Negative test per permission: a token holding everything EXCEPT X must receive 403 from every route requiring X. Positive-only tests cannot detect a guard that never runs | `NO-CRED` | A real scoped identity exists; every permission has a 403 test; suite mutation-verified |
+| 10.2 | Verify the portal's permission-driven navigation matches the server's answer | `NO-REPO` | Navigation compared against `/admin/me/permissions` for a scoped admin |
+| 10.3 | Confirm a hidden button is never the only control — call each guarded route directly with a deliberately under-permissioned token and require 403 (§12) | `PROD-ACCESS`, `NO-CRED` | Direct calls refused for every dangerous capability |
+| 10.4 | Sweep all 250 admin routes for internal cross-user scoping (§11). Two notification routes were verified actor-scoped in TAB 10; the rest are unchecked | `HUMAN-JUDGEMENT` | Each route's query confirmed scoped, or refused as a leak |
+| 10.5 | Delete the two KNOWN DEFECT exceptions once TAB 09's telemetry gate confirms silence — `workers/:uid/archive` and `provider/reconciliation`. Both are duplicates that are also the weaker door | `PROD-ACCESS` | Routes removed; exception list drops to six |
 
 ## TAB 16 — Certification & runbook
 

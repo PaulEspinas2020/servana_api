@@ -73,7 +73,7 @@ direction of whoever wrote it.
 | Read my security posture | SHARED | planned | planned | planned | planned | planned |
 | Read and change my settings | SHARED | planned | planned | planned | planned | planned |
 | Operate the booking queue | SINGLE_SURFACE | — | — | — | — | legacy |
-| Register, sign in, and end a session | SHARED | legacy | ⚠ mixed | legacy | legacy | legacy |
+| Register, sign in, and end a session | SHARED | legacy | ⚠ mixed | legacy | ⚠ mixed | legacy |
 | Recover an account and verify a contact | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | ⚠ mixed | legacy |
 | Read booking-code state | SHARED | planned | planned | planned | **migrated** | planned |
 | Read a booking | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | planned | planned |

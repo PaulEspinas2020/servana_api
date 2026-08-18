@@ -70,7 +70,7 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `POST /api/auth/admin-signin` | ALIAS_TEMPORARILY | `auth.login` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `POST /api/auth/firebase-login` | ALIAS_TEMPORARILY | `auth.login` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `POST /api/auth/forgot-password` | ALIAS_TEMPORARILY | `auth.forgotPassword` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
-| `POST /api/auth/logout` | ALIAS_TEMPORARILY | `auth.logout` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
+| `POST /api/auth/logout` | ALIAS_TEMPORARILY | `auth.logout` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
 | `GET /api/auth/me` | ALIAS_TEMPORARILY | `identity.me` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
 | `POST /api/auth/provider/register` | ALIAS_TEMPORARILY | `auth.register` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/auth/refresh` | ALIAS_TEMPORARILY | `auth.refresh` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |

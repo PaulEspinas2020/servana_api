@@ -211,7 +211,7 @@
         "customerMobile": "legacy",
         "customerWeb": "legacy",
         "providerMobile": "legacy",
-        "providerWeb": "legacy",
+        "providerWeb": "migrated",
         "admin": "legacy"
       },
       "supersedes": [

@@ -983,7 +983,7 @@ Ends every session for the authenticated account and clears its push token.
 
 - **Domain service** — `services/authSessionService.endAllSessions`
 - **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ⏳
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ✅ · Admin ⏳
 - **Legacy it replaces**
   - `POST /api/auth/logout` — **ALIAS_TEMPORARILY** — Same effect; both now go through the one session service so the side-effect set is decided once.
 
@@ -1575,7 +1575,7 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `POST /api/v1/auth/register` | ⏳ | · | ⏳ | ⏳ | — |
 | `POST /api/v1/auth/login` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
 | `POST /api/v1/auth/refresh` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
-| `POST /api/v1/auth/logout` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
+| `POST /api/v1/auth/logout` | ⏳ | ⏳ | ⏳ | ✅ | ⏳ |
 | `POST /api/v1/auth/forgot-password` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
 | `POST /api/v1/auth/reset-password` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
 | `POST /api/v1/auth/verify-email` | ⏳ | · | ⏳ | · | — |

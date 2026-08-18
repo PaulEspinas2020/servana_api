@@ -1970,7 +1970,7 @@ export const V1_CONTRACT: ContractEntry[] = [
         note: 'Same effect; both now go through the one session service so the side-effect set is decided once.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'legacy' },
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'legacy' },
     observability: 'auth',
     notes:
       'Ends ALL sessions, not this device only. Firebase has no per-session revocation, and a ' +

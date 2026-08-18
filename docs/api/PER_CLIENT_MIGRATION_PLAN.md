@@ -87,8 +87,8 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | --- | --- |
 | Capabilities that apply | 39 |
 | Already on canonical | 22 |
-| Still on a legacy route | 3 |
-| Partially migrated | 6 |
+| Still on a legacy route | 2 |
+| Partially migrated | 7 |
 | No equivalent called today | 8 |
 
 | Capability | Today | Calls now | Move to |
@@ -106,7 +106,7 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Read my security posture | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/security` |
 | Read the services I am approved for | planned | `GET /api/worker/services-overview` | `GET /api/v1/provider/services` |
 | Recover an account and verify a contact | ⚠ mixed | `GET /api/auth/resendverification`, `POST /api/auth/forgot-password`, `POST /api/auth/resend-email-otp`, `POST /api/auth/reset-password`, `POST /api/auth/verify-email-otp` | `POST /api/v1/auth/forgot-password`, `POST /api/v1/auth/reset-password`, `POST /api/v1/auth/verify-email`, `POST /api/v1/auth/resend-verification`, `POST /api/v1/auth/verify-mobile` |
-| Register, sign in, and end a session | legacy | `POST /api/auth/admin-signin`, `POST /api/auth/firebase-login`, `POST /api/auth/logout`, `POST /api/auth/provider/register`, `POST /api/auth/refresh`, `POST /api/auth/signin`, `POST /api/auth/signup` | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` |
+| Register, sign in, and end a session | ⚠ mixed | `POST /api/auth/admin-signin`, `POST /api/auth/firebase-login`, `POST /api/auth/logout`, `POST /api/auth/provider/register`, `POST /api/auth/refresh`, `POST /api/auth/signin`, `POST /api/auth/signup` | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` |
 | Report a message to moderation | planned | `POST /api/chat/conversations/:id/messages/:msgId/report` | `POST /api/v1/conversations/:conversationId/messages/:messageId/report` |
 | Submit, read, preview and withdraw my documents | ⚠ mixed | `DELETE /api/provider/documents/:documentId`, `GET /api/provider/document-types`, `GET /api/provider/documents`, `GET /api/provider/documents/:documentId/preview`, `POST /api/provider/documents` | `POST /api/v1/provider/documents`, `DELETE /api/v1/provider/documents/:documentId`, `GET /api/v1/provider/documents`, `GET /api/v1/provider/documents/:documentId/preview`, `GET /api/v1/provider/document-types` |
 | What is left before my account is usable | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/completion` |

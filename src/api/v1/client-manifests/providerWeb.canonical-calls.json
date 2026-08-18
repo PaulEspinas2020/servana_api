@@ -6,6 +6,13 @@
   "endpoints": [
     {
       "method": "post",
+      "path": "/v1/auth/logout",
+      "cites": [
+        "src/app/core/api/provider-auth-api.service.ts:283"
+      ]
+    },
+    {
+      "method": "post",
       "path": "/v1/bookings/:param/additional-work",
       "cites": [
         "src/app/core/api/provider-additional-work-api.service.ts:261"
@@ -101,7 +108,7 @@
       "method": "get",
       "path": "/v1/me",
       "cites": [
-        "src/app/core/api/provider-auth-api.service.ts:231"
+        "src/app/core/api/provider-auth-api.service.ts:232"
       ]
     },
     {

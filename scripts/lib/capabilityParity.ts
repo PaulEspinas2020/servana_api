@@ -350,3 +350,57 @@ export function incomparableMoneyGuards(
   }
   return out;
 }
+
+// ── Guard detection for the admin matrix (TAB 10) ────────────────────────────
+
+/**
+ * Every form of authorization a route chain can carry.
+ *
+ * The first version of `permissionsOf` read only `requirePermission('…')`, and
+ * on the admin surface that under-reported protection on eleven routes: the
+ * whole permission-GRANTING path is guarded by `requireSuperAdmin`, which is
+ * strictly stricter than any named permission — super admins bypass
+ * `requirePermission`, so demanding super-admin status is the stronger claim.
+ *
+ * The book warns about exactly this: *a route-auth detector that only reads the
+ * route line under-reports protection and over-reports gaps*. A matrix that
+ * called the grant path unguarded would send somebody to "fix" the strictest
+ * routes in the application.
+ */
+export interface RouteGuards {
+  /** `verifyRoles([...])` present. */
+  roleGuard: boolean;
+  /** Named permissions demanded. */
+  permissions: string[];
+  /** `requireSuperAdmin` — stricter than any named permission. */
+  superAdmin: boolean;
+  /** `verifyAuth` present. */
+  authenticated: boolean;
+}
+
+export function guardsOf(handlers: string[], routeFileSource: string): RouteGuards {
+  // `...adminOnly` and friends hide the guards in a module-local array.
+  const expanded = handlers.flatMap((h) => {
+    const spread = /^\.\.\.([A-Za-z_$][\w$]*)$/.exec(h.trim());
+    if (!spread) return [h.trim()];
+    const decl = new RegExp(`const\\s+${spread[1]}\\s*=\\s*\\[`).exec(routeFileSource);
+    if (!decl) return [h.trim()];
+    let depth = 1;
+    let i = decl.index + decl[0].length;
+    const open = i;
+    for (; i < routeFileSource.length && depth > 0; i += 1) {
+      const c = routeFileSource[i];
+      if (c === '[' || c === '(') depth += 1;
+      else if (c === ']' || c === ')') depth -= 1;
+    }
+    return routeFileSource.slice(open, i - 1).split(',').map((p) => p.trim()).filter(Boolean);
+  });
+
+  const chain = expanded.join(' , ');
+  return {
+    roleGuard: /verifyRoles\s*\(/.test(chain),
+    permissions: permissionsOf(expanded),
+    superAdmin: /requireSuperAdmin/.test(chain),
+    authenticated: /verifyAuth/.test(chain),
+  };
+}
