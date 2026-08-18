@@ -322,14 +322,14 @@ be documented as superseded if it is also being measured.
 
 | Capability | Customer Mobile | Customer Web | Provider Mobile | Provider Web | Admin Web |
 | --- | --- | --- | --- | --- | --- |
-| Open (or resolve) a booking conversation | legacy | legacy | legacy | legacy | legacy |
-| List my conversations with unread counts | legacy | legacy | legacy | legacy | legacy |
-| Read one conversation and its participants | legacy | legacy | legacy | legacy | legacy |
-| Page through a conversation transcript | legacy | legacy | legacy | legacy | legacy |
-| Send a message | legacy | legacy | legacy | legacy | legacy |
+| Open (or resolve) a booking conversation | legacy | legacy | legacy | migrated | legacy |
+| List my conversations with unread counts | legacy | legacy | legacy | migrated | legacy |
+| Read one conversation and its participants | legacy | legacy | legacy | migrated | legacy |
+| Page through a conversation transcript | legacy | legacy | legacy | migrated | legacy |
+| Send a message | legacy | legacy | legacy | migrated | legacy |
 | Attach a file to a conversation | planned | planned | planned | planned | planned |
 | Report a message to moderation | planned | planned | planned | planned | — |
-| Advance the read pointer | legacy | legacy | legacy | legacy | legacy |
+| Advance the read pointer | legacy | legacy | legacy | migrated | legacy |
 
 No client is `migrated` yet: the platform application repositories are out of scope until the
 backend Master Command completes. Every legacy route above stays mounted and reaches the same

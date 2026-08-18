@@ -125,26 +125,12 @@ shows `admin=` counts.
 The cheapest real migration, and the one that proves the contract under load.
 
 <!-- BEGIN GENERATED: v1-moves:providerWeb -->
-**52** canonical capabilities are live that this client still reaches by a legacy route.
+**22** canonical capabilities are live that this client still reaches by a legacy route.
 
 | Move to (canonical) | Legacy routes it supersedes |
 |---|---|
-| `GET /api/v1/me` | `GET /api/auth/me` |
-| `GET /api/v1/provider/jobs` | `GET /api/worker/job-cards`<br>`GET /api/workers/:workerId/job-cards` |
-| `GET /api/v1/provider/jobs/:bookingId` | `GET /api/worker/job-cards/:bookingId` |
-| `GET /api/v1/notifications` | `GET /api/user/notifications` |
-| `GET /api/v1/notifications/unread-count` | `GET /api/user/notifications/unread-count` |
-| `PATCH /api/v1/notifications/:key/read` | `PATCH /api/user/notifications/:key/read` |
 | `DELETE /api/v1/notifications/:key` | `DELETE /api/provider/notifications/:key` |
-| `POST /api/v1/notifications/read-all` | `POST /api/user/notifications/mark-all-read` |
-| `GET /api/v1/me/notification-preferences` | `GET /api/provider/notification-preferences` |
-| `PATCH /api/v1/me/notification-preferences` | `PUT /api/provider/notification-preferences` |
-| `POST /api/v1/me/devices` | `POST /api/provider/fcm-token`<br>`POST /api/user/fcm-token` |
-| `DELETE /api/v1/me/devices` | `DELETE /api/provider/fcm-token`<br>`DELETE /api/user/fcm-token` |
 | `PATCH /api/v1/me` | `PUT /api/user/updateprofile` |
-| `GET /api/v1/provider/profile` | `GET /api/provider/profile` |
-| `PATCH /api/v1/provider/profile` | `POST /api/provider/public-profile-revisions` |
-| `GET /api/v1/provider/documents` | `GET /api/provider/documents` |
 | `GET /api/v1/provider/document-types` | `GET /api/provider/document-types` |
 | `POST /api/v1/provider/documents` | `POST /api/provider/documents` |
 | `GET /api/v1/provider/documents/:documentId/preview` | `GET /api/provider/documents/:documentId/preview` |
@@ -163,24 +149,8 @@ The cheapest real migration, and the one that proves the contract under load.
 | `POST /api/v1/auth/forgot-password` | `POST /api/auth/forgot-password` |
 | `POST /api/v1/auth/reset-password` | `POST /api/auth/reset-password` |
 | `POST /api/v1/auth/resend-verification` | `POST /api/auth/resend-email-otp`<br>`GET /api/auth/resendverification` |
-| `POST /api/v1/conversations` | `GET /api/bookings/:bookingId/conversation` |
-| `GET /api/v1/conversations` | `GET /api/chat/conversations` |
-| `GET /api/v1/conversations/:conversationId` | `GET /api/chat/conversations/:id` |
-| `GET /api/v1/conversations/:conversationId/messages` | `GET /api/chat/conversations/:id/messages` |
-| `POST /api/v1/conversations/:conversationId/messages` | `POST /api/chat/conversations/:id/messages` |
-| `POST /api/v1/conversations/:conversationId/read` | `POST /api/chat/conversations/:id/read` |
-| `POST /api/v1/provider/jobs/:bookingId/accept` | `PUT /api/worker/bookings/:bookingId/accept` |
-| `POST /api/v1/provider/jobs/:bookingId/decline` | `PUT /api/worker/bookings/:bookingId/decline` |
-| `POST /api/v1/provider/jobs/:bookingId/en-route` | `PUT /api/worker/bookings/:bookingId/en-route` |
-| `POST /api/v1/provider/jobs/:bookingId/arrived` | `PUT /api/worker/bookings/:bookingId/arrived` |
 | `POST /api/v1/provider/jobs/:bookingId/start` | `PUT /api/worker/bookings/:bookingId/start` |
-| `POST /api/v1/provider/jobs/:bookingId/complete` | `PUT /api/worker/bookings/:bookingId/complete` |
-| `POST /api/v1/provider/jobs/:bookingId/cancel` | `POST /api/provider/bookings/:bookingId/cancel` |
-| `POST /api/v1/bookings/:bookingId/additional-work` | `POST /api/additional/request/:userId` |
 | `GET /api/v1/bookings/:bookingId/additional-work` | `GET /api/additional/booking/:bookingId` |
-| `GET /api/v1/provider/earnings/summary` | `GET /api/provider/earnings/summary` |
-| `GET /api/v1/provider/earnings/transactions` | `GET /api/provider/earnings`<br>`GET /api/provider/ledger` |
-| `GET /api/v1/provider/earnings/payouts` | `GET /api/provider/payouts` |
 
 Caller state is recorded **per capability**, not per legacy path: this client calls one or more of the routes on the right, not all of them. `ROLE_SPECIFIC` routes are excluded — those are the ones that must not be collapsed.
 <!-- END GENERATED: v1-moves:providerWeb -->

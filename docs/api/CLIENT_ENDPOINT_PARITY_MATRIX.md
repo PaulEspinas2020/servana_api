@@ -27,14 +27,14 @@
 | Single-surface | 2 |
 | **Divergent (forked truth)** | **0** |
 | Broken (names a missing endpoint) | 0 |
-| Surface × capability cells on canonical | 0 |
-| Surface × capability cells still legacy | 112 |
+| Surface × capability cells on canonical | 22 |
+| Surface × capability cells still legacy | 95 |
 
 **0 divergent capabilities.** Every capability whose
 endpoints span more than one route family names exactly one domain service — the
 role split is a permission boundary, never a second implementation.
 
-**0 cells on canonical.** No client has migrated. The v1
+**22 cells on canonical.** No client has migrated. The v1
 namespace is mounted, tested and documented, and it is unpushed — nothing can migrate
 against a contract that is not serving. That is a deployment gap, not a design gap, and
 the matrix says so rather than showing optimistic cells.
@@ -68,55 +68,55 @@ direction of whoever wrote it.
 | Manage my saved addresses | SHARED | legacy | legacy | — | — | — |
 | What is left before my account is usable | SHARED | planned | planned | planned | planned | — |
 | Read and change my customer profile | SHARED | legacy | legacy | — | — | planned |
-| Read and change my account record | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | legacy | planned |
+| Read and change my account record | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | ⚠ mixed | planned |
 | Read and change my availability, and book time off | SHARED | — | — | ⚠ mixed | legacy | — |
-| Submit, read, preview and withdraw my documents | SHARED | — | — | ⚠ mixed | legacy | — |
-| Read and change my provider profile | SHARED | — | — | legacy | legacy | planned |
+| Submit, read, preview and withdraw my documents | SHARED | — | — | ⚠ mixed | ⚠ mixed | — |
+| Read and change my provider profile | SHARED | — | — | legacy | **migrated** | planned |
 | Read the services I am approved for | SHARED | — | — | planned | planned | — |
 | Read my security posture | SHARED | planned | planned | planned | planned | planned |
 | Read and change my settings | SHARED | planned | planned | planned | planned | planned |
 | Operate the booking queue | SINGLE_SURFACE | — | — | — | — | legacy |
 | Register, sign in, and end a session | SHARED | legacy | ⚠ mixed | legacy | legacy | legacy |
 | Recover an account and verify a contact | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | ⚠ mixed | legacy |
-| Read booking-code state | SHARED | planned | planned | planned | planned | planned |
+| Read booking-code state | SHARED | planned | planned | planned | **migrated** | planned |
 | Read a booking | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | planned | planned |
-| Move a booking through its state machine | ROLE_SPLIT_SHARED_SERVICE | — | — | legacy | legacy | legacy |
+| Move a booking through its state machine | ROLE_SPLIT_SHARED_SERVICE | — | — | legacy | ⚠ mixed | legacy |
 | Browse the service catalog | SHARED | ⚠ mixed | planned | legacy | — | — |
 | Search services | ROLE_SPLIT_SHARED_SERVICE | ⚠ mixed | planned | — | — | — |
 | Read the support cases I raised on a booking | SHARED | planned | planned | — | — | — |
-| A provider's own job queue | SHARED | — | — | ⚠ mixed | legacy | — |
+| A provider's own job queue | SHARED | — | — | ⚠ mixed | **migrated** | — |
 | Read a provider's public profile | SHARED | planned | planned | — | — | planned |
-| Read the reschedule history of a booking | SHARED | planned | planned | planned | planned | planned |
-| Register and release this device for push | SHARED | legacy | planned | legacy | legacy | — |
+| Read the reschedule history of a booking | SHARED | planned | planned | planned | **migrated** | planned |
+| Register and release this device for push | SHARED | legacy | planned | legacy | **migrated** | — |
 | Dismiss one notification | SHARED | planned | planned | planned | legacy | — |
-| Read my notification inbox | SHARED | legacy | legacy | legacy | legacy | planned |
-| Mark everything read | SHARED | legacy | legacy | legacy | legacy | planned |
-| Mark one notification read | SHARED | legacy | legacy | legacy | legacy | planned |
-| Read and change my notification preferences | ROLE_SPLIT_SHARED_SERVICE | planned | planned | legacy | legacy | planned |
-| How many unread I have | SHARED | legacy | legacy | legacy | legacy | planned |
-| Additional work | SHARED | planned | planned | planned | legacy | planned |
-| Cancellation | ROLE_SPLIT_SHARED_SERVICE | legacy | legacy | legacy | legacy | — |
-| Disputes | SHARED | planned | planned | planned | planned | ⚠ mixed |
-| Booking codes (OTP) | SHARED | legacy | planned | planned | planned | planned |
+| Read my notification inbox | SHARED | legacy | legacy | legacy | **migrated** | planned |
+| Mark everything read | SHARED | legacy | legacy | legacy | **migrated** | planned |
+| Mark one notification read | SHARED | legacy | legacy | legacy | **migrated** | planned |
+| Read and change my notification preferences | ROLE_SPLIT_SHARED_SERVICE | planned | planned | legacy | ⚠ mixed | planned |
+| How many unread I have | SHARED | legacy | legacy | legacy | **migrated** | planned |
+| Additional work | SHARED | planned | planned | planned | ⚠ mixed | planned |
+| Cancellation | ROLE_SPLIT_SHARED_SERVICE | legacy | legacy | legacy | **migrated** | — |
+| Disputes | SHARED | planned | planned | planned | **migrated** | ⚠ mixed |
+| Booking codes (OTP) | SHARED | legacy | planned | planned | **migrated** | planned |
 | Reschedule | SHARED | planned | planned | — | — | legacy |
-| Tracking | SHARED | legacy | legacy | planned | planned | planned |
-| Provider earnings summary | SHARED | — | — | legacy | legacy | — |
-| Provider earnings transactions | SHARED | — | — | legacy | legacy | — |
+| Tracking | SHARED | legacy | legacy | planned | **migrated** | planned |
+| Provider earnings summary | SHARED | — | — | legacy | **migrated** | — |
+| Provider earnings transactions | SHARED | — | — | legacy | **migrated** | — |
 | Start or resume a booking payment | SHARED | legacy | legacy | — | — | planned |
 | Read a booking's payment and price breakdown | SHARED | planned | planned | planned | planned | planned |
-| Provider payouts | SHARED | — | — | legacy | legacy | — |
+| Provider payouts | SHARED | — | — | legacy | **migrated** | — |
 | Admin ledger reconciliation | SINGLE_SURFACE | — | — | — | — | legacy |
 | Refund a booking payment | SHARED | planned | planned | — | — | legacy |
 | The composed home surface | SHARED | planned | planned | — | — | — |
 | Which sections exist and what owns each | SHARED | planned | planned | — | — | planned |
 | Attach a file to a conversation | SHARED | planned | planned | planned | planned | planned |
-| Read one conversation and its participants | SHARED | legacy | legacy | legacy | legacy | legacy |
-| List my conversations with unread counts | SHARED | legacy | legacy | legacy | legacy | legacy |
-| Advance the read pointer | SHARED | legacy | legacy | legacy | legacy | legacy |
-| Open (or resolve) a booking conversation | SHARED | legacy | legacy | legacy | legacy | legacy |
+| Read one conversation and its participants | SHARED | legacy | legacy | legacy | **migrated** | legacy |
+| List my conversations with unread counts | SHARED | legacy | legacy | legacy | **migrated** | legacy |
+| Advance the read pointer | SHARED | legacy | legacy | legacy | **migrated** | legacy |
+| Open (or resolve) a booking conversation | SHARED | legacy | legacy | legacy | **migrated** | legacy |
 | Report a message to moderation | SHARED | planned | planned | planned | planned | — |
-| Send a message | SHARED | legacy | legacy | legacy | legacy | legacy |
-| Page through a conversation transcript | SHARED | legacy | legacy | legacy | legacy | legacy |
+| Send a message | SHARED | legacy | legacy | legacy | **migrated** | legacy |
+| Page through a conversation transcript | SHARED | legacy | legacy | legacy | **migrated** | legacy |
 | Raise a support case about a completed booking | SHARED | planned | planned | — | — | — |
 | Read a provider's published reviews | SHARED | planned | planned | — | — | — |
 | A provider's rating summary | SHARED | planned | planned | — | — | — |

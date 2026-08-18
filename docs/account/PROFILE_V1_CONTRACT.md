@@ -357,7 +357,7 @@ route can only be documented as superseded if it is also being measured.
 | Read my security posture | planned | planned | planned | planned | planned |
 | Read and change my customer profile | legacy | legacy | — | — | planned |
 | Manage my saved addresses | legacy | legacy | — | — | — |
-| Read and change my provider profile | — | — | legacy | legacy | planned |
+| Read and change my provider profile | — | — | legacy | migrated | planned |
 | Submit, read, preview and withdraw my documents | — | — | legacy | legacy | — |
 | Read and change my availability, and book time off | — | — | legacy | legacy | — |
 | Read the services I am approved for | — | — | planned | planned | — |
