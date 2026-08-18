@@ -12,7 +12,7 @@
 >
 > **Status legend:** `OPEN` · `DONE` · `SUPERSEDED`
 
-Last updated: 2026-08-18 (TAB 04)
+Last updated: 2026-08-18 (TAB 05)
 
 ---
 
@@ -75,6 +75,9 @@ Last updated: 2026-08-18 (TAB 04)
 | --- | --- | --- | --- |
 | 05.1 | Confirm nginx neither strips nor duplicates the new security headers, and align `client_max_body_size` with the Express 10mb limit | `PROD-ACCESS` | Live header capture + nginx config reviewed |
 | 05.2 | Set admin rate limits from **measured p99 admin traffic**, ship log-only for one business day, then enforce | `PROD-ACCESS` | p99 figures recorded; log-only soak completed |
+| 05.3 | Verify the provider-document and catalog-banner flows still fetch from all five consumers now that `Cross-Origin-Resource-Policy` is served. helmet's default (`same-origin`) would break them; it is set to `cross-origin` deliberately, and that decision needs confirming against real clients | `NO-REPO`, `PROD-ACCESS` | One document and one banner fetched cross-origin from each consumer |
+| 05.4 | Deploy with `ADMIN_RATE_LIMIT_LOG_ONLY=true` FIRST and collect a business day of counts before enforcing. The tier values are starting points from the shape of the work, not measured traffic | `PROD-ACCESS`, `HUMAN-JUDGEMENT` | A day of log-only counts; limits re-derived from p99; flag removed |
+| 05.5 | Decide whether HSTS `preload` is wanted. It is deliberately NOT set — preload is close to a one-way door and belongs to whoever owns the domain | `HUMAN-JUDGEMENT` | An explicit decision recorded either way |
 
 ## TAB 16 — Certification & runbook
 
