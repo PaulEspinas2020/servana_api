@@ -126,6 +126,15 @@ const LEGACY_TO_V1_CODE: Record<string, V1ErrorCode> = {
   INVALID_TOKEN: 'UNAUTHENTICATED',
   FORBIDDEN_ROLE: 'ROLE_REQUIRED',
   FORBIDDEN: 'FORBIDDEN',
+  // Provider account-state denials from `requireCapability`. Mapped one-to-one,
+  // never collapsed onto FORBIDDEN: `denialFor` picks between them precisely
+  // because a suspended provider and an unapproved one need different screens,
+  // and flattening here would discard that at the last step.
+  PROVIDER_NOT_APPROVED: 'PROVIDER_NOT_APPROVED',
+  PROVIDER_SUSPENDED: 'PROVIDER_SUSPENDED',
+  PROVIDER_REJECTED: 'PROVIDER_REJECTED',
+  PROVIDER_DISABLED: 'PROVIDER_DISABLED',
+  ROLE_NOT_PERMITTED: 'ROLE_REQUIRED',
 };
 
 export const v1AuthEnvelope = (inner: RequestHandler): RequestHandler =>
