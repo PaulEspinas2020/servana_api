@@ -74,11 +74,23 @@ export const seedUser = (uid: string, role: number, o: Partial<Row> = {}): void 
     gender: null,
     photo_url: null,
     public_display_name: null,
-    public_biography: null,
+    public_bio: null,
     public_skills: null,
     public_languages: null,
     public_experience_summary: null,
   });
+};
+
+/**
+ * Set public provider-profile columns on an already-seeded user.
+ *
+ * Separate from `seedUser` because `seedUser`'s options object applies to
+ * `user_credentials`; the public profile lives in `user_profile` and its column
+ * names are the ones a projection bug hides behind.
+ */
+export const seedProviderProfile = (uid: string, o: Partial<Row> = {}): void => {
+  const row = store.profiles.find((x) => x.uid === uid);
+  if (row) Object.assign(row, o);
 };
 
 export const seedAddress = (uid: string, o: Partial<Row> = {}): Row => {
@@ -116,7 +128,13 @@ export const seedRequirement = (uid: string, type: string, status: string): void
 };
 
 export const seedService = (uid: string, serviceId: number, status = 'active'): void => {
-  store.employeeServices.push({ worker_uid: uid, service_id: serviceId, status, name: `Service ${serviceId}` });
+  // Keyed on `employee_uid` because that is the column `servana.employee_services`
+  // actually declares (scripts/baseline/000-baseline.sql). This fake previously
+  // stored `worker_uid` — the same name the service wrongly queried — so the fake
+  // and the defect agreed with each other and the suite stayed green while every
+  // provider got an empty list in production. A fake that mirrors the bug proves
+  // the bug.
+  store.employeeServices.push({ employee_uid: uid, service_id: serviceId, status, name: `Service ${serviceId}` });
 };
 
 export const addressesFor = (uid: string): Row[] =>
@@ -236,8 +254,14 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
   if (/^SELECT id, requirement_type, status, created_at, expiry_date, review_note/i.test(flat)) {
     return done(store.requirements.filter((r) => r.worker_uid === params[0]));
   }
-  if (/^SELECT es\.service_id, es\.status, sv\.name/i.test(flat)) {
-    return done(store.employeeServices.filter((e) => e.worker_uid === params[0]));
+  // The WHERE column is part of the match, deliberately. Matching on the SELECT
+  // list alone accepted `WHERE es.worker_uid = $1`, which PostgreSQL answers with
+  // 42703 — so the fake was strictly more permissive than the server it stands in
+  // for, and a wider predicate passes while production is broken. Anything that
+  // does not match falls through to the unrouted-SQL throw at the end.
+  if (/^SELECT es\.service_id, es\.status, sv\.name/i.test(flat)
+      && /WHERE es\.employee_uid = \$1/i.test(flat)) {
+    return done(store.employeeServices.filter((e) => e.employee_uid === params[0]));
   }
 
   // ── addresses ─────────────────────────────────────────────────────────────
