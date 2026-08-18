@@ -12,7 +12,7 @@
 >
 > **Status legend:** `OPEN` · `DONE` · `SUPERSEDED`
 
-Last updated: 2026-08-18 (TAB 10)
+Last updated: 2026-08-18 (TAB 11)
 
 ---
 
@@ -116,6 +116,15 @@ Last updated: 2026-08-18 (TAB 10)
 | 10.3 | Confirm a hidden button is never the only control — call each guarded route directly with a deliberately under-permissioned token and require 403 (§12) | `PROD-ACCESS`, `NO-CRED` | Direct calls refused for every dangerous capability |
 | 10.4 | Sweep all 250 admin routes for internal cross-user scoping (§11). Two notification routes were verified actor-scoped in TAB 10; the rest are unchecked | `HUMAN-JUDGEMENT` | Each route's query confirmed scoped, or refused as a leak |
 | 10.5 | Delete the two KNOWN DEFECT exceptions once TAB 09's telemetry gate confirms silence — `workers/:uid/archive` and `provider/reconciliation`. Both are duplicates that are also the weaker door | `PROD-ACCESS` | Routes removed; exception list drops to six |
+
+## TAB 11 — contract testing
+
+| # | Task | Why blocked | Closes when |
+| --- | --- | --- | --- |
+| 11.1 | Provision `ADMIN_API_BASE_URL` and a dedicated CI admin identity with a scoped, rotatable credential. It must be a real Firebase identity with a KNOWN permission set — **not** a super admin, or permission failures are bypassed rather than observed | `NO-CRED` | `smoke:contracts` executes instead of reporting `NOT_AVAILABLE` |
+| 11.2 | Run `smoke:contracts` against a non-production environment on every push, and against production read-only on a schedule | `NO-REPO`, `NO-CRED` | Green runs in CI on both cadences |
+| 11.3 | **Demonstrate the loop closed:** change one backend response key deliberately and watch the PORTAL build fail. This is the proof; the backend-side generatability gate is only half | `NO-REPO` | A red portal build traced to a backend shape change |
+| 11.4 | Generate the portal's DTOs from `docs/api/openapi.v1.json` and wire the generation into its `verify:release`, so drift fails at build time in whichever repo drifted | `NO-REPO` | Portal DTOs generated from the document, not hand-written |
 
 ## TAB 16 — Certification & runbook
 
