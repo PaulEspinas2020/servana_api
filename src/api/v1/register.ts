@@ -322,6 +322,7 @@ import { handlers as financeHandlers } from './domains/finance';
 import { handlers as conversationHandlers } from './domains/conversations';
 import { handlers as accountHandlers } from './domains/account';
 import { handlers as homeHandlers } from './domains/home';
+import { handlers as adminBookingHandlers } from './domains/adminBookings';
 import {
   perAccountLoginLimiter,
   perIpLoginLimiter,
@@ -347,6 +348,7 @@ export const V1_HANDLERS: V1Handlers = {
   ...conversationHandlers,
   ...accountHandlers,
   ...homeHandlers,
+  ...adminBookingHandlers,
 };
 
 /**
@@ -376,20 +378,60 @@ const BUCKET_MIDDLEWARE: Record<BucketName, RequestHandler> = {
  * endpoints that carry a limiter.
  */
 /**
- * Fine-grained admin permissions, per endpoint.
+ * Fine-grained admin permissions, DERIVED from the contract (TAB 06).
  *
- * `auth: 'admin'` proves role 1 and nothing more. The legacy admin finance
- * routes additionally gate on a named permission from `adminPermissionService`,
- * and a v1 successor that dropped that check would be a QUIETER route to the
- * same data — the exact shape of privilege escalation a migration is supposed
- * to avoid. Declared here rather than on the contract because permissions are
- * an authorization detail the OpenAPI generator has no field for, and a
+ * `auth: 'admin'` proves role 1 and nothing more. Every legacy admin route
+ * additionally gates on a named permission, and a v1 successor that dropped it
+ * would be a QUIETER route to the same data — privilege escalation arriving as
+ * a migration.
+ *
+ * ## Why this moved out of a map in this file and onto `ContractEntry`
+ *
+ * It used to be a literal map here, and its docblock gave a fair reason: *a
  * permission key sitting unused in a data file reads as protection that is not
- * mounted.
+ * mounted.* That objection is real, and the answer is to make "unused"
+ * impossible rather than to keep the data away from the contract.
+ *
+ * So the two checks below are the price of moving it, and they are what make
+ * the field trustworthy:
+ *
+ *   1. every `auth: 'admin'` entry MUST declare a permission — a missing one is
+ *      a throw at import, not a route that quietly checks role alone;
+ *   2. every declared permission MUST end up mounted — so a key cannot sit in
+ *      the contract describing protection nobody applied.
+ *
+ * That is the same discipline this file already applies to handlers, where a
+ * key naming no implemented entry is a throw rather than a silent no-op. With
+ * both in place the contract is the better home: it is the surface the docs,
+ * the OpenAPI document and the parity tests all read, and a permission declared
+ * beside the route it guards can be compared against the legacy route without
+ * anybody parsing an Express middleware chain.
  */
-const V1_PERMISSIONS: Record<string, string> = {
-  'admin.finance.reconciliation': 'reconciliation.view',
-};
+const V1_PERMISSIONS: Record<string, string> = (() => {
+  const out: Record<string, string> = {};
+  const undeclared: string[] = [];
+
+  for (const entry of V1_CONTRACT) {
+    if (entry.auth !== 'admin') continue;
+    if (entry.status !== 'implemented') continue;
+    if (!entry.permission) {
+      undeclared.push(entry.id);
+      continue;
+    }
+    out[entry.id] = entry.permission;
+  }
+
+  if (undeclared.length) {
+    throw new Error(
+      `v1 contract: ${undeclared.length} admin endpoint(s) declare no permission — ` +
+        `${undeclared.join(', ')}. auth: 'admin' proves role 1 and nothing more, so an ` +
+        `admin endpoint without a named permission is a weaker guard than the legacy ` +
+        `route it supersedes.`,
+    );
+  }
+
+  return out;
+})();
 
 export const V1_MIDDLEWARE: V1Middleware = (() => {
   const byId = new Map<string, RequestHandler[]>();
@@ -401,6 +443,17 @@ export const V1_MIDDLEWARE: V1Middleware = (() => {
 
   for (const [id, permission] of Object.entries(V1_PERMISSIONS)) {
     byId.set(id, [...(byId.get(id) ?? []), requirePermission(permission) as RequestHandler]);
+  }
+
+  /**
+   * The second half of the guarantee: a declared permission that never got
+   * mounted is a contract that describes protection nobody applied.
+   */
+  const unmounted = Object.keys(V1_PERMISSIONS).filter((id) => !byId.has(id));
+  if (unmounted.length) {
+    throw new Error(
+      `v1 contract: permission declared but not mounted for ${unmounted.join(', ')}`,
+    );
   }
 
   return Object.fromEntries(byId);

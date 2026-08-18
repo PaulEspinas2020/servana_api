@@ -94,6 +94,32 @@ export interface ContractEntry {
   summary: string;
   auth: AuthMode;
   /**
+   * The named permission this endpoint additionally demands.
+   *
+   * REQUIRED for every `auth: 'admin'` entry. `register.ts` throws at import
+   * time when one is missing, so this cannot be a field somebody forgot.
+   *
+   * ## Why it is on the contract and not only in register.ts
+   *
+   * It used to live only in a `V1_PERMISSIONS` map inside `register.ts`, whose
+   * docblock made a fair objection to putting it here: *a permission key
+   * sitting unused in a data file reads as protection that is not mounted*.
+   *
+   * That objection is answered by making "unused" impossible rather than by
+   * moving the data. `register.ts` now builds its permission middleware FROM
+   * this field and refuses to start if an admin entry declares none — the same
+   * discipline it already applies to handlers, where a key naming no
+   * implemented entry is a throw and not a silent no-op.
+   *
+   * With that in place, the contract is the better home. `auth: 'admin'` proves
+   * role 1 and nothing else, and the legacy admin routes gate on a named
+   * permission as well. A v1 successor that dropped it would be a QUIETER route
+   * to the same data — privilege escalation arriving as a migration. Declaring
+   * it beside the route it guards is what lets a test compare the two surfaces
+   * without reading Express middleware chains.
+   */
+  permission?: string;
+  /**
    * `true` when a repeat of the identical request produces the identical
    * end state. GETs are idempotent by definition; a mutation must say so
    * explicitly.
@@ -3375,10 +3401,11 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/admin/bookings',
     summary: 'Admin booking operations list.',
     auth: 'admin',
+    permission: 'bookings.view',
     idempotent: true,
     responseSchema: 'AdminBookingList',
     errors: ['PERMISSION_REQUIRED'],
-    status: 'planned',
+    status: 'implemented',
     domainService: 'services/adminBookingService.listBookings',
     legacy: [
       {
@@ -3415,11 +3442,12 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/admin/bookings/:bookingId/assignment-candidates',
     summary: 'Providers who could take this booking, ranked, each with its blocking reasons — and a diagnosis of the pool itself.',
     auth: 'admin',
+    permission: 'bookings.assign_provider',
     idempotent: true,
     responseSchema: 'AssignmentCandidatePool',
     errors: ['PERMISSION_REQUIRED', 'VALIDATION_FAILED', 'NOT_FOUND'],
     params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
-    status: 'planned',
+    status: 'implemented',
     domainService: 'services/providerEligibilityEngine.listAssignmentCandidatePool',
     legacy: [
       {
@@ -3446,6 +3474,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/admin/bookings/:bookingId/assign',
     summary: 'Assign a provider to an unassigned booking.',
     auth: 'admin',
+    permission: 'bookings.assign_provider',
     idempotent: false,
     replayGuard:
       'The executor locks the booking row and takes a provider-scoped advisory lock, then ' +
@@ -3455,7 +3484,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     requestSchema: 'AdminAssignRequest',
     errors: ['PERMISSION_REQUIRED', 'VALIDATION_FAILED', 'NOT_FOUND', 'BOOKING_STATE_CONFLICT', 'CONFLICT'],
     params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
-    status: 'planned',
+    status: 'implemented',
     domainService: 'services/booking/transitionExecutor.transitionBooking (ADMIN_ASSIGN)',
     legacy: [
       {
@@ -3481,6 +3510,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/admin/bookings/:bookingId/reassign',
     summary: 'Move an assigned booking from one provider to another, with an audited reason.',
     auth: 'admin',
+    permission: 'bookings.reassign_provider',
     idempotent: false,
     replayGuard:
       'Same two locks as assign. The outgoing assignment row is closed inside the transaction ' +
@@ -3490,7 +3520,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     requestSchema: 'AdminReassignRequest',
     errors: ['PERMISSION_REQUIRED', 'VALIDATION_FAILED', 'NOT_FOUND', 'BOOKING_STATE_CONFLICT', 'CONFLICT'],
     params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
-    status: 'planned',
+    status: 'implemented',
     domainService: 'services/booking/transitionExecutor.transitionBooking (ADMIN_REASSIGN)',
     legacy: [
       {
@@ -3753,6 +3783,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/admin/finance/reconciliation',
     summary: 'Ledger reconciliation: every check, its open breaks, and the platform money totals.',
     auth: 'admin',
+    permission: 'reconciliation.view',
     idempotent: true,
     responseSchema: 'FinanceReconciliation',
     errors: ['PERMISSION_REQUIRED'],

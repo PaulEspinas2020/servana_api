@@ -12,7 +12,7 @@
 >
 > **Status legend:** `OPEN` · `DONE` · `SUPERSEDED`
 
-Last updated: 2026-08-18 (TAB 05)
+Last updated: 2026-08-18 (TAB 06)
 
 ---
 
@@ -78,6 +78,14 @@ Last updated: 2026-08-18 (TAB 05)
 | 05.3 | Verify the provider-document and catalog-banner flows still fetch from all five consumers now that `Cross-Origin-Resource-Policy` is served. helmet's default (`same-origin`) would break them; it is set to `cross-origin` deliberately, and that decision needs confirming against real clients | `NO-REPO`, `PROD-ACCESS` | One document and one banner fetched cross-origin from each consumer |
 | 05.4 | Deploy with `ADMIN_RATE_LIMIT_LOG_ONLY=true` FIRST and collect a business day of counts before enforcing. The tier values are starting points from the shape of the work, not measured traffic | `PROD-ACCESS`, `HUMAN-JUDGEMENT` | A day of log-only counts; limits re-derived from p99; flag removed |
 | 05.5 | Decide whether HSTS `preload` is wanted. It is deliberately NOT set — preload is close to a one-way door and belongs to whoever owns the domain | `HUMAN-JUDGEMENT` | An explicit decision recorded either way |
+
+## TAB 06 — v1 admin domain
+
+| # | Task | Why blocked | Closes when |
+| --- | --- | --- | --- |
+| 06.1 | Probe the four new v1 admin booking routes on production after deploy: 401 unauthenticated, 200 authorized, 403 for an admin lacking the named permission | `PROD-ACCESS` | Three status codes captured per route |
+| 06.2 | Grant/confirm `bookings.view`, `bookings.assign_provider` and `bookings.reassign_provider` are held by the operators who use those screens, before the portal cuts over in TAB 07 | `PROD-ACCESS` | Grant list captured |
+| 06.3 | Build wave 2 (provider operations) and wave 3 (finance). Wave 3 is now unblocked by TAB 01 and additionally carries TAB 01's deferred `Deprecation`/`Sunset` headers for `/api/admin/disbursements/*` | `HUMAN-JUDGEMENT` | Waves specified, sized and scheduled |
 
 ## TAB 16 — Certification & runbook
 

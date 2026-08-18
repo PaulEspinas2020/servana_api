@@ -292,7 +292,21 @@ describe('every object-scoped endpoint has an ownership rule', () => {
   it('gives every rule a predicate, an enforcer and a proving suite', () => {
     for (const rule of OWNERSHIP_RULES) {
       expect(rule.predicate.length).toBeGreaterThan(15);
-      expect(rule.enforcedBy).toMatch(/^services\//);
+      /**
+       * `services/` OR `middleware/`.
+       *
+       * Every rule here used to be relationship-scoped — "this booking is
+       * yours" — and those are always enforced by a domain service, so
+       * `^services/` was an accurate description of the world. TAB 06 added the
+       * first PERMISSION-scoped rule: an admin is not scoped to a booking by
+       * any relationship, and the thing standing between them and the object is
+       * `requirePermission`, which is middleware by design.
+       *
+       * The assertion's intent is "name a real module, not prose", and that is
+       * preserved. Forcing a permission check to live under `services/` to
+       * satisfy a regex would move code to suit a test.
+       */
+      expect(rule.enforcedBy).toMatch(/^(services|middleware)\//);
       expect(rule.provenBy).toMatch(/tests\/.+\.test\.ts/);
     }
   });

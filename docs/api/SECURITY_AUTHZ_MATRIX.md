@@ -15,13 +15,13 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 105 |
+| Mounted endpoints | 109 |
 | `public` | 20 |
 | `authenticated` | 58 |
 | `provider` | 26 |
-| `admin` | 1 |
-| Object-scoped | 40 |
-| Object-scoped WITH an ownership rule | 40 |
+| `admin` | 5 |
+| Object-scoped | 43 |
+| Object-scoped WITH an ownership rule | 43 |
 | **Unguarded** | **0** |
 
 ## 2. Role access, by declared mode
@@ -46,6 +46,14 @@ role; the whole point is that one customer must not read another's booking.
 A booking carries an address and a time when somebody will be at home. A leak of
 it is not a data-protection abstraction — it is telling a stranger where a person
 lives and when they will be there. OWASP puts this first in the API top ten.
+
+### `admin-bookings` — `:bookingId`
+
+- predicate: none — an admin is not scoped to a booking by relationship. Authority is role 1 plus the named permission on the contract entry (bookings.view, bookings.assign_provider, bookings.reassign_provider), mounted by api/v1/register from ContractEntry.permission.
+- enforced by: `middleware/requirePermission`
+- proven by: `tests/v1-admin-permission-parity.test.ts, tests/v1-router.test.ts, tests/authz-parity.test.ts`
+- a non-owner receives: 403 PERMISSION_REQUIRED, decided before the booking is read — so it is identical for a booking that does not exist
+- distinguishes absent from forbidden: **no**
 
 ### `bookings` — `:bookingId`
 
@@ -123,6 +131,10 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 
 | Endpoint | Route | Mode | A C P A | Object rule |
 | --- | --- | --- | --- | --- |
+| `admin.bookings.assign` | POST /admin/bookings/:bookingId/assign | `admin` | · · · ● | ✔ bookingId |
+| `admin.bookings.assignmentCandidates` | GET /admin/bookings/:bookingId/assignment-candidates | `admin` | · · · ● | ✔ bookingId |
+| `admin.bookings.list` | GET /admin/bookings | `admin` | · · · ● | — |
+| `admin.bookings.reassign` | POST /admin/bookings/:bookingId/reassign | `admin` | · · · ● | ✔ bookingId |
 | `admin.finance.reconciliation` | GET /admin/finance/reconciliation | `admin` | · · · ● | — |
 | `auth.forgotPassword` | POST /auth/forgot-password | `public` | ● ● ● ● | — |
 | `auth.login` | POST /auth/login | `public` | ● ● ● ● | — |
@@ -251,8 +263,8 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-54 of 105 endpoints are probeable; the other
-51 are writes and are never probed, because a POST to
+56 of 109 endpoints are probeable; the other
+53 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.
 

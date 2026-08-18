@@ -32,9 +32,9 @@ endpoint remains, §3 states why the authorization differs — never the truth.
 | `POST /api/v1/provider/jobs/:bookingId/start` | implemented | · | · | `legacy` | `legacy` | · |
 | `POST /api/v1/provider/jobs/:bookingId/complete` | implemented | · | · | `legacy` | `legacy` | · |
 | `POST /api/v1/provider/jobs/:bookingId/cancel` | implemented | · | · | `legacy` | `legacy` | · |
-| `GET /api/v1/admin/bookings/:bookingId/assignment-candidates` | planned | · | · | · | · | `legacy` |
-| `POST /api/v1/admin/bookings/:bookingId/assign` | planned | · | · | · | · | `legacy` |
-| `POST /api/v1/admin/bookings/:bookingId/reassign` | planned | · | · | · | · | `legacy` |
+| `GET /api/v1/admin/bookings/:bookingId/assignment-candidates` | implemented | · | · | · | · | `legacy` |
+| `POST /api/v1/admin/bookings/:bookingId/assign` | implemented | · | · | · | · | `legacy` |
+| `POST /api/v1/admin/bookings/:bookingId/reassign` | implemented | · | · | · | · | `legacy` |
 
 `legacy` means the client is still on the pre-v1 path listed in §5 and the
 alias is live. Shared surfaces move additively until every client has migrated.

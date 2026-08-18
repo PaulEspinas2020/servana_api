@@ -297,6 +297,46 @@ jest.mock('../src/services/finance/providerEarningsService', () => {
     listProviderPayouts: jest.fn(async () => []),
   };
 });
+/**
+ * TAB 06 wave 1 — the admin booking domain.
+ *
+ * Stubbed at the DOMAIN SERVICE, never at the handler. The point of this suite
+ * is that the real router, the real auth chain and the real permission
+ * middleware are exercised over a real socket; replacing the handler would
+ * leave the wiring untested, which is the only thing this file can actually
+ * prove.
+ */
+jest.mock('../src/services/adminBookingService', () => ({
+  __esModule: true,
+  isBookingState: (s: string) => ['PENDING', 'ASSIGNED', 'COMPLETED'].includes(s),
+  getAdminBookings: async () => ({ bookings: [], total: 0, page: 1, limit: 25 }),
+  adminAssignProvider: async (bookingId: number, providerUid: string) => ({
+    bookingId,
+    providerUid,
+    state: 'ASSIGNED',
+  }),
+  adminReassignProvider: async (bookingId: number, toProviderUid: string) => ({
+    bookingId,
+    providerUid: toProviderUid,
+    state: 'ASSIGNED',
+  }),
+  ensureBookingOpsSchema: async () => undefined,
+}));
+
+jest.mock('../src/services/providerEligibilityEngine', () => ({
+  __esModule: true,
+  listAssignmentCandidatePool: async () => ({
+    candidates: [{ uid: 'provider-under-test', eligible: true }],
+    diagnostics: { poolSize: 1, blockedBy: {} },
+  }),
+}));
+
+jest.mock('../src/services/adminAuditService', () => ({
+  __esModule: true,
+  auditFire: () => undefined,
+  ensureAuditSchema: async () => undefined,
+}));
+
 jest.mock('../src/services/finance/financeReconciliationService', () => ({
   LEDGER_INTEGRITY_CHECKS: [],
   getReconciliationReport: jest.fn(async () => ({
@@ -923,6 +963,30 @@ describe('every implemented contract entry is reachable at its declared path', (
         role: 'admin', permission: 'reconciliation.view',
       }),
 
+    // -- TAB 06 wave 1: the v1 admin booking domain --
+    //
+    // Each carries the SAME named permission its legacy twin demands. Passing
+    // the permission header here is not a convenience: it is what proves the
+    // route actually consults one, because omitting it must 403.
+    'admin.bookings.list': () =>
+      call('GET', '/api/v1/admin/bookings', {
+        role: 'admin', permission: 'bookings.view',
+      }),
+    'admin.bookings.assignmentCandidates': () =>
+      call('GET', '/api/v1/admin/bookings/7/assignment-candidates', {
+        role: 'admin', permission: 'bookings.assign_provider',
+      }),
+    'admin.bookings.assign': () =>
+      call('POST', '/api/v1/admin/bookings/7/assign', {
+        role: 'admin', permission: 'bookings.assign_provider',
+        body: { providerUid: 'provider-under-test' },
+      }),
+    'admin.bookings.reassign': () =>
+      call('POST', '/api/v1/admin/bookings/7/reassign', {
+        role: 'admin', permission: 'bookings.reassign_provider',
+        body: { toProviderUid: 'provider-under-test', reason: 'operator override' },
+      }),
+
     // -- TAB 08 messaging --
     'conversations.create': () => call('POST', '/api/v1/conversations', { body: { bookingId: 7 } }),
     'conversations.list': () => call('GET', '/api/v1/conversations'),
@@ -1133,6 +1197,23 @@ describe('declared auth mode is the mounted auth mode', () => {
 // ─── Planned entries are documented, not mounted ──────────────────────────────
 
 describe('planned entries are not reachable', () => {
+  /**
+   * TAB 06 wave 1 emptied the backlog: the four `admin.bookings.*` entries were
+   * the last `planned` ones and are now implemented.
+   *
+   * `it.each([])` is a Jest error rather than a vacuous pass, which is the right
+   * default — but here an empty backlog is the desired state, not a missing
+   * fixture. The rule itself is asserted at build time in
+   * `tests/v1-contract.test.ts`: supplying a handler for an entry that is not
+   * implemented throws, so an endpoint cannot half-ship as a documented 404.
+   */
+  if (!PLANNED.length) {
+    it('the backlog is empty — every documented entry is built', () => {
+      expect(PLANNED).toEqual([]);
+    });
+    return;
+  }
+
   it.each(PLANNED.map((e) => [e.id, e.method.toUpperCase(), fullPath(e)]))(
     '%s — %s %s is documented but returns 404',
     async (_id, method, path) => {

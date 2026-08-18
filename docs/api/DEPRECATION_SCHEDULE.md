@@ -59,11 +59,11 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `GET /api/:serviceId/options-with-addons` | ALIAS_TEMPORARILY | `catalog.subcategories.services` | Customer Mobile, Customer Web, Provider Mobile have not migrated | 90d |
 | `GET /api/additional/booking/:bookingId` | ALIAS_TEMPORARILY | `bookings.additionalWork.list` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `POST /api/additional/request/:userId` | ALIAS_TEMPORARILY | `bookings.additionalWork.create` | Provider Mobile, Provider Web have not migrated | 90d |
-| `GET /api/admin/bookings` | CANONICALIZE | `admin.bookings.list` | the canonical successor `admin.bookings.list` is not mounted yet; Admin Web has not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 14d |
-| `POST /api/admin/bookings/:id/assign` | CANONICALIZE | `admin.bookings.assign` | the canonical successor `admin.bookings.assign` is not mounted yet; Admin Web has not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 14d |
-| `GET /api/admin/bookings/:id/assignment-candidates` | CANONICALIZE | `admin.bookings.assignmentCandidates` | the canonical successor `admin.bookings.assignmentCandidates` is not mounted yet; Admin Web has not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 14d |
+| `GET /api/admin/bookings` | CANONICALIZE | `admin.bookings.list` | Admin Web has not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 14d |
+| `POST /api/admin/bookings/:id/assign` | CANONICALIZE | `admin.bookings.assign` | Admin Web has not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 14d |
+| `GET /api/admin/bookings/:id/assignment-candidates` | CANONICALIZE | `admin.bookings.assignmentCandidates` | Admin Web has not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 14d |
 | `POST /api/admin/bookings/:id/escalate` | ALIAS_TEMPORARILY | `bookings.disputes.open` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
-| `POST /api/admin/bookings/:id/reassign` | CANONICALIZE | `admin.bookings.reassign` | the canonical successor `admin.bookings.reassign` is not mounted yet; Admin Web has not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 14d |
+| `POST /api/admin/bookings/:id/reassign` | CANONICALIZE | `admin.bookings.reassign` | Admin Web has not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 14d |
 | `POST /api/admin/bookings/:id/reschedule` | ALIAS_TEMPORARILY | `bookings.reschedule` | Customer Mobile, Customer Web, Admin Web have not migrated | 90d |
 | `GET /api/admin/finance/reconciliation/exceptions` | ALIAS_TEMPORARILY | `admin.finance.reconciliation` | Admin Web has not migrated | 14d |
 | `POST /api/admin/finance/refunds` | ALIAS_TEMPORARILY | `bookings.refunds.create` | Customer Mobile, Customer Web, Admin Web have not migrated | 90d |

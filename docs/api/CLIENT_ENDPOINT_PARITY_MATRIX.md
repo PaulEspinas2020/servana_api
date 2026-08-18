@@ -19,8 +19,8 @@
 | | |
 | --- | --- |
 | Capabilities | 57 |
-| Canonical endpoints mounted | 105 |
-| Canonical endpoints planned | 4 |
+| Canonical endpoints mounted | 109 |
+| Canonical endpoints planned | 0 |
 | Legacy mappings tracked | 124 |
 | Converged (one route family) | 51 |
 | Role-split over ONE service | 4 |

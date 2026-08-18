@@ -239,11 +239,27 @@ describe('the canonical call manifest describes the router', () => {
   });
 
   it('omits planned entries, which would generate calls to a 404', () => {
+    /**
+     * The backlog is empty as of TAB 06 wave 1 — the four `admin.bookings.*`
+     * entries were the last `planned` ones and are now implemented.
+     *
+     * This used to assert `planned.length > 0` so the rule was never vacuous.
+     * Keeping that would mean leaving an endpoint unbuilt to satisfy a test, so
+     * the guarantee is restated as the thing that actually matters: the
+     * manifest contains exactly the implemented entries and nothing else. That
+     * holds whether the backlog has ten entries or none, and it still catches a
+     * planned entry leaking into the manifest.
+     */
     const planned = V1_CONTRACT.filter((e) => e.status === 'planned').map((e) => e.id);
-    expect(planned.length).toBeGreaterThan(0);
     for (const id of planned) {
       expect(manifest.some((m) => m.id === id)).toBe(false);
     }
+
+    const implemented = new Set(
+      V1_CONTRACT.filter((e) => e.status === 'implemented').map((e) => e.id),
+    );
+    const strays = manifest.map((m) => m.id).filter((id) => !implemented.has(id));
+    expect(strays).toEqual([]);
   });
 
   it('gives every endpoint a full path under the v1 prefix', () => {

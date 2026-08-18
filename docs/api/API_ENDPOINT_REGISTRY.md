@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**105 implemented** · **4 planned** · 109 total.
+**109 implemented** · **0 planned** · 109 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -1357,10 +1357,10 @@ The disputes on this booking. Investigation notes are never projected.
 
 | Method | Path | Status | Auth | Request | Response | Idem | Owner |
 |---|---|---|---|---|---|---|---|
-| `GET` | `/api/v1/admin/bookings` | _planned_ | admin (role 1) | — | `AdminBookingList` | yes | admin-bookings |
-| `GET` | `/api/v1/admin/bookings/:bookingId/assignment-candidates` | _planned_ | admin (role 1) | — | `AssignmentCandidatePool` | yes | admin-bookings |
-| `POST` | `/api/v1/admin/bookings/:bookingId/assign` | _planned_ | admin (role 1) | `AdminAssignRequest` | `AdminBookingActionResult` | no | admin-bookings |
-| `POST` | `/api/v1/admin/bookings/:bookingId/reassign` | _planned_ | admin (role 1) | `AdminReassignRequest` | `AdminBookingActionResult` | no | admin-bookings |
+| `GET` | `/api/v1/admin/bookings` | **live** | admin (role 1) | — | `AdminBookingList` | yes | admin-bookings |
+| `GET` | `/api/v1/admin/bookings/:bookingId/assignment-candidates` | **live** | admin (role 1) | — | `AssignmentCandidatePool` | yes | admin-bookings |
+| `POST` | `/api/v1/admin/bookings/:bookingId/assign` | **live** | admin (role 1) | `AdminAssignRequest` | `AdminBookingActionResult` | no | admin-bookings |
+| `POST` | `/api/v1/admin/bookings/:bookingId/reassign` | **live** | admin (role 1) | `AdminReassignRequest` | `AdminBookingActionResult` | no | admin-bookings |
 
 ### `GET /api/v1/admin/bookings`
 

@@ -11039,9 +11039,7 @@
         "tags": [
           "admin-bookings"
         ],
-        "deprecated": false,
-        "x-status": "planned",
-        "x-implemented": false,
+        "x-implemented": true,
         "x-idempotent": true,
         "x-domain-service": "services/adminBookingService.listBookings",
         "x-legacy": [
@@ -11132,9 +11130,7 @@
         "tags": [
           "admin-bookings"
         ],
-        "deprecated": false,
-        "x-status": "planned",
-        "x-implemented": false,
+        "x-implemented": true,
         "x-idempotent": true,
         "x-domain-service": "services/providerEligibilityEngine.listAssignmentCandidatePool",
         "x-legacy": [
@@ -11257,9 +11253,7 @@
         "tags": [
           "admin-bookings"
         ],
-        "deprecated": false,
-        "x-status": "planned",
-        "x-implemented": false,
+        "x-implemented": true,
         "x-idempotent": false,
         "x-domain-service": "services/booking/transitionExecutor.transitionBooking (ADMIN_ASSIGN)",
         "x-legacy": [
@@ -11402,9 +11396,7 @@
         "tags": [
           "admin-bookings"
         ],
-        "deprecated": false,
-        "x-status": "planned",
-        "x-implemented": false,
+        "x-implemented": true,
         "x-idempotent": false,
         "x-domain-service": "services/booking/transitionExecutor.transitionBooking (ADMIN_REASSIGN)",
         "x-legacy": [
@@ -17558,6 +17550,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 105,
+  "x-implemented-count": 109,
   "x-total-count": 109
 }
