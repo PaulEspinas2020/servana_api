@@ -83,11 +83,20 @@ export const submitGcash = async (bookingId: number, referenceNo: string, proofU
   return r.rows[0];
 };
 
+/**
+ * Manually approve a GCash payment.
+ *
+ * `paid_at` uses `COALESCE(paid_at, NOW())` for the same reason `markCashPaid`
+ * does: a second approval of an already-PAID row must not move the recorded
+ * moment of payment. The two functions are the same shape and had the same gap —
+ * fixing only the one the client happens to call would leave the defect wherever
+ * the next reader looked.
+ */
 export const approvePayment = async (bookingId: number) => {
   const r = await dbQuery.query(
     `
     UPDATE ${dbSchema}.payments
-    SET status='PAID', paid_at=NOW()
+    SET status='PAID', paid_at=COALESCE(paid_at, NOW())
     WHERE booking_id=$1
       AND method='GCASH'
     RETURNING *
@@ -140,11 +149,37 @@ export const approvePayment = async (bookingId: number) => {
   return r.rows[0];
 };
 
+/**
+ * Record that cash was collected for a booking.
+ *
+ * ## Replay
+ *
+ * `paid_at` is set with `COALESCE(paid_at, NOW())`, not `NOW()`, so a repeat of
+ * this call produces the IDENTICAL end state rather than a new timestamp. That
+ * is the contract's own definition of idempotent, and it is what lets this path
+ * declare a replay guard when it gains a v1 entry.
+ *
+ * It matters because this is money. The unguarded form re-ran the UPDATE against
+ * an already-PAID row, succeeded, and moved `paid_at` forward — so the recorded
+ * moment of collection became the time of the LAST call, not the first. A
+ * provider tapping twice on a slow connection, or any retry, silently rewrote
+ * when the cash was taken. Reconciliation and any dispute about "when" read that
+ * column.
+ *
+ * The alternative — `AND status <> 'PAID'` — was rejected: it makes a replay
+ * match zero rows, which this function reports as "not configured for cash
+ * payment". That is a misleading error for a request that already succeeded.
+ *
+ * Everything downstream was already replay-safe and stays that way: the ledger
+ * event is keyed on the payment id, the notification carries
+ * `ON CONFLICT (worker_uid, notification_key) DO NOTHING`, and the domain event
+ * carries a dedupeKey. The UPDATE was the one unguarded step.
+ */
 export const markCashPaid = async (bookingId: number) => {
   const r = await dbQuery.query(
     `
     UPDATE ${dbSchema}.payments
-    SET status='PAID', paid_at=NOW()
+    SET status='PAID', paid_at=COALESCE(paid_at, NOW())
     WHERE booking_id=$1
       AND method='CASH'
     RETURNING *
