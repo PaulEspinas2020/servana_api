@@ -35,6 +35,26 @@ jobs:
       - name: Generated document drift
         run: npm run verify
 
+      # Dependency review is REPORTING, not blocking, and deliberately so.
+      #
+      # There are 9 moderate advisories today whose fixes are major bumps of
+      # firebase-admin (the auth path) and node-cron (every scheduled job).
+      # Making this blocking would either force those bumps under deadline
+      # pressure or get the step deleted the first time it went red — and a
+      # deleted gate reports nothing forever.
+      #
+      # `--audit-level=high` so a HIGH or CRITICAL is what surfaces; the
+      # moderates are already tracked. Promote to blocking once they are cleared.
+      - name: Dependency advisories (reporting)
+        continue-on-error: true
+        run: npm run security:deps
+
+      # The SECRET scan is blocking, and it runs inside `npm run verify` too.
+      # Named separately here so a failure reads as a secret leak rather than as
+      # "the test suite failed".
+      - name: Secret scan (blocking)
+        run: npm run security:secrets
+
       - name: Release summary
         run: npm run release:summary
 
