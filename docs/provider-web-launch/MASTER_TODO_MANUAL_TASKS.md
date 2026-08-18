@@ -70,3 +70,11 @@ can pick it up without re-deriving why it is stuck.
 | # | Task | Why it is manual | Status |
 |---|---|---|---|
 | M-20 | **Decide what happens to `getCanonicalProfile()`** — it calls `GET /api/v1/provider/profile` and has zero callers anywhere, while `getProfile()` calls the legacy route and feeds the session bootstrap. Either migrate the live reader (and delete the dead method) or delete the dead method and record that profile stays legacy. | Migrating the live one changes the SESSION BOOTSTRAP path, which mandate 5 of TAB 05 says must be certified against a real sign-in. Deleting the canonical one is a decision to stay legacy, which belongs to whoever owns the migration schedule. Not a change to make silently either way. | OPEN — needs M-08 to migrate, or an owner's decision to drop |
+
+## From TAB 09 — supply chain (added 2026-08-18)
+
+| # | Task | Why it is manual | Status |
+|---|---|---|---|
+| M-21 | **Migrate `package-lock.json` from `lockfileVersion: 1` (npm 6) to the current format, and pin ONE Node/npm across Netlify, CI and local.** Today Netlify builds Node 20 with `--legacy-peer-deps`, CI and local run Node 24 / npm 11, and the committed lockfile is npm 6 — so no two environments resolve the same tree. | Measured three times: any dependency change rewrites 31,000-34,000 lines and re-resolves everything; one attempt moved the count from 10 vulnerabilities to 14. Validating the new resolution needs a **Netlify build**, which cannot be run from here. | OPEN — **BLOCKS TAB 09 mandates 2, 5, 7 and gates mandate 1** |
+| M-22 | **Agree the `npm audit` exception list before making it a blocking gate** (mandate 6). Ten advisories are open today, so a blocking gate fails on day one; the command requires each exception to carry an owner and an expiry date. | An owner and a date per finding is a decision, not a code change — and "an exception without an expiry date is a permanent acceptance nobody voted for". | OPEN |
+| M-23 | **Verify provider chat end to end after the socket.io and Firebase upgrades land** (mandate 2's acceptance criterion). | Needs M-08 and a deployed build. | OPEN |
