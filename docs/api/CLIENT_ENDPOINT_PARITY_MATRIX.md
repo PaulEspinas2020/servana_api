@@ -18,17 +18,17 @@
 
 | | |
 | --- | --- |
-| Capabilities | 54 |
-| Canonical endpoints mounted | 95 |
+| Capabilities | 55 |
+| Canonical endpoints mounted | 96 |
 | Canonical endpoints planned | 4 |
-| Legacy mappings tracked | 114 |
-| Converged (one route family) | 48 |
+| Legacy mappings tracked | 115 |
+| Converged (one route family) | 49 |
 | Role-split over ONE service | 4 |
 | Single-surface | 2 |
 | **Divergent (forked truth)** | **0** |
 | Broken (names a missing endpoint) | 0 |
 | Surface × capability cells on canonical | 0 |
-| Surface × capability cells still legacy | 111 |
+| Surface × capability cells still legacy | 112 |
 
 **0 divergent capabilities.** Every capability whose
 endpoints span more than one route family names exactly one domain service — the
@@ -88,6 +88,7 @@ direction of whoever wrote it.
 | Read a provider's public profile | SHARED | planned | planned | — | — | planned |
 | Read the reschedule history of a booking | SHARED | planned | planned | planned | planned | planned |
 | Register and release this device for push | SHARED | legacy | planned | legacy | legacy | — |
+| Dismiss one notification | SHARED | planned | planned | planned | legacy | — |
 | Read my notification inbox | SHARED | legacy | legacy | legacy | legacy | planned |
 | Mark everything read | SHARED | legacy | legacy | legacy | legacy | planned |
 | Mark one notification read | SHARED | legacy | legacy | legacy | legacy | planned |
@@ -545,6 +546,20 @@ Legacy still aliased for this capability:
   - `POST /api/user/fcm-token`
 
 No role split. Providers had a multi-device token TABLE and customers had a single column, so a customer with two devices could only ever receive push on the last one to sign in. One account-scoped token store for both, with the provider table kept and dual-written until ServanaWorker migrates.
+
+### Dismiss one notification
+
+- key: `domainEvents:dismiss` · declared in `services/events/domainEvents`
+- verdict: **SHARED** · domain service: `services/events/notificationInbox`
+- route families: `/notifications`
+
+Canonical:
+  - `DELETE /api/v1/notifications/:key`
+
+Legacy still aliased for this capability:
+  - `DELETE /api/provider/notifications/:key`
+
+No role split, and it is the fourth verb of an inbox that already had three. The legacy route was provider-only and reached provider_notifications directly, which is why customers have never been able to dismiss anything: their rows are in customer_notifications and nothing looked there. Resolving the store from the caller is the same decision list, unread-count and markRead already made — a second, provider-shaped dismiss endpoint would rebuild the defect the inbox exists to end. Admin is a declared surface and answers NOTIFICATION_NOT_ACTIONABLE: that store has no dismiss, and saying so is not the same as claiming the notification is missing.
 
 ### Read my notification inbox
 

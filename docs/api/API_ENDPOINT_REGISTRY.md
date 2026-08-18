@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**95 implemented** · **4 planned** · 99 total.
+**96 implemented** · **4 planned** · 100 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -356,6 +356,7 @@ Cancels a job the provider had already accepted, subject to the notice policy.
 | `GET` | `/api/v1/notifications` | **live** | any signed-in | — | `NotificationList` | yes | notifications |
 | `GET` | `/api/v1/notifications/unread-count` | **live** | any signed-in | — | `UnreadCount` | yes | notifications |
 | `PATCH` | `/api/v1/notifications/:key/read` | **live** | any signed-in | — | `NotificationMutation` | yes | notifications |
+| `DELETE` | `/api/v1/notifications/:key` | **live** | any signed-in | — | `NotificationMutation` | yes | notifications |
 | `POST` | `/api/v1/notifications/read-all` | **live** | any signed-in | — | `NotificationMutation` | yes | notifications |
 | `GET` | `/api/v1/me/notification-preferences` | **live** | any signed-in | — | `NotificationPreferences` | yes | notifications |
 | `PATCH` | `/api/v1/me/notification-preferences` | **live** | any signed-in | `NotificationPreferencePatch` | `NotificationPreferences` | yes | notifications |
@@ -393,6 +394,17 @@ Marks one notification read. Repeating it is a no-op, not an error.
 - **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ·
 - **Legacy it replaces**
   - `PATCH /api/user/notifications/:key/read` — **ALIAS_TEMPORARILY** — Same service and the same key validation. The path differs only in the /user prefix, which named the caller rather than the resource.
+
+### `DELETE /api/v1/notifications/:key`
+
+Dismisses one notification. Repeating it is a no-op, not an error.
+
+- **Domain service** — `services/events/notificationInbox.dismiss`
+- **Error codes** — `INTERNAL`, `NOTIFICATION_NOT_ACTIONABLE`, `NOTIFICATION_NOT_FOUND`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `key` (string) Opaque notification key
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `DELETE /api/provider/notifications/:key` — **CANONICALIZE** — The provider inbox had list, read, read-all and dismiss; v1 took the first three and left dismiss behind, so every provider client kept one legacy call for one verb. The legacy route is provider-only and reaches provider_notifications directly; this one resolves the store from the caller, so a CUSTOMER can dismiss for the first time.
 
 ### `POST /api/v1/notifications/read-all`
 
@@ -1402,6 +1414,7 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `GET /api/v1/notifications` | ⏳ | ⏳ | ⏳ | ⏳ | · |
 | `GET /api/v1/notifications/unread-count` | ⏳ | ⏳ | ⏳ | ⏳ | · |
 | `PATCH /api/v1/notifications/:key/read` | ⏳ | ⏳ | ⏳ | ⏳ | · |
+| `DELETE /api/v1/notifications/:key` | · | · | · | ⏳ | — |
 | `POST /api/v1/notifications/read-all` | ⏳ | ⏳ | ⏳ | ⏳ | · |
 | `GET /api/v1/me/notification-preferences` | · | · | ⏳ | ⏳ | · |
 | `PATCH /api/v1/me/notification-preferences` | · | · | ⏳ | ⏳ | · |

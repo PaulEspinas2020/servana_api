@@ -19,6 +19,7 @@
 | `GET /api/v1/notifications` | authenticated | yes | `services/events/notificationInbox.listNotifications` |
 | `GET /api/v1/notifications/unread-count` | authenticated | yes | `services/events/notificationInbox.countUnread` |
 | `PATCH /api/v1/notifications/:key/read` | authenticated | yes | `services/events/notificationInbox.markRead` |
+| `DELETE /api/v1/notifications/:key` | authenticated | yes | `services/events/notificationInbox.dismiss` |
 | `POST /api/v1/notifications/read-all` | authenticated | yes | `services/events/notificationInbox.markAllRead` |
 | `GET /api/v1/me/notification-preferences` | authenticated | yes | `services/events/notificationPreferences.getPreferences` |
 | `PATCH /api/v1/me/notification-preferences` | authenticated | yes | `services/events/notificationPreferences.patchPreferences` |
@@ -42,6 +43,7 @@ be documented as superseded if it is also being measured.
 | `GET /api/user/notifications` | ALIAS_TEMPORARILY | `notifications.list` | Customer clients call this today. |
 | `GET /api/user/notifications/unread-count` | ALIAS_TEMPORARILY | `notifications.unreadCount` | Declared before /user/notifications/:key on the legacy router precisely so "unread-count" is not parsed as a notification key. v1 has the same ordering requirement and the shadow test now enforces it. |
 | `PATCH /api/user/notifications/:key/read` | ALIAS_TEMPORARILY | `notifications.markRead` | Same service and the same key validation. The path differs only in the /user prefix, which named the caller rather than the resource. |
+| `DELETE /api/provider/notifications/:key` | CANONICALIZE | `notifications.dismiss` | The provider inbox had list, read, read-all and dismiss; v1 took the first three and left dismiss behind, so every provider client kept one legacy call for one verb. The legacy route is provider-only and reaches provider_notifications directly; this one resolves the store from the caller, so a CUSTOMER can dismiss for the first time. |
 | `POST /api/user/notifications/mark-all-read` | ALIAS_TEMPORARILY | `notifications.markAllRead` | Same service; v1 uses the resource-shaped path. |
 | `GET /api/provider/notification-preferences` | ALIAS_TEMPORARILY | `me.notificationPreferences.get` | Provider Web. Same uid-keyed table - nothing about it is provider-specific, and the role gate on this path is the reason customers had no way to configure notifications they were already receiving. |
 | `PUT /api/provider/notification-preferences` | ALIAS_TEMPORARILY | `me.notificationPreferences.patch` | Provider Web sends a full replace. Both shapes reach one writer, so a provider who has not migrated keeps the exact behaviour they have. |
@@ -96,6 +98,7 @@ re-fetch to learn its badge or decrement a number it guessed.
 | How many unread I have | legacy | legacy | legacy | legacy | planned |
 | Mark one notification read | legacy | legacy | legacy | legacy | planned |
 | Mark everything read | legacy | legacy | legacy | legacy | planned |
+| Dismiss one notification | planned | planned | planned | legacy | — |
 | Read and change my notification preferences | planned | planned | legacy | legacy | planned |
 | Register and release this device for push | legacy | planned | legacy | legacy | — |
 
@@ -121,6 +124,10 @@ No role split. The key is opaque and owner-scoped: the same key can exist for tw
 **Mark everything read** (`services/events/notificationInbox`)
 
 No role split. The subject is the token; there is no parameter naming whose inbox to clear.
+
+**Dismiss one notification** (`services/events/notificationInbox`)
+
+No role split, and it is the fourth verb of an inbox that already had three. The legacy route was provider-only and reached provider_notifications directly, which is why customers have never been able to dismiss anything: their rows are in customer_notifications and nothing looked there. Resolving the store from the caller is the same decision list, unread-count and markRead already made — a second, provider-shaped dismiss endpoint would rebuild the defect the inbox exists to end. Admin is a declared surface and answers NOTIFICATION_NOT_ACTIONABLE: that store has no dismiss, and saying so is not the same as claiming the notification is missing.
 
 **Read and change my notification preferences** (`services/events/notificationPreferences`)
 

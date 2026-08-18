@@ -8,10 +8,10 @@ Every route the app mounts outside `/api/v1`: **520**.
 | Disposition | Count | Meaning |
 |---|---:|---|
 | `ALIAS_TEMPORARILY` | 81 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
-| `CANONICALIZE` | 7 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
+| `CANONICALIZE` | 8 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
 | `ROLE_SPECIFIC` | 13 | Legitimately separate: different auth, action or payload — same domain service. |
 | `RETIRE` | 1 | No caller and no successor. Delete once telemetry confirms zero traffic. |
-| `KEEP` | 418 | Not a duplicate of anything canonical. Untouched by this command. |
+| `KEEP` | 417 | Not a duplicate of anything canonical. Untouched by this command. |
 
 ## Retirement criteria
 
@@ -113,13 +113,14 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `GET` | `/api/providers/:providerUid/reviews` | `/api/v1/reviews/providers/:providerUid` | Same service. The legacy form does not clamp limit/offset; v1 does (BE-10). |
 | `GET` | `/api/providers/:providerUid/rating` | `/api/v1/reviews/providers/:providerUid/rating` | Same service. Kept because it sits beside the reviews list that a future customer client may already be calling; retiring one without the other would be half a change. |
 
-## CANONICALIZE (7)
+## CANONICALIZE (8)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
 | `GET` | `/api/services/full` | `/api/v1/catalog` | The legacy LEVEL-2/LEVEL-3 projection the customer app reads today. Cannot be retired until ServanaClient migrates: it is the only catalog either Flutter app has ever consumed. |
 | `GET` | `/api/services/:serviceId/level2` | `/api/v1/catalog/categories/:categoryId/subcategories` | The legacy equivalent, and NOT a rename. Its `:serviceId` is a service_families.id and it returns DISTINCT level_2 STRINGS with no ids at all. This route takes a catalog_categories.id and returns identified Subcategories. Different input, different output, different table. |
 | `GET` | `/api/services/:serviceId/options-with-addons` | `/api/v1/catalog/subcategories/:subcategoryId/services` | The legacy shape. Its `:serviceId` is a service_families.id and it returns level_2 / level_3 option groups, not Services. ServanaWorker calls the un-prefixed twin instead, which is the only catalog route without the /services/ prefix its neighbours use. |
+| `DELETE` | `/api/provider/notifications/:key` | `/api/v1/notifications/:key` | The provider inbox had list, read, read-all and dismiss; v1 took the first three and left dismiss behind, so every provider client kept one legacy call for one verb. The legacy route is provider-only and reaches provider_notifications directly; this one resolves the store from the caller, so a CUSTOMER can dismiss for the first time. |
 | `GET` | `/api/admin/bookings` | `/api/v1/admin/bookings` | The admin portal is the only caller and deploys from git on every push, so it is the cheapest client to migrate — but it is also the only one whose list carries permission-scoped columns, so the DTO needs the permission model resolved first. |
 | `GET` | `/api/admin/bookings/:id/assignment-candidates` | `/api/v1/admin/bookings/:bookingId/assignment-candidates` | Live, and the only caller is the admin portal. Already returns the canonical pool plus its diagnostics; the diagnostics are a sibling key so the array under `data` stays exactly what the portal parses today. |
 | `POST` | `/api/admin/bookings/:id/assign` | `/api/v1/admin/bookings/:bookingId/assign` | Live admin portal route, already on the canonical executor. Path-only migration: the business rules, locks and events do not move with it. |
@@ -149,7 +150,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 |---|---|---|---|
 | `GET` | `/api/workers/:uid/earnings-history` | `/api/v1/provider/earnings/transactions` | Takes the provider uid from the URL and has no auth, so it answers for anybody. No located caller in any of the five clients. Carried over from the planned placeholder this entry replaces; delete once telemetry confirms zero traffic. |
 
-## KEEP (418)
+## KEEP (417)
 
 Mounted, not superseded, not a duplicate. Listed so the inventory is complete and so a
 later domain command starts from a route list rather than from a grep.
@@ -261,7 +262,6 @@ later domain command starts from a route list rather than from a grep.
 | `POST` | `/api/provider/notifications/mark-all-read` | `src/routes/provider.routes.ts:119` |
 | `GET` | `/api/provider/notifications` | `src/routes/provider.routes.ts:120` |
 | `PATCH` | `/api/provider/notifications/:key/read` | `src/routes/provider.routes.ts:121` |
-| `DELETE` | `/api/provider/notifications/:key` | `src/routes/provider.routes.ts:122` |
 | `GET` | `/api/provider/alerts` | `src/routes/provider.routes.ts:125` |
 | `DELETE` | `/api/provider/alerts/:key` | `src/routes/provider.routes.ts:126` |
 | `GET` | `/api/worker/time-off` | `src/routes/provider.routes.ts:134` |

@@ -122,6 +122,42 @@ export const handlers: V1Handlers = {
     }
   },
 
+  /**
+   * Dismiss one, and answer with the resulting unread count.
+   *
+   * Three refusals, kept apart on purpose:
+   *
+   *   `supported: false`  the caller's store has no dismiss concept (admin).
+   *   `found: false`      no such row for this account.
+   *   `allowed: false`    the row exists and its sender marked it undismissable.
+   *
+   * The first two both mean "nothing here", and both could have been answered
+   * as NOT_FOUND — but an admin would then be told their notification does not
+   * exist, which is false and stops being true the day admin gains a dismiss.
+   */
+  'notifications.dismiss': async (req: Request, res: Response) => {
+    try {
+      const actor = await actorOf(req);
+      const result = await inbox.dismiss(actor, readKey(req));
+
+      if (!result.supported) {
+        throw new ApiError(
+          'NOTIFICATION_NOT_ACTIONABLE',
+          'Notifications for this account cannot be dismissed.',
+        );
+      }
+      if (!result.found && !result.allowed) {
+        throw new ApiError('NOTIFICATION_NOT_FOUND', 'No notification with that key.');
+      }
+      if (!result.allowed) {
+        throw new ApiError('NOTIFICATION_NOT_ACTIONABLE', 'That notification cannot be dismissed.');
+      }
+      return ok(res, req, result);
+    } catch (error) {
+      return sendCaught(res, req, 'notifications.dismiss', error);
+    }
+  },
+
   'notifications.markAllRead': async (req: Request, res: Response) => {
     try {
       const result = await inbox.markAllRead(await actorOf(req));

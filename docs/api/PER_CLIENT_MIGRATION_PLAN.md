@@ -14,7 +14,7 @@
 > [`CROSS_CLIENT_MIGRATION_PLAN.md`](CROSS_CLIENT_MIGRATION_PLAN.md), which is
 > hand-written because an argument is not derivable. This is what each client
 > actually has to change, and it is generated because a hand-maintained list of
-> 95 endpoints across five clients is stale the day after it is written.
+> 96 endpoints across five clients is stale the day after it is written.
 
 ## How to read this
 
@@ -84,9 +84,9 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 36 |
+| Capabilities that apply | 37 |
 | Already on canonical | 0 |
-| Still on a legacy route | 24 |
+| Still on a legacy route | 25 |
 | Partially migrated | 1 |
 | No equivalent called today | 11 |
 
@@ -97,6 +97,7 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Advance the read pointer | legacy | `POST /api/chat/conversations/:id/read` | `POST /api/v1/conversations/:conversationId/read` |
 | Booking codes (OTP) | planned | `POST /api/:bookingId/resend-otp`, `POST /api/:id/confirm-otp` | `POST /api/v1/bookings/:bookingId/otp/request`, `POST /api/v1/bookings/:bookingId/otp/verify` |
 | Cancellation | legacy | `POST /api/bookings/:id/cancel`, `POST /api/provider/bookings/:bookingId/cancel` | `POST /api/v1/bookings/:bookingId/cancel`, `POST /api/v1/provider/jobs/:bookingId/cancel` |
+| Dismiss one notification | legacy | `DELETE /api/provider/notifications/:key` | `DELETE /api/v1/notifications/:key` |
 | Disputes | planned | `POST /api/admin/bookings/:id/escalate` | `POST /api/v1/bookings/:bookingId/disputes`, `GET /api/v1/bookings/:bookingId/disputes` |
 | How many unread I have | legacy | `GET /api/user/notifications/unread-count` | `GET /api/v1/notifications/unread-count` |
 | List my conversations with unread counts | legacy | `GET /api/chat/conversations` | `GET /api/v1/conversations` |
@@ -136,11 +137,11 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 43 |
+| Capabilities that apply | 44 |
 | Already on canonical | 0 |
 | Still on a legacy route | 17 |
 | Partially migrated | 4 |
-| No equivalent called today | 22 |
+| No equivalent called today | 23 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
@@ -150,6 +151,7 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Booking codes (OTP) | planned | `POST /api/:bookingId/resend-otp`, `POST /api/:id/confirm-otp` | `POST /api/v1/bookings/:bookingId/otp/request`, `POST /api/v1/bookings/:bookingId/otp/verify` |
 | Browse the service catalog | planned | `GET /api/:serviceId/options-with-addons`, `GET /api/catalog`, `GET /api/catalog/services`, `GET /api/catalog/services/:serviceId`, `GET /api/catalog/summary`, `GET /api/services/:serviceId/level2`, `GET /api/services/:serviceId/options-with-addons`, `GET /api/services/full` | `GET /api/v1/catalog`, `GET /api/v1/catalog/summary`, `GET /api/v1/catalog/categories`, `GET /api/v1/catalog/categories/:categoryId`, `GET /api/v1/catalog/categories/:categoryId/subcategories`, `GET /api/v1/catalog/subcategories/:subcategoryId`, `GET /api/v1/catalog/subcategories/:subcategoryId/services`, `GET /api/v1/catalog/services`, `GET /api/v1/catalog/services/:serviceId` |
 | Cancellation | legacy | `POST /api/bookings/:id/cancel`, `POST /api/provider/bookings/:bookingId/cancel` | `POST /api/v1/bookings/:bookingId/cancel`, `POST /api/v1/provider/jobs/:bookingId/cancel` |
+| Dismiss one notification | planned | `DELETE /api/provider/notifications/:key` | `DELETE /api/v1/notifications/:key` |
 | Disputes | planned | `POST /api/admin/bookings/:id/escalate` | `POST /api/v1/bookings/:bookingId/disputes`, `GET /api/v1/bookings/:bookingId/disputes` |
 | How many unread I have | legacy | `GET /api/user/notifications/unread-count` | `GET /api/v1/notifications/unread-count` |
 | List my conversations with unread counts | legacy | `GET /api/chat/conversations` | `GET /api/v1/conversations` |
@@ -195,11 +197,11 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 37 |
+| Capabilities that apply | 38 |
 | Already on canonical | 0 |
 | Still on a legacy route | 22 |
 | Partially migrated | 4 |
-| No equivalent called today | 11 |
+| No equivalent called today | 12 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
@@ -209,6 +211,7 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Booking codes (OTP) | planned | `POST /api/:bookingId/resend-otp`, `POST /api/:id/confirm-otp` | `POST /api/v1/bookings/:bookingId/otp/request`, `POST /api/v1/bookings/:bookingId/otp/verify` |
 | Browse the service catalog | legacy | `GET /api/:serviceId/options-with-addons`, `GET /api/catalog`, `GET /api/catalog/services`, `GET /api/catalog/services/:serviceId`, `GET /api/catalog/summary`, `GET /api/services/:serviceId/level2`, `GET /api/services/:serviceId/options-with-addons`, `GET /api/services/full` | `GET /api/v1/catalog`, `GET /api/v1/catalog/summary`, `GET /api/v1/catalog/categories`, `GET /api/v1/catalog/categories/:categoryId`, `GET /api/v1/catalog/categories/:categoryId/subcategories`, `GET /api/v1/catalog/subcategories/:subcategoryId`, `GET /api/v1/catalog/subcategories/:subcategoryId/services`, `GET /api/v1/catalog/services`, `GET /api/v1/catalog/services/:serviceId` |
 | Cancellation | legacy | `POST /api/bookings/:id/cancel`, `POST /api/provider/bookings/:bookingId/cancel` | `POST /api/v1/bookings/:bookingId/cancel`, `POST /api/v1/provider/jobs/:bookingId/cancel` |
+| Dismiss one notification | planned | `DELETE /api/provider/notifications/:key` | `DELETE /api/v1/notifications/:key` |
 | Disputes | planned | `POST /api/admin/bookings/:id/escalate` | `POST /api/v1/bookings/:bookingId/disputes`, `GET /api/v1/bookings/:bookingId/disputes` |
 | How many unread I have | legacy | `GET /api/user/notifications/unread-count` | `GET /api/v1/notifications/unread-count` |
 | List my conversations with unread counts | legacy | `GET /api/chat/conversations` | `GET /api/v1/conversations` |
@@ -248,11 +251,11 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 43 |
+| Capabilities that apply | 44 |
 | Already on canonical | 0 |
 | Still on a legacy route | 20 |
 | Partially migrated | 5 |
-| No equivalent called today | 18 |
+| No equivalent called today | 19 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
@@ -262,6 +265,7 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Booking codes (OTP) | legacy | `POST /api/:bookingId/resend-otp`, `POST /api/:id/confirm-otp` | `POST /api/v1/bookings/:bookingId/otp/request`, `POST /api/v1/bookings/:bookingId/otp/verify` |
 | Browse the service catalog | ⚠ mixed | `GET /api/:serviceId/options-with-addons`, `GET /api/catalog`, `GET /api/catalog/services`, `GET /api/catalog/services/:serviceId`, `GET /api/catalog/summary`, `GET /api/services/:serviceId/level2`, `GET /api/services/:serviceId/options-with-addons`, `GET /api/services/full` | `GET /api/v1/catalog`, `GET /api/v1/catalog/summary`, `GET /api/v1/catalog/categories`, `GET /api/v1/catalog/categories/:categoryId`, `GET /api/v1/catalog/categories/:categoryId/subcategories`, `GET /api/v1/catalog/subcategories/:subcategoryId`, `GET /api/v1/catalog/subcategories/:subcategoryId/services`, `GET /api/v1/catalog/services`, `GET /api/v1/catalog/services/:serviceId` |
 | Cancellation | legacy | `POST /api/bookings/:id/cancel`, `POST /api/provider/bookings/:bookingId/cancel` | `POST /api/v1/bookings/:bookingId/cancel`, `POST /api/v1/provider/jobs/:bookingId/cancel` |
+| Dismiss one notification | planned | `DELETE /api/provider/notifications/:key` | `DELETE /api/v1/notifications/:key` |
 | Disputes | planned | `POST /api/admin/bookings/:id/escalate` | `POST /api/v1/bookings/:bookingId/disputes`, `GET /api/v1/bookings/:bookingId/disputes` |
 | How many unread I have | legacy | `GET /api/user/notifications/unread-count` | `GET /api/v1/notifications/unread-count` |
 | List my conversations with unread counts | legacy | `GET /api/chat/conversations` | `GET /api/v1/conversations` |

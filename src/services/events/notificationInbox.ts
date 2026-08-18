@@ -242,6 +242,69 @@ export const markRead = async (actor: InboxActor, key: string): Promise<MarkRead
   return { ...result, unreadCount: await countUnread(actor) };
 };
 
+export interface DismissResult {
+  /** False when the store has no such row for this account. */
+  found: boolean;
+  /** False when the row exists but its `can_dismiss` flag refuses. */
+  allowed: boolean;
+  changed: boolean;
+  /**
+   * False when the caller's store has no dismiss capability AT ALL.
+   *
+   * Distinct from `allowed`, and the distinction is the whole point: `allowed`
+   * is a per-row policy the sender set, `supported` is a property of the store.
+   * Collapsing them would answer "that one cannot be dismissed" to an admin
+   * whose notification does not have a dismiss concept in the first place —
+   * true by accident, and it stops being true the moment admin gains one.
+   */
+  supported: boolean;
+  /** The count AFTER the mutation, so a client never has to guess its badge. */
+  unreadCount: number;
+}
+
+/**
+ * Dismiss one notification, from whichever store holds it.
+ *
+ * Store-resolved for the same reason [[markRead]] is. The v1 inbox exists
+ * because `notifications.list` once called `listCustomerNotifications`
+ * directly and answered a PROVIDER an empty array — not an error, just
+ * nothing. A dismiss that called `deleteNotificationByKey` directly would
+ * rebuild that defect with a DELETE on it: every customer's dismiss would
+ * silently miss, because their rows are in `customer_notifications` and that
+ * function only ever looks at `provider_notifications`.
+ *
+ * Admin has no dismiss path in `adminNotificationService`, so it answers
+ * `supported: false` rather than a fabricated miss.
+ */
+export const dismiss = async (actor: InboxActor, key: string): Promise<DismissResult> => {
+  const store = storeForRole(actor.role);
+
+  if (store === 'admin') {
+    return {
+      found: false,
+      allowed: false,
+      changed: false,
+      supported: false,
+      unreadCount: await countUnread(actor),
+    };
+  }
+
+  const result =
+    store === 'provider'
+      ? await notificationService.deleteNotificationByKey(actor.uid, key)
+      : await notificationService.deleteCustomerNotificationByKey(actor.uid, key);
+
+  return {
+    found: result.found,
+    allowed: result.allowed,
+    // The delete is the change. `found` is true only when a row was actually
+    // removed, which is what both services report.
+    changed: result.found && result.allowed,
+    supported: true,
+    unreadCount: await countUnread(actor),
+  };
+};
+
 export const markAllRead = async (actor: InboxActor): Promise<{ unreadCount: number }> => {
   switch (storeForRole(actor.role)) {
     case 'provider':

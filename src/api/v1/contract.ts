@@ -516,6 +516,38 @@ export const V1_CONTRACT: ContractEntry[] = [
     observability: 'notifications',
   },
   {
+    id: 'notifications.dismiss',
+    domain: 'notifications',
+    method: 'delete',
+    path: '/notifications/:key',
+    summary: 'Dismisses one notification. Repeating it is a no-op, not an error.',
+    auth: 'authenticated',
+    // A second DELETE of the same key finds nothing and changes nothing. The
+    // end state after one call and after five is identical, which is the test
+    // `idempotent` names — not "the first one is safe".
+    idempotent: true,
+    responseSchema: 'NotificationMutation',
+    errors: ['VALIDATION_FAILED', 'NOTIFICATION_NOT_FOUND', 'NOTIFICATION_NOT_ACTIONABLE'],
+    params: [{ name: 'key', type: 'string', description: 'Opaque notification key' }],
+    status: 'implemented',
+    domainService: 'services/events/notificationInbox.dismiss',
+    legacy: [
+      {
+        method: 'delete',
+        path: '/api/provider/notifications/:key',
+        disposition: 'CANONICALIZE',
+        note:
+          'The provider inbox had list, read, read-all and dismiss; v1 took the first three ' +
+          'and left dismiss behind, so every provider client kept one legacy call for one ' +
+          'verb. The legacy route is provider-only and reaches provider_notifications ' +
+          'directly; this one resolves the store from the caller, so a CUSTOMER can dismiss ' +
+          'for the first time.',
+      },
+    ],
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'notifications',
+  },
+  {
     id: 'notifications.markAllRead',
     domain: 'notifications',
     method: 'post',

@@ -60,6 +60,35 @@ const OBJECT_SCOPED_IDS = new Set(objectScopedEntries().map((e) => e.id));
 const SELF_SCOPED_IDS = new Set([
   'settings.notificationPreferences.get',
   'settings.notificationPreferences.put',
+  /**
+   * `DELETE /api/provider/notifications/:key` → `DELETE /api/v1/notifications/:key`.
+   *
+   * Read before listing, because an exemption granted on the strength of a
+   * pattern is how a real loosening gets waved through:
+   *
+   *   - the handler takes no account identifier. `actorOf(req)` resolves the
+   *     uid from the verified token and the role from `user_credentials`; no
+   *     path, query or body field names whose inbox is being touched.
+   *   - `notificationInbox.dismiss` picks the STORE from that role, and both
+   *     statements are owner-predicated —
+   *     `WHERE notification_key = $1 AND worker_uid = $2` for a provider,
+   *     `... AND user_uid = $2` for a customer.
+   *
+   * So `provider` on the successor would not protect anything; it would refuse
+   * a CUSTOMER the ability to dismiss their own notification — which they have
+   * never had, because the legacy route is provider-only and reaches
+   * `provider_notifications` directly.
+   *
+   * Its four siblings — list, unread-count, markRead, markAllRead — are already
+   * `authenticated` and equally self-scoped. They do not appear here only
+   * because their `legacy[]` names the `/api/user/...` spelling, which was
+   * `authenticated` too. This entry names the PROVIDER route because that is
+   * the one Worker Mobile actually calls and the one being retired.
+   *
+   * Proven by `tests/notification-dismiss-store.test.ts`, which asserts the
+   * store routing per role and that no other store is touched on the way.
+   */
+  'notifications.dismiss',
 ]);
 
 /** Strictest first. A chain is reported at the lowest index it matches. */

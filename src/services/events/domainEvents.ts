@@ -1064,6 +1064,24 @@ export const NOTIFICATION_CAPABILITIES: readonly NotificationCapability[] = Obje
       'clear.',
   },
   {
+    key: 'dismiss',
+    title: 'Dismiss one notification',
+    contractIds: ['notifications.dismiss'],
+    domainModule: 'services/events/notificationInbox',
+    surfaces: Object.freeze([
+      'customerMobile', 'customerWeb', 'providerMobile', 'providerWeb', 'admin',
+    ] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split, and it is the fourth verb of an inbox that already had three. The ' +
+      'legacy route was provider-only and reached provider_notifications directly, which is ' +
+      'why customers have never been able to dismiss anything: their rows are in ' +
+      'customer_notifications and nothing looked there. Resolving the store from the caller ' +
+      'is the same decision list, unread-count and markRead already made — a second, ' +
+      'provider-shaped dismiss endpoint would rebuild the defect the inbox exists to end. ' +
+      'Admin is a declared surface and answers NOTIFICATION_NOT_ACTIONABLE: that store has ' +
+      'no dismiss, and saying so is not the same as claiming the notification is missing.',
+  },
+  {
     key: 'preferences',
     title: 'Read and change my notification preferences',
     contractIds: [

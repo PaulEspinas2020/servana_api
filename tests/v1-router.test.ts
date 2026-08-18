@@ -320,6 +320,11 @@ jest.mock('../src/services/notification.service', () => ({
     allowed: key !== 'locked',
   })),
   markAllCustomerNotificationsRead: jest.fn().mockResolvedValue(undefined),
+  deleteCustomerNotificationByKey: jest.fn(async (_uid: string, key: string) => ({
+    found: key !== 'missing',
+    allowed: key !== 'locked',
+  })),
+  deleteNotificationByKey: jest.fn(async () => ({ found: true, allowed: true })),
   getNotificationPrefs: jest.fn().mockResolvedValue({ jobAssigned: true }),
   saveNotificationPrefs: jest.fn(async (_uid: string, body: any) => ({ ...body, saved: true })),
   clearFcmToken: jest.fn().mockResolvedValue(undefined),
@@ -541,6 +546,16 @@ jest.mock('../src/services/events/notificationInbox', () => ({
     unreadCount: 4,
   })),
   markAllRead: jest.fn().mockResolvedValue({ unreadCount: 0 }),
+  // Same missing/locked keys as markRead, plus `supported` — the third refusal.
+  // A store with no dismiss at all answers NOTIFICATION_NOT_ACTIONABLE rather
+  // than a fabricated miss, and the route has to keep those apart.
+  dismiss: jest.fn(async (_actor: any, key: string) => ({
+    found: key !== 'missing',
+    allowed: key !== 'locked',
+    changed: key !== 'missing' && key !== 'locked',
+    supported: key !== 'unsupported',
+    unreadCount: 4,
+  })),
 }));
 jest.mock('../src/services/events/notificationPreferences', () => {
   const actual = jest.requireActual('../src/services/events/notificationPreferences');
@@ -775,6 +790,7 @@ describe('every implemented contract entry is reachable at its declared path', (
     'notifications.unreadCount': () => call('GET', '/api/v1/notifications/unread-count'),
     'notifications.markRead': () => call('PATCH', '/api/v1/notifications/n1/read'),
     'notifications.markAllRead': () => call('POST', '/api/v1/notifications/read-all'),
+    'notifications.dismiss': () => call('DELETE', '/api/v1/notifications/n1'),
     'reviews.provider.list': () => call('GET', '/api/v1/reviews/providers/provider-uid-1', { auth: false }),
     'reviews.provider.rating': () => call('GET', '/api/v1/reviews/providers/provider-uid-1/rating', { auth: false }),
     'settings.notificationPreferences.get': () => call('GET', '/api/v1/settings/notification-preferences'),

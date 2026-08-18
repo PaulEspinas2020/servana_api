@@ -59,7 +59,7 @@ though they are the reason the canonical namespace exists.
 The surface as it stands:
 
 <!-- BEGIN GENERATED: v1-surface -->
-- **95 canonical endpoints live**, each driven end to end by `tests/v1-router.test.ts`.
+- **96 canonical endpoints live**, each driven end to end by `tests/v1-router.test.ts`.
 - **4 planned**, documented and not mounted — see §11 of [`API_V1_CONTRACT.md`](API_V1_CONTRACT.md).
 - **86 legacy aliases** counted by telemetry, derived from the contract.
 - **520 routes** mounted outside `/api/v1`, every one classified in the matrix.
@@ -121,7 +121,7 @@ shows `admin=` counts.
 The cheapest real migration, and the one that proves the contract under load.
 
 <!-- BEGIN GENERATED: v1-moves:providerWeb -->
-**44** canonical capabilities are live that this client still reaches by a legacy route.
+**45** canonical capabilities are live that this client still reaches by a legacy route.
 
 | Move to (canonical) | Legacy routes it supersedes |
 |---|---|
@@ -131,6 +131,7 @@ The cheapest real migration, and the one that proves the contract under load.
 | `GET /api/v1/notifications` | `GET /api/user/notifications` |
 | `GET /api/v1/notifications/unread-count` | `GET /api/user/notifications/unread-count` |
 | `PATCH /api/v1/notifications/:key/read` | `PATCH /api/user/notifications/:key/read` |
+| `DELETE /api/v1/notifications/:key` | `DELETE /api/provider/notifications/:key` |
 | `POST /api/v1/notifications/read-all` | `POST /api/user/notifications/mark-all-read` |
 | `GET /api/v1/me/notification-preferences` | `GET /api/provider/notification-preferences` |
 | `PATCH /api/v1/me/notification-preferences` | `PUT /api/provider/notification-preferences` |

@@ -34,15 +34,15 @@ installed.
 
 | | |
 | --- | --- |
-| Legacy mappings tracked | 114 |
-| In the retirement plan | 95 |
+| Legacy mappings tracked | 115 |
+| In the retirement plan | 96 |
 | `KEEP` (not a duplicate of anything) | 6 |
 | `ROLE_SPECIFIC` (different auth/action, same service) | 13 |
 | `ALIAS_TEMPORARILY` | 86 |
-| `CANONICALIZE` | 8 |
+| `CANONICALIZE` | 9 |
 | `RETIRE` | 1 |
 | **Retirable today** | **0** |
-| Blocked | 95 |
+| Blocked | 96 |
 
 Nothing is retirable today, and the reason is the same for all of them: no client has migrated, because the v1 namespace is not deployed. The schedule is the order things become retirable, not a queue of pending deletions.
 
@@ -106,6 +106,7 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `PUT /api/provider/notification-preferences` | ALIAS_TEMPORARILY | `me.notificationPreferences.patch` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `GET /api/provider/notification-preferences` | ALIAS_TEMPORARILY | `settings.notificationPreferences.get` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
 | `PUT /api/provider/notification-preferences` | ALIAS_TEMPORARILY | `settings.notificationPreferences.put` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
+| `DELETE /api/provider/notifications/:key` | CANONICALIZE | `notifications.dismiss` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 90d |
 | `GET /api/provider/payouts` | ALIAS_TEMPORARILY | `provider.earnings.payouts` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/profile` | ALIAS_TEMPORARILY | `provider.profile.get` | Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `POST /api/provider/public-profile-revisions` | ALIAS_TEMPORARILY | `provider.profile.patch` | Provider Mobile, Provider Web have not migrated | 90d |
