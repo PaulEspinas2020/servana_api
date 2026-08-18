@@ -251,6 +251,22 @@ export const METRICS: readonly MetricSpec[] = Object.freeze([
     why: 'Separates "a client shipped a bad token refresh" from "somebody is trying uids", which look identical in an error-rate chart.',
   },
   {
+    name: 'public_path_auth_failures_total',
+    kind: 'counter',
+    description:
+      'A request to a path the v1 contract declares auth: \'public\' that was answered '
+      + '401 or 403. Labelled by route template only — the caller is anonymous by definition.',
+    labels: Object.freeze(['route', 'namespace']),
+    why:
+      'This is not a rate, it is an INVARIANT: a public entry refusing an anonymous caller '
+      + 'means the request never reached the router that would have allowed it. On 2026-08-18 '
+      + 'production answered 401 to every path including ones that do not exist, because auth '
+      + 'ran before routing — and no existing signal named it. api-error-rate is 5xx only, so a '
+      + '401 storm is invisible to it; auth-failure-spike is relative to a 24h median, so once '
+      + 'the broken state persists past a day it BECOMES the median and the alert goes quiet '
+      + 'while production stays broken.',
+  },
+  {
     name: 'contract_mismatch_total',
     kind: 'counter',
     description: 'Requests for a namespaced path this build does not serve.',
@@ -328,6 +344,21 @@ export const ALERTS: readonly AlertSpec[] = Object.freeze([
     severity: 'P0',
     condition: '5xx share of all requests > 2% over 5 minutes',
     firstAction: 'Group by route and namespace. One route means a deploy; every route means the database or the process.',
+  },
+  {
+    name: 'public-path-auth-failure',
+    metric: 'public_path_auth_failures_total',
+    severity: 'P0',
+    condition:
+      'ANY occurrence. Absolute, deliberately — not a rate, not a share, and not relative to '
+      + 'a baseline, because the correct value is zero and a threshold relative to history '
+      + 'stops firing once the broken state becomes the history.',
+    firstAction:
+      'Do NOT start with credentials. A contract-public entry refusing an anonymous caller '
+      + 'means the request did not reach the v1 router. Probe three paths and compare: a public '
+      + 'one, a guarded one, and one that cannot exist. If all three answer alike, authentication '
+      + 'is running before routing — check the middleware mounted above app.use("/api/v1") and '
+      + 'whether the process restarted on the commit it claims.',
   },
   {
     name: 'v1-contract-mismatch',

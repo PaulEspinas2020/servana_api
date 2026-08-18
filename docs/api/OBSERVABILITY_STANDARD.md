@@ -150,6 +150,13 @@ Rejected authentication and authorization, by reason.
 - labels: `reason`, `route`, `client`
 - **why:** Separates "a client shipped a bad token refresh" from "somebody is trying uids", which look identical in an error-rate chart.
 
+### `public_path_auth_failures_total` (counter)
+
+A request to a path the v1 contract declares auth: 'public' that was answered 401 or 403. Labelled by route template only — the caller is anonymous by definition.
+
+- labels: `route`, `namespace`
+- **why:** This is not a rate, it is an INVARIANT: a public entry refusing an anonymous caller means the request never reached the router that would have allowed it. On 2026-08-18 production answered 401 to every path including ones that do not exist, because auth ran before routing — and no existing signal named it. api-error-rate is 5xx only, so a 401 storm is invisible to it; auth-failure-spike is relative to a 24h median, so once the broken state persists past a day it BECOMES the median and the alert goes quiet while production stays broken.
+
 ### `contract_mismatch_total` (counter)
 
 Requests for a namespaced path this build does not serve.
@@ -194,11 +201,12 @@ Notification projections attempted, by channel and outcome.
 
 ## 5. Alerts (§151)
 
-3 P0 signals. A P0 wakes somebody; the rest wait for the morning.
+4 P0 signals. A P0 wakes somebody; the rest wait for the morning.
 
 | Severity | Alert | Metric | Condition | First action |
 | --- | --- | --- | --- | --- |
 | P0 | `api-error-rate` | `http_requests_total` | 5xx share of all requests > 2% over 5 minutes | Group by route and namespace. One route means a deploy; every route means the database or the process. |
+| P0 | `public-path-auth-failure` | `public_path_auth_failures_total` | ANY occurrence. Absolute, deliberately — not a rate, not a share, and not relative to a baseline, because the correct value is zero and a threshold relative to history stops firing once the broken state becomes the history. | Do NOT start with credentials. A contract-public entry refusing an anonymous caller means the request did not reach the v1 router. Probe three paths and compare: a public one, a guarded one, and one that cannot exist. If all three answer alike, authentication is running before routing — check the middleware mounted above app.use("/api/v1") and whether the process restarted on the commit it claims. |
 | P1 | `v1-contract-mismatch` | `contract_mismatch_total` | any sustained rate on the v1 namespace — more than 10/minute for 5 minutes | Compare the deployed commit against the client build. This is almost never a bug in a route: it is a client asking for an endpoint this build does not have, so the fix is a deploy or a rollback, not a code change. Group by client to see which one is ahead. |
 | P0 | `auth-failure-spike` | `auth_failures_total` | rate > 10× the 24h median over 10 minutes | Group by client. One client version is a bad release; many clients is credential stuffing. |
 | P0 | `booking-transitions-failing` | `booking_transition_failures_total` | any refusal other than a normal guard exceeds 5/minute | Group by action and fromState. A provider who cannot complete leaves a customer waiting at home. |
