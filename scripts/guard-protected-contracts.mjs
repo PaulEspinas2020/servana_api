@@ -64,8 +64,21 @@ for (const { label, pattern } of WORKER_ROUTES) {
 // ── Booking routes (used by customer mobile app) ─────────────────────────────
 section('Booking routes (customer mobile app uses these)');
 
+// Two prefixes, two checks, each anchored.
+//
+// This was ONE check, `/['"`]\/booking/`, with no boundary after the word. It
+// matched `'/bookings'` just as happily as `'/booking/'`, so deleting every
+// `/booking/:bookingId/...` route left it green on the strength of the plural —
+// a path passing by matching inside a longer one, which is the exact failure
+// this repository has recorded an endpoint-matrix guard committing before.
+//
+// Both prefixes are real and distinct: `/booking/:bookingId/provider-location`
+// and `/booking/:bookingId/provider` are mounted in provider.routes.ts, and
+// `/bookings` is its own tree. Splitting them loses no coverage and makes each
+// check answer the question its label asks.
 const BOOKING_ROUTES = [
-  { label: '/booking route prefix exists', pattern: /['"`]\/booking/ },
+  { label: '/booking/ route prefix exists', pattern: /['"`]\/booking\// },
+  { label: '/bookings route prefix exists', pattern: /['"`]\/bookings['"`\/]/ },
 ];
 
 for (const { label, pattern } of BOOKING_ROUTES) {
