@@ -50,27 +50,45 @@ async function main() {
     if (!apply) return;
 
     /**
-     * A migration that declares itself destructive is refused unless this
-     * deploy named it. Checked for ALL pending migrations before any of them
-     * runs, so an unauthorised one cannot be discovered halfway through a batch
-     * with earlier migrations already committed.
+     * Apply the safe prefix; HOLD at the first unauthorised destructive migration.
+     *
+     * This used to refuse the whole batch if any pending migration was
+     * destructive and unnamed. Rehearsing against real PostgreSQL showed why
+     * that is backwards: 036 is additive and wanted now, 037 drops 39
+     * constraints and deserves its own change window — and the all-or-nothing
+     * check made 036 unappliable without also authorising 037.
+     *
+     * Stopping is safe rather than partial. Each migration is its own
+     * transaction with the ledger insert inside it, so the database is left at a
+     * consistent, recorded point; the held migration is simply still pending.
+     *
+     * It does NOT skip ahead. Migrations are ordered, so everything after the
+     * held one waits too — applying 038 while 037 is held would be a schema
+     * nobody has described.
+     *
+     * Exit is SUCCESS, deliberately. A held migration is the intended outcome of
+     * a deploy that has not authorised it, and failing here would stop the
+     * deploy before its restart — leaving the new code undeployed indefinitely,
+     * for as long as any destructive migration sits pending.
      */
-    const unauthorised = pending.filter(
-      (m) => declaresDestructive(m.sql) && !destructiveAuthorised(m.name),
-    );
-    if (unauthorised.length) {
-      const names = unauthorised.map((m) => m.name).join(', ');
-      throw new Error(
-        'Refusing to apply destructive migration(s) without authorisation: ' +
-          names +
-          '. Set ' +
-          DESTRUCTIVE_ACK_VAR +
-          ' to the migration name(s), comma-separated, after an approved backup ' +
-          'and change window.',
-      );
-    }
+    const held: string[] = [];
 
     for (const migration of pending) {
+      if (declaresDestructive(migration.sql) && !destructiveAuthorised(migration.name)) {
+        held.push(...pending.slice(pending.indexOf(migration)).map((m) => m.name));
+        console.log('');
+        console.log('  ================================================================');
+        console.log(`  HELD: ${migration.name}`);
+        console.log('  It declares SERVANA:DESTRUCTIVE and this run did not name it.');
+        console.log(`  To apply it, set ${DESTRUCTIVE_ACK_VAR}=${migration.name}`);
+        console.log('  after an approved backup and change window.');
+        if (held.length > 1) {
+          console.log(`  Also still pending behind it: ${held.slice(1).join(', ')}`);
+        }
+        console.log('  ================================================================');
+        console.log('');
+        break;
+      }
       await client.query('BEGIN');
       try {
         await client.query(migration.sql);
@@ -81,6 +99,12 @@ async function main() {
         await client.query('ROLLBACK');
         throw error;
       }
+    }
+
+    if (held.length) {
+      console.log(
+        `${pending.length - held.length} applied, ${held.length} held: ${held.join(', ')}`,
+      );
     }
   } finally {
     if (locked) await client.query(`SELECT pg_advisory_unlock(hashtext('servana-controlled-migrations'))`).catch(() => {});

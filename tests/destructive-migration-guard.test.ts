@@ -94,35 +94,67 @@ describe('037 is marked, and it is the only one', () => {
   });
 });
 
-describe('the runner enforces it before applying anything', () => {
+describe('the runner applies the safe prefix and HOLDS', () => {
   const SOURCE = fs.readFileSync(
     path.resolve(__dirname, '../scripts/run-migrations.ts'),
     'utf8',
   );
 
-  it('checks every pending migration BEFORE the apply loop', () => {
-    /**
-     * Checking inside the loop would discover an unauthorised migration halfway
-     * through a batch, with earlier ones already committed. The check has to
-     * come first.
-     */
-    const check = SOURCE.indexOf('const unauthorised = pending.filter');
+  /**
+   * This originally refused the WHOLE batch if any pending migration was
+   * destructive and unnamed. Rehearsing against real PostgreSQL showed that is
+   * backwards: it made 036 — additive, wanted now — unappliable without also
+   * authorising 037, which drops 39 constraints and deserves its own window.
+   *
+   * Verified live against PostgreSQL 16: 030-036 applied, 037 held, exit 0,
+   * schema at 132 tables with the 40 stale constraints still present.
+   */
+  it('checks each migration inside the loop, so the prefix still applies', () => {
     const loop = SOURCE.indexOf('for (const migration of pending) {');
-    expect(check).toBeGreaterThan(-1);
-    expect(loop).toBeGreaterThan(check);
+    const check = SOURCE.indexOf('declaresDestructive(migration.sql)');
+    expect(loop).toBeGreaterThan(-1);
+    expect(check).toBeGreaterThan(loop);
   });
 
-  it('throws rather than skipping', () => {
-    // Silently skipping would leave the ledger consistent and the schema wrong,
-    // which is worse than a failed deploy.
+  it('breaks rather than continuing — it must not skip ahead', () => {
+    /**
+     * Migrations are ordered. Applying 038 while 037 is held would produce a
+     * schema nobody has described, so everything behind the held one waits too.
+     */
     const block = SOURCE.slice(
-      SOURCE.indexOf('const unauthorised = pending.filter'),
-      SOURCE.indexOf('for (const migration of pending) {'),
+      SOURCE.indexOf('declaresDestructive(migration.sql)'),
+      SOURCE.indexOf('await client.query(\'BEGIN\')'),
     );
-    expect(block).toContain('throw new Error');
-    // The identifier, not its value — the source references the constant so the
-    // env var name cannot drift between the guard and its error message.
+    expect(block).toContain('break;');
+    expect(block).not.toContain('continue;');
+  });
+
+  it('names the env var and the migration in the HELD notice', () => {
+    const block = SOURCE.slice(
+      SOURCE.indexOf('declaresDestructive(migration.sql)'),
+      SOURCE.indexOf('await client.query(\'BEGIN\')'),
+    );
+    expect(block).toContain('HELD');
     expect(block).toContain('DESTRUCTIVE_ACK_VAR');
+  });
+
+  it('exits SUCCESS when holding, so a deploy is not blocked forever', () => {
+    /**
+     * Failing here would stop the deploy before its restart, leaving new code
+     * undeployed for as long as ANY destructive migration sits pending. The
+     * hold is the intended outcome, not an error.
+     */
+    const holdBlock = SOURCE.slice(
+      SOURCE.indexOf('const held: string[] = []'),
+      SOURCE.indexOf('} finally {'),
+    );
+    expect(holdBlock).not.toContain('throw new Error');
+    expect(holdBlock).not.toContain('process.exit(1)');
+  });
+
+  it('reports what was applied and what was held', () => {
+    expect(SOURCE).toContain('applied, ');
+    expect(SOURCE).toContain('held: ');
   });
 });
 
