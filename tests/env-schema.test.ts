@@ -52,7 +52,7 @@ describe('production refuses an unusable environment', () => {
     let message = '';
     try {
       withEnv(
-        { ...allRequiredSet(), DB_HOST: undefined, DB_USER: undefined, SECRET: undefined },
+        { ...allRequiredSet(), DB_HOST: undefined, DB_USER: undefined, SCHEMA: undefined },
         () => validateEnv(true),
       );
     } catch (err: any) {
@@ -60,7 +60,7 @@ describe('production refuses an unusable environment', () => {
     }
     expect(message).toMatch(/DB_HOST/);
     expect(message).toMatch(/DB_USER/);
-    expect(message).toMatch(/SECRET/);
+    expect(message).toMatch(/SCHEMA/);
   });
 
   it('explains what each missing variable is for', () => {
@@ -139,7 +139,7 @@ describe('no value ever leaves this module', () => {
     const secretValue = 'super-secret-value-do-not-log';
     let message = '';
     try {
-      withEnv({ ...allRequiredSet(), SECRET: secretValue, DB_HOST: undefined }, () =>
+      withEnv({ ...allRequiredSet(), DB_PASSWORD: secretValue, DB_HOST: undefined }, () =>
         validateEnv(true),
       );
     } catch (err: any) {
@@ -171,8 +171,22 @@ describe('the schema itself', () => {
       'DB_PORT',
       'DB_USER',
       'SCHEMA',
-      'SECRET',
     ]);
+
+    /**
+     * SECRET was on this list and had to come off — the correction that
+     * proves why the list is pinned at all.
+     *
+     * The justification for including it was that required variables are ones
+     * whose absence would ALREADY have broken production. Production has never
+     * set SECRET; `helpers/validation.ts` falls back to the literal
+     * "nosecret", so absence was invisible. Making it fatal blocked a deploy
+     * of a system that had run without it for months.
+     *
+     * "It would have broken" is only sound where a failure would have been
+     * VISIBLE. A silent fallback breaks that inference.
+     */
+    expect(DEGRADED_ENV.map((s) => s.name)).toContain('SECRET');
   });
 
   it('declares no variable twice', () => {

@@ -62,11 +62,7 @@ export const REQUIRED_ENV: readonly EnvVarSpec[] = Object.freeze([
     // Every query interpolates this. Undefined turns them into `undefined.table`.
     purpose: 'PostgreSQL schema every query is qualified with',
   },
-  {
-    name: 'SECRET',
-    requirement: 'required',
-    purpose: 'session/token signing — an empty signing key is not a degraded mode',
-  },
+
 ]);
 
 /**
@@ -76,6 +72,26 @@ export const REQUIRED_ENV: readonly EnvVarSpec[] = Object.freeze([
  * failure mode of a missing integration key is usually silence.
  */
 export const DEGRADED_ENV: readonly EnvVarSpec[] = Object.freeze([
+  {
+    name: 'SECRET',
+    requirement: 'degraded',
+    /**
+     * Moved OFF the required list, and the reason is a correction.
+     *
+     * I put it there arguing the required list held only variables whose absence
+     * would ALREADY have broken production. That premise failed here: production
+     * has never set SECRET, and `helpers/validation.ts` silently falls back
+     * to the literal "nosecret". Absence was invisible because the code hid it.
+     *
+     * It is safe to demote because its only consumer, `generateUserToken`,
+     * has NO CALLERS and nothing verifies its JWT — authentication is
+     * Firebase `verifyIdToken` throughout. Dead code, not a live key.
+     *
+     * If anything ever signs with it again, move it back to required AND set it
+     * in production first, in that order.
+     */
+    purpose: 'legacy JWT signing — currently dead code, no callers verify it',
+  },
   { name: 'PAYMONGO_SECRET_KEY', requirement: 'degraded', purpose: 'checkout, refunds and payouts' },
   { name: 'PAYMONGO_WEBHOOK_SECRET', requirement: 'degraded', purpose: 'webhook signature verification' },
   { name: 'MAILER_KEY', requirement: 'degraded', purpose: 'all outbound email' },
