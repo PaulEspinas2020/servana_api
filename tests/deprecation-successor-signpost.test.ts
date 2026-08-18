@@ -102,6 +102,40 @@ describe('successor-version signpost', () => {
     });
   });
 
+  it('EVERY notice still matches its own path', () => {
+    /**
+     * The check this TAB should have had from the start.
+     *
+     * The fix added three constraints across all 90 compiled notices, and only
+     * nine paths were pinned individually. A matcher that stops matching its
+     * own path does not fail loudly — the route keeps working and its
+     * Deprecation header silently vanishes, so a client mid-migration simply
+     * stops being told to move. Nothing else in the suite would notice.
+     *
+     * Both an integer and an opaque identifier are tried, because the digits
+     * constraint is derived positionally from the successor's declared param
+     * types: `/api/:id` is an integer booking id, while
+     * `/api/user/notifications/:key` is an opaque string. A notice matching
+     * neither form is broken.
+     */
+    const unmatched: string[] = [];
+    for (const n of __notices) {
+      const numeric = n.path.replace(/:[A-Za-z0-9_]+/g, '12345');
+      const opaque = n.path.replace(/:[A-Za-z0-9_]+/g, 'abc-XYZ_9');
+      if (!findNotice(n.method, numeric) && !findNotice(n.method, opaque)) {
+        unmatched.push(`${n.method.toUpperCase()} ${n.path}`);
+      }
+    }
+    expect({ count: unmatched.length, unmatched }).toMatchObject({ count: 0 });
+  });
+
+  it('there is a meaningful number of notices to check', () => {
+    // Guards the vacuous pass: an empty notice list makes the property above
+    // trivially true, and a build that compiles zero notices is a deprecation
+    // clock that stopped.
+    expect(__notices.length).toBeGreaterThan(50);
+  });
+
   it('every notice points at an implemented canonical successor', () => {
     // A signpost to something unmounted is worse than no signpost.
     for (const n of __notices) {
