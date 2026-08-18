@@ -48,13 +48,65 @@ export interface DeprecationNotice {
   sunsetEligible: boolean;
 }
 
-const toMatcher = (path: string): RegExp => {
+const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Literal segments that some OTHER legacy route claims at the same position.
+ *
+ * `GET /api/:id` compiles to a pattern for one segment under `/api`, and
+ * `/api/catalog` is one segment under `/api`. Without this, the booking-detail
+ * alias answers for the catalog, and production told four of the busiest public
+ * paths that their successor was `/api/v1/bookings/:bookingId`. The catalog is
+ * not superseded by a booking read, and neither is pricing.
+ *
+ * Derived from the contract array, never from a hand-maintained list. A
+ * string-keyed guard drifts the moment somebody adds a route; a derived one
+ * cannot, because the same array mounts the router.
+ */
+const literalsAt = (index: number): Set<string> => {
+  const out = new Set<string>();
+  for (const entry of V1_CONTRACT) {
+    for (const l of entry.legacy) {
+      const seg = l.path.split('/').filter(Boolean)[index];
+      if (seg && !seg.startsWith(':')) out.add(seg);
+    }
+  }
+  return out;
+};
+
+/**
+ * Positional param types, read off the successor entry.
+ *
+ * A legacy path names its parameter whatever it named it — `/api/:id` — while
+ * the canonical successor declares `bookingId` with `type: 'integer'`. The
+ * names differ and the positions do not, so the type is taken positionally.
+ * Booking and service ids are integers everywhere on this platform, so a
+ * digits-only pattern makes even a future literal route safe by construction
+ * rather than by remembering to add it to a list.
+ */
+const paramTypesOf = (successorParams: ReadonlyArray<{ type: string }> | undefined): string[] =>
+  (successorParams ?? []).map((p) => p.type);
+
+const toMatcher = (path: string, paramTypes: string[] = []): RegExp => {
+  let paramIndex = 0;
   const body = path
     .split('/')
     .filter(Boolean)
-    .map((segment) =>
-      segment.startsWith(':') ? '[^/]+' : segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
-    )
+    .map((segment, index) => {
+      if (!segment.startsWith(':')) return escape(segment);
+
+      const type = paramTypes[paramIndex++];
+      // Constraint 1: an integer id cannot be the word `catalog`.
+      if (type === 'integer') return '\\d+';
+
+      // Constraint 2, independent of the first: whatever the type, a parameter
+      // must not swallow a literal another route claims at this position. Kept
+      // even when constraint 1 already applies, because the two fail
+      // differently — one on a type change, the other on a new route.
+      const reserved = [...literalsAt(index)].filter(Boolean).sort();
+      if (reserved.length === 0) return '[^/]+';
+      return `(?!(?:${reserved.map(escape).join('|')})(?:/|$))[^/]+`;
+    })
     .map((s) => '/' + s)
     .join('');
   return new RegExp(`^${body}/?$`);
@@ -88,13 +140,30 @@ export const buildDeprecationNotices = (): DeprecationNotice[] => {
     notices.push({
       method: row.legacy.method,
       path: row.legacy.path,
-      matcher: toMatcher(row.legacy.path),
+      matcher: toMatcher(row.legacy.path, paramTypesOf(successor.params)),
       successor: `${V1_PREFIX}${successor.path}`,
       canonical: successor.id,
       windowDays: row.earliestWindowDays,
       sunsetEligible: row.retirable,
     });
   }
+
+  // Constraint 3: order. `findNotice` takes the first match, so a route whose
+  // segments are all literal must be tested before one that can match a
+  // parameter — otherwise a greedy alias answers for a sibling that named
+  // itself exactly. Most literal segments first; ties broken by path so the
+  // compiled order is stable and diffable rather than dependent on contract
+  // array order.
+  const literalCount = (p: string) =>
+    p.split('/').filter((s) => s && !s.startsWith(':')).length;
+  const paramCount = (p: string) => p.split('/').filter((s) => s.startsWith(':')).length;
+
+  notices.sort(
+    (a, b) =>
+      paramCount(a.path) - paramCount(b.path) ||
+      literalCount(b.path) - literalCount(a.path) ||
+      a.path.localeCompare(b.path),
+  );
 
   return notices;
 };
