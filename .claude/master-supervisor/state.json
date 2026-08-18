@@ -9,24 +9,26 @@
     "TAB 04 (rules + parity + audit)",
     "TAB 12 (credential + high CVEs)"
   ],
-  "currentObjective": "TAB 02 rescoped 2026-08-17. Authoring gap CLOSED by migration 036. Deletion phase: 148 -> 41 statements, 106 -> 32 objects, startup graph 19 -> 9 deps, across twenty-two services. Lost-race class GATED (contested 7 -> 2, 0 unsatisfiable). Recipe + traps in RESUME.md section 3.",
-  "status": "IN PROGRESS - TAB 02 deletion phase 148 -> 41; 72% of the runtime DDL is gone",
+  "currentObjective": "TAB 02 rescoped 2026-08-17. Authoring gap CLOSED by 036. Deletion phase: 148 -> 3 statements, 106 -> 3 objects, startup graph 19 -> 6 deps (ONE required, and it seeds DATA). The only runtime DDL left is chat.repository, which is deferred.",
+  "status": "IN PROGRESS - TAB 02 deletion phase 148 -> 3; 98% done, remainder is the deferred chat.repository",
   "supervisorCycleCount": 15,
   "lastHourlyReportAt": null,
-  "lastCheckpointAt": "2026-08-18 - TAB 02: 148 -> 41, serviceApplication + technicianService",
+  "lastCheckpointAt": "2026-08-18 - TAB 02: 148 -> 3, migration 037 authored",
   "lastLocalCommit": "see git log — do not trust a recorded SHA, two handoffs running recorded a stale one",
   "workingTreeState": "CLEAN — check `git rev-list --count origin/main..HEAD` for the real number",
   "activeBlockers": [
-    "No real boot since app.ts startup was rewritten (14 fire-and-forget IIFEs -> a dependency graph awaited before listen). It was 19 dependencies; TAB 02 has removed 10, so it is 9 - including the REQUIRED payment and identity entries, REMOVED not downgraded. Both the rewrite AND every removal are unverified against a running server.",
+    "No real boot since app.ts startup was rewritten. It was 19 dependencies; TAB 02 has removed 13, so it is 6 - and only ONE is still `required` (admin-permission-seed, which seeds DATA not schema). The payment, identity and BOTH booking required entries are gone. Every removal is unverified against a running server.",
     "Deploy decision: a push to main IS the deploy, and conflicts with the standing local-only rule (0 of 108 endpoints migrated)",
-    "Migration 036 is authored, gated and committed but NOT applied. Production lacks four tables its own booking code writes to. This gates deletion of the runtime DDL for THOSE SIX OBJECTS ONLY — the other 41 statements target objects production already has and are safe to delete now.",
+    "Migration 036 is authored, gated and committed but NOT applied. Production lacks four tables its own booking code writes to. This gates deletion of the runtime DDL for THOSE SIX OBJECTS ONLY — the other 3 statements (all in the deferred chat.repository) target objects production already has and are safe to delete now.",
+    "P1 migration 037 authored, PROVEN on PGlite, NOT APPLIED. It drops 39 redundant GLOBAL unique constraints that defeat notification idempotency in production today. Destructive, so it needs the same explicit authorisation 030-035 got.",
     "booking-postgres-races needs a disposable PostgreSQL; PGlite cannot substitute (single-connection)",
     "9 moderate CVEs need npm audit fix --force: major bumps of firebase-admin (auth path) and node-cron (every scheduled job)"
   ],
   "openItems": [
     "P0 apply migration 036 to production, then delete the runtime DDL it replaces (separate commit, in that order)",
+    "P1 DEFECT notification_key idempotency has NEVER worked. Production carries 39 GLOBAL UNIQUE (notification_key) constraints (provider_notifications _key1.._key37, customer_notifications _key1/_key2). Both migration 015 and the runtime DDL tried to DROP the UNSUFFIXED name, which has never existed. ON CONFLICT (worker_uid, notification_key) does not absorb a violation of a different constraint, so any deterministic non-owner-scoped key fails for every recipient after the first - scheduler.ts daily_active_bookings_${day} is ONE KEY PER DAY. Migration 037 fixes it by enumerating pg_constraint; PROVEN on PGlite (39 -> 0, owner indexes survive, idempotent). AUTHORED, NOT APPLIED - destructive, needs authorisation.",
     "P1 DEFECT provider_source_attribution had TWO incompatible runtime definitions behind CREATE TABLE IF NOT EXISTS. Production has the providerOnboardingService shape (PK uid), so GET /admin/providers/:uid/attribution and POST /admin/providers/attribution/backfill fail with 42703 today. Needs a decision on the canonical shape plus a migration; admin portal reads one shape, provider-web writes the other.",
-    "P1 41 runtime DDL statements left: notification.service, adminCreateBookingService, adminBookingService, providerAutoOnlineEngine, chat.repository (deferred), plus ONE statement each still touching service_options and employee_services. Do NOT estimate test coupling by grep; delete then run the gate.",
+    "P1 3 runtime DDL statements left, ALL in chat.repository, which is deferred (see the next item). Everything else is done: 22 services, startup graph 19 -> 6.",
     "P1 technicianService.ensureOnboardingTable is the LAST gated deletion: it creates worker_onboarding, which migration 036 claims and production lacks. Six sibling bootstraps in that same file were removed; this one waits for the 036 apply.",
     "P1 chat.repository ensureChatLifecycleSchema DEFERRED: it also runs a DML derivation (UPDATE chat_conversations SET status=CLOSED WHERE is_closed=TRUE), and is_closed has three consumers. Needs the writers traced before the derivation can be dropped. See project_servana_booking_conversation.",
     "P1 ownership unverified on a real engine — PGlite has no role separation; the `fresh` CI job activates but has never been observed running",
@@ -49,8 +51,8 @@
   "gates": {
     "npm run verify": "PASS - 265 suites, 5769 tests (exit code checked directly, not through a pipe)",
     "npm run db:verify:embedded": "PASS — 121 restored + 7 applied = 132 tables",
-    "npm run schema:authority": "PASS - UNMANAGED 0, columns 0, contested 2 / 0 unsatisfiable, 1 invisible index, 2 interpolated columns read by hand",
-    "npm run ddl:inventory": "41 unmanaged / 32 objects - exits 1 BY DESIGN, and UNDERSTATES the backlog (interpolated index names are invisible to it)",
+    "npm run schema:authority": "PASS - UNMANAGED 0, columns 0, contested 1, 1 invisible index, 1 interpolated column read by hand",
+    "npm run ddl:inventory": "3 unmanaged / 3 objects - exits 1 BY DESIGN. All three are chat.repository.",
     "npm run authz:legacy": "615 legacy routes, 0 v1 loosenings",
     "npm run migrations:baseline:plan": "exits 1 BY DESIGN — 14 DML migrations need human judgement"
   },

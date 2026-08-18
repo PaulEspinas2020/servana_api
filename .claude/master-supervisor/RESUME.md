@@ -15,9 +15,9 @@ Read this, then `MEMORY.md`, `state.json`, `DECISIONS.md`, and
 ```
 npm run verify              expect PASS — 265 suites, 5769 tests
 npm run db:verify:embedded  expect PASS — 121 restored + 7 applied = 132 tables
-npm run schema:authority    expect UNMANAGED 0, MISSING 0, contested 2 / 0
+npm run schema:authority    expect UNMANAGED 0, MISSING 0, contested 1 / 0
                             unsatisfiable, 1 invisible index  (exits 0)
-npm run ddl:inventory       expect 41 unmanaged, 32 objects  (exits 1 BY DESIGN)
+npm run ddl:inventory       expect 3 unmanaged, 3 objects  (exits 1 BY DESIGN)
                             ⚠ UNDERSTATES the backlog — it cannot see a
                             CREATE INDEX whose name is interpolated
 npm run authz:legacy        expect 615 routes, 0 loosenings
@@ -89,9 +89,10 @@ that is proven rather than asserted — three orderings on real PostgreSQL
 
 ### What is actually left
 
-**Delete 41 runtime DDL statements and the lazy bootstraps that await them.**
-Mechanical and broad, not a design exercise. 148 → 41 is done (objects 106 → 32,
-startup graph 19 → 9 dependencies), across twenty-two services:
+**Three runtime DDL statements remain, and all three are the deferred
+`chat.repository`.** 148 → 3 is done (objects 106 → 3, startup graph 19 → 6),
+across twenty-two services. Only ONE startup entry is still `required`, and it
+seeds DATA rather than schema:
 
 - `accountDeletionService`, `providerOperationalAvailabilityService`
 - `adminNotificationService`, `adminMobileAttributionService`,
@@ -103,6 +104,8 @@ startup graph 19 → 9 dependencies), across twenty-two services:
 - `adminPermissionService` (**split**, not deleted), `customerSupportService`
 - `adminCommunicationService`, `providerCatalogService`
 - `serviceApplicationService`, `technicianService` (six of its seven bootstraps)
+- `notification.service` (both), `providerAutoOnlineEngine`,
+  `adminBookingService`, `adminCreateBookingService`
 
 `adminPermissionService` is the pattern for a bootstrap that does DDL **and**
 seeding: the DDL goes, the seeding stays, and the function gets RENAMED —
@@ -134,6 +137,28 @@ also carried a FUNCTION, the schema's only TRIGGER, and a one-time DML backfill 
 because a trigger whose function is missing fails at the first UPDATE rather than
 at creation.
 
+⛔ **A SECOND P1: notification idempotency has never worked.**
+
+`notification.service` and migration 015 both ran
+
+    ALTER TABLE provider_notifications
+      DROP CONSTRAINT IF EXISTS provider_notifications_notification_key_key;
+
+against a name that has never existed. Production carries `..._key1` through
+`..._key37`, plus two on `customer_notifications` — 39 constraints, each UNIQUE
+on `notification_key` with no owner column. So GLOBAL uniqueness is still
+enforced, and `ON CONFLICT (worker_uid, notification_key) DO NOTHING` cannot
+absorb a violation of a *different* constraint; it raises 23505.
+
+Any deterministic key that is not owner-scoped therefore fails for every
+recipient after the first. `scheduler.ts:184` uses
+`daily_active_bookings_${day}` — one key per DAY across all providers.
+
+`037-notification-key-drop-global-uniques.sql` fixes it by enumerating
+`pg_constraint` rather than guessing suffixes. **Proven on real PostgreSQL**:
+39 → 0, both `uq_*_owner_key` indexes surviving, second apply a no-op.
+**AUTHORED, NOT APPLIED** — destructive, needs the same authorisation as 030–035.
+
 ⛔ **A P1 defect surfaced doing this — see the note at the top of
 `adminMobileAttributionService`.** Two services defined
 `provider_source_attribution` with incompatible shapes behind
@@ -156,7 +181,7 @@ safe ONLY because the baseline owns the full table; do not promote the subset.
 different PRIMARY KEY over the same columns, passes it. `db:verify:embedded` is
 the real guarantee.
 
-⚠ **The 036 objects are the exception, and they are NOT part of this 41.**
+⚠ **The 036 objects are the exception, and they are NOT part of this 3.**
 Their runtime DDL stays until 036 is applied to production — deleting it first
 makes booking transitions depend on a migration that has not run. Everything
 else targets an object production already has, so it is safe now.
@@ -181,6 +206,12 @@ else targets an object production already has, so it is safe now.
 #### The traps, every one of them hit for real
 
 Two more, added after the finance/audit batch:
+
+- **A suite that fails to PARSE does not fail — it vanishes.** A duplicated
+  `});` from a bad splice stopped two suites compiling. `verify` reported 265
+  suites, 2 failed, **0 failed tests**, and a total down 91. `suite-inventory`
+  is what catches this; do not read a green-looking test count without it. When
+  replacing a block programmatically, slice PAST its closing `});`, not to it.
 
 - **A heredoc turns `\b` into a BACKSPACE.** Three regexes in
   `admin-finance.test.js` ended up containing literal 0x08 and silently matched
