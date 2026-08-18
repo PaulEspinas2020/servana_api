@@ -33,18 +33,33 @@ jobs:
       # Generated-document and OpenAPI drift. Separate from the summary because
       # these fail on CONTENT, and their diff is the useful output.
       - name: Generated document drift
-        # --max-old-space-size because the failing run (32119165094) produced NO
-        # log for this step at all while every sibling step logged normally.
-        # A step that fails a check writes why; a step whose log never appears
-        # was killed before it could flush. deploy.yml already records the same
-        # signature on the other host as "exit 134 - JS heap out of memory", and
-        # jest --runInBand shares one heap across all 276 suites.
+        # CORRECTION. An earlier version of this block blamed the JS heap and set
+        # --max-old-space-size, inferred from a run whose log for this step was
+        # missing. That inference was WRONG, and run 32161440209 - which did log -
+        # says what actually happens:
         #
-        # NOTE: inferred from the missing log, not from an error message - the
-        # run's own output for this step is gone. If a future run still dies
-        # here, capture the exit code before assuming heap again.
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
+        #   Firebase Admin credentials not found.
+        #     at src/middleware/firebaseApp.ts:25
+        #     at src/middleware/verifyAuth.ts:2
+        #     at src/api/v1/register.ts:36
+        #     at src/app.ts:205
+        #     at tests/app-import-is-inert.test.ts:63
+        #   Test Suites: 4 failed, 272 passed    Tests: 7 failed, 5903 passed
+        #
+        # Not memory. Not drift. 4 suites need Firebase Admin credentials, which
+        # exist on the self-hosted deploy host (deploy.yml copies
+        # servana-serviceAccountKey.json out of /home/github-runner/env) and do
+        # not exist on a GitHub-hosted runner. That is also why `npm run verify`
+        # is green locally and red here: the difference is credentials, not load.
+        #
+        # Worth noting what the failing suite is called: app-import-is-inert.
+        # Importing src/app.ts is NOT inert without credentials, so that test is
+        # reporting a real property of the app, not a CI misconfiguration.
+        #
+        # Two ways to close it, neither done here: supply the service account as
+        # an Actions secret, or make firebaseApp.ts defer credential resolution
+        # so a bare import cannot throw. The second is the one the test is asking
+        # for by name.
         run: npm run verify
 
       # Dependency review is REPORTING, not blocking, and deliberately so.
