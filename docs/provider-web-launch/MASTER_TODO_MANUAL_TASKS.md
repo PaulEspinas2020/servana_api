@@ -39,3 +39,11 @@ Add a row when a TAB reaches an item it cannot close from this machine. Do not
 add code work here — if it can be done locally, it gets done locally instead.
 Each row names the *blocking authority*, not just the task, so the right person
 can pick it up without re-deriving why it is stuck.
+
+## From TAB 05 — auth migration (added 2026-08-18)
+
+| # | Task | Why it is manual | Status |
+|---|---|---|---|
+| M-10 | **Certify the migrated logout against production** — sign in, sign out, confirm the session is revoked and `POST /api/v1/auth/logout` answers 200 with `{sessionsRevoked, pushCleared}`. | Needs a real provider account (M-08) and a deploy. The migration is verified locally (5,793 tests) and by reading both handlers; it is not verified against the running server. | OPEN |
+| M-11 | **The remaining eight auth routes cannot be migrated responsibly yet**: forgot/reset password, resend verification (x2), verify-email-otp, register (x2), sign-in, firebase-login. TAB 05 mandate 5 requires certifying each with a REAL sign-in against production across five credential scenarios — correct credentials, wrong password, unverified email, deactivated account, and a customer credential refused at the provider portal. | None is possible without M-08. The Master Command deferred this work twice for the same reason, and migrating sign-in blind is the one change that can lock every provider out of the product. | OPEN — BLOCKED ON M-08 |
+| M-12 | **Observe canonical traffic for a full day before deleting any legacy auth call site.** The guardrail is explicit that removal is a separate commit, after real traffic. | Requires a deploy and a day of production telemetry. | OPEN |
