@@ -407,7 +407,28 @@ const releaseDisbursement = async (disbursement: any) => {
 // Finds PENDING disbursements where the job was completed 72 h+ ago.
 // ---------------------------------------------------------------------------
 
-export const processPendingDisbursements = async () => {
+export interface DuePayoutRunSummary {
+  /** Rows the due-and-not-held query selected. */
+  selected: number;
+  /** Rows `releaseDisbursement` was called for. */
+  attempted: number;
+  /** Rows whose release threw out of `releaseDisbursement` entirely. */
+  threw: number;
+}
+
+/**
+ * Returns a summary rather than `void` (TAB 01).
+ *
+ * The count is not decoration. `POST /api/admin/disbursements/trigger` runs this
+ * batch, and until TAB 01 that route consulted no named permission and wrote no
+ * audit record — so an admin could move every due payout on the platform and
+ * leave nothing behind that named them. `adminFinanceService.runDuePayoutBatch`
+ * is now the only admin path in, and it writes an audit record; a record saying
+ * "a batch ran" without saying how much it touched is barely a record at all.
+ *
+ * Additive: `src/scheduler.ts` calls this on a cron and ignores the value.
+ */
+export const processPendingDisbursements = async (): Promise<DuePayoutRunSummary> => {
   const res = await dbQuery.query(
     `
     SELECT d.*
@@ -437,18 +458,25 @@ export const processPendingDisbursements = async () => {
 
   if (!res.rowCount) {
     console.log("[disbursement] No pending disbursements due for release.");
-    return;
+    return { selected: 0, attempted: 0, threw: 0 };
   }
 
   console.log(`[disbursement] Processing ${res.rowCount} disbursement(s)…`);
 
+  let attempted = 0;
+  let threw = 0;
+
   for (const row of res.rows) {
+    attempted += 1;
     try {
       await releaseDisbursement(row);
     } catch (err: any) {
+      threw += 1;
       console.error(`[disbursement] processPending row ${row.id} threw:`, err.message);
     }
   }
+
+  return { selected: res.rowCount, attempted, threw };
 };
 
 // ---------------------------------------------------------------------------
@@ -495,35 +523,39 @@ export const retryFailedDisbursements = async () => {
 // Manual retry — admin can force-retry a specific booking's disbursement.
 // ---------------------------------------------------------------------------
 
-export const manualRetry = async (disbursementId: number) => {
-  const res = await dbQuery.query(
-    `SELECT * FROM ${dbSchema}.disbursements WHERE id = $1`,
-    [disbursementId]
-  );
-
-  if (!res.rowCount) throw new Error("Disbursement not found");
-
-  const row = res.rows[0];
-
-  if (row.status === "RELEASED") throw new Error("Disbursement is already released");
-
-  // Guard against concurrent in-flight retries — only reset if not already PENDING/PROCESSING/RELEASED
-  const reset = await dbQuery.query(
-    `UPDATE ${dbSchema}.disbursements SET status = 'PENDING', payout_error = NULL, updated_at = NOW()
-     WHERE id = $1 AND status NOT IN ('PENDING','PROCESSING','RELEASED') RETURNING *`,
-    [disbursementId]
-  );
-  if (!reset.rowCount) throw new Error("Disbursement already in-flight or released");
-
-  await releaseDisbursement({ ...row, status: "PENDING" });
-
-  const updated = await dbQuery.query(
-    `SELECT * FROM ${dbSchema}.disbursements WHERE id = $1`,
-    [disbursementId]
-  );
-
-  return updated.rows[0];
-};
+/**
+ * `manualRetry` is DELETED. It was a second, weaker way to move money (TAB 01).
+ *
+ * It lived here and `adminFinanceService.retryPayout` lived there, and the two
+ * were described everywhere as the same capability. They were not:
+ *
+ *                        retryPayout (canonical)      manualRetry (deleted)
+ *   named permission     payouts.retry_failed         none
+ *   audit record         finance_payout_retry_...     none
+ *   retry cap            PAYOUT_MAX_RETRIES = 3       none — never even read
+ *                                                     or incremented retry_count
+ *   eligible status      FAILED only                  anything but PENDING /
+ *                                                     PROCESSING / RELEASED
+ *   how the money moves  sets PENDING; the hourly     POSTs to PayMongo
+ *                        job releases it, and that    SYNCHRONOUSLY, in the
+ *                        job honours an admin hold    request
+ *
+ * So the weaker-guarded path was also the more powerful one. An admin denied
+ * `payouts.retry_failed` could call the legacy route and push an unbounded
+ * number of live transfers, leaving no record naming them.
+ *
+ * Deleting it rather than adding a guard is deliberate. A guarded duplicate is
+ * still a duplicate (§9): the next divergence is one edit away, and a route
+ * wired to a function that exists is easier to write than one that does not.
+ * `releaseDisbursement` remains, reached only by the two scheduler jobs and by
+ * the canonical admin path, which is the single reality this leaves behind.
+ *
+ * The behavioural change is real and is stated rather than hidden: an admin
+ * retry now QUEUES. The transfer happens on the next hourly tick instead of
+ * inside the request. That is what the admin portal already experiences,
+ * because the portal calls the finance surface — so this converges the odd one
+ * out onto the behaviour operations already has.
+ */
 
 // ---------------------------------------------------------------------------
 // Admin dashboard — list all disbursements with booking + worker info.

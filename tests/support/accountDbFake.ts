@@ -176,6 +176,37 @@ const rollbackTx = () => {
 
 const done = (rows: Row[]) => ({ rows, rowCount: rows.length });
 
+/**
+ * Return only the columns a SELECT list names.
+ *
+ * The fake stores whole rows, so without this it answers every question with
+ * every column — and a query asking for a column that does not exist gets a
+ * usable row anyway. Real PostgreSQL raises 42703 instead. Projecting narrows
+ * the fake to what was asked, so a wrong column name surfaces as an absent key
+ * rather than as a silently correct answer.
+ *
+ * Anything the parser cannot resolve to a bare `alias.column`, `column`, or
+ * `... AS name` falls back to the whole row. Over-supplying is the previous
+ * behaviour and is safe; guessing at an expression would drop a column a suite
+ * legitimately needs.
+ */
+const projectSelected = (sql: string, row: Row): Row => {
+  const list = /^SELECT\s+([\s\S]*?)\s+FROM\s/i.exec(sql)?.[1];
+  if (!list || list.includes('*')) return row;
+  const wanted: string[] = [];
+  for (const part of list.split(',')) {
+    const term = part.trim();
+    const aliased = /\bAS\s+(\w+)$/i.exec(term);
+    const simple = /^(?:\w+\.)?(\w+)$/.exec(term);
+    if (aliased) wanted.push(aliased[1]);
+    else if (simple) wanted.push(simple[1]);
+    else return row;
+  }
+  const out: Row = {};
+  for (const key of wanted) out[key] = row[key];
+  return out;
+};
+
 export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCount: number } => {
   const flat = sql.replace(/\s+/g, ' ').trim();
   store.sql.push(flat);
@@ -242,7 +273,14 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
     const u = store.users.find((x) => x.uid === params[0]);
     if (!u) return done([]);
     const p = store.profiles.find((x) => x.uid === params[0]) ?? {};
-    return done([{ ...u, ...p }]);
+    // PROJECT what the SELECT list actually names. Returning the whole merged row
+    // meant a query could name a column that does not exist and still receive a
+    // populated row, because the caller then read the key it wanted from a row
+    // the fake had over-supplied. That is how `up.public_biography` — a column no
+    // migration has ever created — passed here while raising 42703 on a real
+    // server. A fake that answers questions it was not asked cannot catch a
+    // question that was asked wrongly.
+    return done([projectSelected(flat, { ...u, ...p })]);
   }
   if (/FROM servana\.worker_requirements WHERE worker_uid = \$1 AND COALESCE/i.test(flat)) {
     const accepted = store.requirements.filter(

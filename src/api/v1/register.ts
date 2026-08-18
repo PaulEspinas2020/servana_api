@@ -32,12 +32,13 @@
  * person to be careful.
  */
 
-import { Request, Response, Router, RequestHandler } from 'express';
+import { Request, Response, Router, RequestHandler, NextFunction } from 'express';
 import verifyAuth from '../../middleware/verifyAuth';
 import verifyRoles from '../../middleware/verifyRoles';
 import requireProviderRole from '../../middleware/requireProviderRole';
 import { ContractEntry, IMPLEMENTED, V1_CONTRACT, HttpMethod } from './contract';
 import { fail } from './envelope';
+import { V1ErrorCode } from './errors';
 import { V1Handler, V1Handlers } from './types';
 
 export type { V1Handler, V1Handlers } from './types';
@@ -80,16 +81,98 @@ const guard = (id: string, handler: V1Handler): RequestHandler =>
  * changing `verifyRoles([1])` to `verifyRoles([1, 4])` would have left the
  * published security matrix saying `provider: deny` with nothing failing.
  */
+/**
+ * The v1 envelope, applied to the auth chain's failures (TAB 02 mandate 3).
+ *
+ * ## The measured defect
+ *
+ * `envelope.ts` declares every v1 failure as
+ * `{ error: { code, message, requestId } }`. The auth chain below is built from
+ * the LEGACY middlewares — deliberately, because they are the one definition of
+ * how a Servana token is verified and a second one would eventually disagree
+ * with them. But they answer in the legacy shape,
+ * `{ status: 'failed', code: 'UNAUTHENTICATED' }`, with no `requestId`.
+ *
+ * Smoked against production on 2026-08-18: **85 of 85** non-public v1 endpoints
+ * answered a tokenless request in the legacy envelope. Not some — all of them.
+ * So the v1 router violated its own published contract on every authenticated
+ * route, and `routeHealth.ts`'s own definition of a well-formed v1 error
+ * (`code` and `requestId` both strings) was unsatisfiable for a 401.
+ *
+ * ## Why this matters beyond tidiness
+ *
+ * The provider portal classifies failures on `error.code`. With the legacy
+ * shape there is no `error` object, so every 401 reads to the client as "no v1
+ * error code present" — the exact ambiguous case TAB 03 must distinguish from a
+ * genuinely expired session. Fixing the client without fixing this would have
+ * the client looking for a field the server never sends.
+ *
+ * ## Why a translator rather than a v1 auth middleware
+ *
+ * Re-implementing verification for v1 would create a second answer to "is this
+ * token good", and the two would drift. This wraps the real chain and rewrites
+ * only the failure body, so the decision stays in one place and the legacy tree
+ * — 520 routes and five clients — is untouched. Additive, per the standing rule.
+ */
+const LEGACY_TO_V1_CODE: Record<string, V1ErrorCode> = {
+  UNAUTHENTICATED: 'UNAUTHENTICATED',
+  TOKEN_EXPIRED: 'TOKEN_EXPIRED',
+  TOKEN_REVOKED: 'TOKEN_REVOKED',
+  // Emitted by verifyAuth but absent from V1_ERROR_STATUS. TAB 03 names
+  // INVALID_TOKEN as a code the portal acts on, so the original is preserved in
+  // `details.reason` rather than discarded — adding it to the vocabulary is a
+  // contract change and belongs to TAB 04, not here.
+  INVALID_TOKEN: 'UNAUTHENTICATED',
+  FORBIDDEN_ROLE: 'ROLE_REQUIRED',
+  FORBIDDEN: 'FORBIDDEN',
+};
+
+export const v1AuthEnvelope = (inner: RequestHandler): RequestHandler =>
+  function v1AuthEnvelopeWrapper(req, res, next) {
+    const originalJson = res.json.bind(res);
+    let restored = false;
+    const restore = () => {
+      if (!restored) { res.json = originalJson; restored = true; }
+    };
+
+    res.json = ((body: any) => {
+      restore();
+      const status = res.statusCode;
+      // Translate ONLY an auth-chain rejection in the legacy shape. A handler
+      // that already answers in the v1 envelope is passed through untouched.
+      if ((status === 401 || status === 403) && body && !body.error && typeof body.code === 'string') {
+        const mapped = LEGACY_TO_V1_CODE[body.code];
+        if (mapped) {
+          return fail(
+            res, req, mapped, typeof body.message === 'string' ? body.message : undefined,
+            body.code === mapped ? undefined : { reason: body.code },
+          );
+        }
+      }
+      return originalJson(body);
+    }) as Response['json'];
+
+    // If the middleware calls next(), it did not reject — put res.json back so
+    // the handler's own responses are never rewritten.
+    //
+    // The inner middleware's return value is PROPAGATED, not discarded. These
+    // are async middlewares that return a promise, and callers rely on it:
+    // `tests/authz-matrix-behaviour.test.ts` drives the chain directly and
+    // awaits either `next()` or that promise. Swallowing it hangs the caller —
+    // which is precisely how that suite caught this wrapper's first draft.
+    return inner(req, res, ((err?: unknown) => { restore(); next(err as any); }) as NextFunction);
+  };
+
 export const authChain = (entry: ContractEntry): RequestHandler[] => {
   switch (entry.auth) {
     case 'public':
       return [];
     case 'authenticated':
-      return [verifyAuth];
+      return [v1AuthEnvelope(verifyAuth)];
     case 'provider':
-      return [verifyAuth, requireProviderRole as RequestHandler];
+      return [v1AuthEnvelope(verifyAuth), v1AuthEnvelope(requireProviderRole as RequestHandler)];
     case 'admin':
-      return [verifyAuth, verifyRoles([1]) as RequestHandler];
+      return [v1AuthEnvelope(verifyAuth), v1AuthEnvelope(verifyRoles([1]) as RequestHandler)];
     default: {
       // Exhaustiveness: a new AuthMode must be handled here or the build fails.
       const unreachable: never = entry.auth;
