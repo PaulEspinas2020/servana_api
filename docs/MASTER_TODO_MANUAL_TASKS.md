@@ -12,7 +12,7 @@
 >
 > **Status legend:** `OPEN` · `DONE` · `SUPERSEDED`
 
-Last updated: 2026-08-18 (TAB 13)
+Last updated: 2026-08-18 (TAB 14)
 
 ---
 
@@ -137,6 +137,17 @@ Last updated: 2026-08-18 (TAB 13)
 | 13.5 | Wire the five declared `ALERTS` to a pager, including the new `v1-contract-mismatch` | `PROD-ACCESS` | Alerts fire; each has an owner |
 | 13.6 | Dashboard the legacy-vs-v1 traffic split — it is the instrument that says when a legacy route is safe to retire (TABs 07/09) | `PROD-ACCESS` | Split visible per endpoint |
 | 13.7 | External uptime monitoring on both origins, including a check that TAB 02's security headers are still present | `PROD-ACCESS` | Monitor live; header regression pages somebody |
+
+## TAB 14 — performance
+
+| # | Task | Why blocked | Closes when |
+| --- | --- | --- | --- |
+| 14.1 | Set Angular bundle budgets that **fail** the build rather than warn. A warning in a log nobody reads is not a budget | `NO-REPO` | `build:prod` errors when a budget is exceeded |
+| 14.2 | Confirm every feature area is lazily routed — watch for the eager-plus-lazy conflict that silently ships a module eagerly | `NO-REPO` | Route-level bundle report shows no eager feature module |
+| 14.3 | Verify cache headers on live hashed assets (`main.*.js`, `chunk-*.js`, `styles.*.css`). TAB 02 proved the `/*.html` rule never fires; the asset rules need the same live check rather than trust in the config | `NO-REPO`, `PROD-ACCESS` | `curl -I` on each asset class shows the intended `Cache-Control` |
+| 14.4 | `EXPLAIN ANALYZE` every admin list query against production-shaped data. The queries are correct; whether they are fast is unmeasured, and 111 local bookings is not a scale problem | `PROD-ACCESS` | Plans captured per list endpoint |
+| 14.5 | Add indexes for the admin list and search paths, chosen from 14.4's plans. Build them concurrently to avoid locking | `PROD-ACCESS` | Indexes added; plans re-run showing the improvement |
+| 14.6 | Set a p95 latency budget per admin screen and hold TAB 13's SLOs to it | `PROD-ACCESS`, `HUMAN-JUDGEMENT` | Budgets agreed and measured |
 
 ## TAB 16 — Certification & runbook
 
