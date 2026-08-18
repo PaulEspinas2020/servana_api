@@ -13,3 +13,10 @@
 
 *.sql text eol=lf
 *.ts  text eol=lf
+
+# Shell scripts MUST be LF. A hook or script checked out with CRLF fails on any
+# Linux host with `bad interpreter: /bin/sh^M` — including the self-hosted deploy
+# runner. Git warned "LF will be replaced by CRLF" when scripts/hooks/pre-push
+# was first added, which is exactly that bug waiting to happen.
+scripts/hooks/*  text eol=lf
+*.sh             text eol=lf

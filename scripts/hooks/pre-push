@@ -1,0 +1,43 @@
+#!/bin/sh
+# Pre-push gate. Enable once per clone with:
+#
+#     git config core.hooksPath scripts/hooks
+#
+# ## Why this exists
+#
+# release-gate.yml and fresh-db.yml are manual-only: they are GitHub-hosted and
+# this repo's Actions credit is exhausted and not being topped up. Without them,
+# nothing stood between a push and production — and for this repo a push to main
+# IS a production deploy (deploy.yml runs on the self-hosted runner, migrates the
+# database, and restarts PM2). A gate that runs after the deploy is not a gate.
+#
+# So the check that CI used to perform now runs here, before the push leaves.
+#
+# Pushing main runs the full `npm run verify`. Anything else runs verify:quick,
+# because no other branch deploys and a two-minute wait would just train someone
+# to reach for --no-verify.
+#
+# This cannot check what only a GitHub-hosted runner could: `npm run verify` here
+# passes with credentials present, and 4 suites fail without them. That gap is
+# tests/app-import-is-inert.test.ts and it is a real property of the app, not a
+# CI artefact. Do not read a green hook as proof those 4 suites pass clean.
+
+set -e
+
+remote_ref_is_main=0
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  [ -z "$remote_ref" ] && continue
+  case "$remote_ref" in
+    refs/heads/main) remote_ref_is_main=1 ;;
+  esac
+done
+
+if [ "$remote_ref_is_main" -eq 1 ]; then
+  echo "pre-push: pushing main, which DEPLOYS TO PRODUCTION — running full npm run verify"
+  npm run verify
+  echo "pre-push: verify passed; allowing the push (and the deploy it triggers)"
+else
+  echo "pre-push: non-deploying branch — running npm run verify:quick"
+  npm run verify:quick
+  echo "pre-push: verify:quick passed"
+fi

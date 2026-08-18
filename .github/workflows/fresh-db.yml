@@ -46,10 +46,21 @@
 
 name: fresh-db
 
+# ⛔ MANUAL ONLY — GitHub Actions credit for this repo is exhausted and is not
+# being topped up (owner decision, 2026-08-19). Every job below is
+# `ubuntu-latest`, i.e. GitHub-hosted, so it cannot run: an automatic trigger
+# would just queue a run that fails and leaves a red X that means nothing.
+#
+# `deploy.yml` is unaffected and still deploys on push to main — it targets the
+# self-hosted runner, which does not consume Actions minutes.
+#
+# Nothing here is deleted. Restore the automatic trigger by putting back
+#     push:
+#       branches: [main]
+#     pull_request:
+# above `workflow_dispatch`. Until then the real gate is `npm run verify`,
+# enforced locally by scripts/hooks/pre-push.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 jobs:
