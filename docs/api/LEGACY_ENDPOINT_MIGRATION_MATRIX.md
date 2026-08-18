@@ -7,11 +7,11 @@ Every route the app mounts outside `/api/v1`: **520**.
 
 | Disposition | Count | Meaning |
 |---|---:|---|
-| `ALIAS_TEMPORARILY` | 82 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
+| `ALIAS_TEMPORARILY` | 86 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
 | `CANONICALIZE` | 9 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
 | `ROLE_SPECIFIC` | 13 | Legitimately separate: different auth, action or payload — same domain service. |
 | `RETIRE` | 1 | No caller and no successor. Delete once telemetry confirms zero traffic. |
-| `KEEP` | 415 | Not a duplicate of anything canonical. Untouched by this command. |
+| `KEEP` | 411 | Not a duplicate of anything canonical. Untouched by this command. |
 
 ## Retirement criteria
 
@@ -27,7 +27,7 @@ build knows how to call.
 
 Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 
-## ALIAS_TEMPORARILY (82)
+## ALIAS_TEMPORARILY (86)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
@@ -82,7 +82,11 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `POST` | `/api/chat/conversations/:id/messages/:msgId/report` | `/api/v1/conversations/:conversationId/messages/:messageId/report` | IDENTICAL domain call. This entry is a second URL onto one write, in the resource shape the rest of the conversations domain already uses. |
 | `GET` | `/api/provider/profile` | `/api/v1/provider/profile` | The live provider profile, built inline in a controller with a hand-written column list. Safe only for as long as nobody adds a column; the canonical route emits the fields the policy says this seat may read. |
 | `POST` | `/api/provider/public-profile-revisions` | `/api/v1/provider/profile` | The live revision submit. IDENTICAL domain call - this is a second URL onto one workflow. |
+| `GET` | `/api/provider/document-types` | `/api/v1/provider/document-types` | The same static catalog constant. No per-caller data of any kind. |
 | `GET` | `/api/provider/documents` | `/api/v1/provider/documents` | The live document list. Same `worker_requirements` model - the command is explicit that provider_documents must not be invented, and it does not exist. |
+| `POST` | `/api/provider/documents` | `/api/v1/provider/documents` | The live submit for both provider clients. IDENTICAL domain call, and it carries the same post-commit `autoOnlineEngine.evaluateProvider` — submitting the last outstanding requirement is what makes a provider eligible to go online, so an endpoint that stored the file without re-evaluating would leave them blocked. |
+| `DELETE` | `/api/provider/documents/:documentId` | `/api/v1/provider/documents/:documentId` | IDENTICAL domain call, and it re-evaluates online eligibility for the same reason the upload does: withdrawing a requirement can make a provider ineligible, and skipping it would leave someone online against a document they just removed. |
+| `GET` | `/api/provider/documents/:documentId/preview` | `/api/v1/provider/documents/:documentId/preview` | Same authorization and the same short-lived grant. The `Cache-Control: private, no-store` and `Pragma: no-cache` headers are set by the handler rather than the route, so they travel with the only v1 response that contains a private storage URL. |
 | `GET` | `/api/provider/earnings` | `/api/v1/provider/earnings/transactions` | The live earnings list. Same domain service now; the v1 shape adds the economic model, the payout block reason and minor-unit amounts. |
 | `GET` | `/api/provider/earnings/summary` | `/api/v1/provider/earnings/summary` | The live provider portal call, now delegating to the same domain service so the two paths return identical figures during migration rather than merely similar ones. |
 | `GET` | `/api/provider/ledger` | `/api/v1/provider/earnings/transactions` | A THIRD reading of the same columns, which used to hardcode every completed booking as "settled" and report failed payouts as money in hand. Superseded entirely. |
@@ -152,7 +156,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 |---|---|---|---|
 | `GET` | `/api/workers/:uid/earnings-history` | `/api/v1/provider/earnings/transactions` | Takes the provider uid from the URL and has no auth, so it answers for anybody. No located caller in any of the five clients. Carried over from the planned placeholder this entry replaces; delete once telemetry confirms zero traffic. |
 
-## KEEP (415)
+## KEEP (411)
 
 Mounted, not superseded, not a duplicate. Listed so the inventory is complete and so a
 later domain command starts from a route list rather than from a grep.
@@ -219,10 +223,6 @@ later domain command starts from a route list rather than from a grep.
 | `POST` | `/api/provider/service-preference` | `src/routes/provider.routes.ts:42` |
 | `GET` | `/api/provider/profile-fields` | `src/routes/provider.routes.ts:48` |
 | `GET` | `/api/provider/public-profile-preview` | `src/routes/provider.routes.ts:49` |
-| `GET` | `/api/provider/document-types` | `src/routes/provider.routes.ts:51` |
-| `POST` | `/api/provider/documents` | `src/routes/provider.routes.ts:53` |
-| `DELETE` | `/api/provider/documents/:documentId` | `src/routes/provider.routes.ts:54` |
-| `GET` | `/api/provider/documents/:documentId/preview` | `src/routes/provider.routes.ts:55` |
 | `GET` | `/api/provider/certifications` | `src/routes/provider.routes.ts:56` |
 | `POST` | `/api/provider/certifications` | `src/routes/provider.routes.ts:57` |
 | `GET` | `/api/provider/compliance` | `src/routes/provider.routes.ts:58` |

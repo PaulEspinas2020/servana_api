@@ -59,9 +59,9 @@ though they are the reason the canonical namespace exists.
 The surface as it stands:
 
 <!-- BEGIN GENERATED: v1-surface -->
-- **98 canonical endpoints live**, each driven end to end by `tests/v1-router.test.ts`.
+- **102 canonical endpoints live**, each driven end to end by `tests/v1-router.test.ts`.
 - **4 planned**, documented and not mounted — see §11 of [`API_V1_CONTRACT.md`](API_V1_CONTRACT.md).
-- **87 legacy aliases** counted by telemetry, derived from the contract.
+- **91 legacy aliases** counted by telemetry, derived from the contract.
 - **520 routes** mounted outside `/api/v1`, every one classified in the matrix.
 <!-- END GENERATED: v1-surface -->
 
@@ -121,7 +121,7 @@ shows `admin=` counts.
 The cheapest real migration, and the one that proves the contract under load.
 
 <!-- BEGIN GENERATED: v1-moves:providerWeb -->
-**45** canonical capabilities are live that this client still reaches by a legacy route.
+**49** canonical capabilities are live that this client still reaches by a legacy route.
 
 | Move to (canonical) | Legacy routes it supersedes |
 |---|---|
@@ -141,6 +141,10 @@ The cheapest real migration, and the one that proves the contract under load.
 | `GET /api/v1/provider/profile` | `GET /api/provider/profile` |
 | `PATCH /api/v1/provider/profile` | `POST /api/provider/public-profile-revisions` |
 | `GET /api/v1/provider/documents` | `GET /api/provider/documents` |
+| `GET /api/v1/provider/document-types` | `GET /api/provider/document-types` |
+| `POST /api/v1/provider/documents` | `POST /api/provider/documents` |
+| `GET /api/v1/provider/documents/:documentId/preview` | `GET /api/provider/documents/:documentId/preview` |
+| `DELETE /api/v1/provider/documents/:documentId` | `DELETE /api/provider/documents/:documentId` |
 | `GET /api/v1/provider/availability` | `GET /api/worker/availability` |
 | `PATCH /api/v1/provider/availability` | `PUT /api/worker/availability` |
 | `GET /api/v1/settings/notification-preferences` | `GET /api/provider/notification-preferences`<br>`GET /api/workers/:uid/notification-preferences` |

@@ -1974,6 +1974,73 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  ProviderDocumentTypeCatalog: {
+    type: 'object',
+    description: 'Static policy: what may be submitted and which are required.',
+    properties: {
+      version: { type: 'integer' },
+      documentTypes: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    },
+  },
+
+  ProviderDocumentUpload: {
+    type: 'object',
+    required: ['documentTypeId', 'fileName', 'file', 'clientRequestId'],
+    properties: {
+      documentTypeId: { type: 'string', description: 'From the document catalog.' },
+      fileName: { type: 'string' },
+      file: {
+        type: 'string',
+        description:
+          'data: URI. Validated by SIGNATURE against an allowlist and a size ceiling, so a ' +
+          'renamed executable is refused on its contents rather than its declared type.',
+      },
+      clientRequestId: {
+        type: 'string',
+        description:
+          'REQUIRED. Unique per provider - a retried submit returns the ORIGINAL row rather ' +
+          'than queueing a second copy of the same passport for review.',
+      },
+      issueDate: { type: ['string', 'null'], format: 'date' },
+      expiresAt: { type: ['string', 'null'], format: 'date' },
+      identifierLast4: { type: ['string', 'null'] },
+      replacementForId: {
+        type: ['integer', 'null'],
+        description: 'The requirement this supersedes, when re-submitting after a rejection.',
+      },
+    },
+  },
+
+  ProviderDocument: {
+    type: 'object',
+    description: 'Review STATE for one submitted document. No storage path is projected.',
+    properties: {
+      requirementId: { type: 'string' },
+      documentType: { type: 'string' },
+      status: { type: 'string' },
+      submittedAt: { type: ['string', 'null'], format: 'date-time' },
+      expiresAt: { type: ['string', 'null'], format: 'date-time' },
+      reviewNote: { type: ['string', 'null'] },
+    },
+  },
+
+  ProviderDocumentPreview: {
+    type: 'object',
+    description:
+      'A SHORT-LIVED signed URL. The response carries no-store headers because a browser or ' +
+      'intermediary that retains it turns a brief grant into a durable one.',
+    properties: {
+      url: { type: 'string' },
+      expiresAt: { type: ['string', 'null'], format: 'date-time' },
+      mimeType: { type: ['string', 'null'] },
+    },
+  },
+
+  ProviderDocumentMutation: {
+    type: 'object',
+    properties: { deleted: { type: 'boolean' } },
+  },
+
   ProviderAvailability: {
     type: 'object',
     required: ['timezone', 'weeklySchedule'],

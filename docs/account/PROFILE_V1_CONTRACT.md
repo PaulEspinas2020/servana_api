@@ -298,6 +298,10 @@ see.
 | `PATCH /api/v1/provider/profile` | provider | no | `services/account/providerProfileService.patchProviderProfile` |
 | `GET /api/v1/providers/:providerUid/profile` | authenticated | yes | `services/account/providerProfileService.getProviderProfile` |
 | `GET /api/v1/provider/documents` | provider | yes | `services/account/providerProfileService.listDocuments` |
+| `GET /api/v1/provider/document-types` | provider | yes | `services/providerProfileComplianceService.DOCUMENT_TYPE_CATALOG` |
+| `POST /api/v1/provider/documents` | provider | no | `services/providerProfileComplianceService.uploadDocument` |
+| `GET /api/v1/provider/documents/:documentId/preview` | provider | yes | `services/providerProfileComplianceService.getDocumentPreview` |
+| `DELETE /api/v1/provider/documents/:documentId` | provider | yes | `services/providerProfileComplianceService.deleteDocument` |
 | `GET /api/v1/provider/availability` | provider | yes | `services/providerAvailabilityEngine.getAvailabilityProfile` |
 | `PATCH /api/v1/provider/availability` | provider | yes | `services/providerAvailabilityEngine.saveWeeklySchedule` |
 | `GET /api/v1/provider/services` | provider | yes | `services/account/providerProfileService.listServices` |
@@ -324,6 +328,10 @@ route can only be documented as superseded if it is also being measured.
 | `GET /api/provider/profile-center` | ROLE_SPECIFIC | `provider.profile.get` | The compliance view: revision history, review state, field-level edit affordances. A genuinely different question, and it already reads the same field registry this entry projects from. |
 | `POST /api/provider/public-profile-revisions` | ALIAS_TEMPORARILY | `provider.profile.patch` | The live revision submit. IDENTICAL domain call - this is a second URL onto one workflow. |
 | `GET /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.list` | The live document list. Same `worker_requirements` model - the command is explicit that provider_documents must not be invented, and it does not exist. |
+| `GET /api/provider/document-types` | ALIAS_TEMPORARILY | `provider.documents.types` | The same static catalog constant. No per-caller data of any kind. |
+| `POST /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.create` | The live submit for both provider clients. IDENTICAL domain call, and it carries the same post-commit `autoOnlineEngine.evaluateProvider` — submitting the last outstanding requirement is what makes a provider eligible to go online, so an endpoint that stored the file without re-evaluating would leave them blocked. |
+| `GET /api/provider/documents/:documentId/preview` | ALIAS_TEMPORARILY | `provider.documents.preview` | Same authorization and the same short-lived grant. The `Cache-Control: private, no-store` and `Pragma: no-cache` headers are set by the handler rather than the route, so they travel with the only v1 response that contains a private storage URL. |
+| `DELETE /api/provider/documents/:documentId` | ALIAS_TEMPORARILY | `provider.documents.delete` | IDENTICAL domain call, and it re-evaluates online eligibility for the same reason the upload does: withdrawing a requirement can make a provider ineligible, and skipping it would leave someone online against a document they just removed. |
 | `GET /api/worker/availability` | ALIAS_TEMPORARILY | `provider.availability.get` | The live provider availability read. Same engine; the legacy shape bridges it to a web schedule. |
 | `PUT /api/worker/availability` | ALIAS_TEMPORARILY | `provider.availability.patch` | The live write. IDENTICAL engine call, including its expectedVersion check. |
 | `GET /api/worker/services-overview` | ALIAS_TEMPORARILY | `provider.services.list` | The live provider services screen. Same `employee_services` qualification; the canonical entry projects it keyed on services.id with the active flag matching actually selects on. |
@@ -344,7 +352,7 @@ route can only be documented as superseded if it is also being measured.
 | Read and change my customer profile | legacy | legacy | — | — | planned |
 | Manage my saved addresses | legacy | legacy | — | — | — |
 | Read and change my provider profile | — | — | legacy | legacy | planned |
-| Read my documents and requirements | — | — | legacy | legacy | — |
+| Submit, read, preview and withdraw my documents | — | — | legacy | legacy | — |
 | Read and change my availability | — | — | legacy | legacy | — |
 | Read the services I am approved for | — | — | planned | planned | — |
 | What is left before my account is usable | planned | planned | planned | planned | — |
@@ -380,9 +388,9 @@ No role split. Five legacy routes with five shapes — query-param ids, a POST t
 
 Role-specific by DATA and by WORKFLOW. A provider profile field is classified, and editing a reviewable one submits a revision rather than writing a column — the compliance service owns that, and the canonical PATCH delegates to it instead of reimplementing it.
 
-**Read my documents and requirements** (`services/account/providerProfileService`)
+**Submit, read, preview and withdraw my documents** (`services/providerProfileComplianceService`)
 
-Provider-only, and it must stay that way. The projection carries review STATE and never a document URL or storage path; the preview endpoint mints a short-lived signed URL after re-authorizing, which is a different operation with a different audit trail.
+Provider-only, and it must stay that way. The projection carries review STATE and never a document URL or storage path; the preview endpoint mints a short-lived signed URL after re-authorizing, which is a different operation with a different audit trail. The write half arrived on 2026-08-18: the LIST was canonical while submit, preview and withdraw were still legacy, which is the most lopsided shape a capability can have - a provider could read their onboarding state over v1 and not act on it. Submit and withdraw both re-evaluate online eligibility, because the last outstanding requirement is what gates going online in either direction.
 
 **Read and change my availability** (`services/providerAvailabilityEngine`)
 

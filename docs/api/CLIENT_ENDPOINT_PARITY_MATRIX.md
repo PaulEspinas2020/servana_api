@@ -19,9 +19,9 @@
 | | |
 | --- | --- |
 | Capabilities | 57 |
-| Canonical endpoints mounted | 98 |
+| Canonical endpoints mounted | 102 |
 | Canonical endpoints planned | 4 |
-| Legacy mappings tracked | 117 |
+| Legacy mappings tracked | 121 |
 | Converged (one route family) | 51 |
 | Role-split over ONE service | 4 |
 | Single-surface | 2 |
@@ -70,7 +70,7 @@ direction of whoever wrote it.
 | Read and change my customer profile | SHARED | legacy | legacy | — | — | planned |
 | Read and change my account record | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | legacy | planned |
 | Read and change my availability | SHARED | — | — | legacy | legacy | — |
-| Read my documents and requirements | SHARED | — | — | legacy | legacy | — |
+| Submit, read, preview and withdraw my documents | SHARED | — | — | ⚠ mixed | legacy | — |
 | Read and change my provider profile | SHARED | — | — | legacy | legacy | planned |
 | Read the services I am approved for | SHARED | — | — | planned | planned | — |
 | Read my security posture | SHARED | planned | planned | planned | planned | planned |
@@ -233,19 +233,27 @@ Legacy still aliased for this capability:
 
 No role split. The canonical route reads and writes the SAME engine matching consumes, which is the release gate: a provider editing one source while matching reads another is a provider who is unbookable for reasons nobody can see.
 
-### Read my documents and requirements
+### Submit, read, preview and withdraw my documents
 
 - key: `accountPolicy:providerDocuments` · declared in `services/account/accountPolicy`
-- verdict: **SHARED** · domain service: `services/account/providerProfileService`
+- verdict: **SHARED** · domain service: `services/account/providerProfileService, services/providerProfileComplianceService`
 - route families: `/provider`
 
 Canonical:
+  - `POST /api/v1/provider/documents`
+  - `DELETE /api/v1/provider/documents/:documentId`
   - `GET /api/v1/provider/documents`
+  - `GET /api/v1/provider/documents/:documentId/preview`
+  - `GET /api/v1/provider/document-types`
 
 Legacy still aliased for this capability:
+  - `DELETE /api/provider/documents/:documentId`
+  - `GET /api/provider/document-types`
   - `GET /api/provider/documents`
+  - `GET /api/provider/documents/:documentId/preview`
+  - `POST /api/provider/documents`
 
-Provider-only, and it must stay that way. The projection carries review STATE and never a document URL or storage path; the preview endpoint mints a short-lived signed URL after re-authorizing, which is a different operation with a different audit trail.
+Provider-only, and it must stay that way. The projection carries review STATE and never a document URL or storage path; the preview endpoint mints a short-lived signed URL after re-authorizing, which is a different operation with a different audit trail. The write half arrived on 2026-08-18: the LIST was canonical while submit, preview and withdraw were still legacy, which is the most lopsided shape a capability can have - a provider could read their onboarding state over v1 and not act on it. Submit and withdraw both re-evaluate online eligibility, because the last outstanding requirement is what gates going online in either direction.
 
 ### Read and change my provider profile
 

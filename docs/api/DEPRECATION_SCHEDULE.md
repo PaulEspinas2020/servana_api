@@ -34,15 +34,15 @@ installed.
 
 | | |
 | --- | --- |
-| Legacy mappings tracked | 117 |
-| In the retirement plan | 98 |
+| Legacy mappings tracked | 121 |
+| In the retirement plan | 102 |
 | `KEEP` (not a duplicate of anything) | 6 |
 | `ROLE_SPECIFIC` (different auth/action, same service) | 13 |
-| `ALIAS_TEMPORARILY` | 87 |
+| `ALIAS_TEMPORARILY` | 91 |
 | `CANONICALIZE` | 10 |
 | `RETIRE` | 1 |
 | **Retirable today** | **0** |
-| Blocked | 98 |
+| Blocked | 102 |
 
 Nothing is retirable today, and the reason is the same for all of them: no client has migrated, because the v1 namespace is not deployed. The schedule is the order things become retirable, not a queue of pending deletions.
 
@@ -98,7 +98,11 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `POST /api/chat/conversations/:id/messages/:msgId/report` | ALIAS_TEMPORARILY | `conversations.messages.report` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/chat/conversations/:id/read` | ALIAS_TEMPORARILY | `conversations.read` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `POST /api/provider/bookings/:bookingId/cancel` | ALIAS_TEMPORARILY | `provider.jobs.cancel` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/provider/document-types` | ALIAS_TEMPORARILY | `provider.documents.types` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.list` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.create` | Provider Mobile, Provider Web have not migrated | 90d |
+| `DELETE /api/provider/documents/:documentId` | ALIAS_TEMPORARILY | `provider.documents.delete` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/provider/documents/:documentId/preview` | ALIAS_TEMPORARILY | `provider.documents.preview` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/earnings` | ALIAS_TEMPORARILY | `provider.earnings.transactions` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/earnings/summary` | ALIAS_TEMPORARILY | `provider.earnings.summary` | Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/provider/fcm-token` | ALIAS_TEMPORARILY | `me.devices.register` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |

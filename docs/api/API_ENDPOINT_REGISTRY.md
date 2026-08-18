@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**98 implemented** · **4 planned** · 102 total.
+**102 implemented** · **4 planned** · 106 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -486,6 +486,10 @@ Releases this device, or every device for the account.
 | `PATCH` | `/api/v1/provider/profile` | **live** | provider (role 2/4) | `ProviderProfilePatch` | `ProviderProfileRevision` | no | account |
 | `GET` | `/api/v1/providers/:providerUid/profile` | **live** | any signed-in | — | `ProviderProfile` | yes | account |
 | `GET` | `/api/v1/provider/documents` | **live** | provider (role 2/4) | — | `ProviderDocumentList` | yes | account |
+| `GET` | `/api/v1/provider/document-types` | **live** | provider (role 2/4) | — | `ProviderDocumentTypeCatalog` | yes | account |
+| `POST` | `/api/v1/provider/documents` | **live** | provider (role 2/4) | `ProviderDocumentUpload` | `ProviderDocument` | no | account |
+| `GET` | `/api/v1/provider/documents/:documentId/preview` | **live** | provider (role 2/4) | — | `ProviderDocumentPreview` | yes | account |
+| `DELETE` | `/api/v1/provider/documents/:documentId` | **live** | provider (role 2/4) | — | `ProviderDocumentMutation` | yes | account |
 | `GET` | `/api/v1/provider/availability` | **live** | provider (role 2/4) | — | `ProviderAvailability` | yes | account |
 | `PATCH` | `/api/v1/provider/availability` | **live** | provider (role 2/4) | `ProviderAvailabilityPatch` | `ProviderAvailability` | yes | account |
 | `GET` | `/api/v1/provider/services` | **live** | provider (role 2/4) | — | `ProviderServiceList` | yes | account |
@@ -677,6 +681,54 @@ Document and requirement REVIEW STATE. Never content.
 - **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
 - **Legacy it replaces**
   - `GET /api/provider/documents` — **ALIAS_TEMPORARILY** — The live document list. Same `worker_requirements` model - the command is explicit that provider_documents must not be invented, and it does not exist.
+
+### `GET /api/v1/provider/document-types`
+
+The document catalog: what may be submitted, and which are required.
+
+> Provider-scoped rather than public even though the payload is static policy: the requirement set is part of how onboarding works, and a public catalog invites building the checklist screen against an endpoint nobody has to be signed in to read.
+
+- **Domain service** — `services/providerProfileComplianceService.DOCUMENT_TYPE_CATALOG`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/document-types` — **ALIAS_TEMPORARILY** — The same static catalog constant. No per-caller data of any kind.
+
+### `POST /api/v1/provider/documents`
+
+Submits one document for review.
+
+> The file is a data URI validated by SIGNATURE against an allowlist and a size ceiling, so a renamed executable is refused on its contents. The response is review STATE; no storage path is ever projected.
+
+- **Domain service** — `services/providerProfileComplianceService.uploadDocument`
+- **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/documents` — **ALIAS_TEMPORARILY** — The live submit for both provider clients. IDENTICAL domain call, and it carries the same post-commit `autoOnlineEngine.evaluateProvider` — submitting the last outstanding requirement is what makes a provider eligible to go online, so an endpoint that stored the file without re-evaluating would leave them blocked.
+
+### `GET /api/v1/provider/documents/:documentId/preview`
+
+A short-lived signed URL for one document the caller owns.
+
+> A malformed id and an id belonging to another provider answer the SAME 404. A 422 for the first would let a caller enumerate which document ids exist.
+
+- **Domain service** — `services/providerProfileComplianceService.getDocumentPreview`
+- **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Path params** — `documentId` (integer) worker_requirements.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/documents/:documentId/preview` — **ALIAS_TEMPORARILY** — Same authorization and the same short-lived grant. The `Cache-Control: private, no-store` and `Pragma: no-cache` headers are set by the handler rather than the route, so they travel with the only v1 response that contains a private storage URL.
+
+### `DELETE /api/v1/provider/documents/:documentId`
+
+Withdraws one document.
+
+- **Domain service** — `services/providerProfileComplianceService.deleteDocument`
+- **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Path params** — `documentId` (integer) worker_requirements.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `DELETE /api/provider/documents/:documentId` — **ALIAS_TEMPORARILY** — IDENTICAL domain call, and it re-evaluates online eligibility for the same reason the upload does: withdrawing a requirement can make a provider ineligible, and skipping it would leave someone online against a document they just removed.
 
 ### `GET /api/v1/provider/availability`
 
@@ -1464,6 +1516,10 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `PATCH /api/v1/provider/profile` | — | — | ⏳ | ⏳ | — |
 | `GET /api/v1/providers/:providerUid/profile` | · | · | — | — | · |
 | `GET /api/v1/provider/documents` | — | — | ⏳ | ⏳ | — |
+| `GET /api/v1/provider/document-types` | — | — | · | ⏳ | — |
+| `POST /api/v1/provider/documents` | — | — | · | ⏳ | — |
+| `GET /api/v1/provider/documents/:documentId/preview` | — | — | · | ⏳ | — |
+| `DELETE /api/v1/provider/documents/:documentId` | — | — | · | ⏳ | — |
 | `GET /api/v1/provider/availability` | — | — | ⏳ | ⏳ | — |
 | `PATCH /api/v1/provider/availability` | — | — | ⏳ | ⏳ | — |
 | `GET /api/v1/provider/services` | — | — | · | · | — |

@@ -14,7 +14,7 @@
 > [`CROSS_CLIENT_MIGRATION_PLAN.md`](CROSS_CLIENT_MIGRATION_PLAN.md), which is
 > hand-written because an argument is not derivable. This is what each client
 > actually has to change, and it is generated because a hand-maintained list of
-> 98 endpoints across five clients is stale the day after it is written.
+> 102 endpoints across five clients is stale the day after it is written.
 
 ## How to read this
 
@@ -119,7 +119,6 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Read and change my provider profile | legacy | `GET /api/provider/profile`, `POST /api/provider/public-profile-revisions` | `GET /api/v1/provider/profile`, `PATCH /api/v1/provider/profile` |
 | Read and change my settings | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/settings`, `PATCH /api/v1/me/settings` |
 | Read booking-code state | planned | _no legacy equivalent — this is new_ | `GET /api/v1/bookings/:bookingId/otp/status` |
-| Read my documents and requirements | legacy | `GET /api/provider/documents` | `GET /api/v1/provider/documents` |
 | Read my notification inbox | legacy | `GET /api/user/notifications` | `GET /api/v1/notifications` |
 | Read my security posture | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/security` |
 | Read one conversation and its participants | legacy | `GET /api/chat/conversations/:id` | `GET /api/v1/conversations/:conversationId` |
@@ -130,6 +129,7 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Register, sign in, and end a session | legacy | `POST /api/auth/admin-signin`, `POST /api/auth/firebase-login`, `POST /api/auth/logout`, `POST /api/auth/provider/register`, `POST /api/auth/refresh`, `POST /api/auth/signin`, `POST /api/auth/signup` | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` |
 | Report a message to moderation | planned | `POST /api/chat/conversations/:id/messages/:msgId/report` | `POST /api/v1/conversations/:conversationId/messages/:messageId/report` |
 | Send a message | legacy | `POST /api/chat/conversations/:id/messages` | `POST /api/v1/conversations/:conversationId/messages` |
+| Submit, read, preview and withdraw my documents | legacy | `DELETE /api/provider/documents/:documentId`, `GET /api/provider/document-types`, `GET /api/provider/documents`, `GET /api/provider/documents/:documentId/preview`, `POST /api/provider/documents` | `POST /api/v1/provider/documents`, `DELETE /api/v1/provider/documents/:documentId`, `GET /api/v1/provider/documents`, `GET /api/v1/provider/documents/:documentId/preview`, `GET /api/v1/provider/document-types` |
 | Tracking | planned | `GET /api/:id/tracking`, `GET /api/booking/:bookingId/provider-location` | `GET /api/v1/bookings/:bookingId/tracking` |
 | What is left before my account is usable | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/completion` |
 
@@ -204,8 +204,8 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | --- | --- |
 | Capabilities that apply | 40 |
 | Already on canonical | 0 |
-| Still on a legacy route | 22 |
-| Partially migrated | 4 |
+| Still on a legacy route | 21 |
+| Partially migrated | 5 |
 | No equivalent called today | 14 |
 
 | Capability | Today | Calls now | Move to |
@@ -237,7 +237,6 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Read and change my provider profile | legacy | `GET /api/provider/profile`, `POST /api/provider/public-profile-revisions` | `GET /api/v1/provider/profile`, `PATCH /api/v1/provider/profile` |
 | Read and change my settings | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/settings`, `PATCH /api/v1/me/settings` |
 | Read booking-code state | planned | _no legacy equivalent — this is new_ | `GET /api/v1/bookings/:bookingId/otp/status` |
-| Read my documents and requirements | legacy | `GET /api/provider/documents` | `GET /api/v1/provider/documents` |
 | Read my notification inbox | legacy | `GET /api/user/notifications` | `GET /api/v1/notifications` |
 | Read my security posture | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/security` |
 | Read one conversation and its participants | legacy | `GET /api/chat/conversations/:id` | `GET /api/v1/conversations/:conversationId` |
@@ -248,6 +247,7 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Register, sign in, and end a session | legacy | `POST /api/auth/admin-signin`, `POST /api/auth/firebase-login`, `POST /api/auth/logout`, `POST /api/auth/provider/register`, `POST /api/auth/refresh`, `POST /api/auth/signin`, `POST /api/auth/signup` | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` |
 | Report a message to moderation | planned | `POST /api/chat/conversations/:id/messages/:msgId/report` | `POST /api/v1/conversations/:conversationId/messages/:messageId/report` |
 | Send a message | legacy | `POST /api/chat/conversations/:id/messages` | `POST /api/v1/conversations/:conversationId/messages` |
+| Submit, read, preview and withdraw my documents | ⚠ mixed | `DELETE /api/provider/documents/:documentId`, `GET /api/provider/document-types`, `GET /api/provider/documents`, `GET /api/provider/documents/:documentId/preview`, `POST /api/provider/documents` | `POST /api/v1/provider/documents`, `DELETE /api/v1/provider/documents/:documentId`, `GET /api/v1/provider/documents`, `GET /api/v1/provider/documents/:documentId/preview`, `GET /api/v1/provider/document-types` |
 | Tracking | planned | `GET /api/:id/tracking`, `GET /api/booking/:bookingId/provider-location` | `GET /api/v1/bookings/:bookingId/tracking` |
 | What is left before my account is usable | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/completion` |
 

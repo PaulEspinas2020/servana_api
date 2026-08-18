@@ -775,14 +775,38 @@ export const ACCOUNT_CAPABILITIES: readonly AccountCapability[] = Object.freeze(
   },
   {
     key: 'providerDocuments',
-    title: 'Read my documents and requirements',
-    contractIds: ['provider.documents.list'],
-    domainModule: 'services/account/providerProfileService',
+    title: 'Submit, read, preview and withdraw my documents',
+    // Sorted, and everything document-shaped shares the `provider.documents.`
+    // prefix. The catalog was briefly `provider.documentTypes.list`, which sorts
+    // BEFORE `provider.documents.*` under code-unit ordering ('T' < 's') and
+    // AFTER it under `localeCompare`. `canonicalManifest` uses the latter and
+    // `convergence-manifest.test` asserts the former; they agree on every id
+    // that existed before, so the divergence was invisible until an id differed
+    // by case. Recorded in docs/V1_ONLY_BACKEND_GAP.md as a follow-up rather
+    // than re-sorting a published manifest inside a feature commit.
+    contractIds: [
+      'provider.documents.create',
+      'provider.documents.delete',
+      'provider.documents.list',
+      'provider.documents.preview',
+      'provider.documents.types',
+    ],
+    // The LIST is served by `providerProfileService` and the other four by
+    // `providerProfileComplianceService` — a split that predates v1 and is not
+    // worth a migration to tidy. Named at the module the capability's own
+    // reads and writes mostly live in; the per-entry `domainService` on each
+    // contract entry is the precise answer.
+    domainModule: 'services/providerProfileComplianceService',
     surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
     roleSplitRationale:
       'Provider-only, and it must stay that way. The projection carries review STATE and never ' +
       'a document URL or storage path; the preview endpoint mints a short-lived signed URL ' +
-      'after re-authorizing, which is a different operation with a different audit trail.',
+      'after re-authorizing, which is a different operation with a different audit trail. ' +
+      'The write half arrived on 2026-08-18: the LIST was canonical while submit, preview and ' +
+      'withdraw were still legacy, which is the most lopsided shape a capability can have - ' +
+      'a provider could read their onboarding state over v1 and not act on it. Submit and ' +
+      'withdraw both re-evaluate online eligibility, because the last outstanding requirement ' +
+      'is what gates going online in either direction.',
   },
   {
     key: 'providerAvailability',

@@ -3542,6 +3542,463 @@
           }
         },
         "description": "Driven by the document CATALOG rather than by the stored rows, so a required document that has never been submitted appears as `missing`. A list built from rows alone shows an empty screen to a provider who has everything left to do. No URL and no storage path appears; the preview endpoint mints a short-lived signed URL after re-authorizing."
+      },
+      "post": {
+        "operationId": "provider.documents.create",
+        "summary": "Submits one document for review.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerProfileComplianceService.uploadDocument",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/documents",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderDocumentUpload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderDocument"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "The file is a data URI validated by SIGNATURE against an allowlist and a size ceiling, so a renamed executable is refused on its contents. The response is review STATE; no storage path is ever projected."
+      }
+    },
+    "/api/v1/provider/document-types": {
+      "get": {
+        "operationId": "provider.documents.types",
+        "summary": "The document catalog: what may be submitted, and which are required.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerProfileComplianceService.DOCUMENT_TYPE_CATALOG",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/document-types",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderDocumentTypeCatalog"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Provider-scoped rather than public even though the payload is static policy: the requirement set is part of how onboarding works, and a public catalog invites building the checklist screen against an endpoint nobody has to be signed in to read."
+      }
+    },
+    "/api/v1/provider/documents/{documentId}/preview": {
+      "get": {
+        "operationId": "provider.documents.preview",
+        "summary": "A short-lived signed URL for one document the caller owns.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerProfileComplianceService.getDocumentPreview",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/documents/:documentId/preview",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "worker_requirements.id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderDocumentPreview"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "A malformed id and an id belonging to another provider answer the SAME 404. A 422 for the first would let a caller enumerate which document ids exist."
+      }
+    },
+    "/api/v1/provider/documents/{documentId}": {
+      "delete": {
+        "operationId": "provider.documents.delete",
+        "summary": "Withdraws one document.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerProfileComplianceService.deleteDocument",
+        "x-legacy": [
+          {
+            "method": "DELETE",
+            "path": "/api/provider/documents/:documentId",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "worker_requirements.id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderDocumentMutation"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/provider/availability": {
@@ -15780,6 +16237,140 @@
           }
         }
       },
+      "ProviderDocumentTypeCatalog": {
+        "type": "object",
+        "description": "Static policy: what may be submitted and which are required.",
+        "properties": {
+          "version": {
+            "type": "integer"
+          },
+          "documentTypes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "ProviderDocumentUpload": {
+        "type": "object",
+        "required": [
+          "documentTypeId",
+          "fileName",
+          "file",
+          "clientRequestId"
+        ],
+        "properties": {
+          "documentTypeId": {
+            "type": "string",
+            "description": "From the document catalog."
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string",
+            "description": "data: URI. Validated by SIGNATURE against an allowlist and a size ceiling, so a renamed executable is refused on its contents rather than its declared type."
+          },
+          "clientRequestId": {
+            "type": "string",
+            "description": "REQUIRED. Unique per provider - a retried submit returns the ORIGINAL row rather than queueing a second copy of the same passport for review."
+          },
+          "issueDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "identifierLast4": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replacementForId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The requirement this supersedes, when re-submitting after a rejection."
+          }
+        }
+      },
+      "ProviderDocument": {
+        "type": "object",
+        "description": "Review STATE for one submitted document. No storage path is projected.",
+        "properties": {
+          "requirementId": {
+            "type": "string"
+          },
+          "documentType": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "submittedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reviewNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProviderDocumentPreview": {
+        "type": "object",
+        "description": "A SHORT-LIVED signed URL. The response carries no-store headers because a browser or intermediary that retains it turns a brief grant into a durable one.",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "mimeType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProviderDocumentMutation": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        }
+      },
       "ProviderAvailability": {
         "type": "object",
         "required": [
@@ -16529,6 +17120,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 98,
-  "x-total-count": 102
+  "x-implemented-count": 102,
+  "x-total-count": 106
 }

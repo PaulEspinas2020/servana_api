@@ -659,6 +659,31 @@ jest.mock('../src/services/account/providerProfileService', () => {
     PROVIDER_FIELD_COUNT: actual.PROVIDER_FIELD_COUNT,
   };
 });
+// The document WRITES live in the compliance service, not in
+// providerProfileService. Only the list is served by the latter, which is a
+// split that predates v1.
+jest.mock('../src/services/providerProfileComplianceService', () => {
+  const actual = jest.requireActual('../src/services/providerProfileComplianceService');
+  return {
+    ...actual,
+    uploadDocument: jest.fn().mockResolvedValue({
+      requirementId: '5', documentType: 'gov_id', status: 'submitted',
+      submittedAt: '2026-08-18T00:00:00.000Z', expiresAt: null, reviewNote: null,
+    }),
+    getDocumentPreview: jest.fn().mockResolvedValue({
+      url: 'https://example.test/signed', expiresAt: '2026-08-18T00:15:00.000Z',
+      mimeType: 'image/png',
+    }),
+    deleteDocument: jest.fn().mockResolvedValue(undefined),
+  };
+});
+jest.mock('../src/services/providerAutoOnlineEngine', () => ({
+  // Fire-and-forget on the upload and delete paths. Mocked so the router suite
+  // does not reach the real engine; that it RUNS at all is asserted in
+  // `tests/provider-documents-v1.test.ts`, because carrying a side effect into
+  // v1 is only worth anything if it happens.
+  evaluateProvider: jest.fn().mockResolvedValue(undefined),
+}));
 jest.mock('../src/services/account/accountSettingsService', () => {
   const actual = jest.requireActual('../src/services/account/accountSettingsService');
   const settings = {
@@ -940,6 +965,20 @@ describe('every implemented contract entry is reachable at its declared path', (
       }),
     'provider.publicProfile.get': () => call('GET', '/api/v1/providers/provider-uid-1/profile'),
     'provider.documents.list': () => call('GET', '/api/v1/provider/documents', { role: 'provider' }),
+    'provider.documents.types': () =>
+      call('GET', '/api/v1/provider/document-types', { role: 'provider' }),
+    'provider.documents.create': () =>
+      call('POST', '/api/v1/provider/documents', {
+        role: 'provider',
+        body: {
+          documentTypeId: 'gov_id', fileName: 'id.png',
+          file: 'data:image/png;base64,iVBORw0KGgo=', clientRequestId: 'req-1',
+        },
+      }),
+    'provider.documents.preview': () =>
+      call('GET', '/api/v1/provider/documents/5/preview', { role: 'provider' }),
+    'provider.documents.delete': () =>
+      call('DELETE', '/api/v1/provider/documents/5', { role: 'provider' }),
     'provider.availability.get': () => call('GET', '/api/v1/provider/availability', { role: 'provider' }),
     'provider.availability.patch': () =>
       call('PATCH', '/api/v1/provider/availability', { role: 'provider', body: { slots: [] } }),

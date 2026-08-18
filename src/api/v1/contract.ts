@@ -1178,6 +1178,125 @@ export const V1_CONTRACT: ContractEntry[] = [
       'appears; the preview endpoint mints a short-lived signed URL after re-authorizing.',
   },
   {
+    id: 'provider.documents.types',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/document-types',
+    summary: 'The document catalog: what may be submitted, and which are required.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderDocumentTypeCatalog',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerProfileComplianceService.DOCUMENT_TYPE_CATALOG',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/document-types',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'The same static catalog constant. No per-caller data of any kind.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'Provider-scoped rather than public even though the payload is static policy: the ' +
+      'requirement set is part of how onboarding works, and a public catalog invites building ' +
+      'the checklist screen against an endpoint nobody has to be signed in to read.',
+  },
+  {
+    id: 'provider.documents.create',
+    domain: 'account',
+    method: 'post',
+    path: '/provider/documents',
+    summary: 'Submits one document for review.',
+    auth: 'provider',
+    idempotent: false,
+    replayGuard:
+      'A REQUIRED clientRequestId, unique per provider. A retried submit returns the ORIGINAL ' +
+      'row rather than queueing a second copy of the same passport for review.',
+    requestSchema: 'ProviderDocumentUpload',
+    responseSchema: 'ProviderDocument',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    status: 'implemented',
+    domainService: 'services/providerProfileComplianceService.uploadDocument',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/documents',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'The live submit for both provider clients. IDENTICAL domain call, and it carries the ' +
+          'same post-commit `autoOnlineEngine.evaluateProvider` — submitting the last ' +
+          'outstanding requirement is what makes a provider eligible to go online, so an ' +
+          'endpoint that stored the file without re-evaluating would leave them blocked.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'The file is a data URI validated by SIGNATURE against an allowlist and a size ceiling, ' +
+      'so a renamed executable is refused on its contents. The response is review STATE; no ' +
+      'storage path is ever projected.',
+  },
+  {
+    id: 'provider.documents.preview',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/documents/:documentId/preview',
+    summary: 'A short-lived signed URL for one document the caller owns.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderDocumentPreview',
+    errors: ['NOT_FOUND'],
+    params: [{ name: 'documentId', type: 'integer', description: 'worker_requirements.id' }],
+    status: 'implemented',
+    domainService: 'services/providerProfileComplianceService.getDocumentPreview',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/documents/:documentId/preview',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same authorization and the same short-lived grant. The `Cache-Control: private, ' +
+          'no-store` and `Pragma: no-cache` headers are set by the handler rather than the ' +
+          'route, so they travel with the only v1 response that contains a private storage URL.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'A malformed id and an id belonging to another provider answer the SAME 404. A 422 for ' +
+      'the first would let a caller enumerate which document ids exist.',
+  },
+  {
+    id: 'provider.documents.delete',
+    domain: 'account',
+    method: 'delete',
+    path: '/provider/documents/:documentId',
+    summary: 'Withdraws one document.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderDocumentMutation',
+    errors: ['NOT_FOUND', 'CONFLICT'],
+    params: [{ name: 'documentId', type: 'integer', description: 'worker_requirements.id' }],
+    status: 'implemented',
+    domainService: 'services/providerProfileComplianceService.deleteDocument',
+    legacy: [
+      {
+        method: 'delete',
+        path: '/api/provider/documents/:documentId',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'IDENTICAL domain call, and it re-evaluates online eligibility for the same reason ' +
+          'the upload does: withdrawing a requirement can make a provider ineligible, and ' +
+          'skipping it would leave someone online against a document they just removed.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'account',
+  },
+  {
     id: 'provider.availability.get',
     domain: 'account',
     method: 'get',

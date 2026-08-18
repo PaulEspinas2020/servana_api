@@ -15,13 +15,13 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 98 |
+| Mounted endpoints | 102 |
 | `public` | 20 |
 | `authenticated` | 58 |
-| `provider` | 19 |
+| `provider` | 23 |
 | `admin` | 1 |
-| Object-scoped | 38 |
-| Object-scoped WITH an ownership rule | 38 |
+| Object-scoped | 40 |
+| Object-scoped WITH an ownership rule | 40 |
 | **Unguarded** | **0** |
 
 ## 2. Role access, by declared mode
@@ -199,7 +199,11 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `notifications.unreadCount` | GET /notifications/unread-count | `authenticated` | · ● ● ● | — |
 | `provider.availability.get` | GET /provider/availability | `provider` | · · ● · | — |
 | `provider.availability.patch` | PATCH /provider/availability | `provider` | · · ● · | — |
+| `provider.documents.create` | POST /provider/documents | `provider` | · · ● · | — |
+| `provider.documents.delete` | DELETE /provider/documents/:documentId | `provider` | · · ● · | ✔ addressId |
 | `provider.documents.list` | GET /provider/documents | `provider` | · · ● · | — |
+| `provider.documents.preview` | GET /provider/documents/:documentId/preview | `provider` | · · ● · | ✔ addressId |
+| `provider.documents.types` | GET /provider/document-types | `provider` | · · ● · | — |
 | `provider.earnings.payouts` | GET /provider/earnings/payouts | `provider` | · · ● · | — |
 | `provider.earnings.summary` | GET /provider/earnings/summary | `provider` | · · ● · | — |
 | `provider.earnings.transactions` | GET /provider/earnings/transactions | `provider` | · · ● · | — |
@@ -244,8 +248,8 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-51 of 98 endpoints are probeable; the other
-47 are writes and are never probed, because a POST to
+53 of 102 endpoints are probeable; the other
+49 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.
 

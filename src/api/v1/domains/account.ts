@@ -27,6 +27,8 @@ import * as providerProfile from '../../../services/account/providerProfileServi
 import * as settings from '../../../services/account/accountSettingsService';
 import { getCompletion } from '../../../services/account/profileCompletionService';
 import { getUserRole } from '../../../chat/chat.repository';
+import * as compliance from '../../../services/providerProfileComplianceService';
+import * as autoOnlineEngine from '../../../services/providerAutoOnlineEngine';
 import { ok, created, sendCaught } from '../envelope';
 import { ApiError, type V1ErrorCode } from '../errors';
 import { V1Handlers } from '../types';
@@ -78,6 +80,21 @@ const asApiError = (error: unknown): unknown => {
 };
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
+
+/**
+ * A positive integer document id, or a NOT_FOUND rather than a validation error.
+ *
+ * Matching the legacy handlers deliberately: a malformed id and an id belonging
+ * to somebody else must answer the same way, or the difference between 404 and
+ * 422 enumerates which document ids exist.
+ */
+const documentIdOf = (req: Request): number => {
+  const id = Number(req.params.documentId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new ApiError('NOT_FOUND', 'Document not found.');
+  }
+  return id;
+};
 
 export const handlers: V1Handlers = {
   /**
@@ -289,6 +306,100 @@ export const handlers: V1Handlers = {
       });
     } catch (error) {
       return sendCaught(res, req, 'provider.documents.list', asApiError(error));
+    }
+  },
+
+  /**
+   * The document CATALOG: what may be submitted, and which are required.
+   *
+   * Static policy, not the caller's rows. It is provider-scoped rather than
+   * public because the requirement set is part of how onboarding works, and a
+   * public catalog invites building a checklist screen against an endpoint
+   * nobody has to be signed in to read.
+   */
+  'provider.documents.types': async (req: Request, res: Response) => {
+    try {
+      return ok(res, req, {
+        version: 1,
+        documentTypes: compliance.DOCUMENT_TYPE_CATALOG,
+      });
+    } catch (error) {
+      return sendCaught(res, req, 'provider.documents.types', asApiError(error));
+    }
+  },
+
+  /**
+   * Submit one document.
+   *
+   * ## The side effect is part of the endpoint
+   *
+   * The legacy handler calls `autoOnlineEngine.evaluateProvider` after a
+   * successful upload, fire-and-forget. It is easy to read as logging and it is
+   * not: submitting the last outstanding requirement is what makes a provider
+   * eligible to be online, and an endpoint that stores the document without
+   * re-evaluating leaves them blocked until something else happens to trigger
+   * it. Carried here deliberately, with the same swallow — a failure to
+   * re-evaluate must not fail an upload that succeeded.
+   */
+  'provider.documents.create': async (req: Request, res: Response) => {
+    try {
+      const uid = uidOf(req);
+      const body = bodyOf(req);
+
+      const replacement = body.replacementForId == null ? null : Number(body.replacementForId);
+      if (replacement != null && (!Number.isInteger(replacement) || replacement <= 0)) {
+        throw ApiError.validation('replacementForId is invalid.');
+      }
+
+      const document = await compliance.uploadDocument(uid, {
+        documentTypeId: String(body.documentTypeId ?? ''),
+        fileName: String(body.fileName ?? ''),
+        file: String(body.file ?? ''),
+        clientRequestId: String(body.clientRequestId ?? ''),
+        issueDate: body.issueDate == null ? null : String(body.issueDate),
+        expiresAt: body.expiresAt == null ? null : String(body.expiresAt),
+        identifierLast4: body.identifierLast4 == null ? null : String(body.identifierLast4),
+        replacementForId: replacement,
+      });
+
+      autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
+      return created(res, req, document);
+    } catch (error) {
+      return sendCaught(res, req, 'provider.documents.create', asApiError(error));
+    }
+  },
+
+  /**
+   * A short-lived signed URL for one document the caller owns.
+   *
+   * The no-store headers travel WITH the handler, not with the route. This is
+   * the only v1 response that contains a private storage URL, and a browser or
+   * intermediary that retains it turns a 15-minute grant into a durable one.
+   */
+  'provider.documents.preview': async (req: Request, res: Response) => {
+    try {
+      const id = documentIdOf(req);
+      res.set('Cache-Control', 'private, no-store, max-age=0');
+      res.set('Pragma', 'no-cache');
+      return ok(res, req, await compliance.getDocumentPreview(uidOf(req), id));
+    } catch (error) {
+      return sendCaught(res, req, 'provider.documents.preview', asApiError(error));
+    }
+  },
+
+  /** Withdraw one document. Re-evaluates online eligibility, as upload does. */
+  'provider.documents.delete': async (req: Request, res: Response) => {
+    try {
+      const uid = uidOf(req);
+      const id = documentIdOf(req);
+      await compliance.deleteDocument(uid, id);
+      // Deleting a document can make a provider ineligible, which is the same
+      // reason upload re-evaluates. Omitting it here would leave someone online
+      // against a requirement they have just withdrawn.
+      autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
+      return ok(res, req, { deleted: true });
+    } catch (error) {
+      return sendCaught(res, req, 'provider.documents.delete', asApiError(error));
     }
   },
 
