@@ -100,9 +100,9 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `POST /api/provider/bookings/:bookingId/cancel` | ALIAS_TEMPORARILY | `provider.jobs.cancel` | Provider Mobile has not migrated | 90d |
 | `GET /api/provider/document-types` | ALIAS_TEMPORARILY | `provider.documents.types` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.list` | Provider Mobile has not migrated | 90d |
-| `POST /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.create` | Provider Mobile, Provider Web have not migrated | 90d |
-| `DELETE /api/provider/documents/:documentId` | ALIAS_TEMPORARILY | `provider.documents.delete` | Provider Mobile, Provider Web have not migrated | 90d |
-| `GET /api/provider/documents/:documentId/preview` | ALIAS_TEMPORARILY | `provider.documents.preview` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.create` | Provider Mobile has not migrated | 90d |
+| `DELETE /api/provider/documents/:documentId` | ALIAS_TEMPORARILY | `provider.documents.delete` | Provider Mobile has not migrated | 90d |
+| `GET /api/provider/documents/:documentId/preview` | ALIAS_TEMPORARILY | `provider.documents.preview` | Provider Mobile has not migrated | 90d |
 | `GET /api/provider/earnings` | ALIAS_TEMPORARILY | `provider.earnings.transactions` | Provider Mobile has not migrated | 90d |
 | `GET /api/provider/earnings/summary` | ALIAS_TEMPORARILY | `provider.earnings.summary` | Provider Mobile has not migrated | 90d |
 | `POST /api/provider/fcm-token` | ALIAS_TEMPORARILY | `me.devices.register` | Customer Mobile, Customer Web, Provider Mobile have not migrated | 90d |
@@ -112,7 +112,7 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `PUT /api/provider/notification-preferences` | ALIAS_TEMPORARILY | `me.notificationPreferences.patch` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
 | `GET /api/provider/notification-preferences` | ALIAS_TEMPORARILY | `settings.notificationPreferences.get` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
 | `PUT /api/provider/notification-preferences` | ALIAS_TEMPORARILY | `settings.notificationPreferences.put` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
-| `DELETE /api/provider/notifications/:key` | CANONICALIZE | `notifications.dismiss` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 90d |
+| `DELETE /api/provider/notifications/:key` | CANONICALIZE | `notifications.dismiss` | Customer Mobile, Customer Web, Provider Mobile have not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 90d |
 | `GET /api/provider/payouts` | ALIAS_TEMPORARILY | `provider.earnings.payouts` | Provider Mobile has not migrated | 90d |
 | `GET /api/provider/profile` | ALIAS_TEMPORARILY | `provider.profile.get` | Provider Mobile, Admin Web have not migrated | 90d |
 | `POST /api/provider/public-profile-revisions` | ALIAS_TEMPORARILY | `provider.profile.patch` | Provider Mobile has not migrated | 90d |

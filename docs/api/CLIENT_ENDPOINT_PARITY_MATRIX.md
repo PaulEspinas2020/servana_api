@@ -27,14 +27,14 @@
 | Single-surface | 2 |
 | **Divergent (forked truth)** | **0** |
 | Broken (names a missing endpoint) | 0 |
-| Surface × capability cells on canonical | 22 |
-| Surface × capability cells still legacy | 95 |
+| Surface × capability cells on canonical | 23 |
+| Surface × capability cells still legacy | 94 |
 
 **0 divergent capabilities.** Every capability whose
 endpoints span more than one route family names exactly one domain service — the
 role split is a permission boundary, never a second implementation.
 
-**22 cells on canonical.** Each one is derived from that client's published manifest — the endpoints it calls, generated from its own source with a file:line per call site — and never asserted here by hand. A client with no manifest reads legacy, planned or n/a regardless of what it may already have shipped, because nothing in this repository has verified it; see src/api/v1/client-manifests/.
+**23 cells on canonical.** Each one is derived from that client's published manifest — the endpoints it calls, generated from its own source with a file:line per call site — and never asserted here by hand. A client with no manifest reads legacy, planned or n/a regardless of what it may already have shipped, because nothing in this repository has verified it; see src/api/v1/client-manifests/.
 
 ## 2. Legend
 
@@ -85,7 +85,7 @@ direction of whoever wrote it.
 | Read a provider's public profile | SHARED | planned | planned | — | — | planned |
 | Read the reschedule history of a booking | SHARED | planned | planned | planned | **migrated** | planned |
 | Register and release this device for push | SHARED | legacy | planned | legacy | **migrated** | — |
-| Dismiss one notification | SHARED | planned | planned | planned | legacy | — |
+| Dismiss one notification | SHARED | planned | planned | planned | **migrated** | — |
 | Read my notification inbox | SHARED | legacy | legacy | legacy | **migrated** | planned |
 | Mark everything read | SHARED | legacy | legacy | legacy | **migrated** | planned |
 | Mark one notification read | SHARED | legacy | legacy | legacy | **migrated** | planned |

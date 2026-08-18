@@ -148,6 +148,13 @@
       ]
     },
     {
+      "method": "delete",
+      "path": "/v1/notifications/:param",
+      "cites": [
+        "src/app/core/api/provider-notifications-api.service.ts:564"
+      ]
+    },
+    {
       "method": "patch",
       "path": "/v1/notifications/:param/read",
       "cites": [
@@ -174,6 +181,27 @@
       "cites": [
         "src/app/core/api/provider-requirements-api.service.ts:193",
         "src/app/core/api/provider-requirements-api.service.ts:216"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/documents",
+      "cites": [
+        "src/app/core/api/provider-upload-api.service.ts:146"
+      ]
+    },
+    {
+      "method": "delete",
+      "path": "/v1/provider/documents/:param",
+      "cites": [
+        "src/app/core/api/provider-upload-api.service.ts:228"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/documents/:param/preview",
+      "cites": [
+        "src/app/core/api/provider-upload-api.service.ts:204"
       ]
     },
     {

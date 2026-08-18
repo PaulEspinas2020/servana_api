@@ -125,16 +125,12 @@ shows `admin=` counts.
 The cheapest real migration, and the one that proves the contract under load.
 
 <!-- BEGIN GENERATED: v1-moves:providerWeb -->
-**21** canonical capabilities are live that this client still reaches by a legacy route.
+**17** canonical capabilities are live that this client still reaches by a legacy route.
 
 | Move to (canonical) | Legacy routes it supersedes |
 |---|---|
-| `DELETE /api/v1/notifications/:key` | `DELETE /api/provider/notifications/:key` |
 | `PATCH /api/v1/me` | `PUT /api/user/updateprofile` |
 | `GET /api/v1/provider/document-types` | `GET /api/provider/document-types` |
-| `POST /api/v1/provider/documents` | `POST /api/provider/documents` |
-| `GET /api/v1/provider/documents/:documentId/preview` | `GET /api/provider/documents/:documentId/preview` |
-| `DELETE /api/v1/provider/documents/:documentId` | `DELETE /api/provider/documents/:documentId` |
 | `GET /api/v1/provider/availability` | `GET /api/worker/availability` |
 | `PATCH /api/v1/provider/availability` | `PUT /api/worker/availability` |
 | `GET /api/v1/provider/time-off` | `GET /api/worker/time-off` |

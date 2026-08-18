@@ -1957,7 +1957,7 @@
         "customerMobile": "planned",
         "customerWeb": "planned",
         "providerMobile": "planned",
-        "providerWeb": "legacy",
+        "providerWeb": "migrated",
         "admin": "n/a"
       },
       "supersedes": [
@@ -2144,7 +2144,7 @@
         "customerMobile": "n/a",
         "customerWeb": "n/a",
         "providerMobile": "planned",
-        "providerWeb": "legacy",
+        "providerWeb": "migrated",
         "admin": "n/a"
       },
       "supersedes": [
@@ -2169,7 +2169,7 @@
         "customerMobile": "n/a",
         "customerWeb": "n/a",
         "providerMobile": "planned",
-        "providerWeb": "legacy",
+        "providerWeb": "migrated",
         "admin": "n/a"
       },
       "supersedes": [
@@ -2219,7 +2219,7 @@
         "customerMobile": "n/a",
         "customerWeb": "n/a",
         "providerMobile": "planned",
-        "providerWeb": "legacy",
+        "providerWeb": "migrated",
         "admin": "n/a"
       },
       "supersedes": [

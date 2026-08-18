@@ -607,7 +607,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'for the first time.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'notifications',
   },
   {
@@ -1295,7 +1295,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'endpoint that stored the file without re-evaluating would leave them blocked.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'account',
     notes:
       'The file is a data URI validated by SIGNATURE against an allowlist and a size ceiling, ' +
@@ -1326,7 +1326,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'route, so they travel with the only v1 response that contains a private storage URL.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'account',
     notes:
       'A malformed id and an id belonging to another provider answer the SAME 404. A 422 for ' +
@@ -1356,7 +1356,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'skipping it would leave someone online against a document they just removed.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'account',
   },
   {

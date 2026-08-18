@@ -402,7 +402,7 @@ Dismisses one notification. Repeating it is a no-op, not an error.
 - **Domain service** — `services/events/notificationInbox.dismiss`
 - **Error codes** — `INTERNAL`, `NOTIFICATION_NOT_ACTIONABLE`, `NOTIFICATION_NOT_FOUND`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `key` (string) Opaque notification key
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `DELETE /api/provider/notifications/:key` — **CANONICALIZE** — The provider inbox had list, read, read-all and dismiss; v1 took the first three and left dismiss behind, so every provider client kept one legacy call for one verb. The legacy route is provider-only and reaches provider_notifications directly; this one resolves the store from the caller, so a CUSTOMER can dismiss for the first time.
 
@@ -705,7 +705,7 @@ Submits one document for review.
 
 - **Domain service** — `services/providerProfileComplianceService.uploadDocument`
 - **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `POST /api/provider/documents` — **ALIAS_TEMPORARILY** — The live submit for both provider clients. IDENTICAL domain call, and it carries the same post-commit `autoOnlineEngine.evaluateProvider` — submitting the last outstanding requirement is what makes a provider eligible to go online, so an endpoint that stored the file without re-evaluating would leave them blocked.
 
@@ -718,7 +718,7 @@ A short-lived signed URL for one document the caller owns.
 - **Domain service** — `services/providerProfileComplianceService.getDocumentPreview`
 - **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
 - **Path params** — `documentId` (integer) worker_requirements.id
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `GET /api/provider/documents/:documentId/preview` — **ALIAS_TEMPORARILY** — Same authorization and the same short-lived grant. The `Cache-Control: private, no-store` and `Pragma: no-cache` headers are set by the handler rather than the route, so they travel with the only v1 response that contains a private storage URL.
 
@@ -729,7 +729,7 @@ Withdraws one document.
 - **Domain service** — `services/providerProfileComplianceService.deleteDocument`
 - **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
 - **Path params** — `documentId` (integer) worker_requirements.id
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `DELETE /api/provider/documents/:documentId` — **ALIAS_TEMPORARILY** — IDENTICAL domain call, and it re-evaluates online eligibility for the same reason the upload does: withdrawing a requirement can make a provider ineligible, and skipping it would leave someone online against a document they just removed.
 
@@ -1532,7 +1532,7 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `GET /api/v1/notifications` | ⏳ | ⏳ | ⏳ | ✅ | · |
 | `GET /api/v1/notifications/unread-count` | ⏳ | ⏳ | ⏳ | ✅ | · |
 | `PATCH /api/v1/notifications/:key/read` | ⏳ | ⏳ | ⏳ | ✅ | · |
-| `DELETE /api/v1/notifications/:key` | · | · | · | ⏳ | — |
+| `DELETE /api/v1/notifications/:key` | · | · | · | ✅ | — |
 | `POST /api/v1/notifications/read-all` | ⏳ | ⏳ | ⏳ | ✅ | · |
 | `GET /api/v1/me/notification-preferences` | · | · | ⏳ | ✅ | · |
 | `PATCH /api/v1/me/notification-preferences` | · | · | ⏳ | ✅ | · |
@@ -1555,9 +1555,9 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `GET /api/v1/providers/:providerUid/profile` | · | · | — | — | · |
 | `GET /api/v1/provider/documents` | — | — | ⏳ | ✅ | — |
 | `GET /api/v1/provider/document-types` | — | — | · | ⏳ | — |
-| `POST /api/v1/provider/documents` | — | — | · | ⏳ | — |
-| `GET /api/v1/provider/documents/:documentId/preview` | — | — | · | ⏳ | — |
-| `DELETE /api/v1/provider/documents/:documentId` | — | — | · | ⏳ | — |
+| `POST /api/v1/provider/documents` | — | — | · | ✅ | — |
+| `GET /api/v1/provider/documents/:documentId/preview` | — | — | · | ✅ | — |
+| `DELETE /api/v1/provider/documents/:documentId` | — | — | · | ✅ | — |
 | `GET /api/v1/provider/availability` | — | — | ⏳ | ⏳ | — |
 | `PATCH /api/v1/provider/availability` | — | — | ⏳ | ⏳ | — |
 | `GET /api/v1/provider/time-off` | — | — | · | ⏳ | — |

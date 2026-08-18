@@ -86,8 +86,8 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | | |
 | --- | --- |
 | Capabilities that apply | 39 |
-| Already on canonical | 22 |
-| Still on a legacy route | 2 |
+| Already on canonical | 23 |
+| Still on a legacy route | 1 |
 | Partially migrated | 7 |
 | No equivalent called today | 8 |
 
@@ -95,7 +95,6 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | --- | --- | --- | --- |
 | Additional work | ⚠ mixed | `GET /api/additional/booking/:bookingId`, `POST /api/additional/request/:userId` | `POST /api/v1/bookings/:bookingId/additional-work`, `GET /api/v1/bookings/:bookingId/additional-work` |
 | Attach a file to a conversation | planned | `POST /api/chat/attachments/upload` | `POST /api/v1/conversations/:conversationId/attachments` |
-| Dismiss one notification | legacy | `DELETE /api/provider/notifications/:key` | `DELETE /api/v1/notifications/:key` |
 | Move a booking through its state machine | ⚠ mixed | `POST /api/admin/bookings/:id/assign`, `POST /api/admin/bookings/:id/reassign`, `PUT /api/worker/bookings/:bookingId/accept`, `PUT /api/worker/bookings/:bookingId/arrived`, `PUT /api/worker/bookings/:bookingId/complete`, `PUT /api/worker/bookings/:bookingId/decline`, `PUT /api/worker/bookings/:bookingId/en-route`, `PUT /api/worker/bookings/:bookingId/start` | `POST /api/v1/provider/jobs/:bookingId/accept`, `POST /api/v1/provider/jobs/:bookingId/decline`, `POST /api/v1/provider/jobs/:bookingId/en-route`, `POST /api/v1/provider/jobs/:bookingId/arrived`, `POST /api/v1/provider/jobs/:bookingId/start`, `POST /api/v1/provider/jobs/:bookingId/complete`, `POST /api/v1/admin/bookings/:bookingId/assign`, `POST /api/v1/admin/bookings/:bookingId/reassign` |
 | Read a booking | planned | `GET /api/:id`, `GET /api/:id/timeline`, `GET /api/users/:userId/bookings` | `GET /api/v1/bookings`, `GET /api/v1/bookings/:bookingId`, `GET /api/v1/bookings/:bookingId/timeline`, `GET /api/v1/bookings/:bookingId/transitions` |
 | Read a booking's payment and price breakdown | planned | _no legacy equivalent — this is new_ | `GET /api/v1/bookings/:bookingId/payment` |

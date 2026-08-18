@@ -98,7 +98,7 @@ re-fetch to learn its badge or decrement a number it guessed.
 | How many unread I have | legacy | legacy | legacy | migrated | planned |
 | Mark one notification read | legacy | legacy | legacy | migrated | planned |
 | Mark everything read | legacy | legacy | legacy | migrated | planned |
-| Dismiss one notification | planned | planned | planned | legacy | — |
+| Dismiss one notification | planned | planned | planned | migrated | — |
 | Read and change my notification preferences | planned | planned | legacy | legacy | planned |
 | Register and release this device for push | legacy | planned | legacy | migrated | — |
 
