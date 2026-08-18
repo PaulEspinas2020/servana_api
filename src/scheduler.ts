@@ -7,6 +7,7 @@ import { send } from "./helpers/mailer";
 import { getUserInfoByBookingId } from "./services/user.service";
 import { sweepGracePeriod } from "./chat/chat.service";
 import { notifyAllAdmins } from './services/adminNotificationService';
+import { withJobLease } from './services/scheduler/jobLease';
 
 const dbSchema = db.schema;
 
@@ -192,28 +193,93 @@ export const runDailyAdminBookingSummary = async () => {
 // Start all scheduled jobs
 // ---------------------------------------------------------------------------
 
+/**
+ * The scheduled jobs, declared rather than registered inline.
+ *
+ * Separating the WHAT from the WHEN is a TAB 08 work package, and it buys two
+ * things immediately: the duplicate-effect risk of each job is written down next
+ * to it, and a test can enumerate the jobs without starting cron.
+ *
+ * `name` is the lease identity. Changing one is not cosmetic — two replicas on
+ * different names hold different locks and both run.
+ */
+export interface ScheduledJob {
+  name: string;
+  schedule: string;
+  run: () => Promise<void>;
+  options?: { timezone?: string };
+  /** What a duplicate run would actually do. Kept honest, not aspirational. */
+  duplicateEffect: string;
+}
+
+export const SCHEDULED_JOBS: ScheduledJob[] = [
+  {
+    name: 'disbursement-release',
+    schedule: '0 * * * *',
+    run: runDisbursements,
+    duplicateEffect:
+      'None for money: releaseDisbursement claims each row with UPDATE ... WHERE status = PENDING ' +
+      'and sends a per-attempt Idempotency-Key. A duplicate run wastes queries.',
+  },
+  {
+    name: 'disbursement-retry',
+    schedule: '0 */6 * * *',
+    run: retryFailedDisbursements,
+    duplicateEffect:
+      'None for money: the same conditional claim on status = FAILED. Duplicate run wastes queries.',
+  },
+  {
+    name: 'otp-reminder',
+    schedule: '0 */4 * * *',
+    run: runOtpReminders,
+    duplicateEffect:
+      'DUPLICATE EMAILS. A plain SELECT then send() per row, with no per-booking dedupe — ' +
+      'this is the job the lease most protects.',
+  },
+  {
+    name: 'payment-retry',
+    schedule: '0 */6 * * *',
+    run: runPaymentRetries,
+    duplicateEffect:
+      'DUPLICATE EMAILS. createCheckoutSession is serialized per booking by an advisory lock, so ' +
+      'the session is safe, but the send() after it is not.',
+  },
+  {
+    // Hourly — retire booking conversations whose post-completion grace window
+    // has lapsed. Completion deliberately does NOT close the chat: the 48 hours
+    // after a job are when "you left a cable behind", "can I get a receipt" and
+    // "something isn't right" actually happen. After that it goes read-only, so
+    // a finished booking cannot quietly become a permanent private channel.
+    name: 'conversation-grace-sweep',
+    schedule: '30 * * * *',
+    run: runConversationGraceSweep,
+    duplicateEffect:
+      'Low: the sweep is a state transition to read-only, so a second pass finds nothing to move.',
+  },
+  {
+    name: 'daily-admin-booking-summary',
+    schedule: '0 7 * * *',
+    run: runDailyAdminBookingSummary,
+    // 07:00 in the operational timezone, independent of host UTC.
+    options: { timezone: 'Asia/Manila' },
+    duplicateEffect:
+      'DUPLICATE ADMIN NOTIFICATIONS. Guarded by notificationKey, but that idempotency is ' +
+      'currently defeated in production by 39 stale global unique constraints (migration 037), ' +
+      'so the key cannot be relied on until that is applied.',
+  },
+];
+
 export const startScheduler = () => {
-  // Every hour — release worker payouts due after 72 h
-  cron.schedule("0 * * * *", runDisbursements);
+  for (const job of SCHEDULED_JOBS) {
+    cron.schedule(
+      job.schedule,
+      // Every tick goes through the lease, so only one replica runs the job.
+      // withJobLease never throws — node-cron has no error channel, and a throw
+      // here would be swallowed silently rather than reported.
+      () => withJobLease(job.name, job.run),
+      job.options,
+    );
+  }
 
-  // Every 6 hours — retry failed disbursements
-  cron.schedule("0 */6 * * *", retryFailedDisbursements);
-
-  // Every 4 hours — remind customers with unconfirmed OTP
-  cron.schedule("0 */4 * * *", runOtpReminders);
-
-  // Every 6 hours — retry failed PayMongo checkout sessions
-  cron.schedule("0 */6 * * *", runPaymentRetries);
-
-  // Hourly — retire booking conversations whose post-completion grace window
-  // has lapsed. Completion deliberately does NOT close the chat: the 48 hours
-  // after a job are when "you left a cable behind", "can I get a receipt" and
-  // "something isn't right" actually happen. After that it goes read-only, so
-  // a finished booking cannot quietly become a permanent private channel.
-  cron.schedule("30 * * * *", runConversationGraceSweep);
-
-  // 07:00 every morning in the operational timezone, independent of host UTC.
-  cron.schedule('0 7 * * *', runDailyAdminBookingSummary, { timezone: 'Asia/Manila' });
-
-  console.log("[scheduler] All cron jobs started.");
+  console.log(`[scheduler] ${SCHEDULED_JOBS.length} cron jobs started (lease-protected).`);
 };
