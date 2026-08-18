@@ -1,7 +1,7 @@
 # Production readiness — what stands between here and operational
 
 > Evidence, not estimate. Every number below was measured in this repository on
-> 2026-08-16; the method is named beside each one so it can be re-run.
+> 2026-08-18; the method is named beside each one so it can be re-run.
 
 ## The headline
 
@@ -9,9 +9,10 @@ The v1 backend is **built and gated, and neither deployed nor adopted.**
 
 ```
 backend implementation      COMPLETE   95 canonical endpoints from ONE contract
-local verification          GREEN      252 suites, 5687 tests, exit 0
-production deployment       NONE       63 commits unpushed; origin/main = 2e03a4b
-client adoption             ZERO       57 endpoints legacy, 51 planned, 0 migrated
+local verification          GREEN      271 suites, 5846 tests, exit 0
+startup                     BOOTED     binds, resolves the graph, /readyz 503 when degraded
+production deployment       NONE       109 commits unpushed; origin/main = 2e03a4b
+client adoption             ZERO       615 legacy routes mounted, 0 of 108 migrated
 production smoke            NEVER RUN  tooling delivered, never executed
 ```
 
@@ -21,88 +22,91 @@ PostgreSQL. None of it is a statement about the running system.
 
 ---
 
-## 1. Blocking items, in the order they must happen
+## 1. The cutover, as measured on 2026-08-18
 
-Ordering matters here, and it is not the obvious one.
+### 1.0 There is no "legacy backend" to replace
 
-### 1.1 Mark the production migration ledger — 30 rows, NOT 36
+Worth stating first, because it changes the shape of the job. The legacy API and
+the v1 API are **one repository, one branch, one process**. `/api/v1` was built
+ADDITIVELY alongside 615 mounted legacy routes, deliberately, because zero of 108
+client endpoints have migrated.
 
-`servana.schema_migrations` **does not exist in production** and never has.
-`.github/workflows/deploy.yml` never invokes the runner, so migrations were
-applied by hand with no record.
+So this is not an overwrite of one system by another. It is a **deploy of 109
+commits** to the same service. Nothing gets replaced; new routes appear beside
+the old ones, and the old ones keep serving until clients move.
 
-Consequence: `npm run migrations:apply` against production today creates the
-ledger, finds all 36 pending, and dies on `001`.
+Corollary, and it is load-bearing: **do not remove legacy routes as part of this.**
+Both command books state it as a STOP condition — never remove or reshape a
+legacy endpoint while an installed client still calls it. Every installed client
+still calls them.
 
-**Exactly 30 migrations may be marked applied — every one except 030–035.**
-Marking all 36 does not defer the rest, it forgets them: the runner only ever
-applies what is absent from the ledger.
+### 1.1 DONE — the production migration ledger exists
 
-The 14 DML-only migrations MUST be marked even though the baseline cannot prove
-they ran. They did — the catalog they seed exists — and they cannot re-run:
-001–008 read `services.category`, which Catalog V2 removed. Leaving them
-unmarked recreates the exact breakage this fixes, with `migrations:apply` dying
-on 001.
+`servana.schema_migrations` was created on 2026-08-16 with 30 rows marked, and
+030-035 were then applied. Production is at 128 tables. This section previously
+described that as blocking; it is complete.
 
-```
-npm run migrations:baseline:plan
+### 1.2 DONE — 030-035 are applied
 
-  present            16   production already has these effects — mark
-  no schema effect   14   DML-only; ran, but unprovable from schema — mark
-  ABSENT              6   030–035, undeployed — DO NOT mark
-                          ------
-                    30   rows to insert
-```
+Applied and verified 2026-08-16: 36 ledger rows, 128 tables, 0 objects not owned
+by `admin`, `servana-prod` 0 restarts.
 
-The 14 DML-only migrations are catalog seeds (`001`–`008`), backfills and the
-credential canary.
+### 1.3 The database is AHEAD of the deployed code
 
-> **If `030`–`035` are marked applied, `finance_ledger_events`,
-> `domain_event_outbox`, `account_settings`, `booking_support_cases`,
-> `booking_reschedule_requests` and `booking_otp_events` are never created on any
-> database bootstrapped from this baseline.**
+Production ran migrations 030-035 while still serving the code from `2e03a4b`
+(2026-08-11). That is the safe direction — additive schema the old code simply
+does not use — but it means the deploy is closing a gap, not opening one.
 
-### 1.2 Apply the six pending migrations BEFORE the code
+### 1.4 ⛔ Do NOT overwrite the database
 
-This is the sequencing that is easy to get backwards, and the reason is subtle.
+`scripts/baseline/000-baseline.sql` is **schema-only**: 0 `INSERT`, 0 `COPY`.
+Restoring it over production would produce a correct, empty schema and destroy
+every row — 109 real bookings, every user credential, every payment record.
 
-`recordLedgerEventBestEffort` **catches and logs** rather than throwing
-(`financeLedger.ts:284`). So deploying the code before migration `031` does not
-crash anything — it silently drops every financial ledger event while the
-hourly `runDisbursements` cron keeps running. The result is a money path that
-looks healthy and a reconciliation that can never balance, with no alarm.
+It is also unnecessary. Every pending migration is additive:
 
-A crash would be safer. Fail-soft is what makes the ordering load-bearing.
+    036   4 CREATE TABLE IF NOT EXISTS, 2 CREATE INDEX IF NOT EXISTS,
+          1 ADD COLUMN IF NOT EXISTS block, 4 OWNER TO admin.
+          Zero destructive statements.
+    037   drops 39 redundant constraints. Marked SERVANA:DESTRUCTIVE, and the
+          runner refuses it unless SERVANA_APPLY_DESTRUCTIVE names it.
 
-Proven safe to apply: all six land cleanly on production's real schema.
+The baseline's role is to build a FRESH database and to serve as the schema
+authority the repository checks itself against. It is not a restore artefact for
+a live system.
 
-```
-npm run db:verify:embedded
-  restore + mark version   ok        121 tables (production's schema)
-  pending applied on top   all clean   6 migrations
-  final table count        128
-```
+### 1.5 Migrations now run through the repository's own runner
 
-Destructive-operation audit of the six: **none**. One `DROP TRIGGER IF EXISTS`
-in `031`, immediately recreated. No `DROP TABLE`, no `TRUNCATE`, no
-`DELETE FROM`, no type changes, no `SET NOT NULL` on existing columns.
+`deploy.yml` previously walked `scripts/migrations/*.sql` in a bash loop and
+tracked what it had applied with `.done` marker FILES on the runner host — a
+SECOND ledger, which had already diverged from the database one (030-035 were
+applied by hand through the table, so the host has no markers and the loop would
+have re-run all six).
 
-Messaging is the exception that needs no ordering: `chat.repository.ts:561`
-issues `ADD COLUMN IF NOT EXISTS last_read_at` at runtime, so `032`'s effect is
-self-healing either way.
+It now calls `npm run migrations:apply`, which brings what the loop lacked:
+advisory locking so two deploys cannot migrate concurrently, sha256 refusal if an
+applied migration's content changed, and one transaction per migration with the
+ledger insert inside it.
 
-### 1.3 Push — currently blocked by a standing rule, not by readiness
+⚠ **Read the plan output before the first deploy on this path.** The step runs
+`npm run migrations:plan` first and prints exactly what it will apply. If the
+database ledger is missing anything the marker files recorded, that is where it
+shows.
 
-63 commits are unpushed. For this repository a push to `main` **is** a
-production deploy: `deploy.yml` triggers on push and runs on a self-hosted
-runner on the production host.
+### 1.6 Ordering, which is still load-bearing
 
-The standing instruction in this project is that everything stays local until
-the admin, client and worker apps are migrated. **That rule is not satisfied —
-zero clients have migrated.** So this step is blocked by product sequencing, not
-by engineering readiness.
+    checkout → secrets → npm ci → VERIFY → build → PLAN → MIGRATE → restart PM2
 
----
+A failing test touches nothing. A failing migration stops short of the restart,
+so the old code keeps serving. This order was got wrong once before — migrations
+used to run before Node was installed.
+
+### 1.7 Push is still blocked by a standing rule, not by readiness
+
+109 commits are unpushed. A push to `main` IS the deploy. The standing
+instruction is that everything stays local until the admin, client and worker
+apps are migrated, and **zero clients have migrated**. That is product
+sequencing, not engineering readiness.
 
 ## 2. What "operational" additionally requires
 
