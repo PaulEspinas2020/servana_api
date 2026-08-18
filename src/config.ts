@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import { validateEnv } from "./env/envSchema";
 if (!process.env.NODE_ENV) dotenv.config({ path: "../.env" });
 
 // General
@@ -7,9 +8,19 @@ export const port = process.env.PORT;
 export const secret = process.env.SECRET
 export const tempId = process.env.TEMP_ID
 
-if (isProduction && tempId) {
-  throw new Error('SECURITY: TEMP_ID must not be set in production — it bypasses all authentication');
-}
+/**
+ * Validate the environment before anything reads it (TAB 12).
+ *
+ * In production this throws with EVERY problem listed at once — reporting one
+ * variable per restart turns a five-variable misconfiguration into five deploys.
+ * Elsewhere it warns, so tests and local development run without a full
+ * production environment.
+ *
+ * The TEMP_ID guard that used to live here is now one rule inside that policy;
+ * it still throws in production, for the same reason: it bypasses authentication
+ * outright, so it is unsafe regardless of what else is configured.
+ */
+validateEnv(isProduction);
 export const db = {
     user: process.env.DB_USER,
     host: process.env.DB_HOST,
