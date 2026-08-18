@@ -91,98 +91,17 @@ export interface BookingListFilter {
 
 // ─── Schema Init ─────────────────────────────────────────────────────────────
 
-export const ensureBookingOpsSchema = async (): Promise<void> => {
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.booking_timeline_events (
-      id          SERIAL PRIMARY KEY,
-      booking_id  INTEGER NOT NULL,
-      event_type  VARCHAR(80) NOT NULL,
-      title       VARCHAR(200) NOT NULL,
-      description TEXT,
-      actor_type  VARCHAR(20) NOT NULL DEFAULT 'admin',
-      actor_uid   TEXT,
-      metadata    JSONB,
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `, []);
-
-  await dbQuery.query(`
-    CREATE INDEX IF NOT EXISTS idx_bte_booking_id
-    ON ${dbSchema}.booking_timeline_events (booking_id, created_at DESC)
-  `, []);
-
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.booking_notes (
-      id          SERIAL PRIMARY KEY,
-      booking_id  INTEGER NOT NULL,
-      note_text   TEXT NOT NULL,
-      author_uid  TEXT,
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `, []);
-
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.booking_escalations (
-      id             SERIAL PRIMARY KEY,
-      booking_id     INTEGER NOT NULL,
-      reason_code    VARCHAR(80),
-      reason         TEXT NOT NULL,
-      severity       VARCHAR(20) NOT NULL DEFAULT 'normal',
-      assigned_team  TEXT,
-      actor_uid      TEXT,
-      resolved_at    TIMESTAMPTZ,
-      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `, []);
-
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.booking_audit_events (
-      id          SERIAL PRIMARY KEY,
-      booking_id  INTEGER,
-      actor_uid   TEXT,
-      actor_role  VARCHAR(20) NOT NULL DEFAULT 'admin',
-      action      VARCHAR(100) NOT NULL,
-      before_json JSONB,
-      after_json  JSONB,
-      reason      TEXT,
-      request_id  TEXT,
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `, []);
-
-  // booking_workers is a pre-existing table — add admin-portal columns if missing
-  await dbQuery.query(`
-    ALTER TABLE ${dbSchema}.booking_workers
-    ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ DEFAULT NOW()
-  `, []);
-
-  // Confirmation-on-behalf columns — wrapped individually so one DDL failure doesn't abort the rest
-  const confirmCols: [string, string][] = [
-    ['confirmation_source',  'VARCHAR(40)'],
-    ['admin_actor_uid',      'VARCHAR(256)'],
-    ['consent_method',       'VARCHAR(30)'],
-    ['consent_reference',    'TEXT'],
-    ['confirmation_reason',  'TEXT'],
-    ['confirmed_at',         'TIMESTAMPTZ'],
-  ];
-  for (const [col, typ] of confirmCols) {
-    try {
-      await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS ${col} ${typ}`, []);
-    } catch { /* column may already exist with a different type — safe to skip */ }
-  }
-
-  // Sparse partial indexes for admin-confirm-on-behalf audit queries
-  try {
-    await dbQuery.query(
-      `CREATE INDEX IF NOT EXISTS idx_bw_confirmation_source ON ${dbSchema}.booking_workers (confirmation_source) WHERE confirmation_source IS NOT NULL`,
-      []
-    );
-    await dbQuery.query(
-      `CREATE INDEX IF NOT EXISTS idx_bw_consent_method ON ${dbSchema}.booking_workers (consent_method) WHERE consent_method IS NOT NULL`,
-      []
-    );
-  } catch { /* indexes optional — non-fatal if DDL fails */ }
-};
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `ensureBookingOpsSchema` created booking_timeline_events, booking_notes,
+// booking_audit_events and three indexes. It was the last REQUIRED BOOKING
+// entry in the startup graph. All of it comes from
+// `scripts/baseline/000-baseline.sql`.
+//
+// booking_audit_events is what `logBookingAudit` below writes every lifecycle
+// transition into. Its absence would not fail a booking -- the write is
+// fire-and-forget -- it would silently lose the audit trail, which is why this
+// was classified required rather than optional while the app created it.
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 

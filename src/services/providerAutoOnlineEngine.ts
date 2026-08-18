@@ -106,71 +106,16 @@ export interface ProviderAutoOnlineReadiness {
 
 // ── Bootstrap (lazy) ─────────────────────────────────────────────────────────
 
-let _bootstrapped = false;
-
-export const bootstrap = async (): Promise<void> => {
-  if (_bootstrapped) return;
-
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.provider_auto_online_state (
-      provider_uid        TEXT PRIMARY KEY,
-      is_auto_online      BOOLEAN NOT NULL DEFAULT FALSE,
-      is_bookable         BOOLEAN NOT NULL DEFAULT FALSE,
-      activation_mode     TEXT NOT NULL DEFAULT 'none',
-      activation_reason   TEXT,
-      eligibility_snapshot JSONB NOT NULL DEFAULT '{}',
-      activated_at        TIMESTAMPTZ,
-      deactivated_at      TIMESTAMPTZ,
-      last_evaluated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      version             INTEGER NOT NULL DEFAULT 1
-    )
-  `, []);
-
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.provider_provisional_bookable_services (
-      provider_uid TEXT NOT NULL,
-      service_id   INTEGER NOT NULL,
-      source       TEXT NOT NULL,
-      source_id    TEXT,
-      status       TEXT NOT NULL DEFAULT 'active',
-      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      PRIMARY KEY (provider_uid, service_id)
-    )
-  `, []);
-
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.provider_auto_online_events (
-      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      provider_uid TEXT NOT NULL,
-      event_type   TEXT NOT NULL,
-      before       JSONB,
-      after        JSONB,
-      reason       TEXT,
-      actor_type   TEXT NOT NULL DEFAULT 'system',
-      actor_uid    TEXT,
-      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `, []);
-
-  // Index for backfill queries
-  await dbQuery.query(`
-    CREATE INDEX IF NOT EXISTS idx_paoe_provider_uid
-    ON ${s}.provider_auto_online_events (provider_uid)
-  `, []);
-  await dbQuery.query(`
-    CREATE INDEX IF NOT EXISTS idx_ppbs_provider_uid
-    ON ${s}.provider_provisional_bookable_services (provider_uid)
-    WHERE status = 'active'
-  `, []);
-  await dbQuery.query(
-    `ALTER TABLE ${s}.employee_services ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`,
-    [],
-  );
-
-  _bootstrapped = true;
-};
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `bootstrap` created provider_auto_online_state,
+// provider_provisional_bookable_services, provider_auto_online_events, two
+// indexes and a column on employee_services -- at runtime, lazily. All of it
+// comes from `scripts/baseline/000-baseline.sql`.
+//
+// provider_auto_online_state is keyed on provider_uid as its PRIMARY KEY, which
+// is what the upserts below resolve against: one auto-online state per provider,
+// enforced by the database rather than by the caller remembering.
 
 // ── Readiness checks ─────────────────────────────────────────────────────────
 
@@ -313,7 +258,6 @@ const getSource = async (providerUid: string): Promise<ProviderAutoOnlineReadine
 };
 
 const getCurrentAutoOnlineState = async (providerUid: string) => {
-  await bootstrap();
   const res = await dbQuery.query(
     `SELECT * FROM ${s}.provider_auto_online_state WHERE provider_uid = $1`,
     [providerUid]
@@ -328,7 +272,6 @@ export const evaluateProvider = async (
   actorType: 'system' | 'admin' = 'system',
   actorUid: string | null = null,
 ): Promise<ProviderAutoOnlineReadiness> => {
-  await bootstrap();
 
   const [details, documents, serviceAssociation, source, currentState, compliance] = await Promise.all([
     checkDetails(providerUid),
@@ -498,7 +441,6 @@ export const revokeAutoOnline = async (
   actorType: 'system' | 'admin' = 'system',
   actorUid: string | null = null,
 ): Promise<void> => {
-  await bootstrap();
 
   await dbQuery.query(
     `UPDATE ${s}.provider_auto_online_state
@@ -528,7 +470,6 @@ export const disableAutoOnline = async (
   reason: string,
   adminUid: string,
 ): Promise<void> => {
-  await bootstrap();
 
   await dbQuery.query(
     `INSERT INTO ${s}.provider_auto_online_state
@@ -563,7 +504,6 @@ export const enableAutoOnlineOverride = async (
   reason: string,
   adminUid: string,
 ): Promise<void> => {
-  await bootstrap();
 
   await dbQuery.query(
     `UPDATE ${s}.provider_auto_online_state
@@ -625,7 +565,6 @@ export const syncAllAreaServiceArea = async (providerUid: string): Promise<void>
 // ── Sync provisional bookable services ───────────────────────────────────────
 
 export const syncProvisionalBookableServices = async (providerUid: string): Promise<void> => {
-  await bootstrap();
 
   const svcRes = await dbQuery.query(
     `SELECT service_id FROM ${s}.employee_services
@@ -678,7 +617,6 @@ export const writeAuditEvent = async (
   actorUid: string | null,
 ): Promise<void> => {
   try {
-    await bootstrap();
     await dbQuery.query(
       `INSERT INTO ${s}.provider_auto_online_events
          (provider_uid, event_type, before, after, reason, actor_type, actor_uid)
@@ -701,7 +639,6 @@ export const evaluateAllProviders = async (
   blocked: number;
   rows: Array<{ providerUid: string; displayName: string; source: string; eligible: boolean; blockers: string[]; actionsWouldApply: string[] }>;
 }> => {
-  await bootstrap();
 
   const providersRes = await dbQuery.query(
     `SELECT uid, first_name, last_name FROM ${s}.user_credentials WHERE role::int IN (2, 4) AND is_archive = FALSE ORDER BY created_date ASC`,
@@ -774,7 +711,6 @@ export const evaluateAllProviders = async (
 // ── Get auto-bookable provider UIDs for assignment ────────────────────────────
 
 export const getAutoBookableProviderUids = async (serviceId?: number): Promise<string[]> => {
-  await bootstrap();
   if (serviceId) {
     const res = await dbQuery.query(
       `SELECT DISTINCT p.provider_uid
@@ -796,7 +732,6 @@ export const getAutoBookableProviderUids = async (serviceId?: number): Promise<s
 // ── Get summary for Admin ─────────────────────────────────────────────────────
 
 export const getAutoOnlineSummary = async () => {
-  await bootstrap();
   const res = await dbQuery.query(
     `SELECT
        COUNT(*) FILTER (WHERE is_auto_online = TRUE)  AS auto_online_count,
@@ -810,7 +745,6 @@ export const getAutoOnlineSummary = async () => {
 };
 
 export const getAutoOnlineBlockers = async (page = 1, limit = 50) => {
-  await bootstrap();
   const offset = (page - 1) * limit;
   const res = await dbQuery.query(
     `SELECT uc.uid, uc.first_name, uc.last_name, uc.email,

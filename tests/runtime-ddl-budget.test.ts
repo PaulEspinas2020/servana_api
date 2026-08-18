@@ -104,9 +104,18 @@ import { runtimeDdl, migrationObjects } from '../scripts/runtime-ddl-inventory';
  * `technicianService`. NOT `ensureOnboardingTable`: it creates `worker_onboarding`,
  * which migration 036 claims and production does NOT have, so deleting it before
  * 036 is applied would make worker onboarding depend on an unapplied migration.
+ *
+ * 41 → 3 and 32 → 3 with `notification.service` (both bootstraps),
+ * `providerAutoOnlineEngine`, `adminBookingService` and
+ * `adminCreateBookingService`. The startup graph is SIX entries, and only one is
+ * still `required` — `admin-permission-seed`, which seeds DATA, not schema.
+ *
+ * Everything still counted here is `chat.repository`, which is deferred: its
+ * bootstrap also runs a DML derivation of `chat_conversations.status` from
+ * `is_closed`, and that has three consumers.
  */
-const UNMANAGED_BUDGET = 41;
-const DISTINCT_OBJECT_BUDGET = 32;
+const UNMANAGED_BUDGET = 3;
+const DISTINCT_OBJECT_BUDGET = 3;
 
 describe('runtime schema authority is bounded and shrinking', () => {
   const ddl = runtimeDdl();
@@ -172,23 +181,21 @@ describe('runtime schema authority is bounded and shrinking', () => {
      */
     const objects = new Set(unmanaged.map((d) => d.object));
 
-    const stillRuntimeCreated = ['service_options', 'employee_services'];
-    for (const table of stillRuntimeCreated) {
-      expect(objects).toContain(table);
-    }
-
+    // ALL SEVEN are retired now. None is created by anything at runtime.
     const retired = [
+      'service_options',
+      'service_option_meta',
+      'provider_catalog_offerings',
       'provider_onboarding_cases',
       'provider_onboarding_drafts',
-      'provider_catalog_offerings',
-      'service_option_meta',
       'worker_service_applications',
+      'employee_services',
     ];
+    expect(retired).toHaveLength(7);
     for (const table of retired) {
       expect(objects).not.toContain(table);
     }
 
     // All seven are still accounted for, so none was dropped from the record.
-    expect(stillRuntimeCreated.length + retired.length).toBe(7);
   });
 });

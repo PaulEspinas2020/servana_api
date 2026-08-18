@@ -45,9 +45,33 @@ describe('Command 14 — 3 required tables defined in engine', () => {
     expect(engine).toContain('actor_type');
   });
 
-  it('uses CREATE TABLE IF NOT EXISTS (safe bootstrap)', () => {
-    const count = (engine.match(/CREATE TABLE IF NOT EXISTS/g) || []).length;
-    expect(count).toBeGreaterThanOrEqual(3);
+  it('all three tables are declared by the baseline, not the engine (TAB 02)', () => {
+    /**
+     * This counted `CREATE TABLE IF NOT EXISTS` in the engine and required at
+     * least three — the right check while the engine created its own schema.
+     *
+     * Counting occurrences of a safety keyword also could not tell a real table
+     * from a commented example. Naming the three tables against the artefact a
+     * fresh database is built from is narrower AND stronger.
+     */
+    const baseline = require('fs')
+      .readFileSync(require('path').resolve(__dirname, '../scripts/baseline/000-baseline.sql'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    for (const table of [
+      'provider_auto_online_state',
+      'provider_provisional_bookable_services',
+      'provider_auto_online_events',
+    ]) {
+      expect(baseline).toContain('CREATE TABLE servana.' + table + ' (');
+    }
+    // Comments stripped: the note that replaced the bootstrap describes what it
+    // used to create, so a bare substring check matches its own documentation.
+    const code = engine
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((l) => !/^\s*\/\//.test(l))
+      .join('\n');
+    expect(code).not.toContain('CREATE TABLE IF NOT EXISTS');
   });
 });
 
@@ -395,9 +419,11 @@ describe('Command 14 — app.ts wiring', () => {
     expect(app).toContain('adminAutoOnlineRoutes');
   });
 
-  it('bootstraps auto-online schema on startup', () => {
-    // TAB 03: declared in the startup graph.
-    expect(startup).toContain('bootstrapAutoOnline');
+  it('does NOT bootstrap auto-online schema on startup (TAB 02)', () => {
+    // Was a declared startup dependency under TAB 03, while the engine created
+    // its own tables. The entry is removed, not downgraded — no DDL to gate on.
+    expect(startup).not.toContain('bootstrapAutoOnline');
+    expect(startup).not.toContain("name: 'provider-auto-online'");
   });
 });
 

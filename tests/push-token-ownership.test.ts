@@ -56,7 +56,20 @@ describe('binding a token', () => {
   test('claims one authoritative token row atomically', () => {
     const s = serviceBlock('registerProviderDeviceToken');
     expect(s).toContain('provider_notification_device_tokens');
-    expect(service).toContain('token TEXT PRIMARY KEY');
+
+    /**
+     * `token` being the PRIMARY KEY is what makes the claim atomic: a token can
+     * belong to exactly one worker, so re-registering it MOVES it rather than
+     * duplicating it. That used to be asserted as `token TEXT PRIMARY KEY` in the
+     * service's own DDL; TAB 02 removed that bootstrap, so it is asserted against
+     * `scripts/baseline/000-baseline.sql` — the schema that will actually exist.
+     */
+    const baseline = fs
+      .readFileSync(path.resolve(__dirname, '../scripts/baseline/000-baseline.sql'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(baseline).toMatch(
+      /ADD CONSTRAINT provider_notification_device_tokens_pkey PRIMARY KEY \(token\)/,
+    );
   });
 
   test('rejects an empty or stub token', () => {

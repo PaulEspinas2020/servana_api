@@ -184,10 +184,27 @@ describe('the controller wiring', () => {
 
 describe('the admin flow shares this table, and still works', () => {
   const admin = read('services', 'adminCreateBookingService.ts');
+  const baseline = fs
+    .readFileSync(path.resolve(__dirname, '../scripts/baseline/000-baseline.sql'), 'utf8')
+    .replace(/\r\n/g, '\n');
 
   it('the column is named for any actor, not just admins', () => {
-    expect(admin).toMatch(/actor_uid\s+VARCHAR\(256\)\s+NOT NULL/);
-    expect(admin).toMatch(/UNIQUE \(idempotency_key, actor_uid\)/);
+    /**
+     * Asserted against the baseline since TAB 02 removed the bootstrap. The rename
+     * is COMPLETE in production: the column is `actor_uid`.
+     *
+     * The constraint NAME still reads
+     * `booking_create_idempotency_idempotency_key_admin_actor_uid_key`, because
+     * Postgres does not rename a constraint when you rename the column under it.
+     * That is cosmetic — the constraint covers (idempotency_key, actor_uid) — but
+     * it is the kind of leftover that makes a grep for `admin_actor_uid` look
+     * alarming, so it is written down rather than left to be rediscovered.
+     */
+    const m = /CREATE TABLE servana\.booking_create_idempotency \(([\s\S]*?)\n\);/.exec(baseline);
+    expect(m).not.toBeNull();
+    expect(m![1]).toMatch(/^\s+actor_uid character varying\(256\) NOT NULL/m);
+    expect(m![1]).not.toMatch(/^\s+admin_actor_uid/m);
+    expect(baseline).toMatch(/UNIQUE \(idempotency_key, actor_uid\)/);
   });
 
   it('every idempotency query uses the new name', () => {
@@ -200,20 +217,26 @@ describe('the admin flow shares this table, and still works', () => {
     }
   });
 
-  it('existing installs are migrated at boot, idempotently', () => {
-    // Postgres has no IF EXISTS on RENAME COLUMN, and this function runs on
-    // every start — so the catalog is checked first and the rename is skipped
-    // once done.
-    expect(admin).toContain('RENAME COLUMN admin_actor_uid TO actor_uid');
-    expect(admin).toContain("column_name = 'actor_uid'");
-    expect(admin).toMatch(/information_schema\.columns/);
+  it('the boot-time rename is gone, because it is already done', () => {
+    /**
+     * The bootstrap carried `RENAME COLUMN admin_actor_uid TO actor_uid`, guarded
+     * by an information_schema check because Postgres has no IF EXISTS on RENAME
+     * and the function ran on every start.
+     *
+     * Production completed it — the baseline above proves that — so the statement
+     * had nothing left to do. A one-time rename living in a boot path is exactly
+     * the class TAB 02 removes: it must run once, it cannot say whether it has,
+     * and it re-asks the catalog on every restart forever.
+     */
+    expect(admin).not.toContain('RENAME COLUMN');
+    expect(admin).not.toMatch(/information_schema\.columns/);
   });
 
   it('booking_workers.admin_actor_uid is NOT renamed', () => {
     // Different table, different meaning — it records which admin made an
     // assignment. Renaming it would have been a silent data-model change.
-    expect(admin).toMatch(
-      /ALTER TABLE \$\{s\}\.booking_workers ADD COLUMN IF NOT EXISTS admin_actor_uid/,
-    );
+    const m = /CREATE TABLE servana\.booking_workers \(([\s\S]*?)\n\);/.exec(baseline);
+    expect(m).not.toBeNull();
+    expect(m![1]).toMatch(/^\s+admin_actor_uid/m);
   });
 });

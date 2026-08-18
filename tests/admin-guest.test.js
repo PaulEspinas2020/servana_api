@@ -31,28 +31,29 @@ const app    = read(APP_PATH);
 
 // ── 1. Schema migration adds source_channel ───────────────────────────────────
 
-describe('schema migration — guest_customers new columns', () => {
-  test('adds source_channel column', () => {
-    expect(schema).toContain('ADD COLUMN IF NOT EXISTS source_channel');
-  });
+describe('guest_customers columns come from the baseline (TAB 02)', () => {
+  /**
+   * These asserted `ADD COLUMN IF NOT EXISTS ...` in the bootstrap that created
+   * guest_customers. It is gone — the table and every column are in
+   * `scripts/baseline/000-baseline.sql`.
+   */
+  const baseline = require('fs')
+    .readFileSync(require('path').resolve(__dirname, '../scripts/baseline/000-baseline.sql'), 'utf8')
+    .replace(/\r\n/g, '\n');
+  const cols = (() => {
+    const m = /CREATE TABLE servana\.guest_customers \(([\s\S]*?)\n\);/.exec(baseline);
+    expect(m).not.toBeNull();
+    return m[1];
+  })();
 
-  test('adds source_details column', () => {
-    expect(schema).toContain('ADD COLUMN IF NOT EXISTS source_details');
-  });
+  for (const col of ['source_channel', 'source_details', 'internal_notes', 'updated_at']) {
+    test('declares ' + col, () => {
+      expect(cols).toMatch(new RegExp('^\\s+' + col + '\\s', 'm'));
+    });
+  }
 
-  test('adds internal_notes column', () => {
-    expect(schema).toContain('ADD COLUMN IF NOT EXISTS internal_notes');
-  });
-
-  test('adds updated_at column', () => {
-    expect(schema).toContain('ADD COLUMN IF NOT EXISTS updated_at');
-  });
-
-  test('each new ALTER is in a try-catch block', () => {
-    // Every ADD COLUMN IF NOT EXISTS block for the new columns should be followed by a catch
-    const idx = schema.indexOf('ADD COLUMN IF NOT EXISTS source_channel');
-    const catchIdx = schema.indexOf('} catch {', idx);
-    expect(catchIdx).toBeGreaterThan(idx);
+  test('the service issues no DDL for them', () => {
+    expect(schema).not.toContain('ADD COLUMN IF NOT EXISTS source_channel');
   });
 });
 

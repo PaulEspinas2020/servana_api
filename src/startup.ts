@@ -39,8 +39,9 @@
  * downgraded to optional, which is what TAB 03 forbids, but removed, because
  * `payments`, its trigger, the three finance tables and the normalized identifier
  * columns all come from `scripts/baseline/000-baseline.sql` and no longer depend
- * on a bootstrap having run. `booking` and `authorization` are still `required`
- * and will go the same way.
+ * on a bootstrap having run. The `booking` slots (booking-ops, admin-create-booking)
+ * are gone too. ONE `required` entry remains — `admin-permission-seed` — and it
+ * seeds DATA, not schema, which is why it survives a pass whose goal is no DDL.
  *
  * When this list reaches zero the API can start with DDL privileges revoked,
  * which is TAB 02's acceptance criterion. Do NOT add an entry here to create
@@ -53,26 +54,14 @@ import type { Dependency } from './lifecycle';
 import { ensureChatLifecycleSchema } from './chat/chat.repository';
 import { seedBuiltInOfferings } from './services/providerCatalogService';
 import { seedReasonCodes, seedRequirementDefinitions } from './services/adminOnboardingService';
-import { ensureBookingOpsSchema } from './services/adminBookingService';
 import { ensureDashboardSchema } from './services/adminDashboardService';
 import { seedAdminPermissions } from './services/adminPermissionService';
-import { bootstrap as bootstrapAutoOnline } from './services/providerAutoOnlineEngine';
-import { ensureAdminCreateBookingSchema } from './services/adminCreateBookingService';
 import { ensureReviewTables } from './services/customerReviewService';
 
 /** Generous, but bounded. A hung bootstrap must not hold the boot open. */
 const SCHEMA_TIMEOUT_MS = 30_000;
 
 export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
-  {
-    name: 'booking-ops-schema',
-    kind: 'required',
-    timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: ensureBookingOpsSchema,
-    why:
-      'Booking. Carries the timeline and audit tables every lifecycle ' +
-      'transition writes to.',
-  },
   {
     name: 'admin-permission-seed',
     kind: 'required',
@@ -85,15 +74,6 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
       'nothing, which is an authorization outcome decided by absence.',
   },
 
-  {
-    name: 'admin-create-booking-schema',
-    kind: 'required',
-    timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: ensureAdminCreateBookingSchema,
-    why:
-      'Booking. Admin-created bookings are real bookings; the idempotency table ' +
-      'this creates is what stops a retried admin form producing two of them.',
-  },
 
   // ── Optional: degraded, reported, and not a reason to withhold traffic ──
   {
@@ -137,12 +117,5 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
     timeoutMs: SCHEMA_TIMEOUT_MS,
     start: ensureDashboardSchema,
     why: 'Read-only aggregates for the admin dashboard.',
-  },
-  {
-    name: 'provider-auto-online',
-    kind: 'optional',
-    timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: bootstrapAutoOnline,
-    why: 'Provider presence engine. Providers can still be assigned manually while it is down.',
   },
 ]);

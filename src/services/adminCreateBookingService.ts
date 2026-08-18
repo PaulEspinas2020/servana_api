@@ -75,182 +75,21 @@ export interface AdminCreateBookingResult {
 
 // ── Schema bootstrap ──────────────────────────────────────────────────────────
 
-export const ensureAdminCreateBookingSchema = async (): Promise<void> => {
-  // guest_customers — one row per unique guest identity, reusable across bookings
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.guest_customers (
-      id                    SERIAL PRIMARY KEY,
-      guest_customer_id     UUID    NOT NULL DEFAULT gen_random_uuid(),
-      first_name            VARCHAR(100) NOT NULL,
-      last_name             VARCHAR(100) NOT NULL,
-      phone_normalized      VARCHAR(20)  NOT NULL,
-      email                 VARCHAR(255),
-      created_by_admin_uid  VARCHAR(256) NOT NULL,
-      linked_customer_uid   VARCHAR(256),
-      linked_at             TIMESTAMPTZ,
-      linked_by_admin_uid   VARCHAR(256),
-      link_reason           TEXT,
-      created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `, []);
-
-  // UNIQUE on phone_normalized — required for ON CONFLICT (phone_normalized) DO NOTHING to work
-  await dbQuery.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_gc_phone_unique ON ${s}.guest_customers (phone_normalized)
-  `, []);
-  await dbQuery.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_gc_uuid ON ${s}.guest_customers (guest_customer_id)
-  `, []);
-
-  // booking_payment_evidence — receipt images attached to paid bookings
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.booking_payment_evidence (
-      id                    SERIAL PRIMARY KEY,
-      booking_id            INTEGER     NOT NULL,
-      storage_url           TEXT        NOT NULL,
-      original_file_name    VARCHAR(255),
-      mime_type             VARCHAR(50) NOT NULL,
-      file_size_bytes       INTEGER     NOT NULL,
-      uploaded_by_admin_uid VARCHAR(256) NOT NULL,
-      created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `, []);
-  await dbQuery.query(`
-    CREATE INDEX IF NOT EXISTS idx_bpe_booking_id ON ${s}.booking_payment_evidence (booking_id)
-  `, []);
-
-  // booking_create_idempotency — guards against duplicate creation from a
-  // retried or double-tapped request. Used by BOTH the admin create-booking flow
-  // and the customer POST /api/bookings, which is why the actor column is named
-  // generically: it holds whichever uid issued the request.
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.booking_create_idempotency (
-      id               SERIAL PRIMARY KEY,
-      idempotency_key  VARCHAR(64)  NOT NULL,
-      actor_uid        VARCHAR(256) NOT NULL,
-      booking_id       INTEGER      NOT NULL,
-      created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-      UNIQUE (idempotency_key, actor_uid)
-    )
-  `, []);
-
-  // Rename for installs created before customers shared this table. Postgres
-  // has no IF EXISTS on RENAME COLUMN, so the catalog is checked first; the
-  // UNIQUE constraint follows the rename automatically. Idempotent, because
-  // this whole function runs on every boot.
-  await dbQuery.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = '${s}'
-          AND table_name = 'booking_create_idempotency'
-          AND column_name = 'admin_actor_uid'
-      ) AND NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = '${s}'
-          AND table_name = 'booking_create_idempotency'
-          AND column_name = 'actor_uid'
-      ) THEN
-        ALTER TABLE ${s}.booking_create_idempotency
-          RENAME COLUMN admin_actor_uid TO actor_uid;
-      END IF;
-    END $$;
-  `, []);
-
-  // bookings.guest_customer_id — links a booking to its guest_customers row
-  try {
-    await dbQuery.query(
-      `ALTER TABLE ${s}.bookings ADD COLUMN IF NOT EXISTS guest_customer_id UUID`,
-      []
-    );
-  } catch { /* column already present — safe to skip */ }
-
-  // bookings.admin_created — flag distinguishing admin-created from customer-self-created
-  try {
-    await dbQuery.query(
-      `ALTER TABLE ${s}.bookings ADD COLUMN IF NOT EXISTS admin_created BOOLEAN DEFAULT false`,
-      []
-    );
-  } catch { /* column already present — safe to skip */ }
-
-  // bookings.admin_created_by — which admin initiated the booking
-  try {
-    await dbQuery.query(
-      `ALTER TABLE ${s}.bookings ADD COLUMN IF NOT EXISTS admin_created_by VARCHAR(256)`,
-      []
-    );
-  } catch { /* column already present — safe to skip */ }
-
-  // bookings.user_id may be NOT NULL on older schemas; relax it for guest support
-  try {
-    await dbQuery.query(
-      `ALTER TABLE ${s}.bookings ALTER COLUMN user_id DROP NOT NULL`,
-      []
-    );
-  } catch { /* already nullable or constraint doesn't exist — safe to skip */ }
-
-  // bookings.service_address — stores admin-entered address JSON for non-user-address bookings
-  try {
-    await dbQuery.query(
-      `ALTER TABLE ${s}.bookings ADD COLUMN IF NOT EXISTS service_address JSONB`,
-      []
-    );
-  } catch { /* already present */ }
-
-  // Sparse index for admin-created bookings queries
-  try {
-    await dbQuery.query(
-      `CREATE INDEX IF NOT EXISTS idx_bookings_admin_created ON ${s}.bookings (admin_created) WHERE admin_created = true`,
-      []
-    );
-  } catch { /* non-fatal */ }
-
-  // guest_customers — additional columns added in C10 Guest Customer Management
-  try {
-    await dbQuery.query(
-      `ALTER TABLE ${s}.guest_customers ADD COLUMN IF NOT EXISTS source_channel VARCHAR(50)`,
-      []
-    );
-  } catch { /* already present */ }
-
-  try {
-    await dbQuery.query(
-      `ALTER TABLE ${s}.guest_customers ADD COLUMN IF NOT EXISTS source_details TEXT`,
-      []
-    );
-  } catch { /* already present */ }
-
-  try {
-    await dbQuery.query(
-      `ALTER TABLE ${s}.guest_customers ADD COLUMN IF NOT EXISTS internal_notes TEXT`,
-      []
-    );
-  } catch { /* already present */ }
-
-  try {
-    await dbQuery.query(
-      `ALTER TABLE ${s}.guest_customers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
-      []
-    );
-  } catch { /* already present */ }
-
-  // booking_workers.admin_actor_uid — which admin created the assignment
-  try {
-    await dbQuery.query(
-      `ALTER TABLE ${s}.booking_workers ADD COLUMN IF NOT EXISTS admin_actor_uid VARCHAR(256)`,
-      []
-    );
-  } catch { /* already present */ }
-
-  // service_options.duration_mins — actual service duration; used for endAt calculation
-  try {
-    await dbQuery.query(
-      `ALTER TABLE ${s}.service_options ADD COLUMN IF NOT EXISTS duration_mins INT NOT NULL DEFAULT 120`,
-      []
-    );
-  } catch { /* already present */ }
-};
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `ensureAdminCreateBookingSchema` created guest_customers (+2 unique indexes),
+// booking_payment_evidence, booking_create_idempotency, an index on bookings and
+// columns on guest_customers and service_options. All of it comes from
+// `scripts/baseline/000-baseline.sql`.
+//
+// TWO uniqueness rules it declared are load-bearing and no longer visible here:
+//
+//   idx_gc_phone_unique UNIQUE (phone_normalized) -- one guest record per phone
+//     number, the same protection user_credentials gets from
+//     idx_uc_phone_normalized_unique.
+//   booking_create_idempotency -- what stops a retried admin booking form
+//     producing two real bookings. This entry was classified REQUIRED for that
+//     reason while the application created it.
 
 // ── Phone normalization ───────────────────────────────────────────────────────
 

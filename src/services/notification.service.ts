@@ -80,112 +80,33 @@ function providerPushPreferenceForType(type: string): ProviderPushPreferenceKey 
 // ─── Lazy table init ──────────────────────────────────────────────────────────
 // Tables are created on first use and the promise is reused for all subsequent calls.
 
-let tablesReady: Promise<void> | null = null;
-
-async function initTables(): Promise<void> {
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_notifications (
-      id             BIGSERIAL PRIMARY KEY,
-      notification_key VARCHAR(64) NOT NULL DEFAULT gen_random_uuid()::varchar,
-      worker_uid     VARCHAR(128) NOT NULL,
-      type           VARCHAR(64)  NOT NULL DEFAULT 'system',
-      status         VARCHAR(32)  NOT NULL DEFAULT 'unread',
-      severity       VARCHAR(32)  NOT NULL DEFAULT 'info',
-      title          VARCHAR(255) NOT NULL,
-      safe_body      TEXT         NOT NULL,
-      safe_context_label VARCHAR(255),
-      route          JSONB,
-      can_mark_read  BOOLEAN      NOT NULL DEFAULT true,
-      can_dismiss    BOOLEAN      NOT NULL DEFAULT true,
-      can_open_detail BOOLEAN     NOT NULL DEFAULT false,
-      read_at        TIMESTAMPTZ,
-      expires_at     TIMESTAMPTZ,
-      created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS idx_pn_worker_uid
-      ON ${dbSchema}.provider_notifications (worker_uid, created_at DESC);
-
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_notification_device_tokens (
-      token       TEXT PRIMARY KEY,
-      worker_uid  VARCHAR(128) NOT NULL,
-      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS idx_pndt_worker_uid
-      ON ${dbSchema}.provider_notification_device_tokens (worker_uid);
-
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_alerts (
-      id         BIGSERIAL PRIMARY KEY,
-      alert_key  VARCHAR(64)  UNIQUE NOT NULL DEFAULT gen_random_uuid()::varchar,
-      worker_uid VARCHAR(128) NOT NULL,
-      type       VARCHAR(64)  NOT NULL DEFAULT 'unknown',
-      severity   VARCHAR(32)  NOT NULL DEFAULT 'high',
-      title      VARCHAR(255) NOT NULL,
-      safe_body  TEXT         NOT NULL,
-      is_dismissable BOOLEAN  NOT NULL DEFAULT true,
-      route      JSONB,
-      created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS idx_pa_worker_uid
-      ON ${dbSchema}.provider_alerts (worker_uid, created_at DESC);
-
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_support_tickets (
-      id          BIGSERIAL PRIMARY KEY,
-      ticket_key  VARCHAR(64)  UNIQUE NOT NULL DEFAULT gen_random_uuid()::varchar,
-      worker_uid  VARCHAR(128) NOT NULL,
-      category    VARCHAR(64)  NOT NULL DEFAULT 'other',
-      status      VARCHAR(64)  NOT NULL DEFAULT 'submitted',
-      title       VARCHAR(100) NOT NULL,
-      description TEXT         NOT NULL,
-      created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-      updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS idx_pst_worker_uid
-      ON ${dbSchema}.provider_support_tickets (worker_uid, created_at DESC);
-
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_notification_preferences (
-      worker_uid         VARCHAR(128) PRIMARY KEY,
-      job_assigned       BOOLEAN NOT NULL DEFAULT true,
-      job_reminder       BOOLEAN NOT NULL DEFAULT false,
-      payment_received   BOOLEAN NOT NULL DEFAULT true,
-      new_message        BOOLEAN NOT NULL DEFAULT true,
-      promotions         BOOLEAN NOT NULL DEFAULT false,
-      requirement_review BOOLEAN NOT NULL DEFAULT true,
-      support            BOOLEAN NOT NULL DEFAULT true,
-      account_security   BOOLEAN NOT NULL DEFAULT true,
-      system             BOOLEAN NOT NULL DEFAULT true,
-      updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    -- Additive columns for tables that may already exist without them (ST-P1-06)
-    ALTER TABLE ${dbSchema}.provider_notification_preferences ADD COLUMN IF NOT EXISTS requirement_review BOOLEAN NOT NULL DEFAULT true;
-    ALTER TABLE ${dbSchema}.provider_notification_preferences ADD COLUMN IF NOT EXISTS support            BOOLEAN NOT NULL DEFAULT true;
-    ALTER TABLE ${dbSchema}.provider_notification_preferences ADD COLUMN IF NOT EXISTS account_security   BOOLEAN NOT NULL DEFAULT true;
-    ALTER TABLE ${dbSchema}.provider_notification_preferences ADD COLUMN IF NOT EXISTS system             BOOLEAN NOT NULL DEFAULT true;
-
-    -- Idempotency is owner-scoped. A global notification_key constraint caused
-    -- fan-out jobs (for example the daily reminder) to insert for the first
-    -- provider only and silently suppress every subsequent provider.
-    ALTER TABLE ${dbSchema}.provider_notifications
-      DROP CONSTRAINT IF EXISTS provider_notifications_notification_key_key;
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_notifications_owner_key
-      ON ${dbSchema}.provider_notifications (worker_uid, notification_key);
-
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_support_ticket_replies (
-      id          BIGSERIAL PRIMARY KEY,
-      ticket_key  VARCHAR(64)  NOT NULL,
-      sender_type VARCHAR(32)  NOT NULL DEFAULT 'provider',
-      safe_body   TEXT         NOT NULL,
-      is_read     BOOLEAN      NOT NULL DEFAULT false,
-      created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS idx_pstr_ticket_key
-      ON ${dbSchema}.provider_support_ticket_replies (ticket_key, created_at ASC);
-  `);
-}
-
-function ensureTables(): Promise<void> {
-  if (!tablesReady) tablesReady = initTables();
-  return tablesReady;
-}
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `initTables` / `ensureTables` created provider_notifications, provider_alerts,
+// provider_support_tickets, provider_support_ticket_replies,
+// provider_notification_preferences and five indexes, at runtime, awaited at the
+// top of a dozen operations. All of it comes from
+// `scripts/baseline/000-baseline.sql`.
+//
+// It also carried this, which NEVER WORKED and is why migration 037 exists:
+//
+//   ALTER TABLE provider_notifications
+//     DROP CONSTRAINT IF EXISTS provider_notifications_notification_key_key;
+//
+// That name has never existed. Production carries
+// provider_notifications_notification_key_key1 .. _key37 -- 37 separate
+// UNIQUE (notification_key) constraints with no owner column -- so the DROP was
+// always a no-op and GLOBAL uniqueness is still enforced.
+//
+// That defeats owner-scoped idempotency. The ON CONFLICT (worker_uid,
+// notification_key) DO NOTHING below names ONE inference target; a violation of
+// a DIFFERENT unique constraint is raised as 23505 rather than absorbed. So any
+// deterministic key that is not worker-scoped fails for every recipient after
+// the first -- daily_active_bookings_${day} in scheduler.ts is one key per DAY
+// across all providers.
+//
+// Migration 037 drops all 39 (2 more on customer_notifications) by enumerating
+// pg_constraint rather than guessing suffixes. AUTHORED, NOT APPLIED.
 
 // ─── Notification filter → SQL WHERE fragment ─────────────────────────────────
 
@@ -361,7 +282,6 @@ function mapSupportTicketRow(row: any) {
 // ─── Notification operations ──────────────────────────────────────────────────
 
 export async function listNotifications(workerUid: string, filter?: string) {
-  await ensureTables();
   const { sql, params } = buildNotificationFilter(filter, workerUid);
   const { rows } = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.provider_notifications ${sql} ORDER BY created_at DESC LIMIT 100`,
@@ -371,7 +291,6 @@ export async function listNotifications(workerUid: string, filter?: string) {
 }
 
 export async function countUnreadNotifications(workerUid: string): Promise<number> {
-  await ensureTables();
   const { rows } = await dbQuery.query(
     `SELECT COUNT(*) AS cnt FROM ${dbSchema}.provider_notifications
      WHERE worker_uid = $1 AND status = 'unread' AND (expires_at IS NULL OR expires_at > NOW())`,
@@ -381,7 +300,6 @@ export async function countUnreadNotifications(workerUid: string): Promise<numbe
 }
 
 export async function markNotificationReadByKey(workerUid: string, key: string) {
-  await ensureTables();
   const current = await dbQuery.query(
     `SELECT status, can_mark_read FROM ${dbSchema}.provider_notifications
      WHERE notification_key = $1 AND worker_uid = $2 LIMIT 1`,
@@ -402,7 +320,6 @@ export async function markNotificationReadByKey(workerUid: string, key: string) 
 }
 
 export async function markAllNotificationsReadForWorker(workerUid: string) {
-  await ensureTables();
   const { rowCount } = await dbQuery.query(
     `UPDATE ${dbSchema}.provider_notifications
      SET status = 'read', read_at = NOW()
@@ -414,7 +331,6 @@ export async function markAllNotificationsReadForWorker(workerUid: string) {
 }
 
 export async function deleteNotificationByKey(workerUid: string, key: string) {
-  await ensureTables();
   const current = await dbQuery.query(
     `SELECT can_dismiss FROM ${dbSchema}.provider_notifications
      WHERE notification_key = $1 AND worker_uid = $2 LIMIT 1`,
@@ -458,7 +374,6 @@ export async function createNotification(
   workerUid: string,
   data: NotificationInput,
 ): Promise<ReturnType<typeof mapNotificationRow> | null> {
-  await ensureTables();
 
   const type = normalizeNotificationType(data.type);
   const severity = normalizeSeverity(data.severity);
@@ -541,7 +456,6 @@ export async function createNotification(
 // ─── Alert operations ─────────────────────────────────────────────────────────
 
 export async function listAlerts(workerUid: string) {
-  await ensureTables();
   const { rows } = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.provider_alerts
      WHERE worker_uid = $1 ORDER BY created_at DESC LIMIT 20`,
@@ -551,7 +465,6 @@ export async function listAlerts(workerUid: string) {
 }
 
 export async function deleteAlertByKey(workerUid: string, key: string) {
-  await ensureTables();
   const current = await dbQuery.query(
     `SELECT is_dismissable FROM ${dbSchema}.provider_alerts
      WHERE alert_key = $1 AND worker_uid = $2 LIMIT 1`,
@@ -570,7 +483,6 @@ export async function deleteAlertByKey(workerUid: string, key: string) {
 // ─── Support ticket operations ────────────────────────────────────────────────
 
 export async function listSupportTickets(workerUid: string) {
-  await ensureTables();
   const { rows } = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.provider_support_tickets
      WHERE worker_uid = $1 ORDER BY created_at DESC LIMIT 50`,
@@ -585,7 +497,6 @@ export async function createSupportTicketRecord(
   description: string,
   category: string,
 ) {
-  await ensureTables();
   const { rows } = await dbQuery.query(
     `INSERT INTO ${dbSchema}.provider_support_tickets
        (worker_uid, title, description, category, status)
@@ -611,7 +522,6 @@ const DEFAULT_PREFS = {
 };
 
 export async function getNotificationPrefs(workerUid: string) {
-  await ensureTables();
   const { rows } = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.provider_notification_preferences WHERE worker_uid = $1`,
     [workerUid],
@@ -632,7 +542,6 @@ export async function getNotificationPrefs(workerUid: string) {
 }
 
 export async function saveNotificationPrefs(workerUid: string, prefs: Partial<typeof DEFAULT_PREFS>) {
-  await ensureTables();
   const current = await getNotificationPrefs(workerUid);
   const merged = { ...current };
   for (const key of Object.keys(DEFAULT_PREFS) as Array<keyof typeof DEFAULT_PREFS>) {
@@ -684,7 +593,6 @@ function validDeviceToken(value: unknown): string | null {
 export async function registerProviderDeviceToken(workerUid: string, rawToken: unknown): Promise<boolean> {
   const token = validDeviceToken(rawToken);
   if (!token) return false;
-  await ensureTables();
   await dbQuery.query(
     `INSERT INTO ${dbSchema}.provider_notification_device_tokens (token, worker_uid, updated_at)
      VALUES ($1, $2, NOW())
@@ -703,7 +611,6 @@ export async function registerProviderDeviceToken(workerUid: string, rawToken: u
 }
 
 export async function releaseProviderDeviceToken(workerUid: string, rawToken?: unknown): Promise<void> {
-  await ensureTables();
   const token = validDeviceToken(rawToken);
   if (token) {
     await dbQuery.query(
@@ -739,7 +646,6 @@ function mapReplyRow(row: any) {
 }
 
 export async function getSupportTicketDetail(workerUid: string, ticketKey: string) {
-  await ensureTables();
   const { rows } = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.provider_support_tickets
      WHERE ticket_key = $1 AND worker_uid = $2 LIMIT 1`,
@@ -755,7 +661,6 @@ export async function getSupportTicketDetail(workerUid: string, ticketKey: strin
 }
 
 export async function addSupportTicketReply(workerUid: string, ticketKey: string, message: string) {
-  await ensureTables();
   const { rows: ownerRows, rowCount } = await dbQuery.query(
     `SELECT status FROM ${dbSchema}.provider_support_tickets
      WHERE ticket_key = $1 AND worker_uid = $2`,
@@ -782,7 +687,6 @@ export async function addSupportTicketReply(workerUid: string, ticketKey: string
 }
 
 export async function closeSupportTicket(workerUid: string, ticketKey: string) {
-  await ensureTables();
   const { rows, rowCount } = await dbQuery.query(
     `UPDATE ${dbSchema}.provider_support_tickets
      SET status = 'closed', updated_at = NOW()
@@ -796,7 +700,6 @@ export async function closeSupportTicket(workerUid: string, ticketKey: string) {
 }
 
 export async function reopenSupportTicket(workerUid: string, ticketKey: string) {
-  await ensureTables();
   const { rows, rowCount } = await dbQuery.query(
     `UPDATE ${dbSchema}.provider_support_tickets
      SET status = 'open', updated_at = NOW()
@@ -810,7 +713,6 @@ export async function reopenSupportTicket(workerUid: string, ticketKey: string) 
 }
 
 export async function countUnreadSupportReplies(workerUid: string): Promise<number> {
-  await ensureTables();
   const { rows } = await dbQuery.query(
     `SELECT COUNT(*) AS cnt
      FROM ${dbSchema}.provider_support_ticket_replies r
@@ -851,43 +753,11 @@ async function sendFcmPushToCustomer(
   });
 }
 
-// ─── Customer table init ──────────────────────────────────────────────────────
-
-let customerTablesReady: Promise<void> | null = null;
-
-async function initCustomerTables(): Promise<void> {
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.customer_notifications (
-      id               BIGSERIAL PRIMARY KEY,
-      notification_key VARCHAR(64)  NOT NULL DEFAULT gen_random_uuid()::varchar,
-      user_uid         VARCHAR(128) NOT NULL,
-      type             VARCHAR(64)  NOT NULL DEFAULT 'system',
-      status           VARCHAR(32)  NOT NULL DEFAULT 'unread',
-      severity         VARCHAR(32)  NOT NULL DEFAULT 'info',
-      title            VARCHAR(255) NOT NULL,
-      safe_body        TEXT         NOT NULL,
-      safe_context_label VARCHAR(255),
-      route            JSONB,
-      can_mark_read    BOOLEAN      NOT NULL DEFAULT true,
-      can_dismiss      BOOLEAN      NOT NULL DEFAULT true,
-      can_open_detail  BOOLEAN      NOT NULL DEFAULT false,
-      read_at          TIMESTAMPTZ,
-      expires_at       TIMESTAMPTZ,
-      created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS idx_cn_user_uid
-      ON ${dbSchema}.customer_notifications (user_uid, created_at DESC);
-    ALTER TABLE ${dbSchema}.customer_notifications
-      DROP CONSTRAINT IF EXISTS customer_notifications_notification_key_key;
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_notifications_owner_key
-      ON ${dbSchema}.customer_notifications (user_uid, notification_key);
-  `);
-}
-
-function ensureCustomerTables(): Promise<void> {
-  if (!customerTablesReady) customerTablesReady = initCustomerTables();
-  return customerTablesReady;
-}
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `initCustomerTables` created customer_notifications and idx_cn_user_uid, and
+// repeated the same ineffective DROP CONSTRAINT described above. The table comes
+// from the baseline; the DROP is superseded by migration 037.
 
 // ─── Customer row mapper ──────────────────────────────────────────────────────
 
@@ -922,7 +792,6 @@ export async function clearFcmToken(uid: string): Promise<void> {
 // ─── Customer notification CRUD ───────────────────────────────────────────────
 
 export async function listCustomerNotifications(userUid: string, filter?: string) {
-  await ensureCustomerTables();
   const base = `user_uid = $1 AND (expires_at IS NULL OR expires_at > NOW())`;
   let sql = `WHERE ${base}`;
   const params: any[] = [userUid];
@@ -937,7 +806,6 @@ export async function listCustomerNotifications(userUid: string, filter?: string
 }
 
 export async function countCustomerUnreadNotifications(userUid: string): Promise<number> {
-  await ensureCustomerTables();
   const { rows } = await dbQuery.query(
     `SELECT COUNT(*) AS cnt FROM ${dbSchema}.customer_notifications
      WHERE user_uid = $1 AND status = 'unread' AND (expires_at IS NULL OR expires_at > NOW())`,
@@ -947,7 +815,6 @@ export async function countCustomerUnreadNotifications(userUid: string): Promise
 }
 
 export async function markCustomerNotificationReadByKey(userUid: string, key: string) {
-  await ensureCustomerTables();
   const current = await dbQuery.query(
     `SELECT status, can_mark_read FROM ${dbSchema}.customer_notifications
      WHERE notification_key = $1 AND user_uid = $2 LIMIT 1`,
@@ -966,7 +833,6 @@ export async function markCustomerNotificationReadByKey(userUid: string, key: st
 }
 
 export async function markAllCustomerNotificationsRead(userUid: string) {
-  await ensureCustomerTables();
   await dbQuery.query(
     `UPDATE ${dbSchema}.customer_notifications
      SET status = 'read', read_at = NOW()
@@ -976,7 +842,6 @@ export async function markAllCustomerNotificationsRead(userUid: string) {
 }
 
 export async function deleteCustomerNotificationByKey(userUid: string, key: string) {
-  await ensureCustomerTables();
   const current = await dbQuery.query(
     `SELECT can_dismiss FROM ${dbSchema}.customer_notifications
      WHERE notification_key = $1 AND user_uid = $2 LIMIT 1`,
@@ -1012,7 +877,6 @@ export async function createCustomerNotification(
   userUid: string,
   data: CustomerNotificationInput,
 ): Promise<ReturnType<typeof mapCustomerNotificationRow> | null> {
-  await ensureCustomerTables();
 
   const type = normalizeNotificationType(data.type);
   const severity = normalizeSeverity(data.severity);

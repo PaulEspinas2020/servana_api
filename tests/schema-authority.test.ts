@@ -102,15 +102,19 @@ describe('schema authority is classified, not lumped', () => {
     /**
      * A scan that found nothing would satisfy every budget below forever.
      *
-     * The floor is deliberately well BELOW the current count, because the whole
-     * point of TAB 02 is that this number falls — it was 214, and pinning the
-     * fixture just under it failed the moment the deletion pass removed 37
-     * statements. A positive fixture proves the scan works; it must not double as
-     * a budget, or it fails on progress.
+     * The floor is deliberately FAR below the current count, because the whole
+     * point of TAB 02 is that this number falls to zero. It was 214 at the start
+     * and is 39 now, and this fixture has failed THREE times for the good reason:
+     * pinned at 200, then 50, each time tripped by the work succeeding.
+     *
+     * A positive fixture proves the scan still functions. It must not double as a
+     * budget — the budgets live above, and they are allowed to reach nil. The only
+     * floor that stays high is the baseline's, because THAT artefact is not
+     * shrinking.
      */
-    expect(rows.length).toBeGreaterThan(50);
+    expect(rows.length).toBeGreaterThan(1);
     expect(baselineObjects().size).toBeGreaterThan(200);
-    expect(runtimeAddColumns().length).toBeGreaterThan(20);
+    expect(runtimeAddColumns().length).toBeGreaterThan(0);
   });
 
   it('every statement lands in exactly one authority', () => {
@@ -278,7 +282,7 @@ describe('no object is created by two runtime paths that disagree', () => {
     expect(broken).toEqual([]);
   });
 
-  it('the known contested objects are the two that remain', () => {
+  it('the known contested object is the one that remains', () => {
     /**
      * Named, so a NEW one has to be looked at rather than absorbed into a count.
      * Each was diffed against the baseline by hand: `chat_message_reports` and
@@ -307,10 +311,7 @@ describe('no object is created by two runtime paths that disagree', () => {
      * against the baseline, because the baseline is what says which definition
      * actually won.
      */
-    expect(contested.map((c) => c.object)).toEqual([
-      'booking_escalations',
-      'user_profile',
-    ]);
+    expect(contested.map((c) => c.object)).toEqual(['user_profile']);
   });
 
   it('compares column NAMES only — it cannot see a type or key mismatch', () => {
@@ -359,7 +360,8 @@ describe('columns the application adds are declared somewhere', () => {
      * the source text. Both were resolved BY READING them, and both are covered:
      *
      *   adminBookingService:170   six confirmCols — all present in the baseline's
-     *                             booking_workers CREATE TABLE
+     *                             booking_workers CREATE TABLE. GONE: that
+     *                             bootstrap was deleted, leaving one site.
      *   experienceStore:156       category, opened_by_role, state_snapshot — all
      *                             added by migration 030
      *
@@ -367,12 +369,9 @@ describe('columns the application adds are declared somewhere', () => {
      * of this scan captured the SQL keyword `IF` as the column name for exactly
      * these two and scored them as real gaps. Assuming either way is the mistake.
      */
-    expect(indeterminate).toHaveLength(2);
+    expect(indeterminate).toHaveLength(1);
     expect(indeterminate.every((a) => a.column === null)).toBe(true);
-    expect(indeterminate.map((a) => a.table).sort()).toEqual([
-      'booking_escalations',
-      'booking_workers',
-    ]);
+    expect(indeterminate.map((a) => a.table)).toEqual(['booking_escalations']);
   });
 
   it('never reports a SQL keyword as a column name', () => {

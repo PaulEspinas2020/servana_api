@@ -185,20 +185,60 @@ describe('adminConfirmProviderAssignment — controller validation (all required
 });
 
 describe('adminConfirmProviderAssignment — schema bootstrap', () => {
-  it('ensureBookingOpsSchema adds all 6 confirmation columns', () => {
-    expect(svcSrc).toContain('confirmation_source');
-    expect(svcSrc).toContain('admin_actor_uid');
-    expect(svcSrc).toContain('consent_method');
-    expect(svcSrc).toContain('consent_reference');
-    expect(svcSrc).toContain('confirmation_reason');
-    expect(svcSrc).toContain('confirmed_at');
+  it('booking_workers carries all 6 confirmation columns (TAB 02)', () => {
+    /**
+     * These read the DDL inside `ensureBookingOpsSchema`. That bootstrap is gone;
+     * the columns come from `scripts/baseline/000-baseline.sql`, so this checks the
+     * schema that will actually exist rather than code that meant to create it.
+     */
+    const baseline = require('fs')
+      .readFileSync(require('path').resolve(__dirname, '../scripts/baseline/000-baseline.sql'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const m = /CREATE TABLE servana\.booking_workers \(([\s\S]*?)\n\);/.exec(baseline);
+    expect(m).not.toBeNull();
+    const ALL_SIX = [
+      'confirmation_source',
+      'admin_actor_uid',
+      'consent_method',
+      'consent_reference',
+      'confirmation_reason',
+      'confirmed_at',
+    ];
+    for (const col of ALL_SIX) {
+      expect(m[1]).toMatch(new RegExp('^\\s+' + col + '\\s', 'm'));
+    }
+
+    /**
+     * Only THREE of the six are named by this service; the other three live in
+     * `booking/transitionExecutor.ts`, which is the canonical writer of a booking
+     * state change. That split was invisible while the CREATE listed all six here
+     * — removing the DDL is what showed which columns this file actually touches.
+     *
+     * So the ownership is asserted where it really is, rather than requiring one
+     * service to mention every column of a table it shares.
+     */
+    for (const col of ['confirmation_source', 'consent_method', 'confirmed_at']) {
+      expect(svcSrc).toContain(col);
+    }
+    const executor = require('fs').readFileSync(
+      require('path').resolve(__dirname, '../src/services/booking/transitionExecutor.ts'),
+      'utf8',
+    );
+    for (const col of ['admin_actor_uid', 'consent_reference', 'confirmation_reason']) {
+      expect(executor).toContain(col);
+    }
   });
 
-  it('each ALTER TABLE is wrapped in try-catch (one failure does not abort the rest)', () => {
-    const schemaFnIdx = svcSrc.indexOf('ensureBookingOpsSchema');
-    const schemaFn    = svcSrc.slice(schemaFnIdx, schemaFnIdx + 3000);
-    expect(schemaFn).toContain('confirmCols');
-    expect(schemaFn).toContain('try {');
-    expect(schemaFn).toContain('} catch {');
+  it('the service no longer issues DDL for them', () => {
+    // The try/catch-per-ALTER asserted here existed so one failing column did not
+    // abort the rest. With no ALTERs there is nothing to fail, which is a better
+    // outcome than handling it.
+    const code = svcSrc
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((l) => !/^\s*\/\//.test(l))
+      .join('\n');
+    expect(code).not.toContain('ADD COLUMN');
+    expect(code).not.toContain('CREATE TABLE');
   });
 });
