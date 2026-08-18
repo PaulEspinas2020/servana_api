@@ -3,10 +3,14 @@
 # ## Three jobs, and two of them run today
 #
 # `static` needs no database. It replays the migration chain against a modelled
-# catalog and fails when a migration references a table nothing creates — which
-# is true of eighteen tables right now, so this job is RED until a baseline is
-# captured. That is the point: the gap becomes a build failure instead of a
-# thing somebody knows.
+# catalog and fails when a migration references a table nothing creates.
+#
+# This comment used to end "so this job is RED until a baseline is captured".
+# CORRECTED 2026-08-18 (TAB 04): the baseline was captured, and `npm run
+# db:verify` now exits 0 — verified by checking the exit code directly rather
+# than by reading piped output, which has reported success over a red run here
+# before. A comment describing a job as red-by-design when it is green is worse
+# than no comment: the next person to see it fail will assume it always does.
 #
 # `embedded` runs the chain through PGlite — PostgreSQL 18 compiled to WASM,
 # in-process, no service container. It exists because `static` was believed for
@@ -17,8 +21,10 @@
 #
 # `fresh` creates a real PostgreSQL service container, applies the baseline and
 # every migration to an empty schema as the runtime role, replays them a second
-# time to prove replayability, and runs the backend suite against it. It is
-# skipped while no baseline file exists. It is not redundant with `embedded`:
+# time to prove replayability, and runs the backend suite against it. The second
+# replay is inside `scripts/verify-fresh-db.ts` (§159) rather than a separate
+# step, and it deliberately excludes the baseline: a `pg_dump` artifact is not
+# idempotent and is not supposed to be. It is not redundant with `embedded`:
 # PGlite runs as a single bundled superuser, so ownership and role separation —
 # the defect that left 29 of 116 tables unusable in production — are only
 # checkable here.
@@ -82,8 +88,29 @@ jobs:
   fresh:
     name: zero-to-current on a real engine
     runs-on: ubuntu-latest
-    # Only meaningful once a baseline exists; until then `static` is the gate.
-    if: hashFiles('scripts/baseline/000-baseline.sql') != ''
+    # THE CONDITION THAT LIVED HERE IS WHY THIS WORKFLOW HAD NEVER RUN.
+    #
+    #     if: hashFiles('scripts/baseline/000-baseline.sql') != ''
+    #
+    # `hashFiles` is not available in a job-level `if`. GitHub's context
+    # reference lists `jobs.<job_id>.if` as accepting `github, needs, vars,
+    # inputs` and the functions `always, cancelled, success, failure` — with
+    # `hashFiles` available only at `jobs.<job_id>.steps.if`, because it hashes
+    # files in the runner workspace and no workspace exists when job conditions
+    # are evaluated.
+    #
+    # An unrecognised function in a job condition fails the workflow at PARSE
+    # time, before any runner is assigned. That is the "This run likely failed
+    # because of a workflow file issue" with 0s duration and no logs: there is
+    # no log because nothing ever started. Every push since this line was added
+    # produced one, and all three jobs — including the only one that can catch
+    # an ownership defect — have never executed.
+    #
+    # The condition is not merely broken, it is obsolete. It meant "skip until a
+    # baseline is captured", and `scripts/baseline/000-baseline.sql` is now the
+    # declared schema authority. It is deleted rather than moved to a step,
+    # because a step-level guard would restore the skipping the baseline's
+    # existence made unnecessary.
     services:
       postgres:
         image: postgres:16

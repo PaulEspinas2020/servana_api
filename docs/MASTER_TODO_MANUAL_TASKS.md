@@ -12,7 +12,7 @@
 >
 > **Status legend:** `OPEN` · `DONE` · `SUPERSEDED`
 
-Last updated: 2026-08-18 (TAB 03)
+Last updated: 2026-08-18 (TAB 04)
 
 ---
 
@@ -65,7 +65,9 @@ Last updated: 2026-08-18 (TAB 03)
 
 | # | Task | Why blocked | Closes when |
 | --- | --- | --- | --- |
-| 04.1 | Trigger `fresh-db.yml` on GitHub and confirm it produces a real run with real logs, not a 0s startup failure | `REMOTE-OP` | A run with logs; each job green or documented red-by-design |
+| 04.1 | Trigger `fresh-db.yml` on GitHub and confirm it produces a real run with real logs, not a 0s startup failure. **The `fresh` job — the only one that can catch an ownership defect — has still never executed** | `REMOTE-OP` | A run with logs; each job green or documented red-by-design; ownership assertion observed passing on a real engine |
+| 04.2 | Install `actionlint` and add it to CI, so a workflow parse fault is caught by a linter rather than by noticing an absent check | `NO-TOOL` | `actionlint` runs over `.github/workflows/` in the release gate |
+| 04.3 | Make `fresh-db.yml` a required status check feeding the deploy gate — **but not before three consecutive green runs**, or it becomes the cosmetic blocker TAB 03 describes | `REMOTE-OP` | Required check configured after three green runs |
 
 ## TAB 05 — API security baseline
 

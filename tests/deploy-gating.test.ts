@@ -32,64 +32,19 @@
  *
  * `js-yaml` is present only as a transitive dependency. A gate whose own
  * correctness rests on an undeclared package is a gate with a silent expiry
- * date. The reader below answers four structural questions and says so; it is
- * deliberately not a general YAML parser, in the same spirit as
+ * date. The reader lives in `scripts/lib/workflowFile.ts` — shared with
+ * `tests/workflow-startup-validity.test.ts` (TAB 04) rather than written twice,
+ * because two readers of one file format is the duplicate reality §9 is about.
+ * It is deliberately not a general YAML parser, in the same spirit as
  * `scripts/lib/routeTable.ts`.
  */
 
-import fs from 'fs';
-import path from 'path';
+import { readWorkflow, jobsOf, needsOf } from '../scripts/lib/workflowFile';
 
-const WORKFLOWS = path.join(__dirname, '..', '.github', 'workflows');
-const read = (f: string): string =>
-  fs.readFileSync(path.join(WORKFLOWS, f), 'utf8').replace(/\r\n/g, '\n');
+const deploy = readWorkflow('deploy.yml');
+const gate = readWorkflow('release-gate.yml');
 
-const deploy = read('deploy.yml');
-const gate = read('release-gate.yml');
-
-/** Top-level job names and their bodies, from `jobs:` to end of file. */
-function jobs(source: string): Map<string, string> {
-  const out = new Map<string, string>();
-  const lines = source.split('\n');
-  const start = lines.findIndex((l) => /^jobs:\s*$/.test(l));
-  if (start === -1) return out;
-
-  let current: string | null = null;
-  let buffer: string[] = [];
-  for (const line of lines.slice(start + 1)) {
-    const header = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
-    if (header) {
-      if (current) out.set(current, buffer.join('\n'));
-      current = header[1];
-      buffer = [];
-      continue;
-    }
-    if (current) buffer.push(line);
-  }
-  if (current) out.set(current, buffer.join('\n'));
-  return out;
-}
-
-/** `needs: [a, b]` and the block form. Comments are stripped first. */
-function needsOf(jobBody: string): string[] {
-  const uncommented = jobBody
-    .split('\n')
-    .filter((l) => !/^\s*#/.test(l))
-    .join('\n');
-
-  const inline = /^\s*needs:\s*\[([^\]]*)\]/m.exec(uncommented);
-  if (inline) return inline[1].split(',').map((s) => s.trim()).filter(Boolean);
-
-  const single = /^\s*needs:\s*([A-Za-z0-9_-]+)\s*$/m.exec(uncommented);
-  if (single) return [single[1]];
-
-  const block = /^\s*needs:\s*\n((?:\s*-\s*[A-Za-z0-9_-]+\s*\n?)+)/m.exec(uncommented);
-  if (block) return block[1].split('\n').map((l) => l.replace(/^\s*-\s*/, '').trim()).filter(Boolean);
-
-  return [];
-}
-
-const deployJobs = jobs(deploy);
+const deployJobs = jobsOf(deploy);
 
 describe('the reader sees the workflows at all (positive fixture)', () => {
   it('finds both jobs in deploy.yml', () => {
