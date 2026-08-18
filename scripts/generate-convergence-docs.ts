@@ -143,10 +143,16 @@ ${cap.roleSplitRationale}`;
 endpoints span more than one route family names exactly one domain service — the
 role split is a permission boundary, never a second implementation.
 
-**${summary.migratedCallerCells} cells on canonical.** No client has migrated. The v1
-namespace is mounted, tested and documented, and it is unpushed — nothing can migrate
-against a contract that is not serving. That is a deployment gap, not a design gap, and
-the matrix says so rather than showing optimistic cells.
+**${summary.migratedCallerCells} cells on canonical.** ${summary.migratedCallerCells === 0
+  ? 'No client has migrated. The v1 namespace is mounted, tested and documented, and it is '
+    + 'unpushed — nothing can migrate against a contract that is not serving. That is a '
+    + 'deployment gap, not a design gap, and the matrix says so rather than showing '
+    + 'optimistic cells.'
+  : 'Each one is derived from that client\'s published manifest — the endpoints it calls, '
+    + 'generated from its own source with a file:line per call site — and never asserted '
+    + 'here by hand. A client with no manifest reads legacy, planned or n/a regardless of '
+    + 'what it may already have shipped, because nothing in this repository has verified '
+    + 'it; see src/api/v1/client-manifests/.'}
 
 ## 2. Legend
 

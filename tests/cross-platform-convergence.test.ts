@@ -367,14 +367,38 @@ describe('the parity matrix reports honestly', () => {
     }
   });
 
-  it('claims no client has migrated, because none has', () => {
+  it('counts exactly the migrated cells the contract records — no more', () => {
     /**
-     * The honest cell. Every canonical route is mounted and tested, and the
-     * namespace is unpushed — nothing can migrate against a contract that is
-     * not serving. A matrix showing optimistic cells here would read as
-     * permission to start deleting aliases.
+     * Was `expect(migratedCallerCells).toBe(0)` (TAB 04). The reasoning was
+     * sound when nothing could be verified from here: an optimistic cell reads
+     * as permission to start deleting aliases.
+     *
+     * It is no longer true. Provider Web publishes a generated manifest with a
+     * file:line per call site and 36 of its endpoints are provably canonical, so
+     * the pinned zero asserted a registry everyone already knew was wrong.
+     *
+     * The guard that matters survives: the summary may not invent a migration
+     * the contract does not record. It is derived from the contract here rather
+     * than compared to a literal, so it cannot drift into optimism.
      */
-    expect(convergenceSummary().migratedCallerCells).toBe(0);
+    const recordedEntries = V1_CONTRACT.reduce(
+      (total, entry) => total + Object.values(entry.callers).filter((c) => c === 'migrated').length,
+      0,
+    );
+    const cells = convergenceSummary().migratedCallerCells;
+
+    // The summary counts CAPABILITY x client cells; the contract records
+    // ENDPOINT x client entries. A capability whose endpoints are only partly
+    // migrated rolls up to `mixed`, not `migrated`, so cells <= entries always
+    // and the gap is the partially-migrated capabilities. Re-deriving the
+    // rollup here would create a second definition of "migrated capability",
+    // and the two would disagree at the worst moment — so this asserts the
+    // invariant instead of the arithmetic.
+    expect(cells).toBeLessThanOrEqual(recordedEntries);
+
+    // It may not invent one either: a cell can only be migrated if some entry is.
+    if (recordedEntries === 0) expect(cells).toBe(0);
+    else expect(cells).toBeGreaterThan(0);
   });
 
   it('reports mixed rather than rounding a half-migrated capability', () => {

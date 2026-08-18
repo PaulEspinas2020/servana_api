@@ -35,6 +35,7 @@ import {
   providerFieldsVisibleTo,
 } from '../src/services/account/accountPolicy';
 import { V1_CONTRACT, V1_PREFIX } from '../src/api/v1/contract';
+import { expectMigrationsAreBackedByAManifest } from './support/callerMatrix';
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const read = (relPath: string): string =>
@@ -154,13 +155,17 @@ describe('the profile contract states what the code states', () => {
     }
   });
 
-  it('claims no migrated client', () => {
-    const matrix = doc.slice(doc.indexOf('## Cross-platform caller matrix'));
-    const rows = matrix
-      .split('\n')
-      .filter((line) => line.startsWith('| ') && !line.startsWith('| ---') && !line.startsWith('| Capability'));
-    expect(rows.length).toBeGreaterThan(0);
-    for (const row of rows) expect(row).not.toContain('migrated');
+  /**
+   * A migration may be CLAIMED only where a manifest proves it (TAB 04).
+   *
+   * This asserted `not.toContain('migrated')` while no client repository was in
+   * scope. Provider Web now publishes a generated manifest with a file:line per
+   * call site, so 36 migrations are provable and the old assertion failed
+   * BECAUSE the registry became correct. The intent — do not claim a migration
+   * nobody verified — is unchanged.
+   */
+  it('claims a migration only where a client manifest proves one', () => {
+    expectMigrationsAreBackedByAManifest(doc, '## Cross-platform caller matrix');
   });
 
   it('names all five client surfaces and explains every role split', () => {

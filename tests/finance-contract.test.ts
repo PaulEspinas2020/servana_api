@@ -64,6 +64,7 @@ import {
 import { V1_ERROR_CODES } from '../src/api/v1/errors';
 import { SCHEMAS } from '../src/api/v1/openapi';
 import { FINANCE_CAPABILITIES } from '../src/services/finance/financePolicy';
+import { loadManifests } from '../scripts/reconcile-client-manifests';
 
 const FINANCE = V1_CONTRACT.filter((e) => e.domain === 'finance');
 
@@ -174,14 +175,27 @@ describe('the finance domain contract', () => {
   });
 
   /**
-   * No client has migrated — the platform repositories are out of scope until
-   * the backend Master Command completes. Asserted rather than assumed so the
-   * certification cannot claim a migration that did not happen.
+   * A finance caller is recorded as migrated only where a manifest proves it.
+   *
+   * This asserted `not.toBe('migrated')` outright, on the stated premise that
+   * "the platform repositories are out of scope until the backend Master Command
+   * completes". The intent was exactly right: a certification must not claim a
+   * migration that did not happen — and money capabilities are the last place to
+   * be optimistic.
+   *
+   * TAB 04 ended the premise rather than the intent. The Provider Web repository
+   * is in scope, publishes a manifest generated from its own source with a
+   * file:line per call site, and provably calls the three earnings endpoints. So
+   * the guard now asks the question that still has teeth: is there evidence?
+   *
+   * A client with no manifest still cannot be marked migrated here, whatever it
+   * may already have shipped, because nothing in this repository has verified it.
    */
-  it('no finance caller is recorded as migrated yet', () => {
+  it('records a finance migration only for a client that published a manifest', () => {
+    const proven = new Set(loadManifests().map((m) => m.client));
     for (const entry of FINANCE) {
-      for (const state of Object.values(entry.callers)) {
-        expect(state).not.toBe('migrated');
+      for (const [client, state] of Object.entries(entry.callers)) {
+        if (state === 'migrated') expect(proven.has(client)).toBe(true);
       }
     }
   });
