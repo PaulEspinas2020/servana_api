@@ -138,9 +138,28 @@ export const v1AuthEnvelope = (inner: RequestHandler): RequestHandler =>
     res.json = ((body: any) => {
       restore();
       const status = res.statusCode;
-      // Translate ONLY an auth-chain rejection in the legacy shape. A handler
-      // that already answers in the v1 envelope is passed through untouched.
-      if ((status === 401 || status === 403) && body && !body.error && typeof body.code === 'string') {
+
+      /**
+       * Is this ALREADY a v1 envelope?
+       *
+       * `!body.error` was the original discriminator and it is not sufficient.
+       * `verifyAuth`'s TOKEN_REVOKED branch writes a hybrid — the legacy
+       * `{ status, code, message }` PLUS its own nested
+       * `error: { code, recovery, retryable }` — so `!body.error` was false and
+       * the single most security-relevant 401 on the platform passed through
+       * untranslated, in the legacy shape, with no requestId. A revoked session
+       * is the one refusal a client must never mistake for a generic failure.
+       *
+       * Every genuine v1 envelope is minted by `fail()`, which always stamps a
+       * string `requestId`. That is the property to test for, and it cannot be
+       * satisfied by accident: a legacy body carrying an `error` field does not
+       * carry `error.requestId`.
+       */
+      const alreadyV1 =
+        body && body.error && typeof body.error.requestId === 'string';
+
+      // Translate ONLY an auth-chain rejection in the legacy shape.
+      if ((status === 401 || status === 403) && body && !alreadyV1 && typeof body.code === 'string') {
         const mapped = LEGACY_TO_V1_CODE[body.code];
         if (mapped) {
           return fail(
