@@ -150,6 +150,13 @@ Rejected authentication and authorization, by reason.
 - labels: `reason`, `route`, `client`
 - **why:** Separates "a client shipped a bad token refresh" from "somebody is trying uids", which look identical in an error-rate chart.
 
+### `contract_mismatch_total` (counter)
+
+Requests for a namespaced path this build does not serve.
+
+- labels: `namespace`, `client`, `method`
+- **why:** An ordinary 404 is a client asking for something that never existed. This is a client asking for something that was PROMISED — it holds a contract naming the route and the running build does not serve it. A spike on the v1 namespace is the signature of a portal deployed against a backend that has not shipped, which has happened here and presented as "the API is down" rather than as a version mismatch. The operator response is a deploy or a rollback, never a code change, which is why it must not be buried in the general 404 rate.
+
 ### `legacy_route_hits_total` (counter)
 
 Calls to a legacy route that has a canonical successor.
@@ -192,6 +199,7 @@ Notification projections attempted, by channel and outcome.
 | Severity | Alert | Metric | Condition | First action |
 | --- | --- | --- | --- | --- |
 | P0 | `api-error-rate` | `http_requests_total` | 5xx share of all requests > 2% over 5 minutes | Group by route and namespace. One route means a deploy; every route means the database or the process. |
+| P1 | `v1-contract-mismatch` | `contract_mismatch_total` | any sustained rate on the v1 namespace — more than 10/minute for 5 minutes | Compare the deployed commit against the client build. This is almost never a bug in a route: it is a client asking for an endpoint this build does not have, so the fix is a deploy or a rollback, not a code change. Group by client to see which one is ahead. |
 | P0 | `auth-failure-spike` | `auth_failures_total` | rate > 10× the 24h median over 10 minutes | Group by client. One client version is a bad release; many clients is credential stuffing. |
 | P0 | `booking-transitions-failing` | `booking_transition_failures_total` | any refusal other than a normal guard exceeds 5/minute | Group by action and fromState. A provider who cannot complete leaves a customer waiting at home. |
 | P1 | `zero-candidate-matching` | `matching_zero_candidates_total` | > 20% of assignment attempts in an hour | Check provider availability and the eligibility pipeline before assuming demand moved. |

@@ -217,6 +217,31 @@ export const requestLogMiddleware = (req: Request, res: Response, next: NextFunc
         });
       }
 
+      /**
+       * A 404 on a namespaced API is not an ordinary 404 (TAB 13).
+       *
+       * An ordinary 404 is a client asking for something that never existed.
+       * This is a client asking for something that was PROMISED — it holds a
+       * contract naming the route and the running build does not serve it.
+       *
+       * Counted separately because the operator response is completely
+       * different: no route needs fixing, a build needs deploying or rolling
+       * back. Production has already shown this failure once, when it answered
+       * 401 to every path including unknown ones and the symptom read as "the
+       * API is down" rather than as a version mismatch.
+       *
+       * Without this counter an alert on it is impossible, which is why it is
+       * here rather than in a dashboard query: the signal has to exist before
+       * anybody can watch it.
+       */
+      if (line.status === 404 && line.namespace && line.namespace !== 'legacy') {
+        incr('contract_mismatch_total', {
+          namespace: line.namespace,
+          client: line.client,
+          method: line.method,
+        });
+      }
+
       if (shouldLog(line.status)) {
         // eslint-disable-next-line no-console
         console.info(JSON.stringify(line));

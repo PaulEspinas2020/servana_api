@@ -251,6 +251,20 @@ export const METRICS: readonly MetricSpec[] = Object.freeze([
     why: 'Separates "a client shipped a bad token refresh" from "somebody is trying uids", which look identical in an error-rate chart.',
   },
   {
+    name: 'contract_mismatch_total',
+    kind: 'counter',
+    description: 'Requests for a namespaced path this build does not serve.',
+    labels: ['namespace', 'client', 'method'],
+    why:
+      'An ordinary 404 is a client asking for something that never existed. This is a client ' +
+      'asking for something that was PROMISED — it holds a contract naming the route and the ' +
+      'running build does not serve it. A spike on the v1 namespace is the signature of a ' +
+      'portal deployed against a backend that has not shipped, which has happened here and ' +
+      'presented as "the API is down" rather than as a version mismatch. The operator response ' +
+      'is a deploy or a rollback, never a code change, which is why it must not be buried in ' +
+      'the general 404 rate.',
+  },
+  {
     name: 'legacy_route_hits_total',
     kind: 'counter',
     description: 'Calls to a legacy route that has a canonical successor.',
@@ -314,6 +328,16 @@ export const ALERTS: readonly AlertSpec[] = Object.freeze([
     severity: 'P0',
     condition: '5xx share of all requests > 2% over 5 minutes',
     firstAction: 'Group by route and namespace. One route means a deploy; every route means the database or the process.',
+  },
+  {
+    name: 'v1-contract-mismatch',
+    metric: 'contract_mismatch_total',
+    severity: 'P1',
+    condition: 'any sustained rate on the v1 namespace — more than 10/minute for 5 minutes',
+    firstAction:
+      'Compare the deployed commit against the client build. This is almost never a bug in a ' +
+      'route: it is a client asking for an endpoint this build does not have, so the fix is a ' +
+      'deploy or a rollback, not a code change. Group by client to see which one is ahead.',
   },
   {
     name: 'auth-failure-spike',

@@ -12,7 +12,7 @@
 >
 > **Status legend:** `OPEN` · `DONE` · `SUPERSEDED`
 
-Last updated: 2026-08-18 (TAB 11)
+Last updated: 2026-08-18 (TAB 13)
 
 ---
 
@@ -125,6 +125,18 @@ Last updated: 2026-08-18 (TAB 11)
 | 11.2 | Run `smoke:contracts` against a non-production environment on every push, and against production read-only on a schedule | `NO-REPO`, `NO-CRED` | Green runs in CI on both cadences |
 | 11.3 | **Demonstrate the loop closed:** change one backend response key deliberately and watch the PORTAL build fail. This is the proof; the backend-side generatability gate is only half | `NO-REPO` | A red portal build traced to a backend shape change |
 | 11.4 | Generate the portal's DTOs from `docs/api/openapi.v1.json` and wire the generation into its `verify:release`, so drift fails at build time in whichever repo drifted | `NO-REPO` | Portal DTOs generated from the document, not hand-written |
+
+## TAB 13 — observability
+
+| # | Task | Why blocked | Closes when |
+| --- | --- | --- | --- |
+| 13.1 | Ship the structured log lines somewhere that aggregates and can alert. They are emitted and nothing collects them | `PROD-ACCESS` | Lines queryable by request id, actor and route |
+| 13.2 | Frontend error reporting carrying the same `X-Request-Id`, so a portal exception and its server log join on one key | `NO-REPO` | A portal error carries the id the API stamped |
+| 13.3 | **Prove correlation end to end**: trigger a portal error, take the surfaced request id, find the matching server log line. If you cannot, the loop is not closed | `NO-REPO`, `PROD-ACCESS` | One demonstrated trace, id quoted |
+| 13.4 | Define and measure SLOs BEFORE launch — admin API availability, p95 on dashboard and bookings list, error rate on money mutations. Set an error budget and agree what breaching it means | `PROD-ACCESS`, `HUMAN-JUDGEMENT` | SLOs measured from real traffic, not invented fixtures |
+| 13.5 | Wire the five declared `ALERTS` to a pager, including the new `v1-contract-mismatch` | `PROD-ACCESS` | Alerts fire; each has an owner |
+| 13.6 | Dashboard the legacy-vs-v1 traffic split — it is the instrument that says when a legacy route is safe to retire (TABs 07/09) | `PROD-ACCESS` | Split visible per endpoint |
+| 13.7 | External uptime monitoring on both origins, including a check that TAB 02's security headers are still present | `PROD-ACCESS` | Monitor live; header regression pages somebody |
 
 ## TAB 16 — Certification & runbook
 
