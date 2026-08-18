@@ -350,7 +350,7 @@ export const ALERTS: readonly AlertSpec[] = Object.freeze([
     metric: 'public_path_auth_failures_total',
     severity: 'P0',
     condition:
-      'rate > 10x the 24h median. Absolute, deliberately — not a rate, not a share, and not relative to '
+      'ANY occurrence. Absolute, deliberately — not a rate, not a share, and not relative to '
       + 'a baseline, because the correct value is zero and a threshold relative to history '
       + 'stops firing once the broken state becomes the history.',
     firstAction:
