@@ -55,7 +55,7 @@ const suiteFiles = (): string[] =>
  * Raise it in the same commit that adds a suite. Never lower it without
  * naming, in the commit message, which suite went and why.
  */
-const EXPECTED_SUITE_COUNT = 283;
+const EXPECTED_SUITE_COUNT = 284;
 
 describe('the suite inventory is pinned', () => {
   const files = suiteFiles();
