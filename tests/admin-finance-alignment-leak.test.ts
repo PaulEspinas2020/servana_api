@@ -29,6 +29,7 @@ describe('Admin Finance alignment and leakage boundaries', () => {
     const end = service.indexOf('export async function getPaymentDetail');
     const segment = service.slice(start, end);
     expect(segment).not.toContain('p.checkout_url');
+    expect(segment).not.toContain('p.provider_payment_id');
     expect(segment).not.toContain('p.rejection_reason');
     expect(segment).not.toContain('p.reviewed_by');
   });
@@ -39,6 +40,7 @@ describe('Admin Finance alignment and leakage boundaries', () => {
     const segment = service.slice(start, end);
     expect(segment).not.toContain('p.*');
     expect(segment).not.toContain('raw_response');
+    expect(segment).not.toContain('provider_payment_id');
   });
 
   test('payout detail attaches only the canonical booking payment', () => {

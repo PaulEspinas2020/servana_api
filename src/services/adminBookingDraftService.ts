@@ -125,63 +125,25 @@ export interface DraftListFilters {
   limit?: number;
 }
 
-// ── Schema bootstrap ──────────────────────────────────────────────────────────
-
-export const ensureAdminBookingDraftSchema = async (): Promise<void> => {
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.admin_booking_drafts (
-      id                          SERIAL PRIMARY KEY,
-      draft_id                    UUID        NOT NULL DEFAULT gen_random_uuid(),
-      created_by_admin_uid        VARCHAR(256) NOT NULL,
-      last_updated_by_admin_uid   VARCHAR(256),
-      status                      VARCHAR(30)  NOT NULL DEFAULT 'editing',
-      current_step                SMALLINT     NOT NULL DEFAULT 1,
-      customer_type               VARCHAR(10),
-      customer_uid                VARCHAR(256),
-      guest_payload               JSONB,
-      service_option_id           INTEGER,
-      addon_option_ids            INTEGER[]    NOT NULL DEFAULT '{}',
-      schedule_at                 TIMESTAMPTZ,
-      address_payload             JSONB,
-      selected_provider_uid       VARCHAR(256),
-      provider_snapshot           JSONB,
-      payment_method              VARCHAR(20),
-      payment_status_choice       VARCHAR(20),
-      payment_evidence_payload    JSONB,
-      internal_notes              TEXT,
-      version                     INTEGER      NOT NULL DEFAULT 1,
-      created_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-      updated_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-      last_opened_at              TIMESTAMPTZ,
-      expires_at                  TIMESTAMPTZ  NOT NULL DEFAULT (NOW() + INTERVAL '30 days'),
-      converted_booking_id        INTEGER,
-      converted_at                TIMESTAMPTZ,
-      discarded_at                TIMESTAMPTZ,
-      discarded_by_admin_uid      VARCHAR(256),
-      discard_reason              TEXT,
-      CONSTRAINT uq_draft_id UNIQUE (draft_id),
-      CONSTRAINT chk_draft_status CHECK (status IN (
-        'editing','ready_for_review','converting','converted','discarded','expired'
-      ))
-    )
-  `, []);
-
-  await dbQuery.query(`
-    CREATE INDEX IF NOT EXISTS idx_abd_admin_status
-    ON ${s}.admin_booking_drafts (created_by_admin_uid, status, updated_at DESC)
-  `, []);
-
-  await dbQuery.query(`
-    CREATE INDEX IF NOT EXISTS idx_abd_expires
-    ON ${s}.admin_booking_drafts (expires_at) WHERE status IN ('editing','ready_for_review')
-  `, []);
-
-  // Additive migration — safe to run on every start
-  await dbQuery.query(`
-    ALTER TABLE ${s}.admin_booking_drafts
-    ADD COLUMN IF NOT EXISTS customer_name VARCHAR(256)
-  `, []);
-};
+// ── Schema (TAB 02) ───────────────────────────────────────────────────────────
+//
+// `admin_booking_drafts`, its two indexes and the additive `customer_name` column
+// were created here at runtime by `ensureAdminBookingDraftSchema`, declared as an
+// optional startup dependency. That function is gone; the table comes from
+// `scripts/baseline/000-baseline.sql:213`.
+//
+// Two constraints the removed DDL declared are relied on by code below and are
+// NOT incidental:
+//
+//   uq_draft_id       UNIQUE (draft_id) — draft_id is the external handle every
+//                     admin-portal call passes, distinct from the serial id.
+//   chk_draft_status  CHECK over exactly six values: editing, ready_for_review,
+//                     converting, converted, discarded, expired. A seventh status
+//                     added in TypeScript alone will be rejected by the database,
+//                     which is the point — but it means adding one needs a
+//                     migration, not just a union type.
+//
+// The baseline carries both, with the same six values.
 
 // ── Row mapper ────────────────────────────────────────────────────────────────
 

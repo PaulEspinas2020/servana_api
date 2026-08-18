@@ -32,23 +32,10 @@ const s = db.schema;
  * NULL. A derived state cannot drift out of sync with the events that produce
  * it, which a status column would.
  */
-let inviteColumnsReady: Promise<void> | null = null;
-
-export const ensureInviteColumns = (): Promise<void> => {
-  inviteColumnsReady ??= dbQuery
-    .query(
-      `ALTER TABLE ${s}.admin_users
-         ADD COLUMN IF NOT EXISTS invited_at  TIMESTAMPTZ,
-         ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ`,
-      []
-    )
-    .then(() => undefined)
-    .catch((e: any) => {
-      inviteColumnsReady = null;
-      throw e;
-    });
-  return inviteColumnsReady;
-};
+// `admin_users.invited_at` and `accepted_at` were added here at runtime by
+// `ensureInviteColumns`, awaited from three call sites across three files. Both
+// come from `scripts/baseline/000-baseline.sql` now (TAB 02), and both are
+// nullable there — which is what makes the derived "pending" above work.
 
 /**
  * Record that an invited admin has arrived.
@@ -62,7 +49,6 @@ export const ensureInviteColumns = (): Promise<void> => {
  */
 export const markInviteAccepted = async (adminUid: string): Promise<void> => {
   try {
-    await ensureInviteColumns();
     await dbQuery.query(
       `UPDATE ${s}.admin_users
        SET accepted_at = NOW()

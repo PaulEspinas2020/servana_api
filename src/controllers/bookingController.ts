@@ -10,6 +10,8 @@ import {
   findBookingByIdempotencyKey,
 } from "../services/bookingIdempotency";
 import { createCustomerNotification } from "../services/notification.service";
+import { publishEventSafely } from '../services/events/eventOutbox';
+import { dispatchSoon } from '../services/events/notificationProjector';
 import { validateCustomerBookingCreatePayload } from "../services/bookingCreateValidation";
 export const createBooking = async (req: any, res: any) => {
   let idempotencyKey: string | null = null;
@@ -91,6 +93,17 @@ export const createBooking = async (req: any, res: any) => {
     if (userId && booking) {
       const bookingId = (booking as any)?.id ?? (booking as any)?.bookingId ?? '';
       createCustomerNotification(userId, {
+        /**
+         * A deterministic key, added by TAB 09.
+         *
+         * This call was KEYLESS, so `createCustomerNotification` fell through to
+         * the auto-UUID branch and every retried create produced a SECOND
+         * "Booking received" row for the same booking. The key makes it
+         * idempotent, and it is the same key `DOMAIN_EVENTS.BookingCreated`
+         * projects — so this producer and the event projector collapse onto one
+         * row instead of racing to write two.
+         */
+        notificationKey: bookingId ? `booking_created_${bookingId}` : undefined,
         type: 'booking_created',
         severity: 'info',
         title: 'Booking received',
@@ -100,6 +113,18 @@ export const createBooking = async (req: any, res: any) => {
           : null,
         canOpenDetail: !!bookingId,
       }).catch(() => {});
+
+      // The canonical fact. Published after the booking is committed, so it
+      // never announces something that rolled back.
+      if (bookingId) {
+        void publishEventSafely({
+          name: 'BookingCreated',
+          refs: { bookingId, customerUid: userId },
+          display: { bookingCode: `SVN-${String(bookingId).padStart(6, '0')}` },
+          metadata: { actorUid: userId },
+          dedupeKey: `BookingCreated:${bookingId}`,
+        }).then(() => dispatchSoon());
+      }
     }
 
     res.json({ success: true, booking });
@@ -122,7 +147,8 @@ export const createBooking = async (req: any, res: any) => {
         });
       }
     }
-    res.status(400).json({ success: false, message: e.message });
+    const status = Number.isInteger(e?.statusCode) ? e.statusCode : 400;
+    res.status(status).json({ success: false, code: e?.code, message: e.message });
   }
 };
 
@@ -157,7 +183,15 @@ export const confirmOtp = async (req: Request, res: Response) => {
     // entitled to this booking. Check both (§11).
     await assertBookingAccess(bookingId, (req as any).user?.uid);
 
-    const booking = await bookingService.confirmOtp(bookingId, otp);
+    // The actor travels through to the executor, which refuses a customer who
+    // does not own the booking INDEPENDENTLY of the check above. Duplicated
+    // enforcement while this endpoint is the only caller; the controller check
+    // goes when it migrates. No internal caller may bypass ownership merely by
+    // bypassing the controller.
+    const booking = await bookingService.confirmOtp(bookingId, otp, {
+      actorUid: (req as any).user?.uid ?? null,
+      correlationId: String((req as any).id ?? ''),
+    });
 
     return res.json({ success: true, booking: formatBooking(booking) });
   } catch (e: any) {
@@ -183,9 +217,16 @@ export const resendOtp = async (req: Request, res: Response) => {
     // Same authorization as every other booking route: possession of an id is
     // not entitlement (§11). Without this, anyone could rotate the OTP on any
     // booking and lock the real customer out of confirming it.
-    await assertBookingAccess(bookingId, (req as any).user?.uid);
+    // The relationship decides the actor, so an admin resending on a customer's
+    // behalf is recorded as an admin. `requestBookingOtp` refuses a provider
+    // outright — a provider who could rotate the code is a provider who could
+    // mint the proof they are supposed to be given.
+    const role = await assertBookingAccess(bookingId, (req as any).user?.uid);
 
-    const result = await bookingService.resendBookingOtp(bookingId);
+    const result = await bookingService.resendBookingOtp(bookingId, {
+      actorUid: (req as any).user?.uid ?? null,
+      role: role === 'admin' ? 'admin' : 'customer',
+    });
     return res.json({ success: true, ...result });
   } catch (e: any) {
     if (sendBookingAccessError(res, e)) return;
@@ -332,5 +373,54 @@ export const cancelBooking = async (req: Request, res: Response) => {
   } catch (e: any) {
     const status = e.statusCode === 403 ? 403 : 400;
     return res.status(status).json({ success: false, message: e.message || 'Cancellation failed' });
+  }
+};
+
+/**
+ * The customer-facing booking timeline.
+ *
+ * Command 6 §11. The timeline logic already existed and was reachable only at
+ * `GET /provider/bookings/:bookingId/timeline`, behind `requireProviderRole` —
+ * so a customer had no authoritative history of their own booking, and the
+ * customer mobile app worked around it by delegating to `/:id/tracking`
+ * (BACKEND_GAP-C15-002 in `servana_api_client.dart`).
+ *
+ * This exposes the same builder to the booking's owner. It is additive: the
+ * provider route, its query and its response are untouched, and
+ * `booking-timeline-projection.test.ts` pins that the provider projection still
+ * reads in provider voice.
+ *
+ * ## Two differences from the provider handler, both deliberate
+ *
+ * **The events are re-voiced.** `buildBookingTimeline` is provider-seat
+ * throughout — see `projectTimelineForCustomer`. Serving its output verbatim
+ * would tell a customer "You marked yourself arrived" about their professional
+ * while attributing their own booking creation to somebody else.
+ *
+ * **The reassignment gate is not applied.** In the provider handler,
+ * `is_current_assignee` stops a replaced provider seeing admin events that
+ * happened after they lost the booking. A customer never loses their own
+ * booking, so the gate has nothing to protect against here and withholding
+ * their own history would be the bug.
+ *
+ * Access is `assertBookingAccess`, the same check `GET /:id` and `/:id/tracking`
+ * use: the customer, the actively-assigned provider, or an admin. A booking
+ * belonging to somebody else answers 403, and an unknown id answers 404, so this
+ * cannot be used to probe which booking ids exist.
+ */
+export const getCustomerBookingTimeline = async (req: Request, res: Response) => {
+  try {
+    const bookingId = Number(req.params.id);
+    if (!bookingId || Number.isNaN(bookingId)) {
+      return res.status(400).json({ success: false, message: "Invalid booking id" });
+    }
+
+    await assertBookingAccess(bookingId, (req as any).user?.uid);
+
+    const timeline = await bookingService.getCustomerBookingTimeline(bookingId);
+    return res.json({ success: true, timeline });
+  } catch (e: any) {
+    if (sendBookingAccessError(res, e)) return;
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };

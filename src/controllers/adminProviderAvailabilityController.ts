@@ -60,8 +60,13 @@ export const evaluateBooking = async (req: Request, res: Response) => {
     const { bookingId } = req.body ?? {};
     const parsedBookingId = Number(bookingId);
     if (!Number.isSafeInteger(parsedBookingId) || parsedBookingId <= 0) return fail(res, 400, 'bookingId must be a positive integer');
-    const candidates = await eligEngine.listAssignmentCandidates(String(parsedBookingId));
-    return ok(res, candidates);
+    // Same pool, same diagnosis as GET /admin/bookings/:id/assignment-candidates.
+    // This route is the supply-health view of it, so the diagnosis is the point
+    // — it travels in `meta`, which this controller already emits, leaving
+    // `data` the array existing callers parse.
+    const { candidates, diagnostics } =
+      await eligEngine.listAssignmentCandidatePool(String(parsedBookingId));
+    return ok(res, candidates, { diagnostics });
   } catch (err: any) {
     return fail(res, err?.statusCode ?? 500, err?.message ?? 'Failed to evaluate booking');
   }

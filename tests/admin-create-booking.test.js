@@ -16,49 +16,82 @@ const appSrc    = fs.readFileSync(path.join(__dirname, '../src/app.ts'), 'utf-8'
 const txStart = svcSrc.indexOf('adminCreateBooking =');
 const txBody  = svcSrc.slice(txStart, txStart + 12000);
 
-describe('adminCreateBooking — schema bootstrap', () => {
-  it('creates guest_customers table', () => {
-    expect(svcSrc).toContain('guest_customers');
-    expect(svcSrc).toContain('phone_normalized');
-    expect(svcSrc).toContain('linked_customer_uid');
+describe('adminCreateBooking — the schema comes from the baseline (TAB 02)', () => {
+  /**
+   * These asserted the DDL text inside `ensureAdminCreateBookingSchema`. That
+   * bootstrap is gone: every object comes from `scripts/baseline/000-baseline.sql`,
+   * which is production's own dump and what a fresh database is built from. So each
+   * guarantee is now checked against the schema that will actually exist.
+   */
+  const baseline = fs
+    .readFileSync(path.join(__dirname, '..', 'scripts', 'baseline', '000-baseline.sql'), 'utf8')
+    .replace(/\r\n/g, '\n');
+
+  const columnsOf = (table) => {
+    const m = new RegExp('CREATE TABLE servana\\.' + table + ' \\(([\\s\\S]*?)\\n\\);').exec(baseline);
+    expect(m).not.toBeNull();
+    return m[1];
+  };
+
+  it('the service issues no DDL at all', () => {
+    const code = svcSrc
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((l) => !/^\s*\/\//.test(l))
+      .join('\n');
+    expect(code).not.toContain('CREATE TABLE');
+    expect(code).not.toContain('ADD COLUMN');
+    expect(code).not.toContain('DROP NOT NULL');
   });
 
-  it('creates UNIQUE index on phone_normalized (required for ON CONFLICT (phone_normalized) to work)', () => {
-    expect(svcSrc).toContain('CREATE UNIQUE INDEX IF NOT EXISTS idx_gc_phone_unique');
-    expect(svcSrc).toContain('(phone_normalized)');
+  it('guest_customers is declared, with the columns the flow reads', () => {
+    const cols = columnsOf('guest_customers');
+    expect(cols).toMatch(/phone_normalized/);
+    expect(cols).toMatch(/linked_customer_uid/);
   });
 
-  it('creates booking_payment_evidence table', () => {
-    expect(svcSrc).toContain('booking_payment_evidence');
-    expect(svcSrc).toContain('storage_url');
-    expect(svcSrc).toContain('mime_type');
+  it('phone_normalized is UNIQUE — ON CONFLICT (phone_normalized) needs it', () => {
+    // Without this index the upsert is not an upsert, it is a duplicate guest.
+    expect(baseline).toMatch(
+      /CREATE UNIQUE INDEX idx_gc_phone_unique ON servana\.guest_customers USING btree \(phone_normalized\)/,
+    );
   });
 
-  it('creates booking_create_idempotency table with UNIQUE constraint', () => {
-    // The actor column was renamed admin_actor_uid -> actor_uid when the
-    // CUSTOMER booking path began sharing this table. One concept, one table
-    // (§9) — and the old name would have been a lie the moment a customer uid
-    // was written to it. Existing installs are migrated at boot.
-    expect(svcSrc).toContain('booking_create_idempotency');
-    expect(svcSrc).toContain('UNIQUE (idempotency_key, actor_uid)');
+  it('booking_payment_evidence is declared', () => {
+    const cols = columnsOf('booking_payment_evidence');
+    expect(cols).toMatch(/storage_url/);
+    expect(cols).toMatch(/mime_type/);
   });
 
-  it('adds guest_customer_id column to bookings', () => {
-    expect(svcSrc).toContain('ADD COLUMN IF NOT EXISTS guest_customer_id');
+  it('booking_create_idempotency is UNIQUE on (idempotency_key, actor_uid)', () => {
+    /**
+     * This is what stops a retried admin form producing two real bookings, and it
+     * is why the startup entry was classified `required` while the app created it.
+     *
+     * The actor column was renamed admin_actor_uid -> actor_uid when the CUSTOMER
+     * booking path began sharing the table: one concept, one table (§9), and the
+     * old name would have been a lie the moment a customer uid was written to it.
+     */
+    expect(baseline).toMatch(
+      /UNIQUE \(idempotency_key, actor_uid\)|USING btree \(idempotency_key, actor_uid\)/,
+    );
+    expect(columnsOf('booking_create_idempotency')).toMatch(/actor_uid/);
   });
 
-  it('adds admin_created flag to bookings', () => {
-    expect(svcSrc).toContain('ADD COLUMN IF NOT EXISTS admin_created');
+  it('bookings carries guest_customer_id and admin_created', () => {
+    const cols = columnsOf('bookings');
+    expect(cols).toMatch(/guest_customer_id/);
+    expect(cols).toMatch(/admin_created/);
   });
 
-  it('relaxes user_id NOT NULL for guest support', () => {
-    expect(svcSrc).toContain('ALTER COLUMN user_id DROP NOT NULL');
-  });
-
-  it('wraps each ALTER TABLE in try-catch so one failure does not abort the rest', () => {
-    const alterIdx = svcSrc.indexOf('ALTER TABLE ${s}.bookings ADD COLUMN IF NOT EXISTS guest_customer_id');
-    const catchIdx = svcSrc.indexOf('} catch {', alterIdx);
-    expect(catchIdx).toBeGreaterThan(alterIdx);
+  it('bookings.user_id is NULLABLE, which is what makes a guest booking possible', () => {
+    // The bootstrap did this with ALTER COLUMN user_id DROP NOT NULL. In the
+    // baseline, the absence of NOT NULL on that line IS the guarantee.
+    const line = columnsOf('bookings')
+      .split('\n')
+      .find((l) => /^\s+user_id\s/.test(l));
+    expect(line).toBeDefined();
+    expect(line).not.toMatch(/NOT NULL/);
   });
 });
 
@@ -309,8 +342,25 @@ describe('adminCreateBooking — permissions', () => {
 });
 
 describe('adminCreateBooking — app.ts wiring', () => {
-  it('wires ensureAdminCreateBookingSchema IIFE in app.ts', () => {
-    expect(appSrc).toContain('ensureAdminCreateBookingSchema');
+  it('no longer bootstraps booking schema at startup (TAB 02)', () => {
+    /**
+     * TAB 03 moved this out of an app.ts IIFE into the startup dependency graph
+     * and classified it `required`, because an admin-created booking is a real
+     * booking and the idempotency table stops a retried form producing two.
+     *
+     * That reasoning was about the SCHEMA existing before traffic. It no longer
+     * applies: `booking_create_idempotency` and its uniqueness come from
+     * `scripts/baseline/000-baseline.sql`, so they exist before the process does.
+     * The entry is REMOVED, not downgraded to optional — the distinction TAB 03
+     * actually forbids — because there is no DDL left to gate on.
+     *
+     * The guarantee itself is asserted above, against the baseline.
+     */
+    const startup = require('fs')
+      .readFileSync(require('path').resolve(__dirname, '../src/startup.ts'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(startup).not.toContain('ensureAdminCreateBookingSchema');
+    expect(startup).not.toContain("name: 'admin-create-booking-schema'");
   });
 });
 
@@ -385,6 +435,9 @@ describe('job-card — instructions surface to provider (STITCH-003)', () => {
   const techCtrlSrc = require('fs').readFileSync(
     require('path').join(__dirname, '../src/controllers/technicianController.ts'), 'utf-8'
   ).replace(/\r\n/g, '\n');
+  const jobCardViewSrc = require('fs').readFileSync(
+    require('path').join(__dirname, '../src/controllers/jobCardView.ts'), 'utf-8'
+  ).replace(/\r\n/g, '\n');
 
   it('getJobCardsByWorker SELECT includes delivery_instructions from service_address JSONB', () => {
     const fnIdx = techSvcSrc.indexOf('getJobCardsByWorker');
@@ -395,9 +448,9 @@ describe('job-card — instructions surface to provider (STITCH-003)', () => {
 
   it('getJobCards controller maps delivery_instructions into address.instructions', () => {
     const fnIdx = techCtrlSrc.indexOf('getJobCards');
-    const fn = techCtrlSrc.slice(fnIdx, fnIdx + 1200);
-    expect(fn).toContain('instructions:');
-    expect(fn).toContain('delivery_instructions');
+    const fn = techCtrlSrc.slice(fnIdx, fnIdx + 500);
+    expect(fn).toContain('jobs.map(formatJobCard)');
+    expect(jobCardViewSrc).toContain('instructions: job.delivery_instructions ?? null');
   });
 });
 
@@ -406,8 +459,25 @@ describe('adminBookingDraftService — DRAFT-002: customerName storage (2026-07-
     require('path').join(__dirname, '../src/services/adminBookingDraftService.ts'), 'utf-8'
   ).replace(/\r\n/g, '\n');
 
-  it('ensureAdminBookingDraftSchema adds customer_name column via additive ALTER TABLE', () => {
-    expect(draftSrc).toContain('ADD COLUMN IF NOT EXISTS customer_name VARCHAR(256)');
+  it('customer_name is supplied by the baseline, not by runtime DDL (TAB 02)', () => {
+    /**
+     * This asserted `ADD COLUMN IF NOT EXISTS customer_name VARCHAR(256)` in
+     * `ensureAdminBookingDraftSchema`. That bootstrap is gone — the application
+     * no longer creates its own schema — so the guarantee is now checked where
+     * the column actually comes from: production's own dump, which is also what
+     * a fresh database is built from.
+     */
+    // Normalised, like every other source read in this suite: a fixed-window or
+    // anchored regex over raw CRLF fails on Windows and passes in CI, which is the
+    // exact trap `source-reads-normalise-line-endings.test.ts` exists to catch.
+    const baseline = require('fs').readFileSync(
+      require('path').join(__dirname, '../scripts/baseline/000-baseline.sql'), 'utf-8'
+    ).replace(/\r\n/g, '\n');
+    const table = /CREATE TABLE servana\.admin_booking_drafts \(([\s\S]*?)\n\);/.exec(baseline);
+    expect(table).not.toBeNull();
+    expect(table[1]).toMatch(/customer_name character varying\(256\)/);
+    // And the service must not have quietly regained a DDL path.
+    expect(draftSrc).not.toMatch(/CREATE TABLE|ADD COLUMN|CREATE INDEX/);
   });
 
   it('DraftPatchSections includes customerName field', () => {

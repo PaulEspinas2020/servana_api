@@ -26,6 +26,7 @@
  */
 
 import fs from 'fs';
+import { paidAdditionalWorkSql } from '../src/services/earningsBasis';
 import path from 'path';
 
 const SRC = path.join(__dirname, '..', 'src');
@@ -166,12 +167,26 @@ describe('disbursement basis — additional work', () => {
     // A request can be ACCEPTED, IN_PROGRESS or PROCEEDING with the customer
     // having paid nothing. Paying a share of uncollected money turns a
     // shortfall into a loss, so the sum keys on the PAYMENT row.
-    const sub = src.match(/SELECT SUM\(p\.amount\)[\s\S]{0,320}?\)/);
-    expect(sub).not.toBeNull();
-    expect(sub![0]).toMatch(/p\.status = 'PAID'/);
-    expect(sub![0]).toMatch(/p\.additional_request_id IS NOT NULL/);
+    //
+    // The subquery no longer lives in this file. It moved to
+    // `services/earningsBasis.ts` when the READERS were fixed to use the same
+    // basis as this writer — the earnings screens were showing `final_price`
+    // alone beside a share computed from `final_price + additional_paid`.
+    // Asserting against the shared fragment tests the value both sides now use,
+    // rather than one file's text.
+    const sub = paidAdditionalWorkSql('servana');
+    expect(sub).toMatch(/SELECT SUM\(p_add\.amount\)/);
+    expect(sub).toMatch(/p_add\.status = 'PAID'/);
+    expect(sub).toMatch(/p_add\.additional_request_id IS NOT NULL/);
     // Not the request table, whose status does not evidence payment.
-    expect(sub![0]).not.toMatch(/booking_additional_requests/);
+    expect(sub).not.toMatch(/booking_additional_requests/);
+  });
+
+  test('the writer still uses the shared fragment', () => {
+    // Guards the move itself: if disbursement.service stopped importing it and
+    // grew its own copy again, the reader and writer could drift apart —
+    // which is the exact defect the shared fragment exists to prevent (§10).
+    expect(src).toMatch(/paidAdditionalWorkSql/);
   });
 });
 
@@ -182,18 +197,23 @@ describe('cancelled spelling normalisation', () => {
   test('nothing WRITES the single-L spelling to booking_workers any more', () => {
     // Two spellings of one state is how getWorkerDashboard came to report zero
     // cancellations forever. 'CANCELLED' is canonical, matching bookings.status.
-    for (const src of [bookingSvc, adminSvc]) {
+    const executorSrc = flat(code(read('services/booking/transitionExecutor.ts')));
+    for (const src of [bookingSvc, adminSvc, executorSrc]) {
       expect(src).not.toMatch(/booking_workers SET status = 'CANCELED'/);
     }
-    expect(bookingSvc).toMatch(/booking_workers SET status = 'CANCELLED'/);
+    // The write lives in the executor now. Asserting it against bookingService
+    // would pass only until that file stopped writing status at all - which it
+    // has, as of Phase C.
+    expect(executorSrc).toMatch(/booking_workers SET status = \$2/);
+    expect(executorSrc).toContain('CANONICAL_CANCELLED');
   });
 
   test('READS still accept both, for rows written before normalisation', () => {
     // A query matching only the canonical spelling against un-normalised data
     // reintroduces exactly the bug this replaced. Reads stay tolerant until the
     // migration has run everywhere.
-    const provider = flat(code(read('controllers/providerController.ts')));
-    expect(provider).toMatch(/'CANCELED','CANCELLED'/);
+    const tech = flat(code(read('services/technicianService.ts')));
+    expect(tech).toMatch(/'CANCELED',\s*'CANCELLED'/);
   });
 
   test('the dashboard counter still matches both', () => {
@@ -204,30 +224,69 @@ describe('cancelled spelling normalisation', () => {
 });
 
 describe('arrival stages — EN_ROUTE and ARRIVED', () => {
-  const tech = flat(code(read('services/technicianService.ts')));
   const booking = flat(code(read('services/bookingService.ts')));
   const routes = flat(code(read('routes/provider.routes.ts')));
 
+  /**
+   * These two properties moved, they did not disappear.
+   *
+   * B1.3/B1.4/B1.5 took the arrival stages and the start off
+   * `technicianService`'s own SQL guards and onto the canonical machine, so
+   * assertions written against `AND status = $3` and
+   * `bw.status IN ('ACCEPTED','EN_ROUTE','ARRIVED')` now describe code that no
+   * longer exists. Deleting them would drop a real guarantee; leaving them
+   * pointed at the old file would fail a migration that kept every guarantee
+   * intact. They follow the property to the transition table instead.
+   */
+  const machine = flat(code(read('services/booking/canonicalState.ts')));
+  const executor = flat(code(read('services/booking/transitionExecutor.ts')));
+
   test('the transitions are guarded, not blind writes', () => {
-    // Every other lifecycle transition carries its expected current status, so
-    // an out-of-order call changes nothing rather than corrupting state. These
-    // must match that standard or they become the weak link.
-    expect(tech).toMatch(/ACCEPTED["'],\s*["']EN_ROUTE/);
-    expect(tech).toMatch(/EN_ROUTE["'],\s*["']ARRIVED/);
-    expect(tech).toMatch(/AND status = \$3/);
+    // The guard is now the whitelist, checked under the row lock before any
+    // write, rather than an expected-status clause bolted onto each UPDATE.
+    expect(machine).toMatch(/from: 'ACCEPTED',\s*to: 'EN_ROUTE'/);
+    expect(machine).toMatch(/from: 'EN_ROUTE',\s*to: 'ARRIVED'/);
+    expect(executor).toMatch(/canTransition\(fromState, toState, input\.actorRole\)/);
+    expect(executor).toMatch(/FOR UPDATE/);
   });
 
   test('startJob still accepts a provider who skipped both stages', () => {
     // Requiring ACCEPTED alone would strand a provider who tapped "on my way"
     // one tap short of starting the job, because the stage advanced the status.
-    expect(tech).toMatch(/bw\.status IN \('ACCEPTED', 'EN_ROUTE', 'ARRIVED'\)/);
+    // The SQL list that used to encode this is gone; the machine carries it.
+    expect(machine).toMatch(/from: 'ACCEPTED', to: 'IN_PROGRESS'/);
+    expect(machine).toMatch(/from: 'EN_ROUTE', to: 'IN_PROGRESS'/);
+    expect(machine).toMatch(/from: 'ARRIVED', to: 'IN_PROGRESS'/);
+    // And the second copy really is gone, not merely unused.
+    //
+    // Block comments have to come off for this one. `code()` strips `--` and
+    // `//` only, and the executor's docblock explains at length that the
+    // predicate does NOT carry a state list — so the prose describing its
+    // absence would fail the check for its absence.
+    const noBlocks = (src: string) => flat(code(src.replace(/\/\*[\s\S]*?\*\//g, '')));
+    const tech = noBlocks(read('services/technicianService.ts'));
+    const executorCode = noBlocks(read('services/booking/transitionExecutor.ts'));
+    expect(tech).not.toMatch(/bw\.status IN \('ACCEPTED', 'EN_ROUTE', 'ARRIVED'\)/);
+    expect(executorCode).not.toMatch(/bw\.status IN \(/);
+    // Positive fixture: the statement itself is still there to be checked.
+    expect(executorCode).toMatch(/UPDATE \$\{s\}\.booking_workers bw/);
   });
 
   test('cancelling reaches a provider who is already travelling', () => {
     // The cancel path matched ASSIGNED/ACCEPTED only. Adding stages after
     // ACCEPTED without widening this would leave the assignment live on a
     // cancelled booking, with the provider still driving to the address.
-    expect(booking).toMatch(/'ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED'/);
+    //
+    // Phase C moved the write into the executor's CANCELLED branch, so the
+    // assertion follows it. The property is unchanged and still enforced;
+    // pointing it at bookingService would fail a migration that kept it.
+    expect(executor).toMatch(/'ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED'/);
+    // And it is the CANCELLED write that carries it, not some other statement.
+    const cancelBranch = executor.slice(
+      executor.indexOf("case 'CANCELLED': {"),
+      executor.indexOf("case 'EXPIRED':"),
+    );
+    expect(cancelBranch).toMatch(/'ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED'/);
   });
 
   test('both routes are authenticated', () => {
@@ -237,8 +296,15 @@ describe('arrival stages — EN_ROUTE and ARRIVED', () => {
 
   test('the columns are added additively', () => {
     // Nullable and IF NOT EXISTS, so every existing row and every shipped
-    // client is unaffected.
-    expect(tech).toMatch(/ADD COLUMN IF NOT EXISTS en_route_at/);
-    expect(tech).toMatch(/ADD COLUMN IF NOT EXISTS arrived_at/);
+    // client is unaffected. Now asserted in BOTH places that create them:
+    // migration 027, which is the real definition, and the lazy DDL that
+    // remains as a compatibility bridge until 027 is applied in production.
+    const migration = read('../scripts/migrations/027-booking-lifecycle-timestamps.sql');
+    const tech = flat(code(read('services/technicianService.ts')));
+
+    for (const column of ['en_route_at', 'arrived_at']) {
+      expect(migration).toMatch(new RegExp(`ADD COLUMN IF NOT EXISTS ${column}`));
+      expect(tech).toMatch(new RegExp(`ADD COLUMN IF NOT EXISTS ${column}`));
+    }
   });
 });

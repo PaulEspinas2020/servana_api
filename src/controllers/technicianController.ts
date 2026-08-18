@@ -13,6 +13,7 @@ import {
 } from "../services/providerProfileProjection";
 import dbQuery from "../db/dbQuery";
 import { db as dbCfg } from "../config";
+import { formatJobCard } from "./jobCardView";
 
 export const listByRole = async (req: Request, res: Response) => {
   try {
@@ -221,46 +222,7 @@ export const getJobCards = async (req: Request, res: Response) => {
 
     const jobs = await technician.getJobCardsByWorker(workerId);
 
-    const formatted = await Promise.all(
-      jobs.map(async (job: any) => {
-        // const addons = await technician.getJobCardAddons(job.booking_id);
-
-        return {
-          bookingId: job.booking_id,
-          status: job.status,
-          scheduleAt: job.schedule,
-
-          customer: {
-            uid: job.customer_id,
-            name: `${job.first_name} ${job.last_name}`,
-            phone: job.phone_number,
-          },
-
-          address: {
-            addressOne: job.address_one,
-            addressTwo: job.address_two,
-            city: job.post_town,
-            zipCode: job.zip_code,
-            country: job.country,
-            label: job.label,
-            instructions: job.delivery_instructions ?? null,
-          },
-
-          service: {
-            name: job.service_name,
-            type: job.service_type,
-          },
-
-          addOns: job.pricing_breakdown,
-          workerStatus: job.worker_status,
-          assignedAt: job.assigned_at,
-          startedAt: job.started_at,
-          completedAt: job.completed_at,
-        };
-      })
-    );
-
-    return res.json(formatted); // 👈 FLAT ARRAY RESPONSE
+    return res.json(jobs.map(formatJobCard));
   } catch (error: any) {
     return res.status(500).json({
       success: false,
@@ -484,35 +446,13 @@ export const deleteBankAccount = async (req: Request, res: Response) => {
   }
 };
 
-export const assignWorker = async (req: Request, res: Response) => {
-  try {
-    const bookingId = Number(req.params.bookingId);
-    const workerUid = req.query.workerUid as string;
-
-    if (!bookingId || !workerUid) {
-      return res.status(400).json({
-        success: false,
-        message: "bookingId and workerUid are required",
-      });
-    }
-
-    const result = await technician.assignWorker(
-      bookingId,
-      workerUid
-    );
-
-    return res.json({
-      success: true,
-      message: "Worker assigned successfully",
-      data: result,
-    });
-  } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      message: error.message || "Failed to assign worker",
-    });
-  }
-};
+// assignWorker and its PUT /admin/bookings/:bookingId/assign route were removed.
+// It was a DUPLICATE of POST /admin/bookings/:id/assign (adminBooking.routes.ts),
+// and the weaker of the two: verifyRoles([1]) with no requirePermission, where the
+// canonical route is gated on bookings.assign_provider. It also took the target
+// provider from a query string with no requireProviderTarget, wrote no audit event,
+// and returned a different envelope. Its only client was the admin portal's
+// AssignEmployee dialog, itself unreachable and since deleted.
 
 /**
  * The worker performing a lifecycle action on their own job.
@@ -575,7 +515,7 @@ export const acceptJob = async (req: Request, res: Response) => {
     const bookingId = Number(req.params.bookingId);
     const workerUid = actingWorkerUid(req);
 
-    if (!bookingId || !workerUid) {
+    if (!Number.isSafeInteger(bookingId) || bookingId <= 0 || !workerUid) {
       return res.status(400).json({
         success: false,
         message: "bookingId and workerUid are required",

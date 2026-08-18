@@ -18,13 +18,23 @@
  * before it commits, mirroring `calculateReadiness` in the approval path. A
  * caller cannot pass a stale "I checked already".
  *
- * ── Schema bootstrap ────────────────────────────────────────────────────────
- * `ensureActivationSchema` is called at module load AND awaited at the top of
- * every entry point. That is the pattern `providerOperationalAvailabilityService`
- * uses, and it is deliberately not the app.ts pattern: `ensureIdentityColumns`
- * was written, added to no boot path, and every Firebase sign-in failed with
- * 42703 until it was noticed. Awaiting at the entry point is self-healing and
- * does not depend on boot ordering.
+ * ── Schema (TAB 02) ─────────────────────────────────────────────────────────
+ * `provider_activation`, `provider_activation_events` and
+ * `idx_activation_events_provider` used to be created here by
+ * `ensureActivationSchema`, awaited at the top of every entry point. That
+ * function is gone; all three come from `scripts/baseline/000-baseline.sql`.
+ *
+ * The pattern it replaced was chosen for a real reason worth preserving in the
+ * record: `ensureIdentityColumns` was written, added to no boot path, and every
+ * Firebase sign-in failed with 42703 until somebody noticed. Awaiting at the
+ * entry point was self-healing where boot ordering was not.
+ *
+ * What makes removing it safe now is NOT that the risk went away — it is that
+ * the object no longer depends on any application code running. The baseline is
+ * production's own dump, and `npm run db:verify:embedded` proves a fresh database
+ * reaches the same schema. If you ever add a table that the baseline and the
+ * migrations both lack, `npm run schema:authority` fails, and that is the guard
+ * standing where the runtime bootstrap used to.
  */
 
 import dbQuery from "../db/dbQuery";
@@ -60,51 +70,12 @@ export type ActivationRequirement = {
   route: string;
 };
 
-let schemaReady: Promise<void> | null = null;
+// `provider_activation.version` is the optimistic-concurrency counter every
+// transition below increments; `activation_status` defaults to 'NOT_ELIGIBLE', so
+// a provider with no row reads as the initial state rather than as missing.
 
-export const ensureActivationSchema = (): Promise<void> => {
-  if (schemaReady) return schemaReady;
-  schemaReady = (async () => {
-    await dbQuery.query(
-      `CREATE TABLE IF NOT EXISTS ${s}.provider_activation (
-         provider_uid       VARCHAR(128) PRIMARY KEY,
-         activation_status  VARCHAR(32)  NOT NULL DEFAULT 'NOT_ELIGIBLE',
-         version            INTEGER      NOT NULL DEFAULT 1,
-         policy_acknowledged_at TIMESTAMPTZ,
-         activated_at       TIMESTAMPTZ,
-         activated_by       VARCHAR(128),
-         created_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
-         updated_at         TIMESTAMPTZ  NOT NULL DEFAULT now()
-       )`,
-      []
-    );
-    await dbQuery.query(
-      `CREATE TABLE IF NOT EXISTS ${s}.provider_activation_events (
-         id            BIGSERIAL PRIMARY KEY,
-         provider_uid  VARCHAR(128) NOT NULL,
-         prev_state    VARCHAR(32),
-         next_state    VARCHAR(32)  NOT NULL,
-         actor_type    VARCHAR(16)  NOT NULL,
-         actor_uid     VARCHAR(128),
-         reason        TEXT,
-         created_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
-       )`,
-      []
-    );
-    await dbQuery.query(
-      `CREATE INDEX IF NOT EXISTS idx_activation_events_provider
-         ON ${s}.provider_activation_events (provider_uid, created_at DESC)`,
-      []
-    );
-  })().catch((e) => {
-    // Reset so a transient failure does not permanently poison the cache.
-    schemaReady = null;
-    throw e;
-  });
-  return schemaReady;
-};
-
-ensureActivationSchema().catch(() => {});
+// Startup: declared in src/startup.ts (TAB 03). Running DDL at import
+// meant every importer issued it, including tests and CLI scripts.
 
 /**
  * Read the stored row WITHOUT creating one.
@@ -119,7 +90,6 @@ ensureActivationSchema().catch(() => {});
 export async function peekActivation(
   providerUid: string
 ): Promise<{ status: ActivationStatus; version: number; activatedAt: string | null } | null> {
-  await ensureActivationSchema();
   const { rows } = await dbQuery.query(
     `SELECT activation_status, version, activated_at
        FROM ${s}.provider_activation
@@ -140,7 +110,6 @@ export async function peekActivation(
 export async function getActivation(
   providerUid: string
 ): Promise<{ status: ActivationStatus; version: number; activatedAt: string | null }> {
-  await ensureActivationSchema();
   const { rows } = await dbQuery.query(
     `INSERT INTO ${s}.provider_activation (provider_uid)
      VALUES ($1)
@@ -157,6 +126,74 @@ export async function getActivation(
 }
 
 /**
+ * Records that the provider has accepted the Servana provider agreement.
+ *
+ * ## The checklist row that could never be ticked
+ *
+ * `policy_acknowledgement` is a BLOCKING requirement and
+ * `policy_acknowledged_at` had exactly two references in the whole backend: the
+ * column definition, and the `count(*)` below that reads it. **Nothing wrote
+ * it, anywhere, on any platform.** Measured on production 2026-08-11:
+ * `provider_activation` held 0 rows and 0 acknowledgements.
+ *
+ * So every provider sat permanently short of 100%, the application could never
+ * be submitted through this path, and the row rendered as an inert line on the
+ * checklist with no destination — which is how it was reported: "provider
+ * agreement not clickable". The missing tap target was the symptom; the missing
+ * writer was the defect.
+ *
+ * Same class as `is_mobile_verified`, which held 68 of 70 providers at
+ * IDENTIFIER_VERIFICATION_REQUIRED for the same reason. A requirement with no
+ * writer is not a strict rule, it is a dead end.
+ *
+ * ## Why it is idempotent and monotonic
+ *
+ * Accepting twice is not a second acceptance. `COALESCE` keeps the FIRST
+ * timestamp, so a provider who taps again — or a client that retries — cannot
+ * quietly rewrite when they agreed. That date is the evidence of consent and it
+ * only happens once (§15).
+ *
+ * Returns the effective timestamp either way, so a repeat call is a success
+ * with the original date rather than an error the UI has to explain.
+ */
+export async function acknowledgeProviderPolicy(
+  providerUid: string,
+  meta: { version: string | null }
+): Promise<{ acknowledgedAt: string; policyVersion: string | null }> {
+
+  // Creates the row on first sight — a provider acknowledges before anything
+  // else has had reason to insert one, which is why this cannot assume it
+  // exists.
+  const { rows } = await dbQuery.query(
+    `INSERT INTO ${s}.provider_activation (provider_uid, policy_acknowledged_at)
+     VALUES ($1, now())
+     ON CONFLICT (provider_uid) DO UPDATE
+       SET policy_acknowledged_at =
+             COALESCE(${s}.provider_activation.policy_acknowledged_at, now()),
+           updated_at = now()
+     RETURNING policy_acknowledged_at`,
+    [providerUid]
+  );
+
+  const acknowledgedAt = new Date(rows[0].policy_acknowledged_at).toISOString();
+
+  // Audited on the same table every other activation transition uses, so "who
+  // agreed to what, and when" is answerable from one place (§15/§16).
+  await dbQuery
+    .query(
+      `INSERT INTO ${s}.provider_activation_events
+         (provider_uid, prev_state, next_state, actor_type, actor_uid, reason)
+       VALUES ($1, NULL, 'POLICY_ACKNOWLEDGED', 'provider', $1, $2)`,
+      [providerUid, meta.version ? `policy_version=${meta.version}` : null]
+    )
+    .catch((e: any) =>
+      console.error("[activation] policy audit write failed:", e?.message)
+    );
+
+  return { acknowledgedAt, policyVersion: meta.version };
+}
+
+/**
  * The activation checklist (§9).
  *
  * Each check is defensive: a table that does not exist yet yields
@@ -167,7 +204,6 @@ export async function getActivation(
 export async function getActivationRequirements(
   providerUid: string
 ): Promise<ActivationRequirement[]> {
-  await ensureActivationSchema();
 
   const count = async (sql: string): Promise<number> => {
     try {
@@ -241,7 +277,6 @@ export async function transitionActivation(opts: {
   actorUid?: string | null;
   reason?: string;
 }): Promise<{ status: ActivationStatus; version: number }> {
-  await ensureActivationSchema();
   const { providerUid, to, expectedVersion, actorType, actorUid = null, reason } = opts;
 
   const current = await getActivation(providerUid);
@@ -403,7 +438,6 @@ export async function refreshActivationEligibility(
   providerUid: string,
   applicationApproved: boolean
 ): Promise<ActivationStatus> {
-  await ensureActivationSchema();
   const current = await getActivation(providerUid);
 
   if (current.status === "ACTIVE" || current.status === "TEMPORARILY_RESTRICTED") {

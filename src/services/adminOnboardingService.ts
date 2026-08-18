@@ -25,209 +25,30 @@ import * as notificationService from './notification.service';
 
 const dbSchema = db.schema;
 
-// ── Lazy schema init ──────────────────────────────────────────────────────────
-
-let _schemaReady: Promise<void> | null = null;
-
-export const ensureOnboardingSchema = (): Promise<void> => {
-  if (_schemaReady) return _schemaReady;
-  _schemaReady = (async () => {
-    // ── provider_onboarding_cases ─────────────────────────────────────────────
-    await dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_onboarding_cases (
-        id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        provider_uid        TEXT NOT NULL,
-        onboarding_status   TEXT NOT NULL DEFAULT 'not_started'
-                            CHECK (onboarding_status IN (
-                              'not_started','in_progress','submitted','queued',
-                              'in_review','waiting_for_provider',
-                              'waiting_for_internal_review','escalated',
-                              'ready_for_final_review','approved','rejected',
-                              'withdrawn','expired','suspended','reopened'
-                            )),
-        priority            TEXT NOT NULL DEFAULT 'normal'
-                            CHECK (priority IN ('low','normal','high','urgent')),
-        assigned_reviewer   TEXT,
-        assigned_team       TEXT,
-        waiting_party       TEXT CHECK (waiting_party IN ('provider','servana','external',NULL)),
-        submitted_at        TIMESTAMPTZ,
-        first_review_due_at TIMESTAMPTZ,
-        decision_due_at     TIMESTAMPTZ,
-        last_activity_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        completed_at        TIMESTAMPTZ,
-        reopened_at         TIMESTAMPTZ,
-        internal_note       TEXT,
-        version             INT NOT NULL DEFAULT 1,
-        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-    await dbQuery.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS poc_provider_uid_active_idx
-      ON ${dbSchema}.provider_onboarding_cases (provider_uid)
-      WHERE onboarding_status NOT IN ('approved','rejected','withdrawn','expired')
-    `);
-    await dbQuery.query(`
-      CREATE INDEX IF NOT EXISTS poc_status_idx
-      ON ${dbSchema}.provider_onboarding_cases (onboarding_status, last_activity_at DESC)
-    `);
-    await dbQuery.query(`
-      CREATE INDEX IF NOT EXISTS poc_priority_idx
-      ON ${dbSchema}.provider_onboarding_cases (priority, submitted_at ASC NULLS LAST)
-    `);
-
-    // ── provider_requirement_definitions ──────────────────────────────────────
-    await dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_requirement_definitions (
-        id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        code                      TEXT UNIQUE NOT NULL,
-        def_version               INT NOT NULL DEFAULT 1,
-        title                     TEXT NOT NULL,
-        provider_facing_title     TEXT NOT NULL,
-        description               TEXT NOT NULL DEFAULT '',
-        category                  TEXT NOT NULL DEFAULT 'other'
-                                  CHECK (category IN ('identity','background','qualification',
-                                    'profile','financial','service_specific','other')),
-        is_required               BOOLEAN NOT NULL DEFAULT true,
-        applicable_provider_types JSONB NOT NULL DEFAULT '["2","4"]',
-        accepted_mime_types       JSONB NOT NULL DEFAULT '["image/jpeg","image/png","application/pdf"]',
-        max_file_size_bytes       BIGINT NOT NULL DEFAULT 5242880,
-        min_files                 INT NOT NULL DEFAULT 1,
-        max_files                 INT NOT NULL DEFAULT 3,
-        provider_instructions     TEXT NOT NULL DEFAULT '',
-        reviewer_instructions     TEXT NOT NULL DEFAULT '',
-        is_active                 BOOLEAN NOT NULL DEFAULT true,
-        effective_from            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        effective_until           TIMESTAMPTZ,
-        created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-
-    // ── provider_requirement_decisions ────────────────────────────────────────
-    await dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_requirement_decisions (
-        id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        worker_requirement_id       BIGINT NOT NULL,
-        provider_uid                TEXT NOT NULL,
-        requirement_definition_code TEXT,
-        decision                    TEXT NOT NULL
-                                    CHECK (decision IN (
-                                      'approved','rejected','needs_resubmission','escalated'
-                                    )),
-        reason_code                 TEXT,
-        provider_message            TEXT,
-        internal_rationale          TEXT,
-        reviewer_uid                TEXT NOT NULL,
-        decided_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        expected_req_version        INT,
-        is_superseded               BOOLEAN NOT NULL DEFAULT false,
-        created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-    await dbQuery.query(`
-      CREATE INDEX IF NOT EXISTS prd_provider_uid_idx
-      ON ${dbSchema}.provider_requirement_decisions (provider_uid, decided_at DESC)
-    `);
-    await dbQuery.query(`
-      CREATE INDEX IF NOT EXISTS prd_req_id_idx
-      ON ${dbSchema}.provider_requirement_decisions (worker_requirement_id)
-    `);
-
-    // ── provider_review_reason_codes ──────────────────────────────────────────
-    await dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_review_reason_codes (
-        code                    TEXT PRIMARY KEY,
-        domain                  TEXT NOT NULL,
-        applicable_decisions    JSONB NOT NULL DEFAULT '[]',
-        internal_label          TEXT NOT NULL,
-        provider_facing_title   TEXT NOT NULL,
-        provider_facing_body    TEXT NOT NULL,
-        suggested_correction    TEXT NOT NULL DEFAULT '',
-        requires_free_text      BOOLEAN NOT NULL DEFAULT false,
-        requires_escalation     BOOLEAN NOT NULL DEFAULT false,
-        provider_may_resubmit   BOOLEAN NOT NULL DEFAULT true,
-        is_sensitive            BOOLEAN NOT NULL DEFAULT false,
-        is_active               BOOLEAN NOT NULL DEFAULT true,
-        created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-
-    /**
-     * Additive columns for the suspension domain and reapplication policy.
-     *
-     * Separate ALTERs rather than edits to the CREATE above: that statement is
-     * `IF NOT EXISTS`, so on every already-deployed database it is a no-op and
-     * a new column added inside it would never appear. This is the same shape
-     * as ensureIdentityColumns — the difference being that this one is actually
-     * reached, because ensureOnboardingSchema is awaited by its callers.
-     */
-    await dbQuery.query(`
-      ALTER TABLE ${dbSchema}.provider_review_reason_codes
-        ADD COLUMN IF NOT EXISTS restricts_scope          TEXT,
-        ADD COLUMN IF NOT EXISTS may_auto_lift            BOOLEAN NOT NULL DEFAULT false,
-        ADD COLUMN IF NOT EXISTS reapplication_wait_days  INTEGER
-    `);
-
-    // ── provider_onboarding_notes ─────────────────────────────────────────────
-    await dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_onboarding_notes (
-        id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        case_id        UUID NOT NULL,
-        author_uid     TEXT NOT NULL,
-        note_type      TEXT NOT NULL DEFAULT 'internal'
-                       CHECK (note_type IN ('internal','provider_message','escalation')),
-        body           TEXT NOT NULL,
-        is_provider_visible BOOLEAN NOT NULL DEFAULT false,
-        created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-    await dbQuery.query(`
-      CREATE INDEX IF NOT EXISTS pon_case_id_idx
-      ON ${dbSchema}.provider_onboarding_notes (case_id, created_at DESC)
-    `);
-
-    // ── provider_onboarding_timeline ──────────────────────────────────────────
-    await dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_onboarding_timeline (
-        id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        case_id          UUID,
-        provider_uid     TEXT NOT NULL,
-        actor_uid        TEXT,
-        actor_role       INT,
-        action           TEXT NOT NULL,
-        domain           TEXT NOT NULL DEFAULT 'case',
-        target_id        TEXT,
-        prev_state       TEXT,
-        next_state       TEXT,
-        reason_code      TEXT,
-        internal_reason  TEXT,
-        provider_message TEXT,
-        result_version   INT,
-        source_client    TEXT NOT NULL DEFAULT 'admin',
-        metadata         JSONB NOT NULL DEFAULT '{}',
-        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-    await dbQuery.query(`
-      CREATE INDEX IF NOT EXISTS pot_case_id_idx
-      ON ${dbSchema}.provider_onboarding_timeline (case_id, created_at DESC)
-    `);
-    await dbQuery.query(`
-      CREATE INDEX IF NOT EXISTS pot_provider_uid_idx
-      ON ${dbSchema}.provider_onboarding_timeline (provider_uid, created_at DESC)
-    `);
-  })().catch(err => {
-    _schemaReady = null;
-    throw err;
-  });
-  return _schemaReady;
-};
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// Seven tables and eight indexes used to be created here at runtime by
+// `ensureOnboardingSchema`: provider_onboarding_cases, _requirement_definitions,
+// _requirement_decisions, _review_reason_codes, _onboarding_notes and
+// _onboarding_timeline. It was awaited at the top of eighteen operations and
+// declared as a startup dependency. All of it now comes from
+// `scripts/baseline/000-baseline.sql`.
+//
+// Three things the removed DDL enforced, all still enforced by the baseline and
+// all relied on by code below:
+//
+//   provider_onboarding_cases.onboarding_status  CHECK over exactly 15 values.
+//     Adding a sixteenth needs a migration, not just a wider union type.
+//   priority                                     CHECK over low/normal/high/urgent.
+//   poc_provider_uid_active_idx                  UNIQUE (provider_uid) WHERE status
+//     NOT IN (approved, rejected, withdrawn, expired) -- i.e. ONE ACTIVE case per
+//     provider, enforced by the database. This is what stops a reopened case
+//     racing a new one into existence; it is a partial index, which is why a
+//     provider can still have many historical cases.
 
 // ── Seed reason codes (idempotent) ────────────────────────────────────────────
 
 export const seedReasonCodes = async () => {
-  await ensureOnboardingSchema();
   const codes = [
     // Requirement domain
     { code: 'req_unreadable', domain: 'requirement', decisions: ['rejected','needs_resubmission'], label: 'Document Unreadable', title: 'Document could not be read', body: 'The uploaded file is blurry, incomplete, or could not be opened. Please upload a clear, complete copy.', correction: 'Upload a high-quality scan or photo.', sensitive: false },
@@ -364,7 +185,6 @@ export const assertValidReasonCode = async (
   decision: string,
   providerMessage?: string | null
 ): Promise<void> => {
-  await ensureOnboardingSchema();
   if (!code) return; // absence is handled by the callers that require one
 
   const { rows } = await dbQuery.query(
@@ -402,7 +222,6 @@ export const assertValidReasonCode = async (
 // ── Seed requirement definitions (idempotent) ─────────────────────────────────
 
 export const seedRequirementDefinitions = async () => {
-  await ensureOnboardingSchema();
   const defs = [
     {
       code: 'gov_id',
@@ -460,7 +279,6 @@ export const seedRequirementDefinitions = async () => {
 // ── Case management ───────────────────────────────────────────────────────────
 
 const ensureCase = async (providerUid: string): Promise<any> => {
-  await ensureOnboardingSchema();
 
   // Check for existing active case
   const existing = await dbQuery.query(
@@ -506,6 +324,47 @@ const ensureCase = async (providerUid: string): Promise<any> => {
   )).rows[0];
 };
 
+/**
+ * Record that a provider has SUBMITTED their onboarding.
+ *
+ * The defect this closes: `providerOnboardingService.submitOnboarding` wrote
+ * `provider_onboarding_drafts.submitted = true` and nothing else, while
+ * `providerAccountStateService` derives the application status SOLELY from
+ * `provider_onboarding_cases` — defaulting to NOT_STARTED when no row exists.
+ * Cases were only ever created by admin code. So a provider could complete and
+ * submit everything and remain "APPLICATION_NOT_SUBMITTED" forever: told to
+ * submit an application they had already submitted, blocked from going online,
+ * and routed back into onboarding by the auth guard. Measured in production: a
+ * provider with `submitted = true` since 2026-08-07, 14 requirements uploaded
+ * and a COMPLETE profile still reported `application.status = NOT_STARTED`.
+ *
+ * Lives here because this service owns the table. The provider flow calls it
+ * rather than writing its own INSERT, so the two cannot drift (§10).
+ *
+ * MONOTONIC. Only `not_started` and `in_progress` advance. A case already
+ * queued, in review, or decided must never be dragged back to `submitted` by a
+ * re-submit — that would silently reset a reviewer's progress. Combined with
+ * `ensureCase` being idempotent, calling this twice is a no-op.
+ */
+export const markCaseSubmitted = async (providerUid: string) => {
+  const existing = await ensureCase(providerUid);
+
+  const advanced = await dbQuery.query(
+    `UPDATE ${dbSchema}.provider_onboarding_cases
+        SET onboarding_status = 'submitted',
+            submitted_at      = COALESCE(submitted_at, NOW()),
+            last_activity_at  = NOW(),
+            waiting_party     = 'servana',
+            version           = version + 1
+      WHERE provider_uid = $1
+        AND onboarding_status IN ('not_started', 'in_progress')
+      RETURNING id, onboarding_status`,
+    [providerUid],
+  );
+
+  return advanced.rows[0] ?? existing;
+};
+
 // ── Queue listing ─────────────────────────────────────────────────────────────
 
 export interface QueueFilter {
@@ -519,7 +378,6 @@ export interface QueueFilter {
 }
 
 export const getQueueSummary = async () => {
-  await ensureOnboardingSchema();
 
   const res = await dbQuery.query(
     `SELECT
@@ -551,7 +409,6 @@ export const getQueueSummary = async () => {
 };
 
 export const listCases = async (filter: QueueFilter = {}) => {
-  await ensureOnboardingSchema();
 
   const { status, priority, assignedReviewer, search, waitingParty, page = 1, limit = 30 } = filter;
   const offset = (page - 1) * limit;
@@ -642,7 +499,6 @@ export const listCases = async (filter: QueueFilter = {}) => {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const getCaseDetail = async (caseIdOrProviderUid: string) => {
-  await ensureOnboardingSchema();
 
   // Try by case UUID first (skip if not a valid UUID — avoids 22P02 when a
   // provider UID is passed directly, which the queue does when caseId is null)
@@ -704,7 +560,7 @@ export const getCaseDetail = async (caseIdOrProviderUid: string) => {
       `SELECT wsa.id, wsa.service_id, wsa.status, wsa.submitted_at,
               '' AS category, s.name AS service_name
        FROM ${dbSchema}.worker_service_applications wsa
-       LEFT JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+       LEFT JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
        WHERE wsa.worker_uid = $1
        ORDER BY wsa.submitted_at DESC`,
       [c.provider_uid]
@@ -892,7 +748,6 @@ const transitionCase = async (
 // ── Assignment ────────────────────────────────────────────────────────────────
 
 export const assignCase = async (caseId: string, reviewerUid: string | null, actorUid: string, reason?: string) => {
-  await ensureOnboardingSchema();
   const c = await dbQuery.query(`SELECT * FROM ${dbSchema}.provider_onboarding_cases WHERE id = $1 LIMIT 1`, [caseId]);
   if (!c.rowCount) throw Object.assign(new Error('Case not found'), { statusCode: 404 });
   const prev = c.rows[0];
@@ -916,7 +771,6 @@ export const assignCase = async (caseId: string, reviewerUid: string | null, act
 };
 
 export const setPriority = async (caseId: string, priority: string, actorUid: string) => {
-  await ensureOnboardingSchema();
   const valid = ['low', 'normal', 'high', 'urgent'];
   if (!valid.includes(priority)) throw Object.assign(new Error('Invalid priority'), { statusCode: 400 });
   const c = await dbQuery.query(`SELECT * FROM ${dbSchema}.provider_onboarding_cases WHERE id = $1 LIMIT 1`, [caseId]);
@@ -946,7 +800,6 @@ export const decideRequirement = async (
   // exists would leave the provider looking at a stored decision explained by a
   // code we already refused.
   await assertValidReasonCode(opts.reasonCode, decision, opts.providerMessage);
-  await ensureOnboardingSchema();
 
   const reqRes = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.worker_requirements WHERE id = $1 LIMIT 1`,
@@ -1075,7 +928,6 @@ export const decideRequirement = async (
 // ── Readiness calculation ─────────────────────────────────────────────────────
 
 export const calculateReadiness = async (providerUid: string) => {
-  await ensureOnboardingSchema();
 
   const [provRes, reqsRes, appsRes, servRes] = await Promise.all([
     dbQuery.query(
@@ -1237,7 +1089,6 @@ export const finalApproveProvider = async (
   adminUid: string,
   internalNote?: string
 ) => {
-  await ensureOnboardingSchema();
 
   const caseRes = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.provider_onboarding_cases WHERE id = $1 LIMIT 1`,
@@ -1330,7 +1181,6 @@ export const finalRejectProvider = async (
   providerMessage: string,
   internalRationale?: string
 ) => {
-  await ensureOnboardingSchema();
   if (!reasonCode) throw Object.assign(new Error('reasonCode is required'), { statusCode: 400 });
   if (!providerMessage) throw Object.assign(new Error('providerMessage is required'), { statusCode: 400 });
   // Present is not the same as valid — until now any string was accepted here.
@@ -1383,7 +1233,6 @@ export const addNote = async (
   body: string,
   noteType: 'internal' | 'provider_message' | 'escalation' = 'internal'
 ) => {
-  await ensureOnboardingSchema();
   if (!body.trim()) throw Object.assign(new Error('Note body is required'), { statusCode: 400 });
 
   const isProviderVisible = noteType === 'provider_message';
@@ -1396,7 +1245,6 @@ export const addNote = async (
 };
 
 export const getNotes = async (caseId: string, includeInternal = true) => {
-  await ensureOnboardingSchema();
   const where = includeInternal ? '' : 'AND is_provider_visible = true';
   const res = await dbQuery.query(
     `SELECT n.*, uc.first_name AS author_first, uc.last_name AS author_last
@@ -1463,7 +1311,6 @@ const writeTimeline = async (evt: TimelineEvent) => {
 };
 
 export const getTimeline = async (caseId: string, limit = 50) => {
-  await ensureOnboardingSchema();
   const caseRes = await dbQuery.query(
     `SELECT provider_uid FROM ${dbSchema}.provider_onboarding_cases WHERE id = $1 LIMIT 1`,
     [caseId]
@@ -1499,7 +1346,6 @@ export const getTimeline = async (caseId: string, limit = 50) => {
 // ── Reason codes ──────────────────────────────────────────────────────────────
 
 export const getReasonCodes = async (domain?: string) => {
-  await ensureOnboardingSchema();
   const where = domain ? `WHERE domain = $1 AND is_active = true` : `WHERE is_active = true`;
   const params = domain ? [domain] : [];
   const res = await dbQuery.query(

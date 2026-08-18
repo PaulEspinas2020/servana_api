@@ -1,10 +1,9 @@
 import { Router } from "express";
 import verifyAuth from "../middleware/verifyAuth";
 import * as ctrl from "../controllers/customerSupportController";
-import { ensureCustomerSupportTables } from "../services/customerSupportService";
 
 // Ensure tables exist at module load time so the first request isn't slow
-ensureCustomerSupportTables().catch(console.error);
+// Startup: declared in src/startup.ts (TAB 03).
 
 const router = Router();
 

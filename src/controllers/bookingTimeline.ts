@@ -237,3 +237,97 @@ function sequenceForTime(derived: TimelineEvent[], at: string): number {
   }
   return seq;
 }
+
+// ─── Customer projection ──────────────────────────────────────────────────────
+
+/**
+ * The same events, told from the customer's seat.
+ *
+ * ## Why a projection and not a second builder
+ *
+ * `buildBookingTimeline` is provider-voiced throughout — deliberately, and it
+ * says so at the top of this file. Its labels read "You marked yourself
+ * arrived" and its `TimelineActor` uses `"YOU"` to mean **the provider**.
+ *
+ * Reusing that response for a customer gets it wrong in *both* directions at
+ * once: the customer reads "You marked yourself arrived" about somebody else,
+ * and the one event that genuinely is theirs — `BOOKING_CREATED`, actor
+ * `"CUSTOMER"` — is the only one not attributed to them. That is not a wording
+ * nit; it is the timeline telling the customer they did things they did not do.
+ *
+ * A projection keeps one source of truth for *what happened and when*, and
+ * changes only *how it is told*. The provider path is untouched, which the
+ * cross-platform rule requires and `booking-timeline-projection.test.ts` pins.
+ *
+ * ## The actor vocabulary genuinely inverts
+ *
+ *   provider "YOU"      → customer "PROVIDER"   (the professional acted)
+ *   provider "CUSTOMER" → customer "YOU"        (the customer acted)
+ *   provider "SERVANA"  → customer "SERVANA"    (the platform acted)
+ *
+ * Note the first two swap rather than one being renamed. A mapping that only
+ * rewrote `"YOU"` would leave the customer's own booking creation attributed to
+ * a third party.
+ */
+export type CustomerTimelineActor = "YOU" | "PROVIDER" | "SERVANA";
+
+export interface CustomerTimelineEvent {
+  code: TimelineEventCode;
+  /** Customer-facing label. Never a backend transition name (§5). */
+  label: string;
+  at: string | null;
+  actor: CustomerTimelineActor;
+  sequence: number;
+}
+
+/**
+ * Customer-voiced labels, one per event code.
+ *
+ * `PROVIDER_DECLINED` deliberately does not say the professional refused. §14
+ * forbids exposing declined providers, and a customer seeing "your
+ * professional declined you" would read as a personal rejection of them when
+ * it usually means unavailability. What is true and useful is that Servana is
+ * finding someone else.
+ */
+const CUSTOMER_LABELS: Record<TimelineEventCode, string> = {
+  BOOKING_CREATED: "You created this booking",
+  ASSIGNED: "A professional was assigned",
+  PROVIDER_ACCEPTED: "Your professional accepted",
+  PROVIDER_DECLINED: "Finding you another professional",
+  PROVIDER_EN_ROUTE: "Your professional is on the way",
+  PROVIDER_ARRIVED: "Your professional arrived",
+  JOB_STARTED: "Work started",
+  JOB_COMPLETED: "Work completed",
+  BOOKING_CANCELLED: "Booking cancelled",
+  ADMIN_ASSIGNED: "Servana assigned a professional",
+  ADMIN_RESCHEDULED: "Servana rescheduled this booking",
+  ADMIN_CANCELLED: "Servana cancelled this booking",
+  COMPLETION_APPROVED: "Servana confirmed the work was completed",
+  DISPUTE_OPENED: "This booking is under review",
+};
+
+const ACTOR_FROM_PROVIDER_SEAT: Record<TimelineActor, CustomerTimelineActor> = {
+  YOU: "PROVIDER",
+  CUSTOMER: "YOU",
+  SERVANA: "SERVANA",
+};
+
+/**
+ * Re-tells a provider-voiced timeline for the customer.
+ *
+ * Order, timestamps and sequence are preserved exactly — only `label` and
+ * `actor` change. An unrecognised code keeps its original label rather than
+ * being dropped: a new event type appearing in a rolling deploy should read
+ * slightly oddly, not vanish from the customer's history.
+ */
+export function projectTimelineForCustomer(
+  events: TimelineEvent[]
+): CustomerTimelineEvent[] {
+  return events.map((event) => ({
+    code: event.code,
+    label: CUSTOMER_LABELS[event.code] ?? event.label,
+    at: event.at,
+    actor: ACTOR_FROM_PROVIDER_SEAT[event.actor] ?? "SERVANA",
+    sequence: event.sequence,
+  }));
+}

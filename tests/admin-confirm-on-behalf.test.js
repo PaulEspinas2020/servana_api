@@ -10,8 +10,35 @@ const svcSrc   = fs.readFileSync(path.join(__dirname, '../src/services/adminBook
 const ctrlSrc  = fs.readFileSync(path.join(__dirname, '../src/controllers/adminBookingController.ts'), 'utf-8').replace(/\r\n/g, '\n');
 const routeSrc = fs.readFileSync(path.join(__dirname, '../src/routes/adminBooking.routes.ts'), 'utf-8').replace(/\r\n/g, '\n');
 
+const exeSrc   = fs.readFileSync(path.join(__dirname, '../src/services/booking/transitionExecutor.ts'), 'utf-8').replace(/\r\n/g, '\n');
+
+/**
+ * The function body, sliced to its actual END rather than to a fixed byte
+ * count.
+ *
+ * It used to be `slice(fnStart, fnStart + 4000)`. Adding a docblock pushed the
+ * email and audit calls past the window, and three assertions failed for a
+ * reason that had nothing to do with the code they were checking — the same
+ * fixed-window trap `source-reads-normalise-line-endings.test.ts` exists to
+ * prevent, in a file it does not cover.
+ */
 const fnStart  = svcSrc.indexOf('adminConfirmProviderAssignment =');
-const fnBody   = svcSrc.slice(fnStart, fnStart + 4000);
+const fnEnd    = svcSrc.indexOf('\nexport const ', fnStart);
+const fnBody   = svcSrc.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+
+/**
+ * The same body with comments removed.
+ *
+ * Needed by the "does NOT call acceptJob" assertion: a comment inside this
+ * function explains that it deliberately mirrors what `acceptJob` does, and
+ * once the slice reached the real end of the function that prose started
+ * satisfying a check for a CALL. Naming a thing is not calling it.
+ */
+const fnCode   = fnBody
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .split('\n')
+  .filter((l) => !l.trim().startsWith('//'))
+  .join('\n');
 
 describe('adminConfirmProviderAssignment — input validation contracts', () => {
   it('validates consentMethod against exactly verbal | written | chat_message', () => {
@@ -41,17 +68,46 @@ describe('adminConfirmProviderAssignment — input validation contracts', () => 
   });
 });
 
+/**
+ * The write moved into the canonical executor (D1). These assertions follow
+ * it: the CONTRACT is unchanged, so deleting them would drop a real guarantee,
+ * and leaving them pointed at the service would fail a migration that kept
+ * every part of it.
+ */
 describe('adminConfirmProviderAssignment — UPDATE contract', () => {
+  const adminBranch = exeSrc.slice(
+    exeSrc.indexOf("if (input.action === 'ADMIN_CONFIRM_ASSIGNMENT')"),
+    exeSrc.indexOf('// `accepted_at` is what the provider app renders'),
+  );
+
   it("sets booking_workers.status = 'ACCEPTED'", () => {
-    expect(fnBody).toContain("status              = 'ACCEPTED'");
+    expect(adminBranch).toContain("status              = 'ACCEPTED'");
   });
 
   it("sets confirmation_source = 'admin_on_behalf_of_provider'", () => {
-    expect(fnBody).toContain("'admin_on_behalf_of_provider'");
+    expect(adminBranch).toContain("'admin_on_behalf_of_provider'");
   });
 
-  it('UPDATE WHERE includes AND status = ASSIGNED (concurrency guard)', () => {
-    expect(fnBody).toContain("AND status     = 'ASSIGNED'");
+  it('the whole consent trail lands in the SAME statement as the status', () => {
+    // An ACCEPTED row whose confirmation_source failed to land is
+    // indistinguishable from the provider accepting themselves, which is the
+    // one distinction this action exists to preserve.
+    for (const col of ['admin_actor_uid', 'consent_method', 'consent_reference',
+                       'confirmation_reason', 'confirmed_at']) {
+      expect(adminBranch).toContain(col);
+    }
+  });
+
+  it('the ASSIGNED source restriction belongs to the ACTION, not to a SQL clause', () => {
+    // `AND status = 'ASSIGNED'` used to be the concurrency guard. It is now
+    // `from: ['ASSIGNED']` on the action, checked under the row lock before
+    // any write — which also makes it impossible for a caller to skip.
+    const actions = exeSrc.slice(
+      exeSrc.indexOf('ADMIN_CONFIRM_ASSIGNMENT: {'),
+      exeSrc.indexOf('ADMIN_CANCEL:'),
+    );
+    expect(actions).toContain("from: ['ASSIGNED']");
+    expect(adminBranch).not.toContain("AND status     = 'ASSIGNED'");
   });
 
   it('rowCount=0 guard prevents phantom success on concurrent change', () => {
@@ -75,7 +131,9 @@ describe('adminConfirmProviderAssignment — side effects', () => {
   });
 
   it('does NOT call acceptJob — mobile route is untouched', () => {
-    expect(fnBody).not.toContain('acceptJob');
+    expect(fnCode).not.toContain('acceptJob');
+    // Positive fixture: the stripper must not have removed everything.
+    expect(fnCode).toContain('transitionBooking');
   });
 
   it('does NOT reference /api/workers/bookings (mobile endpoint protected)', () => {
@@ -127,20 +185,60 @@ describe('adminConfirmProviderAssignment — controller validation (all required
 });
 
 describe('adminConfirmProviderAssignment — schema bootstrap', () => {
-  it('ensureBookingOpsSchema adds all 6 confirmation columns', () => {
-    expect(svcSrc).toContain('confirmation_source');
-    expect(svcSrc).toContain('admin_actor_uid');
-    expect(svcSrc).toContain('consent_method');
-    expect(svcSrc).toContain('consent_reference');
-    expect(svcSrc).toContain('confirmation_reason');
-    expect(svcSrc).toContain('confirmed_at');
+  it('booking_workers carries all 6 confirmation columns (TAB 02)', () => {
+    /**
+     * These read the DDL inside `ensureBookingOpsSchema`. That bootstrap is gone;
+     * the columns come from `scripts/baseline/000-baseline.sql`, so this checks the
+     * schema that will actually exist rather than code that meant to create it.
+     */
+    const baseline = require('fs')
+      .readFileSync(require('path').resolve(__dirname, '../scripts/baseline/000-baseline.sql'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const m = /CREATE TABLE servana\.booking_workers \(([\s\S]*?)\n\);/.exec(baseline);
+    expect(m).not.toBeNull();
+    const ALL_SIX = [
+      'confirmation_source',
+      'admin_actor_uid',
+      'consent_method',
+      'consent_reference',
+      'confirmation_reason',
+      'confirmed_at',
+    ];
+    for (const col of ALL_SIX) {
+      expect(m[1]).toMatch(new RegExp('^\\s+' + col + '\\s', 'm'));
+    }
+
+    /**
+     * Only THREE of the six are named by this service; the other three live in
+     * `booking/transitionExecutor.ts`, which is the canonical writer of a booking
+     * state change. That split was invisible while the CREATE listed all six here
+     * — removing the DDL is what showed which columns this file actually touches.
+     *
+     * So the ownership is asserted where it really is, rather than requiring one
+     * service to mention every column of a table it shares.
+     */
+    for (const col of ['confirmation_source', 'consent_method', 'confirmed_at']) {
+      expect(svcSrc).toContain(col);
+    }
+    const executor = require('fs').readFileSync(
+      require('path').resolve(__dirname, '../src/services/booking/transitionExecutor.ts'),
+      'utf8',
+    );
+    for (const col of ['admin_actor_uid', 'consent_reference', 'confirmation_reason']) {
+      expect(executor).toContain(col);
+    }
   });
 
-  it('each ALTER TABLE is wrapped in try-catch (one failure does not abort the rest)', () => {
-    const schemaFnIdx = svcSrc.indexOf('ensureBookingOpsSchema');
-    const schemaFn    = svcSrc.slice(schemaFnIdx, schemaFnIdx + 3000);
-    expect(schemaFn).toContain('confirmCols');
-    expect(schemaFn).toContain('try {');
-    expect(schemaFn).toContain('} catch {');
+  it('the service no longer issues DDL for them', () => {
+    // The try/catch-per-ALTER asserted here existed so one failing column did not
+    // abort the rest. With no ALTERs there is nothing to fail, which is a better
+    // outcome than handling it.
+    const code = svcSrc
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((l) => !/^\s*\/\//.test(l))
+      .join('\n');
+    expect(code).not.toContain('ADD COLUMN');
+    expect(code).not.toContain('CREATE TABLE');
   });
 });

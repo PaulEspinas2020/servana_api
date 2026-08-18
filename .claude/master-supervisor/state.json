@@ -1,0 +1,67 @@
+{
+  "masterCommand": "SERVANA API MASTER COMMAND (12 TABs, from repo state 9016e7e) — supersedes the 15-TAB Backend Centralization Command Book",
+  "currentTab": "TAB 02 CLOSED (0 unmanaged DDL). 10 of 12 TABs coded. Backend MVP-ready.",
+  "currentTabIndex": 8,
+  "totalTabs": 12,
+  "completedTabs": [
+    "TAB 01 (bar the concurrency suite)",
+    "TAB 02 (deletion 148 -> 3; only chat.repository deferred)",
+    "TAB 03 (acceptance met; see the readiness-gating note in openItems)",
+    "TAB 04 (rules + parity + audit)",
+    "TAB 06 (0 raw booking-status writes outside the executor)",
+    "TAB 07 (ledger, policy, reconciliation, outbox, one PayMongo transport)",
+    "TAB 08 (six cron jobs lease-protected)",
+    "TAB 09 (terminal error handler; the rest pre-existed)",
+    "TAB 12 (env schema; CI secret/dep scan still open)"
+  ],
+  "currentObjective": "Backend is MVP-ready. TAB 02 reached ZERO unmanaged runtime DDL. Migrations 036 AND 037 are APPLIED and VERIFIED in production (132 tables, ledger 38). The notification-idempotency P1 is FIXED in production: 39 stale global uniques dropped, both owner-scoped indexes surviving. Remaining TABs 05/10/11 need production traffic that does not exist yet.",
+  "status": "MVP-READY - 118 commits local; the only blocker is the standing local-only push rule",
+  "supervisorCycleCount": 15,
+  "lastHourlyReportAt": null,
+  "lastCheckpointAt": "2026-08-18 - 036 + 037 applied to production; zero unmanaged DDL",
+  "lastLocalCommit": "see git log — do not trust a recorded SHA, two handoffs running recorded a stale one",
+  "workingTreeState": "CLEAN — check `git rev-list --count origin/main..HEAD` for the real number",
+  "activeBlockers": [
+    "Deploy decision: a push to main IS the deploy, and conflicts with the standing local-only rule (0 of 108 endpoints migrated). This is the ONLY thing between the current tree and production.",
+    "P2 readiness gates NOTHING but the probe. isReady() is read only by /readyz, and production is PM2 behind nginx which does not health-gate. Fine at one replica; decide before scaling out.",
+    "DDL privileges not yet revoked. 27 runtime DDL statements remain, ALL baseline- or migration-owned, but each still needs CREATE. Reachable now, unproven - needs a boot against a role without DDL.",
+    "booking-postgres-races needs a disposable PostgreSQL; PGlite cannot substitute (single-connection)",
+    "9 moderate CVEs need npm audit fix --force: major bumps of firebase-admin and node-cron",
+    "Production smoke never executed - needs credentials this environment must not hold"
+  ],
+  "openItems": [
+    "P1 TABs 05 (client convergence), 10 (query amplification) and 11 (data ownership) are NOT coded. All three need production traffic or telemetry that does not exist: 111 bookings is not a scale problem. Doing them now would optimise against invented fixtures.",
+    "P2 provider_source_attribution still has TWO incompatible runtime definitions behind CREATE TABLE IF NOT EXISTS. Production has the providerOnboardingService shape (PK uid), so two admin endpoints return 42703 today. Needs a decision on the canonical shape plus a migration.",
+    "P2 scripts/** is typechecked by neither tsconfig - demonstrated hiding a commented-out import",
+    "P3 no monthly backup exists yet; promotion only happens on the 1st",
+    "P3 restore rehearsal never run - dumps verify with pg_restore --list, which proves readable not restorable"
+  ],
+  "pendingQuestions": [],
+  "researchDecisions": [
+    "PGlite over pg-mem or a server install — real PostgreSQL source compiled to WASM, so disagreements are meaningful",
+    "engine-proven asserted as a SUBSET of model-reported — the engine stops each file at its first error",
+    "baseline-version ledger (Flyway/Sqitch pattern) rather than replaying a chain that is spent",
+    "pending count read back OUT of the database, not derived from the SQL that wrote it",
+    "the baseline counts as a schema AUTHORITY, not just a test fixture — db:verify:embedded restores it and applies pending on top, so what it declares is reproducible without runtime DDL. This is what rescoped TAB 02.",
+    "classification checked against the ENGINE (restore baseline into PGlite, ask PostgreSQL) rather than trusting the regex that produced it",
+    "two CREATE TABLE IF NOT EXISTS for one object is a race with a silent loser, not idempotence - gated by contestedObjects() in schema-authority; all 7 audited against the baseline, 0 unsatisfiable beyond the provider_source_attribution P1",
+    "advisory locks over a durable jobs table for scheduler leases — they need NO SCHEMA, and with migrations as the sole authority and 036/037 unapplied a jobs table could not run. Cost stated, not hidden: no durable run history, no dead-letter, no resumable cursors. recordOutcome is the seam to persist through later.",
+    "the terminal error handler only runs where NOTHING has replied, so it cannot reshape an existing response — that is what lets it satisfy TAB 09 without breaching its STOP condition against a breaking envelope.",
+    "env REQUIRED list confined to what production demonstrably already sets (DB_*, SCHEMA, SECRET). A fail-fast naming a variable prod does not set would crash the next boot and look like the startup work. Pinned by test so additions are an explicit claim."
+  ],
+  "contextPressure": "moderate",
+  "gates": {
+    "npm run verify": "PASS - 275 suites, 5924 tests",
+    "npm run db:verify:embedded": "PASS — 121 restored + 7 applied = 132 tables",
+    "npm run schema:authority": "PASS - UNMANAGED 0, columns 0, contested 1, 1 invisible index, 1 interpolated column read by hand",
+    "npm run ddl:inventory": "27 statements, UNMANAGED 0 - exits 0 now, TAB 02 objective met",
+    "npm run authz:legacy": "615 legacy routes, 0 v1 loosenings",
+    "npm run migrations:baseline:plan": "exits 1 BY DESIGN — 14 DML migrations need human judgement"
+  },
+  "productionActions": {
+    "reads": "pg_dump --schema-only (Aug 16, authorised); reconnaissance queries 2026-08-18",
+    "writes": "FOUR, all explicitly authorised. 2026-08-16: created servana.schema_migrations (30 rows) and applied 030-035. 2026-08-18: applied migration 036 (132 tables, ledger 37) and migration 037 (39 stale notification_key uniques dropped, ledger 38). Verified after each: owners all admin, bookings 111 and users 122 unchanged.",
+    "deploys": "none - 118 commits remain unpushed",
+    "credentialChanges": "none"
+  }
+}

@@ -15,6 +15,8 @@ const SVC   = (...parts) => SRC('services', ...parts);
 const CTRL  = (...parts) => SRC('controllers', ...parts);
 const ROUTE = (...parts) => SRC('routes', ...parts);
 const APP   = SRC('app.ts');
+// TAB 03: bootstraps moved out of app.ts into a declared dependency graph.
+const STARTUP = SRC('startup.ts');
 
 // ── File existence ─────────────────────────────────────────────────────────────
 
@@ -42,64 +44,99 @@ describe('C17 Finance — app.ts registers finance route and schema', () => {
   it('mounts adminFinanceRoutes on /api', () => {
     expect(app).toContain('adminFinanceRoutes');
   });
-  it('calls ensureFinanceSchema on startup', () => {
-    expect(app).toContain('ensureFinanceSchema');
+  it('no longer bootstraps finance schema at startup (TAB 02)', () => {
+    /**
+     * This asserted the opposite: that `ensureFinanceSchema` was in the startup
+     * graph, classified `required` so a failure withheld readiness. TAB 03 was
+     * right to demand that WHILE the application created the schema.
+     *
+     * It no longer does. `payments`' columns, the three finance tables, their
+     * indexes, the `touch_payments_updated_at` function and its trigger all come
+     * from `scripts/baseline/000-baseline.sql`, so there is nothing to await
+     * before serving finance endpoints — the schema is a precondition of the
+     * database existing, not of the process having booted.
+     *
+     * That is a REMOVAL, not the downgrade-to-optional TAB 03 forbids. The
+     * distinction matters: an optional bootstrap would still be creating schema
+     * and merely not gating on it.
+     */
+    const startup = fs.readFileSync(STARTUP, 'utf8').replace(/\r\n/g, '\n');
+    expect(startup).not.toContain('ensureFinanceSchema');
+    expect(startup).not.toContain("name: 'finance-schema'");
   });
-  it('ensureFinanceSchema import is from adminFinanceService', () => {
-    expect(app).toContain('adminFinanceService');
+
+  it('the finance schema is in the baseline instead', () => {
+    // Where the guarantee actually lives now.
+    const baseline = fs
+      .readFileSync(path.join(__dirname, '..', 'scripts', 'baseline', '000-baseline.sql'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    for (const table of [
+      'finance_ledger_entries',
+      'finance_refund_reviews',
+      'finance_reconciliation_exceptions',
+    ]) {
+      expect(baseline).toContain(`CREATE TABLE servana.${table} (`);
+    }
+    expect(baseline).toContain('CREATE FUNCTION servana.touch_payments_updated_at()');
+    expect(baseline).toContain('CREATE TRIGGER trg_payments_updated_at');
   });
 });
 
 // ── Schema bootstrap: additive only ───────────────────────────────────────────
 
-describe('C17 Finance — ensureFinanceSchema is additive (no DROP, no breaking ALTER)', () => {
+describe('C17 Finance — the finance schema is in the baseline, not in the service (TAB 02)', () => {
   let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
-
-  it('does not drop any table', () => {
-    expect(svc.toUpperCase()).not.toContain('DROP TABLE');
+  let baseline;
+  beforeAll(() => {
+    svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n');
+    baseline = fs
+      .readFileSync(path.join(__dirname, '..', 'scripts', 'baseline', '000-baseline.sql'), 'utf8')
+      .replace(/\r\n/g, '\n');
   });
-  it('does not drop any column', () => {
+
+  /**
+   * These used to assert that `ensureFinanceSchema` was ADDITIVE — no DROP TABLE,
+   * no DROP COLUMN, IF NOT EXISTS on every CREATE — because it ran on every boot
+   * against production. That was the right property for boot-time DDL.
+   *
+   * The service issues no DDL now, so those assertions would pass vacuously: zero
+   * CREATE TABLE statements trivially satisfies "all of them use IF NOT EXISTS".
+   * A test that cannot fail is worse than no test, so they are replaced with the
+   * two things that are still true and still worth guarding.
+   */
+
+  it('the service no longer issues DDL at all', () => {
+    expect(svc).not.toMatch(/CREATE TABLE/i);
+    expect(svc).not.toMatch(/ADD COLUMN/i);
+    expect(svc).not.toMatch(/CREATE TRIGGER/i);
+    expect(svc).not.toMatch(/CREATE OR REPLACE FUNCTION/i);
+    // And it never gained a destructive one on the way past.
+    expect(svc.toUpperCase()).not.toContain('DROP TABLE');
     expect(svc.toUpperCase()).not.toContain('DROP COLUMN');
   });
-  it('uses IF NOT EXISTS for all CREATE TABLE statements', () => {
-    const creates     = (svc.match(/CREATE TABLE/gi) || []).length;
-    const safeCreates = (svc.match(/CREATE TABLE IF NOT EXISTS/gi) || []).length;
-    expect(safeCreates).toEqual(creates);
+
+  it('every object it used to create is declared by the baseline', () => {
+    for (const table of [
+      'finance_ledger_entries',
+      'finance_refund_reviews',
+      'finance_reconciliation_exceptions',
+    ]) {
+      expect(baseline).toContain(`CREATE TABLE servana.${table} (`);
+    }
+    // The columns it used to add to pre-existing tables.
+    expect(baseline).toMatch(/is_internal_fixer/);
+    expect(baseline).toMatch(/hold_reason/);
+    expect(baseline).toMatch(/reviewed_by/);
+    // The function and its trigger, which are easy to lose separately.
+    expect(baseline).toContain('CREATE FUNCTION servana.touch_payments_updated_at()');
+    expect(baseline).toContain('CREATE TRIGGER trg_payments_updated_at');
   });
-  it('uses ADD COLUMN IF NOT EXISTS for all ALTER ADD COLUMN statements', () => {
-    const adds     = (svc.match(/ADD COLUMN/gi) || []).length;
-    const safeAdds = (svc.match(/ADD COLUMN IF NOT EXISTS/gi) || []).length;
-    expect(safeAdds).toEqual(adds);
-  });
-});
 
-// ── New tables created ─────────────────────────────────────────────────────────
-
-describe('C17 Finance — ensureFinanceSchema creates required tables', () => {
-  let svc;
-  beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
-
-  it('creates finance_ledger_entries table', () => {
+  it('the service still READS those tables, so the schema is load-bearing', () => {
+    // Guards the opposite mistake: deleting the DDL because the feature is dead.
     expect(svc).toContain('finance_ledger_entries');
-  });
-  it('creates finance_refund_reviews table', () => {
     expect(svc).toContain('finance_refund_reviews');
-  });
-  it('creates finance_reconciliation_exceptions table', () => {
     expect(svc).toContain('finance_reconciliation_exceptions');
-  });
-  it('adds is_internal_fixer column to user_credentials', () => {
-    expect(svc).toContain('is_internal_fixer');
-    expect(svc).toContain('user_credentials');
-  });
-  it('adds reviewed_by column to payments', () => {
-    expect(svc).toContain('reviewed_by');
-    expect(svc).toContain('payments');
-  });
-  it('adds hold_reason column to disbursements', () => {
-    expect(svc).toContain('hold_reason');
-    expect(svc).toContain('disbursements');
   });
 });
 
@@ -110,7 +147,6 @@ describe('C17 Finance — adminFinanceService exports required functions', () =>
   beforeAll(() => { svc = fs.readFileSync(SVC('adminFinanceService.ts'), 'utf8').replace(/\r\n/g, '\n'); });
 
   const expected = [
-    'ensureFinanceSchema',
     'getFinanceSummary',
     'listPayments',
     'getPaymentDetail',

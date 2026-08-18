@@ -1,4 +1,5 @@
 import { db } from "../config";
+import { deriveEffectiveBookingStatus } from "./bookingStatusProjection";
 import dbQuery, { pool } from "../db/dbQuery";
 const dbSchema = db.schema;
 import { generateOTP } from "../helpers/otp";
@@ -12,14 +13,22 @@ import { send } from "../helpers/mailer";
 import { getEmailById, getNameByEmail } from "./user.service";
 import { closeConversationForCancellation } from "../chat/chat.service";
 import { toCamel } from "../helpers/idGenerator";
-import { assertBookingAccess } from "./bookingAccessService";
+import { assertBookingAccess, BookingAccessError } from "./bookingAccessService";
+import {
+  buildBookingTimeline,
+  currentTimelineStep,
+  mergeStoredEvents,
+  projectTimelineForCustomer,
+} from "../controllers/bookingTimeline";
 import { notifyAdminsSafely } from './adminNotificationService';
+import { transitionBooking, TransitionError } from './booking/transitionExecutor';
 
 export const createBooking = async (
   userId: string,
   payload: {
     userAddressId: string;
     serviceOptionId: number;
+    branchId?: number;
     schedule: string;
     paymentMethod: "CASH" | "GCASH" | "PAYMONGO";
     pricing: any;
@@ -32,7 +41,7 @@ export const createBooking = async (
       `
       SELECT s.id AS service_id
       FROM ${dbSchema}.service_options so
-      JOIN ${dbSchema}.services s ON s.id = so.service_id
+      JOIN ${dbSchema}.service_families s ON s.id = so.service_id
       WHERE so.id = $1
         AND so.option_type = 'MAIN'
         AND so.is_active = true
@@ -85,14 +94,78 @@ export const createBooking = async (
     let booking: any;
     try {
       await client.query('BEGIN');
+      if (payload.branchId !== undefined) {
+        // Lock the concrete branch slot before counting and inserting. This
+        // makes capacity enforcement atomic under concurrent checkouts.
+        const slotRes = await client.query(
+          `SELECT bs.max_capacity
+             FROM ${dbSchema}.branch_slots bs
+             JOIN ${dbSchema}.branches br ON br.id = bs.branch_id
+            WHERE bs.branch_id = $1
+              AND br.service_id = $2
+              AND br.is_active = TRUE
+              AND bs.slot_time::time = ($3::timestamptz AT TIME ZONE 'Asia/Manila')::time
+            FOR UPDATE OF bs`,
+          [payload.branchId, serviceId, payload.schedule],
+        );
+        if (!slotRes.rowCount) {
+          throw Object.assign(new Error('The selected branch slot is no longer available.'), {
+            statusCode: 409,
+            code: 'SLOT_UNAVAILABLE',
+          });
+        }
+        const bookedRes = await client.query(
+          `SELECT COUNT(*)::integer AS booked_count
+             FROM ${dbSchema}.bookings b
+            WHERE b.branch_id = $1
+              AND (b.schedule AT TIME ZONE 'Asia/Manila')::date =
+                  ($2::timestamptz AT TIME ZONE 'Asia/Manila')::date
+              AND (b.schedule AT TIME ZONE 'Asia/Manila')::time =
+                  ($2::timestamptz AT TIME ZONE 'Asia/Manila')::time
+              AND UPPER(COALESCE(b.status, '')) NOT IN
+                  ('CANCELLED','CANCELED','COMPLETED','REVIEWED','EXPIRED','FAILED','REFUNDED')`,
+          [payload.branchId, payload.schedule],
+        );
+        if (Number(bookedRes.rows[0]?.booked_count ?? 0) >= Number(slotRes.rows[0].max_capacity)) {
+          throw Object.assign(new Error('That branch slot just filled up. Choose another time.'), {
+            statusCode: 409,
+            code: 'SLOT_FULL',
+          });
+        }
+      }
+      // Catalog V2 dual-write.
+      //
+      // Migration 020 added `bookings.catalog_service_id` and its comment reads
+      // "written only from Phase 4, for NEW bookings". Phase 4 was never built,
+      // so migration 021 backfilled history and then nothing ever wrote the
+      // column again — measured on production: 109 of 111 bookings carry it,
+      // and the two most recent, created after the backfill, are NULL. A
+      // canonical column that only history populates is worse than an absent
+      // one, because a reader cannot tell "not migrated" from "new booking".
+      //
+      // The subselect, not `payload.serviceOptionId` directly, is the point.
+      // Canonical `services.id` currently EQUALS the legacy option id for all
+      // 95 promoted rows, so copying the value would look correct today and
+      // silently write a dangling id the moment a Service is created through
+      // the Admin API — those take their id from `catalog_services_id_seq` and
+      // have no legacy option at all. Resolving through
+      // `legacy_service_option_id` stays correct on both sides of that change.
+      //
+      // NULL when the option has no canonical Service (the 5 active ADD_ON
+      // rows, which are configuration and were never promoted). `service_option_id`
+      // remains authoritative and is untouched, so no reader moves (§4).
       const bookingRes = await client.query(
         `
         INSERT INTO ${dbSchema}.bookings
-          (user_id, user_address_id, service_option_id,
-           schedule, payment_method,
+          (user_id, user_address_id, service_option_id, catalog_service_id,
+           schedule, payment_method, branch_id,
            otp_code, status,
            quoted_price, final_price, pricing_breakdown)
-        VALUES ($1,$2,$3,$4,$5,$6,'PENDING_OTP',$7,$8,$9)
+        VALUES (
+          $1,$2,$3,
+          (SELECT s.id FROM ${dbSchema}.services s WHERE s.legacy_service_option_id = $3),
+          $4,$5,$6,$7,'PENDING_OTP',$8,$9,$10
+        )
         RETURNING *
         `,
         [
@@ -101,6 +174,7 @@ export const createBooking = async (
           payload.serviceOptionId,
           payload.schedule,
           payload.paymentMethod,
+          payload.branchId ?? null,
           otp,
           quote.final,
           quote.final,
@@ -209,48 +283,89 @@ export const createBooking = async (
  * Restricted to PENDING_OTP. Re-issuing against a booking that is already
  * confirmed, cancelled or completed would move it backwards, and an OTP for a
  * finished job is only useful to someone who should not have one.
+ *
+ * ── TAB 06: this is now a DELEGATION ──────────────────────────────────────────
+ *
+ * The rotation, the delivery and the response shape are unchanged. What is new
+ * is that the resend cooldown, the per-booking issue ceiling and the audit row
+ * come from `bookingOtpService`, which is also what the canonical
+ * `POST /api/v1/bookings/:id/otp/request` calls.
+ *
+ * That is the whole point of delegating rather than adding the policy twice: a
+ * cooldown only the v1 path applied would leave this route — the one the shipped
+ * customer app calls — as an unlimited rotation oracle, and the release gate
+ * would be met on paper and not in the field.
+ *
+ * Imported lazily because `bookingOtpService` imports this module back for the
+ * post-confirmation assignment step. Both directions are lazy, so neither is a
+ * load-order hazard.
  */
-export const resendBookingOtp = async (bookingId: number) => {
-  const res = await dbQuery.query(
-    `SELECT id, user_id, status, schedule, worker_uid FROM ${dbSchema}.bookings WHERE id = $1`,
-    [bookingId],
-  );
-  if (!res.rowCount) throw new Error('Booking not found');
+export const resendBookingOtp = async (
+  bookingId: number,
+  actor: { actorUid?: string | null; role?: 'customer' | 'admin' } = {},
+) => {
+  const { requestBookingOtp, BookingOtpError } = await import('./booking/bookingOtpService');
 
-  const booking = res.rows[0];
-  const status = String(booking.status).toUpperCase();
-  const awaitsOtp = status === 'PENDING_OTP' ||
-    (status === 'PAID' && !booking.worker_uid);
-  if (!awaitsOtp) {
-    throw Object.assign(
-      new Error('This booking is no longer awaiting verification.'),
-      { statusCode: 409 },
-    );
+  try {
+    await requestBookingOtp({
+      bookingId,
+      purpose: 'BOOKING_CONFIRMATION',
+      actor: actor.role ?? 'customer',
+      actorUid: actor.actorUid ?? null,
+      deliver: async (id, code, row) => {
+        await deliverBookingOtpEmail(id, code, row.user_id);
+      },
+    });
+  } catch (error) {
+    // The legacy contract: 404-ish "Booking not found" as a plain Error, and 409
+    // for "no longer awaiting verification". Both callers read `e.message` and
+    // branch on `e.statusCode`, so the new refusals are mapped onto that shape
+    // rather than changing it under a shipped client.
+    if (error instanceof BookingOtpError) {
+      if (error.code === 'BOOKING_NOT_FOUND') throw new Error('Booking not found');
+      throw Object.assign(new Error(error.message), {
+        statusCode: error.code === 'OTP_PURPOSE_NOT_APPLICABLE' ? 409 : 429,
+        code: error.code,
+        detail: error.detail,
+      });
+    }
+    throw error;
   }
 
-  const otp = generateOTP();
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET otp_code = $1 WHERE id = $2`,
-    [otp, bookingId],
-  );
+  // The code itself is never returned: it travels by email only.
+  return { bookingId, resent: true };
+};
 
-  // Best-effort: the code IS rotated regardless of whether the mail goes out.
-  // Failing here would leave the customer holding a code that no longer works,
-  // which is worse than a missing email.
+/**
+ * The verification email, extracted so the canonical and legacy paths send the
+ * SAME message. Best-effort: the code IS rotated whether or not the mail goes
+ * out, because failing here would leave the customer holding a code that no
+ * longer works — worse than a missing email.
+ */
+export const deliverBookingOtpEmail = async (
+  bookingId: number,
+  code: string,
+  userId: string | null,
+): Promise<void> => {
   try {
-    const email = await getEmailById(booking.user_id);
+    const res = await dbQuery.query(
+      `SELECT schedule FROM ${dbSchema}.bookings WHERE id = $1`,
+      [bookingId],
+    );
+    const schedule = res.rows[0]?.schedule ?? null;
+    const email = await getEmailById(userId as string);
     const firstName = await getNameByEmail(email);
     send(email, 'verify_booking_otp', {
       first_name: firstName,
-      otp_code: otp,
+      otp_code: code,
       booking_id: bookingId,
-      booking_date: booking.schedule
-        ? new Date(booking.schedule).toLocaleDateString('en-US', {
+      booking_date: schedule
+        ? new Date(schedule).toLocaleDateString('en-US', {
             year: 'numeric', month: 'long', day: 'numeric',
           })
         : '',
-      booking_time: booking.schedule
-        ? new Date(booking.schedule).toLocaleTimeString('en-US', {
+      booking_time: schedule
+        ? new Date(schedule).toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit',
           })
         : '',
@@ -258,43 +373,120 @@ export const resendBookingOtp = async (bookingId: number) => {
   } catch {
     // Swallowed deliberately — see above.
   }
-
-  // The code itself is never returned: it travels by email only.
-  return { bookingId, resent: true };
 };
 
+
+/**
+ * ─── PHASE C · CUSTOMER_CONFIRM_OTP, on the canonical executor ───────────────
+ *
+ * The customer proves presence with the booking OTP, and the booking is
+ * released to the assignment pool.
+ *
+ * ## What Phase C preserved, and what TAB 06 deliberately changed
+ *
+ * Phase C preserved the OTP's total absence of a lifecycle — no expiry, no
+ * attempt limit, not consumed — because a state-machine migration is the wrong
+ * place to change product policy.
+ *
+ * TAB 06 §63 changes it on purpose: purpose, issuer, recipient, expiry, resend
+ * cooldown, attempt limit and audit are now required. Those rules live in
+ * `booking/bookingOtpService` and this function DELEGATES to it, so the legacy
+ * route and `POST /api/v1/bookings/:id/otp/verify` enforce one policy. A limit
+ * only the canonical path applied would leave this one — which the shipped
+ * customer app calls — as an unlimited guessing oracle.
+ *
+ * Three things are still true and still deliberate: the code is NOT consumed on
+ * success, the credential comparison stays inside the mutating statement, and a
+ * replay errors rather than answering 200, because installed clients were built
+ * against that.
+ *
+ * The credential predicate stays IN the write, exactly as the legacy
+ * compare-and-swap had it. What did NOT come with it is the other half of that
+ * statement — `status = 'PENDING_OTP' OR (status = 'PAID' AND worker_uid IS
+ * NULL)` — which was a second state machine written in SQL. The canonical
+ * machine decides legality now; the predicate is only for the credential.
+ *
+ * ## One behaviour change, and it is a bug fix
+ *
+ * The legacy sequence committed the status write, then inserted tracking, then
+ * looked up the address for auto-assignment — and threw
+ * `Error("Address missing locationId.")` if the address had no location. The
+ * customer received HTTP 400 for a booking that was ALREADY confirmed.
+ *
+ * The address is needed only for auto-assignment: every earlier branch
+ * (`no rows`, `no user_address_id`) returned the confirmed booking
+ * successfully. So the coupling was accidental, and it is gone. Confirmation
+ * commits, and a failure to find a provider afterwards leaves the booking
+ * CONFIRMED with no worker — which is AWAITING_ASSIGNMENT, exactly the queue an
+ * admin watches for bookings needing a provider.
+ *
+ * ## Authorization
+ *
+ * `assertBookingAccess` stays in the controller for now, and the executor
+ * independently refuses a customer who does not own the booking. That is
+ * duplicated ENFORCEMENT, not duplicated policy — and the executor's is the
+ * one that cannot be bypassed by a caller that never touched HTTP. The
+ * controller check is removed when the legacy endpoint migrates.
+ */
 export const confirmOtp = async (
   bookingId: number,
-  otp: string
+  otp: string,
+  options: { actorUid?: string | null; correlationId?: string } = {},
 ) => {
-  try {
-    const r = await dbQuery.query(
-      `
-      UPDATE ${dbSchema}.bookings
-      SET status='CONFIRMED'
-      WHERE id=$1
-        AND otp_code=$2::text
-        AND (
-          status='PENDING_OTP'
-          OR (status='PAID' AND worker_uid IS NULL)
-        )
-      RETURNING *
-      `,
-      [bookingId, otp]
-    );
+  const { verifyBookingOtp, BookingOtpError } = await import('./booking/bookingOtpService');
 
-    if (!r.rowCount) {
+  try {
+    await verifyBookingOtp({
+      bookingId,
+      purpose: 'BOOKING_CONFIRMATION',
+      code: otp,
+      actor: options.actorUid ? 'customer' : 'admin',
+      actorUid: options.actorUid ?? null,
+      correlationId: options.correlationId,
+      // The post-commit assignment is run by THIS function, below, so the
+      // service is told not to run it again. One caller, one auto-assignment.
+      skipPostConfirmationAssignment: true,
+    });
+  } catch (error) {
+    // The legacy message, byte for byte: both callers surface `e.message`
+    // directly and answer 400 for every failure here.
+    //
+    // The new policy refusals collapse into it too. That is not information
+    // thrown away — it is the shape this route has always had, and the caller
+    // that needs "expired" told apart from "wrong" is the canonical endpoint,
+    // which returns the specific code.
+    if (error instanceof TransitionError || error instanceof BookingOtpError) {
       throw new Error("Invalid OTP or booking is not in PENDING_OTP.");
     }
+    throw error;
+  }
 
-    await dbQuery.query(
-      `
-      INSERT INTO ${dbSchema}.booking_tracking (booking_id,status,note)
-      VALUES ($1,'CONFIRMED','OTP verified')
-      `,
-      [bookingId]
-    );
+  const confirmed = await dbQuery.query(
+    `SELECT * FROM ${dbSchema}.bookings WHERE id = $1`,
+    [bookingId],
+  );
+  const booking = confirmed.rows[0];
 
+  await runPostConfirmationAssignment(bookingId);
+
+  return booking;
+};
+
+/**
+ * Auto-assignment, AFTER the commit and unable to fail the confirmation.
+ *
+ * TAB 05 owns who gets assigned. What matters here is that the customer is told
+ * their booking is confirmed — because it is — and a booking left without a
+ * provider surfaces to an admin as awaiting assignment rather than as a 400 the
+ * customer cannot act on.
+ *
+ * Extracted and exported in TAB 06 so the canonical
+ * `POST /api/v1/bookings/:id/otp/verify` runs the SAME step. A confirmation that
+ * assigns a provider on one route and not on the other would be two products
+ * wearing one name.
+ */
+export const runPostConfirmationAssignment = async (bookingId: number): Promise<void> => {
+  try {
     const bookingRes = await dbQuery.query(
       `
       SELECT
@@ -309,28 +501,20 @@ export const confirmOtp = async (
       [bookingId]
     );
 
-    if (!bookingRes.rowCount) return r.rows[0];
-
     const row = bookingRes.rows[0];
-
-    if (!row.user_address_id) return r.rows[0];
-
-    const locationId = row.location_id;
-    if (!locationId) throw new Error("Address missing locationId.");
-
-    const [lon, lat] = await getLatLonByLocationId(String(locationId));
-
-    const serviceId = row.service_id ? Number(row.service_id) : null;
-    await assignNearestWorker(
-      bookingId,
-      Number(lat),
-      Number(lon),
-      serviceId
-    );
-
-    return r.rows[0];
-  } catch (e) {
-    throw e;
+    if (row?.user_address_id && row.location_id) {
+      const [lon, lat] = await getLatLonByLocationId(String(row.location_id));
+      await assignNearestWorker(
+        bookingId,
+        Number(lat),
+        Number(lon),
+        row.service_id ? Number(row.service_id) : null,
+      );
+    }
+  } catch (assignErr) {
+    // Never surfaced to the customer: the booking IS confirmed, and telling
+    // them otherwise is the defect this replaced.
+    console.error(`auto-assignment after OTP confirm failed for booking ${bookingId}:`, assignErr);
   }
 };
 
@@ -372,10 +556,9 @@ export const getBookingById = async (
       bw.started_at,
       bw.completed_at,
       -- The customer app reads etaMinutes on the booking detail screen.
-      -- booking_workers was joined for its status and timestamps but never for
-      -- the ETA, so the key was always absent from the response and the app had
-      -- nothing to show.
-      bw.eta_minutes,
+      -- Travel ETA belongs to the booking assignment projection and is stored
+      -- on bookings by the assignment transaction.
+      b.eta_minutes,
       -- Money. The app renders "Amount" from totalAmount, which is not a column
       -- on this table and never was — bookings stores quoted_price and
       -- final_price. The key was simply missing from the payload, the client's
@@ -388,14 +571,18 @@ export const getBookingById = async (
       ON p.booking_id = b.id
     LEFT JOIN ${dbSchema}.service_options so
       ON so.id = b.service_option_id
-    LEFT JOIN ${dbSchema}.services s
+    LEFT JOIN ${dbSchema}.service_families s
       ON s.id = so.service_id
     LEFT JOIN ${dbSchema}.branches br
       ON br.id = b.branch_id
     LEFT JOIN ${dbSchema}.user_address ua
       ON ua.address_id = b.user_address_id
-    LEFT JOIN ${dbSchema}.booking_workers bw
-      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
+    LEFT JOIN LATERAL (
+      SELECT bw0.* FROM ${dbSchema}.booking_workers bw0
+      WHERE bw0.booking_id = b.id
+      ORDER BY bw0.assigned_at DESC NULLS LAST, bw0.id DESC
+      LIMIT 1
+    ) bw ON TRUE
     WHERE b.id = $1
     `,
     [bookingId]
@@ -468,9 +655,12 @@ export const getAllBookings = async (from?: string, to?: string) => {
       ON br.id = b.branch_id
     LEFT JOIN ${dbSchema}.user_address ua
       ON ua.address_id = b.user_address_id
-    LEFT JOIN ${dbSchema}.booking_workers bw
-      ON bw.booking_id = b.id
-      AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
+    LEFT JOIN LATERAL (
+      SELECT bw0.* FROM ${dbSchema}.booking_workers bw0
+      WHERE bw0.booking_id = b.id
+      ORDER BY bw0.assigned_at DESC NULLS LAST, bw0.id DESC
+      LIMIT 1
+    ) bw ON TRUE
     LEFT JOIN ${dbSchema}.user_credentials w
       ON w.uid = bw.worker_uid
     ${whereClause}
@@ -494,6 +684,29 @@ export const getBookingsByUserId = async (userId: string) => {
       br.name AS branch_name,
       br.address AS branch_address,
       br.city AS branch_city,
+      -- Service identity and money, matching the detail query above.
+      --
+      -- The detail query gained these joins when the booking detail screen was
+      -- found rendering a bare "Service" label with nothing beside it. The LIST
+      -- query was never given the same treatment, so every consumer that shows
+      -- a list of bookings has had to invent the name of the thing booked.
+      --
+      -- The customer app's live list mapper does exactly that
+      -- (http_backend.dart:491-502): it digs the name out of
+      -- pricingBreakdown.addons[0].level_3 and, when a booking has no addons,
+      -- falls back to the literal string 'Beauty & Wellness'. A plumbing
+      -- booking with no addons is currently labelled Beauty & Wellness in a
+      -- shipped app. That is not a name the customer chose and not one anybody
+      -- can act on.
+      --
+      -- Same columns and same aliases as the detail query, deliberately: a list
+      -- row and a detail page describing the same booking differently is the
+      -- drift this is meant to remove, not create.
+      so.service_id,
+      so.level_2 AS service_name,
+      so.level_3 AS service_option_name,
+      s.name     AS service_category,
+      COALESCE(b.final_price, b.quoted_price) AS total_amount,
       -- Admin-created bookings store address in service_address JSONB; COALESCE
       -- ensures customer mobile always receives a readable address line.
       COALESCE(ua.address_one, b.service_address->>'addressLine') AS address,
@@ -507,12 +720,23 @@ export const getBookingsByUserId = async (userId: string) => {
     FROM ${dbSchema}.bookings b
     LEFT JOIN ${dbSchema}.payments p
       ON p.booking_id = b.id
+    -- LEFT, not INNER. A booking whose service_option row was deleted or is
+    -- null must still appear in its owner's list; an inner join would delete
+    -- bookings from a customer's history to avoid a missing label.
+    LEFT JOIN ${dbSchema}.service_options so
+      ON so.id = b.service_option_id
+    LEFT JOIN ${dbSchema}.service_families s
+      ON s.id = so.service_id
     LEFT JOIN ${dbSchema}.branches br
       ON br.id = b.branch_id
     LEFT JOIN ${dbSchema}.user_address ua
       ON ua.address_id = b.user_address_id
-    LEFT JOIN ${dbSchema}.booking_workers bw
-      ON bw.booking_id = b.id AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
+    LEFT JOIN LATERAL (
+      SELECT bw0.* FROM ${dbSchema}.booking_workers bw0
+      WHERE bw0.booking_id = b.id
+      ORDER BY bw0.assigned_at DESC NULLS LAST, bw0.id DESC
+      LIMIT 1
+    ) bw ON TRUE
     -- Guest bookings surface to a registered customer only through the
     -- explicit link an admin created (linked_customer_uid, alongside
     -- linked_at / linked_by_admin_uid / link_reason). That link is deliberate
@@ -664,6 +888,7 @@ export const formatBooking = (raw: any): Record<string, unknown> => {
   const userIdVal = c.userId ?? raw.user_id ?? null;
   const statusVal: string = (c.status ?? raw.status ?? '');
   const workerStatusVal = c.workerStatus ?? raw.worker_status ?? null;
+  const effectiveStatus = deriveEffectiveBookingStatus(statusVal, workerStatusVal);
 
   return {
     ...c,
@@ -680,6 +905,7 @@ export const formatBooking = (raw: any): Record<string, unknown> => {
     ...(userIdVal !== null && !('customerUid' in c) ? { customerUid: userIdVal } : {}),
     // Status: UPPERCASE from DB stays, lowercase variant added for platforms that normalise
     ...(statusVal && !('statusLower' in c) ? { statusLower: statusVal.toLowerCase() } : {}),
+    effectiveStatus,
     // Worker/assignment status aliases
     ...(workerStatusVal !== null && !('assignmentStatus' in c) ? { assignmentStatus: workerStatusVal } : {}),
   };
@@ -690,11 +916,9 @@ export const formatBookings = (rows: any[]): Record<string, unknown>[] =>
 
 // ─── Customer Self-Cancel (BACKEND_GAP-C15-001 implementation) ────────────────
 
-const NON_CANCELLABLE_STATUSES = new Set([
-  'CANCELLED', 'CANCELED', 'COMPLETED', 'IN_PROGRESS',
-  'EN_ROUTE', 'ARRIVED', 'AWAITING_COMPLETION',
-  'REVIEWED', 'REFUNDED', 'EXPIRED', 'FAILED',
-]);
+// The stage list moved to `booking/bookingPolicies.CUSTOMER_NON_CANCELLABLE_STATUSES`
+// when CUSTOMER_CANCEL migrated to the executor. Deleted rather than left here
+// unused: two copies of a policy list is how they drift.
 
 /**
  * Allows a customer to cancel their own booking.
@@ -741,31 +965,47 @@ export const customerCancelBooking = async (
     throw Object.assign(new Error('Access denied'), { statusCode: 403 });
   }
 
-  if (NON_CANCELLABLE_STATUSES.has((prevStatus ?? '').toUpperCase())) {
-    throw new Error(`Cannot cancel booking with status: ${prevStatus}`);
+  /**
+   * ─── PHASE C · CUSTOMER_CANCEL, on the canonical executor ──────────────────
+   *
+   * The stage check, both status writes and the timeline event are now one
+   * transaction inside `transitionBooking`. Previously they were four separate
+   * autocommit statements, so a failure between any two left a cancelled
+   * booking with a live assignment row, or with no entry in the customer's own
+   * timeline.
+   *
+   * The stage rule itself moved to `bookingPolicies.customerMayCancel` and is
+   * enforced as the named guard `customerCancellationStage` — implementing
+   * `requires: ['cancellation_eligible']`, which the transition table has
+   * declared on the customer-cancel rules since it was written and which
+   * nothing enforced. Without it this migration would have WIDENED what a
+   * customer can cancel, because the machine permits cancelling from EN_ROUTE
+   * and ARRIVED and the platform does not.
+   *
+   * The two checks above are untouched: `assertBookingAccess` still fails
+   * closed on guest bookings, and a provider still cannot cancel on the
+   * customer's behalf. The executor additionally refuses a customer who does
+   * not own the booking, which is the check no internal caller can bypass.
+   */
+  try {
+    await transitionBooking({
+      action: 'CUSTOMER_CANCEL',
+      bookingId,
+      actorRole: 'customer',
+      actorUid: customerUid,
+      metadata: { reason, ...(reasonCode ? { reasonCode } : {}) },
+    });
+  } catch (error) {
+    // The legacy messages, verbatim — both callers surface `e.message`.
+    // Every refusal reachable here reads the same way, and did before: not
+    // found and access denied are already thrown above, so what remains is the
+    // stage guard and a terminal booking — which the legacy list also reported
+    // with this sentence.
+    if (error instanceof TransitionError) {
+      throw new Error(`Cannot cancel booking with status: ${prevStatus}`);
+    }
+    throw error;
   }
-
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET status = 'CANCELLED', cancelled_at = NOW() WHERE id = $1`,
-    [bookingId],
-  );
-
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.booking_workers SET status = 'CANCELLED'
-     WHERE booking_id = $1 AND status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED')`,
-    [bookingId],
-  );
-
-  await dbQuery.query(
-    `INSERT INTO ${dbSchema}.booking_timeline_events
-       (booking_id, event_type, title, description, actor_type, actor_uid, metadata)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [
-      bookingId, 'booking_cancelled', 'Booking cancelled by customer',
-      reason, 'customer', customerUid ?? null,
-      reasonCode ? JSON.stringify({ reasonCode }) : null,
-    ],
-  );
 
   // Close the conversation on the customer-cancelled path too. Both cancel
   // routes must behave identically or a cancelled booking stays a live private
@@ -783,4 +1023,84 @@ export const customerCancelBooking = async (
     [bookingId],
   );
   return updatedRes.rows[0] ?? { id: bookingId, status: 'CANCELLED' };
+};
+
+/**
+ * The customer's own booking history, as authoritative events.
+ *
+ * Command 6 §11. Reuses `buildBookingTimeline` and `mergeStoredEvents` — the
+ * same derivation the provider timeline uses — then re-voices the result for
+ * the customer. One source of truth for what happened; two ways of telling it.
+ *
+ * ## The query is scoped by booking, not by worker
+ *
+ * The provider handler filters `bw.worker_uid = $2` because a provider may only
+ * see the assignment row that is theirs. A customer owns the booking itself, so
+ * the join takes the most recent assignment regardless of who holds it — which
+ * is what makes a reassigned booking still show its full history.
+ *
+ * LEFT JOIN, not JOIN: a booking at PENDING_OTP or CONFIRMED has no
+ * `booking_workers` row at all. An inner join would return zero rows and the
+ * caller would report "no timeline" for every booking that has not yet been
+ * assigned — which is every newly created one.
+ *
+ * Ownership is NOT checked here. `assertBookingAccess` in the controller is the
+ * authority, exactly as it is for `getTracking`; duplicating it would create a
+ * second rule that can drift from the first.
+ */
+export const getCustomerBookingTimeline = async (bookingId: number) => {
+  const schema = dbSchema || "";
+
+  const result = await dbQuery.query(
+    `SELECT b.created_at,
+            b.status                AS booking_status,
+            bw.status               AS worker_status,
+            bw.assigned_at,
+            bw.started_at,
+            bw.completed_at,
+            to_jsonb(bw) ->> 'accepted_at' AS accepted_at,
+            to_jsonb(bw) ->> 'declined_at' AS declined_at,
+            to_jsonb(bw) ->> 'en_route_at' AS en_route_at,
+            to_jsonb(bw) ->> 'arrived_at'  AS arrived_at
+       FROM ${schema}.bookings b
+       LEFT JOIN ${schema}.booking_workers bw
+         ON bw.booking_id = b.id
+      WHERE b.id = $1
+      ORDER BY bw.id DESC NULLS LAST
+      LIMIT 1`,
+    [bookingId]
+  );
+
+  if (!result.rowCount) {
+    throw new BookingAccessError("Booking not found", 404, "BOOKING_NOT_FOUND");
+  }
+
+  // Only `event_type` and `created_at` cross. `title`, `description` and
+  // `metadata` on booking_timeline_events are admin-authored and must never
+  // reach a customer — the same rule the provider handler applies.
+  const stored = await dbQuery
+    .query(
+      `SELECT event_type, created_at
+         FROM ${schema}.booking_timeline_events
+        WHERE booking_id = $1
+        ORDER BY created_at ASC`,
+      [bookingId]
+    )
+    .catch(() => null);
+
+  // `true` for the assignee gate: a customer never stops owning their booking,
+  // so every admin event on it is theirs to see. See the controller's note.
+  const events = mergeStoredEvents(
+    buildBookingTimeline(result.rows[0]),
+    stored?.rows ?? [],
+    true
+  );
+
+  const projected = projectTimelineForCustomer(events);
+
+  return {
+    bookingId,
+    events: projected,
+    currentStep: currentTimelineStep(events),
+  };
 };

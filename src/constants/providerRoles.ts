@@ -27,3 +27,30 @@ export const isProviderRole = (role: unknown): boolean => {
   const s = String(role).trim();
   return s !== "" && PROVIDER_ROLES.has(s);
 };
+
+/**
+ * The provider roles as a SQL list, derived from the set above.
+ *
+ * Exists so raw SQL never retypes `2, 4`. `adminBookingService` had
+ * `role::int = 2` in two places and `role::int IN (2, 4)` in a third — the
+ * same file disagreeing with itself, which meant an admin could not assign a
+ * role-4 provider and was told "Provider not found".
+ *
+ * Safe to interpolate: the values come from this module's own constant, never
+ * from a request. Asserted numeric below so it cannot become an injection
+ * point if PROVIDER_ROLES ever gains a non-numeric member.
+ */
+export const providerRoleSqlList = (): string => {
+  const values = [...PROVIDER_ROLES].map((role) => {
+    const n = Number(role);
+    if (!Number.isInteger(n)) {
+      throw new Error(`Non-numeric provider role cannot be inlined into SQL: ${role}`);
+    }
+    return String(n);
+  });
+  return values.join(', ');
+};
+
+/** `role::int IN (2, 4)` for a given column, built from the canonical set. */
+export const providerRoleSqlPredicate = (column: string): string =>
+  `${column}::int IN (${providerRoleSqlList()})`;

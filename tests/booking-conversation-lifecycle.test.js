@@ -93,13 +93,20 @@ describe('chat.repository — active worker statuses', function () {
   });
 
   it('covers every status the arrival lifecycle can write', function () {
-    var tech = readCode('services', 'technicianService.ts');
+    // Reads the EXECUTOR, not technicianService. The arrival writes moved there
+    // in B1.3/B1.4, and this check used to be conditional on finding the
+    // double-quoted literals "EN_ROUTE"/"ARRIVED" in technicianService — which
+    // the migration removed. The guard would have gone silently vacuous:
+    // still green, asserting nothing, on exactly the day the source of truth
+    // moved. It now reads the file that actually writes those statuses.
+    var executor = readCode('services', 'booking', 'transitionExecutor.ts');
     var block = code.match(/ACTIVE_WORKER_STATUSES\s*=\s*\[[\s\S]*?\]/)[0];
-    // advanceArrivalStage(..., FROM, TO, ...) — every TO must be authorized.
+
     ['EN_ROUTE', 'ARRIVED'].forEach(function (s) {
-      if (new RegExp('"' + s + '"').test(tech)) {
-        expect(block).toMatch(new RegExp("'" + s + "'"));
-      }
+      // Positive fixture: the executor MUST name it, or the loop below proves
+      // nothing. This is the assertion the old conditional was missing.
+      expect(executor).toMatch(new RegExp("'" + s + "'"));
+      expect(block).toMatch(new RegExp("'" + s + "'"));
     });
   });
 });
@@ -135,19 +142,23 @@ describe('chat.repository — inbox excludes departed participants', function ()
 
 describe('adminBookingService — reassignment updates chat membership', function () {
   var code;
-  beforeAll(function () { code = readCode('services', 'adminBookingService.ts'); });
+  var fn;
+  beforeAll(function () {
+    code = readCode('services', 'adminBookingService.ts');
+    var start = code.indexOf('export const adminReassignProvider');
+    var end = code.indexOf('export const adminRescheduleBooking', start);
+    fn = code.slice(start, end);
+  });
 
   it('imports handleProviderReassignment', function () {
     expect(code).toMatch(/handleProviderReassignment/);
   });
 
   it('calls it inside adminReassignProvider', function () {
-    var fn = code.match(/adminReassignProvider[\s\S]{0,4000}/)[0];
     expect(fn).toMatch(/handleProviderReassignment\(/);
   });
 
   it('cannot fail the reassignment it follows (own try/catch)', function () {
-    var fn = code.match(/adminReassignProvider[\s\S]{0,4000}/)[0];
     var call = fn.slice(fn.indexOf('handleProviderReassignment('));
     expect(call).toMatch(/catch\s*\(/);
   });
@@ -174,20 +185,40 @@ describe('is_closed remains a maintained compatibility flag', function () {
     expect(fn).toMatch(/WRITABLE_STATUSES\.includes/);
   });
 
+  /**
+   * The DECLARATION moved to `services/messaging/messagingPolicy` in TAB 08 and
+   * `chat.repository` re-exports it, because the repository imports `../config`
+   * and anything declared there needs a database to be read at all — which put
+   * the conversation policy out of reach of the docs generator.
+   *
+   * So this asserts the RUNTIME value rather than a source literal. The list is
+   * now DERIVED from `partiesMayWrite` on each state spec, and a derived list
+   * asserted by regex would only prove the spelling of the filter.
+   */
   it('WRITABLE_STATUSES is exactly ACTIVE and SUPPORT_ESCALATED', function () {
-    // Match the array literal after `= [`, not the `ConversationStatus[]`
-    // type annotation in between — which has its own bracket pair.
-    var block = repoCode.match(/WRITABLE_STATUSES[^=]*=\s*\[([\s\S]*?)\]/)[1];
-    expect(block).toMatch(/ACTIVE/);
-    expect(block).toMatch(/SUPPORT_ESCALATED/);
-    expect(block).not.toMatch(/ARCHIVED/);
-    expect(block).not.toMatch(/READ_ONLY/);
+    var policy = require('../src/services/messaging/messagingPolicy');
+    expect(policy.WRITABLE_STATUSES.slice().sort())
+      .toEqual(['ACTIVE', 'SUPPORT_ESCALATED']);
+    // Still re-exported from where every existing caller imports it.
+    expect(repoCode).toMatch(/export \{ CONVERSATION_STATUS, WRITABLE_STATUSES \}/);
   });
 
-  it('legacy rows with is_closed=TRUE are backfilled to CLOSED', function () {
-    var fn = repoCode.match(/ensureChatLifecycleSchema[\s\S]{0,2000}/)[0];
-    expect(fn).toMatch(/is_closed = TRUE/);
-    expect(fn).toMatch(/status = 'CLOSED'/);
+  it('is_closed and status can no longer diverge, so no backfill is needed', function () {
+    /**
+     * This read the one-time backfill inside `ensureChatLifecycleSchema`
+     * (UPDATE ... SET status = CLOSED WHERE is_closed AND status = ACTIVE).
+     * That bootstrap is gone: the derivation was verified SPENT against
+     * production on 2026-08-18 — 0 rows matched — and it cannot come back.
+     *
+     * The reason it cannot is the thing worth pinning, and it is stronger than
+     * the backfill ever was: `setConversationStatus` writes BOTH fields in the
+     * same UPDATE. Divergence would need someone to write one without the
+     * other, which is what this now guards.
+     */
+    var fn = repoCode.match(/export const setConversationStatus[\s\S]{0,900}/)[0];
+    var update = fn.match(/UPDATE[\s\S]{0,400}/)[0];
+    expect(update).toMatch(/status\s*=\s*\$2/);
+    expect(update).toMatch(/is_closed\s*=\s*\$3/);
   });
 
   it('resolveAccessForConversation still honours a legacy is_closed row', function () {
@@ -195,11 +226,24 @@ describe('is_closed remains a maintained compatibility flag', function () {
     expect(fn).toMatch(/is_closed/);
   });
 
-  it('all lifecycle DDL is additive (IF NOT EXISTS on every column)', function () {
-    var fn = repoCode.match(/ensureChatLifecycleSchema[\s\S]{0,2000}/)[0];
-    var adds = fn.match(/ADD COLUMN[^,\n]*/g) || [];
-    expect(adds.length).toBeGreaterThan(0);
-    adds.forEach(function (a) { expect(a).toMatch(/IF NOT EXISTS/); });
+  it('the lifecycle columns are declared by the BASELINE, not by the engine', function () {
+    /**
+     * This counted ADD COLUMN statements in a runtime bootstrap and required
+     * IF NOT EXISTS on each. With no bootstrap there is nothing to count, and
+     * asserting the columns exist in the artefact a database is BUILT from is
+     * the stronger claim: it holds for a fresh database, which a lazy ALTER
+     * never guaranteed.
+     */
+    var fs2 = require('fs');
+    var path2 = require('path');
+    var baseline = fs2
+      .readFileSync(path2.resolve(__dirname, '../scripts/baseline/000-baseline.sql'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    var conv = /CREATE TABLE servana\.chat_conversations \(([\s\S]*?)\n\);/.exec(baseline);
+    expect(conv).not.toBeNull();
+    ['status', 'read_only_at', 'archived_at', 'escalated_at'].forEach(function (c) {
+      expect(conv[1]).toMatch(new RegExp('^\\s+' + c + '\\s', 'm'));
+    });
   });
 
   it('no DROP or RENAME anywhere in the chat module', function () {
@@ -232,11 +276,32 @@ describe('is_closed remains a maintained compatibility flag', function () {
   });
 
   it('participant rows keep their original keys and only gain capabilities', function () {
-    var fn = repoCode.match(/ensureChatLifecycleSchema[\s\S]{0,2000}/)[0];
-    var participantDdl = fn.match(/chat_participants[\s\S]{0,300}/)[0];
-    expect(participantDdl).toMatch(/ADD COLUMN IF NOT EXISTS can_read/);
-    expect(participantDdl).toMatch(/ADD COLUMN IF NOT EXISTS can_send/);
-    expect(participantDdl).not.toMatch(/DROP|RENAME/i);
+    // Same move: asserted against the baseline rather than a bootstrap that no
+    // longer runs. The original keys matter as much as the new capabilities.
+    var fs2 = require('fs');
+    var path2 = require('path');
+    var baseline = fs2
+      .readFileSync(path2.resolve(__dirname, '../scripts/baseline/000-baseline.sql'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    var part = /CREATE TABLE servana\.chat_participants \(([\s\S]*?)\n\);/.exec(baseline);
+    expect(part).not.toBeNull();
+    // The baseline covers the original keys and the two capability columns.
+    ['conversation_id', 'user_uid', 'can_read', 'can_send'].forEach(function (c) {
+      expect(part[1]).toMatch(new RegExp('^\\s+' + c + '\\s', 'm'));
+    });
+
+    /**
+     * `last_read_at` is NOT in the baseline: the capture predates it, and
+     * migration 032 owns it. The schema authority is the baseline PLUS the
+     * migrations, and an assertion against the baseline alone would have
+     * declared a column live in production to be missing.
+     */
+    var m032 = fs2.readFileSync(
+      path2.resolve(__dirname, '../scripts/migrations/032-messaging-read-receipts.sql'),
+      'utf8',
+    );
+    expect(m032).toMatch(/ADD COLUMN IF NOT EXISTS last_read_at/);
+    expect(repoCode).not.toMatch(/DROP COLUMN|RENAME COLUMN/i);
   });
 });
 

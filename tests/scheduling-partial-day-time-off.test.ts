@@ -16,9 +16,19 @@
  * and the query that decides bookability actually honours them. Storing them
  * without the second half would be the "foundations without callers" defect.
  */
+const mockDbQuery = jest.fn();
+const mockTxQuery = jest.fn((sql: string, params?: any[]) => {
+  const text = String(sql);
+  if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(text) || text.includes('pg_advisory_xact_lock'))
+    return Promise.resolve({ rows: [], rowCount: 0 });
+  if (text.includes('SELECT id FROM test.worker_time_off'))
+    return Promise.resolve({ rows: [], rowCount: 0 });
+  return mockDbQuery(sql, params);
+});
 jest.mock("../src/db/dbQuery", () => ({
   __esModule: true,
-  default: { query: jest.fn() },
+  default: { query: mockDbQuery },
+  pool: { connect: jest.fn(async () => ({ query: mockTxQuery, release: jest.fn() })) },
 }));
 jest.mock("../src/config", () => ({ __esModule: true, db: { schema: "test" } }));
 
@@ -27,7 +37,15 @@ import { createTimeOff, filterUidsAvailableAt } from "../src/services/providerAv
 
 const query = (dbQuery as any).query as jest.Mock;
 
-/** Bootstrap issues DDL; every test needs those to resolve first. */
+/**
+ * An empty result. Used as the fallback for any query a test does not route.
+ *
+ * It was named for the DDL that `bootstrap()` used to issue before every
+ * operation. TAB 02 removed that bootstrap — `worker_time_off` comes from
+ * `scripts/baseline/000-baseline.sql` now — so there is no DDL to absorb, and the
+ * two `mockResolvedValueOnce(ddlOk)` calls that used to swallow it were making
+ * the first REAL query return no rows.
+ */
 const ddlOk = { rows: [], rowCount: 0 };
 
 const storedRow = (over: Record<string, any> = {}) => ({
@@ -57,13 +75,11 @@ beforeEach(() => {
   query.mockResolvedValue(ddlOk);
 });
 
-/** The INSERT is the last call; bootstrap DDL comes first. */
+/** The INSERT … RETURNING is the last call the operation makes. */
 const lastCall = () => query.mock.calls[query.mock.calls.length - 1];
 
 describe("the times are persisted, not dropped", () => {
   it("stores allDay, start, end and note", async () => {
-    query.mockResolvedValue(ddlOk);
-    query.mockResolvedValueOnce(ddlOk).mockResolvedValueOnce(ddlOk);
     query.mockResolvedValue(storedRow());
 
     await createTimeOff(
@@ -195,6 +211,17 @@ describe("validation refuses rather than guessing", () => {
         "worker-A"
       )
     ).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it("rejects impossible calendar dates and oversized private notes", async () => {
+    await rejects(
+      { startDate: "2026-02-30", endDate: "2026-02-30" },
+      /real dates/i,
+    );
+    await rejects(
+      { startDate: "2026-08-10", endDate: "2026-08-10", note: "x".repeat(501) },
+      /at most 500/i,
+    );
   });
 });
 

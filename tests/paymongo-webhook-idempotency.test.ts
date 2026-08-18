@@ -30,26 +30,26 @@ const code = (rel: string) =>
 
 const service = code("src/services/paymentService.ts");
 const controller = code("src/controllers/paymentController.ts");
+const migration = code("scripts/migrations/017-paymongo-transaction-integrity.sql");
 
 describe("uniqueness is enforced by the database, not by a SELECT", () => {
   it("creates a unique index on webhook_event_id", () => {
-    expect(service).toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS/);
-    expect(service).toMatch(/idx_payments_webhook_event_id/);
-    expect(service).toMatch(/\(webhook_event_id\)/);
+    expect(migration).toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS/);
+    expect(migration).toMatch(/idx_payments_webhook_event_id/);
+    expect(migration).toMatch(/\(webhook_event_id\)/);
   });
 
   it("the index is partial, so historical NULLs do not collide", () => {
     // Several NULLs are not a uniqueness conflict in Postgres, but being
     // explicit documents that rows predating webhook capture are expected.
-    expect(service).toMatch(/WHERE webhook_event_id IS NOT NULL/);
+    expect(migration).toMatch(/WHERE webhook_event_id IS NOT NULL/);
   });
 
-  it("the index is ensured BEFORE the dedupe SELECT runs", () => {
-    const ensureAt = service.indexOf("ensureWebhookEventUniqueness()");
+  it("uses a transaction advisory lock before the dedupe SELECT", () => {
+    const lockAt = service.indexOf("paymongo-webhook:${eventId}");
     const selectAt = service.indexOf("WHERE webhook_event_id = $1");
-    expect(ensureAt).toBeGreaterThan(-1);
-    expect(selectAt).toBeGreaterThan(-1);
-    expect(ensureAt).toBeLessThan(selectAt);
+    expect(lockAt).toBeGreaterThan(-1);
+    expect(selectAt).toBeGreaterThan(lockAt);
   });
 
   it("the cheap SELECT path is kept as well", () => {
@@ -57,8 +57,8 @@ describe("uniqueness is enforced by the database, not by a SELECT", () => {
     expect(service).toMatch(/WHERE webhook_event_id = \$1/);
   });
 
-  it("a failed index creation is retryable, not cached as broken", () => {
-    expect(service).toMatch(/webhookIndexReady = null/);
+  it("does not run schema DDL from the webhook request", () => {
+    expect(service).not.toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS/);
   });
 });
 
@@ -99,6 +99,12 @@ describe("the signature check is still the gate", () => {
 
   it("rejects a request with no signature header at all", () => {
     expect(service).toMatch(/Missing signature header/);
+  });
+
+  it("rejects stale signatures and cross-environment events", () => {
+    expect(service).toMatch(/PAYMONGO_WEBHOOK_TOLERANCE_SECONDS/);
+    expect(service).toMatch(/PAYMONGO_EXPECT_LIVE_MODE/);
+    expect(controller).toMatch(/PayMongo webhook environment mismatch/);
   });
 
   it("the secret comes from the environment, never a literal", () => {

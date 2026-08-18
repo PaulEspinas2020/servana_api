@@ -1,0 +1,101 @@
+# The release gate (TAB 01).
+#
+# One job, one command, one artifact. The gate's verdict is whatever
+# `npm run release:summary` writes — this workflow does not re-derive it, because
+# a CI job that computes its own answer becomes a second definition of
+# releasable and then the two disagree at the worst moment.
+#
+# The summary is retained whether the gate passes or fails. A failed run is the
+# one you most want the artifact from, and `if: always()` is what makes that
+# true rather than aspirational.
+
+name: release-gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gate:
+    name: hermetic release gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+
+      # Generated-document and OpenAPI drift. Separate from the summary because
+      # these fail on CONTENT, and their diff is the useful output.
+      - name: Generated document drift
+        # --max-old-space-size because the failing run (32119165094) produced NO
+        # log for this step at all while every sibling step logged normally.
+        # A step that fails a check writes why; a step whose log never appears
+        # was killed before it could flush. deploy.yml already records the same
+        # signature on the other host as "exit 134 - JS heap out of memory", and
+        # jest --runInBand shares one heap across all 276 suites.
+        #
+        # NOTE: inferred from the missing log, not from an error message - the
+        # run's own output for this step is gone. If a future run still dies
+        # here, capture the exit code before assuming heap again.
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: npm run verify
+
+      # Dependency review is REPORTING, not blocking, and deliberately so.
+      #
+      # There are 9 moderate advisories today whose fixes are major bumps of
+      # firebase-admin (the auth path) and node-cron (every scheduled job).
+      # Making this blocking would either force those bumps under deadline
+      # pressure or get the step deleted the first time it went red — and a
+      # deleted gate reports nothing forever.
+      #
+      # `--audit-level=high` so a HIGH or CRITICAL is what surfaces; the
+      # moderates are already tracked. Promote to blocking once they are cleared.
+      - name: Dependency advisories (reporting)
+        continue-on-error: true
+        run: npm run security:deps
+
+      # The SECRET scan is blocking, and it runs inside `npm run verify` too.
+      # Named separately here so a failure reads as a secret leak rather than as
+      # "the test suite failed".
+      - name: Secret scan (blocking)
+        run: npm run security:secrets
+
+      - name: Release summary
+        # if: always() so the summary exists even when the gate above failed.
+        # Without it this step was SKIPPED on any failure, which meant the
+        # artifact could never exist for a failed run - the exact opposite of
+        # what this file's header promises ("The summary is retained whether the
+        # gate passes or fails"). The upload below then failed too, manufacturing
+        # a second red X that pointed at the artifact instead of the real cause.
+        if: always()
+        run: npm run release:summary
+
+      - name: Retain the summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-summary
+          path: reports/release-summary.json
+          # warn, not error: a missing summary is a SYMPTOM of an earlier
+          # failure, and turning it into its own failure buries the cause.
+          if-no-files-found: warn
+          retention-days: 30
+
+      # The gate must not leave anything behind in a tracked directory.
+      # `tests/release-gate-hermeticity.test.ts` asserts this statically; this
+      # proves it dynamically, on a real clean checkout.
+      - name: Working tree is still clean
+        if: always()
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::the gate wrote into the working tree:"
+            git status --porcelain
+            exit 1
+          fi

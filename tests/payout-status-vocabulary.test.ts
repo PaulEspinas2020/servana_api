@@ -182,8 +182,22 @@ describe("the controller has one source, not three", () => {
   });
 
   it("all four payout-bearing responses report the canonical value", () => {
-    // /provider/earnings (two shapes), /provider/payouts, /provider/ledger.
-    const occurrences = code.match(/payoutStatusCanonical:/g) ?? [];
-    expect(occurrences.length).toBe(4);
+    /**
+     * TAB 07 moved two of the four into the canonical earnings DTO, so counting
+     * occurrences in the controller alone would now under-report. The claim is
+     * about the RESPONSES, not about one file: /provider/earnings and
+     * /provider/earnings/:id project the shared transaction DTO, while
+     * /provider/ledger and /provider/payouts still map in the controller.
+     */
+    const earnings = fs.readFileSync(
+      path.join(__dirname, "..", "src/services/finance/providerEarningsService.ts"),
+      "utf8"
+    );
+    // Declared on the DTO and populated from the one canonical source.
+    expect(earnings).toMatch(/payoutStatusCanonical: PayoutStatus/);
+    expect(earnings).toMatch(/payoutStatusCanonical: canonicalPayoutStatus/);
+
+    const inController = code.match(/payoutStatusCanonical:/g) ?? [];
+    expect(inController.length).toBe(2);
   });
 });

@@ -1,0 +1,153 @@
+# Zero-to-current database creation (§158).
+#
+# ## Three jobs, and two of them run today
+#
+# `static` needs no database. It replays the migration chain against a modelled
+# catalog and fails when a migration references a table nothing creates — which
+# is true of eighteen tables right now, so this job is RED until a baseline is
+# captured. That is the point: the gap becomes a build failure instead of a
+# thing somebody knows.
+#
+# `embedded` runs the chain through PGlite — PostgreSQL 18 compiled to WASM,
+# in-process, no service container. It exists because `static` was believed for
+# a while and was wrong: its model only recorded tables an ALTER named, so it
+# reported eleven when a real engine proves more, and blamed migration 009 when
+# the chain actually dies on 001. This job also asserts the model reports
+# everything the engine proves, so that class of fail-open cannot return.
+#
+# `fresh` creates a real PostgreSQL service container, applies the baseline and
+# every migration to an empty schema as the runtime role, replays them a second
+# time to prove replayability, and runs the backend suite against it. It is
+# skipped while no baseline file exists. It is not redundant with `embedded`:
+# PGlite runs as a single bundled superuser, so ownership and role separation —
+# the defect that left 29 of 116 tables unusable in production — are only
+# checkable here.
+#
+# ## Engine version
+#
+# `postgres:16` — the same major family the deployment runs. A fresh-database
+# check on a different major proves the migrations parse, not that they behave.
+# Pinned rather than `latest` so a Postgres release cannot turn a green build
+# red overnight with no change on our side.
+#
+# ## The runtime role
+#
+# The container's superuser creates the database, then everything is applied as
+# `admin` — the approved runtime role. Applying as a superuser would let a
+# migration succeed here and fail in production, which is precisely the class of
+# defect that left 29 of 116 tables unusable by the app once already.
+#
+# ## Never production
+#
+# The connection string is built from the service container. `verify-fresh-db`
+# additionally refuses any host matching the configured production host and any
+# schema that already has tables, so a misconfigured secret cannot point this at
+# anything real.
+
+name: fresh-db
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  static:
+    name: static replay (no engine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: Replay the migration chain against an empty catalog
+        run: npm run db:verify
+
+  embedded:
+    name: zero-to-current on an in-process engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: Execute the chain against PostgreSQL 18 (PGlite)
+        run: npm run db:verify:embedded
+
+  fresh:
+    name: zero-to-current on a real engine
+    runs-on: ubuntu-latest
+    # NO job-level `if:` here. This job carried
+    #   if: hashFiles('scripts/baseline/000-baseline.sql') != ''
+    # from 8282e46 until 2026-08-19, and it made the whole FILE invalid: every
+    # run since it was added failed in 0s with zero jobs created and the run
+    # named after its own file path, which is what a workflow that never parsed
+    # looks like. hashFiles() needs a checked-out workspace, so it cannot be
+    # evaluated while the job graph is still being built. Six consecutive red
+    # runs, and not one of the three jobs below ever executed once.
+    #
+    # The guard is obsolete anyway: scripts/baseline/000-baseline.sql is tracked
+    # and present, so the condition it encoded is now permanently true.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-not-a-secret
+          POSTGRES_DB: servana_fresh
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    env:
+      PGPASSWORD: ci-not-a-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+
+      - name: Create the approved runtime role and an empty schema
+        run: |
+          psql -h localhost -U postgres -d servana_fresh -v ON_ERROR_STOP=1 <<'SQL'
+            CREATE ROLE admin LOGIN PASSWORD 'ci-not-a-secret';
+            CREATE SCHEMA servana AUTHORIZATION admin;
+            GRANT ALL ON SCHEMA servana TO admin;
+          SQL
+
+      - name: Apply the baseline and every migration as the runtime role
+        run: npm run db:verify -- --live=postgres://admin:ci-not-a-secret@localhost:5432/servana_fresh
+
+      - name: Seed the synthetic bootstrap fixtures
+        run: |
+          psql -h localhost -U admin -d servana_fresh -v ON_ERROR_STOP=1 \
+            -f scripts/baseline/bootstrap-fixtures.sql
+
+      - name: Assert ownership is the runtime role, not the superuser
+        run: |
+          psql -h localhost -U postgres -d servana_fresh -v ON_ERROR_STOP=1 -t <<'SQL'
+            DO $$
+            DECLARE wrong int;
+            BEGIN
+              SELECT count(*) INTO wrong FROM pg_tables
+               WHERE schemaname = 'servana' AND tableowner <> 'admin';
+              IF wrong > 0 THEN
+                RAISE EXCEPTION '% table(s) in servana are not owned by admin', wrong;
+              END IF;
+            END $$;
+          SQL
+
+      - name: Backend suite against the fresh database
+        run: npm run test:ci
+
+      - name: Route initialisation and contract checks
+        run: npm run verify:quick && npm run api:docs:check && npm run convergence:docs:check

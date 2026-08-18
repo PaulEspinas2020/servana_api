@@ -2,6 +2,8 @@ import { Router } from "express";
 import * as additionalController from "../controllers/additional.controller";
 import verifyAuth from "../middleware/verifyAuth";
 import verifyRoles from "../middleware/verifyRoles";
+import requireProviderRole from "../middleware/requireProviderRole";
+import requireActiveProvider from "../middleware/requireActiveProvider";
 
 const router = Router();
 
@@ -18,16 +20,17 @@ const router = Router();
 // a customer for a charge the caller invented. That is a payment handler with no
 // authentication at all, which is the case §12 exists for.
 //
-// verifyAuth is the floor, not the ceiling: these handlers still take the
-// booking and customer from the URL, so per-object authorization inside the
-// controllers is a follow-up (recorded in the masterlist, not silently assumed).
+// verifyAuth is the floor, not the ceiling. Controllers resolve every request
+// id back to its booking and apply booking-scoped access. Provider mutations
+// additionally require provider role + active operational account; the legacy
+// :userId segment remains compatible but is never treated as identity.
 router.get("/additional/booking/:bookingId", verifyAuth, additionalController.getByBooking);
 
-router.post("/additional/request/:userId", verifyAuth, additionalController.createRequest);
+router.post("/additional/request/:userId", verifyAuth, requireProviderRole, requireActiveProvider, additionalController.createRequest);
 router.post("/additional/:id/payment", verifyAuth, additionalController.generatePayment);
-router.post("/additional/:id/worker-decision", verifyAuth, additionalController.workerDecision);
-router.post("/additional/:id/withdraw", verifyAuth, additionalController.workerWithdraw);
-router.post("/additional/:id/confirm-proceed", verifyAuth, additionalController.workerConfirmProceed);
+router.post("/additional/:id/worker-decision", verifyAuth, requireProviderRole, requireActiveProvider, additionalController.workerDecision);
+router.post("/additional/:id/withdraw", verifyAuth, requireProviderRole, requireActiveProvider, additionalController.workerWithdraw);
+router.post("/additional/:id/confirm-proceed", verifyAuth, requireProviderRole, requireActiveProvider, additionalController.workerConfirmProceed);
 
 // Admin approval — protected (admin portal only; mobile never calls this route)
 router.post("/additional/:id/approve", verifyAuth, verifyRoles([1]), additionalController.approveRequest);

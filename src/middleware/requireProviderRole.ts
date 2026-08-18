@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { sendAuthError } from "../errors/authErrors";
+import { decisionFor, recordAuthzDecision, routeIdOf } from "../observability/authzAudit";
 import dbQuery from "../db/dbQuery";
 import { db } from "../config";
 import { isProviderRole } from "../constants/providerRoles";
@@ -56,7 +57,15 @@ const requireProviderRole = async (
   next: NextFunction
 ): Promise<void> => {
   const uid = (req as any).user?.uid as string | undefined;
+
+  /** One line per refusal, naming WHICH rule refused. See authzAudit. */
+  const deny = (rule: "authentication" | "role", reason: string) =>
+    recordAuthzDecision(
+      decisionFor(req, { outcome: "deny", rule, routeId: routeIdOf(req), reason }),
+    );
+
   if (!uid) {
+    deny("authentication", "UNAUTHENTICATED");
     sendAuthError(res, "UNAUTHENTICATED");
     return;
   }
@@ -70,6 +79,7 @@ const requireProviderRole = async (
     // No row is an authenticated token with no account behind it. Unknown
     // actors do not get the provider surface.
     if (rows.length === 0 || !isProviderRole(rows[0].role)) {
+      deny("role", "ROLE_NOT_PERMITTED");
       sendAuthError(
         res,
         "ROLE_NOT_PERMITTED",
@@ -80,7 +90,10 @@ const requireProviderRole = async (
 
     next();
   } catch {
-    // Transient, and it must not masquerade as a verdict.
+    // Transient, and it must not masquerade as a verdict — so it is recorded
+    // as an authentication-layer refusal rather than a role decision, which
+    // would read as "this account is not a provider".
+    deny("authentication", "ACCOUNT_STATUS_UNAVAILABLE");
     sendAuthError(res, "ACCOUNT_STATUS_UNAVAILABLE");
   }
 };

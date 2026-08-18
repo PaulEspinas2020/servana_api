@@ -15,6 +15,9 @@ import uploadInStorage from "../helpers/firebaseStorageUploader";
 import * as addressService from "../services/address.service";
 import { idGenerator } from "../helpers/idGenerator";
 import { continueUrlFor } from "../constants/platformContinueUrls";
+import { normalizeEmail } from "../helpers/phoneIdentifier";
+import { normalizeProfileName } from "./profileCreationContract";
+import { endSessionsOnCredentialChange } from "./authSessionService";
 
 const now = dayjs();
 const dbSchema = db.schema;
@@ -69,23 +72,36 @@ const registerUser = async (user: UserCredentialsReq) => {
     let userData;
     let dbData;
     let dbRegister;
+    let registrationCommitted = false;
 
     if (!email || !password || !firstName || !lastName || !role) {
         throw "Missing required parameters";
     }
 
+    const normalizedRole = Number(role);
     const ALLOWED_PUBLIC_ROLES = [2, 3]; // provider=2, client=3; admins must use /auth/add-employees
-    if (!ALLOWED_PUBLIC_ROLES.includes(Number(role))) {
+    if (!ALLOWED_PUBLIC_ROLES.includes(normalizedRole)) {
         throw Object.assign(new Error("Invalid role. Admin accounts cannot be created via this endpoint."), { statusCode: 403 });
     }
 
-    if (email && (!isValidEmail(email) || !validatePassword(password))) {
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail || !validatePassword(password)) {
         throw "Please enter a valid Email or Password";
     }
 
+    const normalizedFirstName = normalizeProfileName(firstName, "firstName");
+    const normalizedLastName = normalizeProfileName(lastName, "lastName");
+    const canonicalUser = {
+        ...user,
+        email: normalizedEmail,
+        firstName: normalizedFirstName,
+        lastName: normalizedLastName,
+        role: normalizedRole,
+    };
+
     try {
 
-        const userInFirebase = await firebaseFunction.checkUserIfExistInFirebase(email);
+        const userInFirebase = await firebaseFunction.checkUserIfExistInFirebase(normalizedEmail);
 
         if (userInFirebase) {
             // Generic message — do not reveal whether the email exists in the system.
@@ -93,7 +109,7 @@ const registerUser = async (user: UserCredentialsReq) => {
         }
 
         // Use this if we have different mailer
-        userData = await firebaseFunction.registerNewUserInFirebase(user);
+        userData = await firebaseFunction.registerNewUserInFirebase(canonicalUser);
         if (!userData) {
             throw "Failed to create user in Firebase";
         }
@@ -102,25 +118,26 @@ const registerUser = async (user: UserCredentialsReq) => {
             uid: userData.uid,
             email: userData.email || "",
             password: hashPassword(password),
-            firstName,
-            lastName,
-            role,
+            firstName: normalizedFirstName,
+            lastName: normalizedLastName,
+            role: normalizedRole,
             phoneNumber: userData.phoneNumber || null,
             isEmailVerified: false,
             isPhoneVerified: !!userData.phoneNumber,
         };
         dbRegister = await userService.registerUserInDB(dbData);
         if (!dbRegister) {
-            await firebaseFunction.deleteFirebaseUser(userData.uid);
             throw "Failed to Create User in DB";
         }
+        registrationCommitted = true;
         if (platform === "mobile") {
             let otpDeliveryPending = false;
+            let onboardingPending = false;
             try {
                 const otpCode = generateOTP();
                 await userService.storeEmailOtp(dbRegister.email, otpCode);
 
-                send(dbRegister.email, "verify_email_otp", {
+                await send(dbRegister.email, "verify_email_otp", {
                     otp_code: otpCode,
                     first_name: dbRegister.firstName,
                     email: dbRegister.email,
@@ -132,19 +149,28 @@ const registerUser = async (user: UserCredentialsReq) => {
                 // the verification screen's resend endpoint recover delivery.
                 otpDeliveryPending = true;
                 console.error('[auth.register] profile created; initial OTP persistence failed', {
-                    uid: dbRegister.uid,
+                    uid: dbRegister.uid || dbRegister.id,
                     error: otpError?.message || 'unknown error',
                 });
             }
 
-            if (role == 2 && serviceIds?.length) {
-                await technicianService.assignServicesToEmployee(userData.uid, [Number(serviceIds[0])]);
+            if (normalizedRole === 2 && serviceIds?.length) {
+                try {
+                    await technicianService.assignServicesToEmployee(userData.uid, [Number(serviceIds[0])]);
+                } catch (onboardingError: any) {
+                    onboardingPending = true;
+                    console.error('[auth.register] profile created; initial service assignment failed', {
+                        uid: dbRegister.uid || dbRegister.id,
+                        error: onboardingError?.message || 'unknown error',
+                    });
+                }
             }
 
             return {
                 dbRegister,
                 verificationType: "otp",
                 otpDeliveryPending,
+                onboardingPending,
                 message: otpDeliveryPending
                     ? "User created successfully. Request a new verification code to continue."
                     : "User created successfully. OTP sent to email.",
@@ -160,28 +186,41 @@ const registerUser = async (user: UserCredentialsReq) => {
         // this call reads it as a destination name, and only 'provider' and
         // 'customer' resolve. The default 'web', which every existing caller
         // sends, resolves to undefined and keeps Firebase's hosted page.
-        const verify = await firebaseFunction.sendEmailVerificationFirebase(
-            dbRegister.email,
-            continueUrlFor('verify', platform),
-        );
+        let verificationDeliveryPending = false;
+        try {
+            const verify = await firebaseFunction.sendEmailVerificationFirebase(
+                dbRegister.email,
+                continueUrlFor('verify', platform),
+            );
 
-        if (!verify) {
-            throw "User created but failed to generate Verification link";
+            if (!verify) throw new Error("Verification link was not generated");
+
+            await send(dbRegister.email, "verify_email", {
+                verify_url: verify + `&role=${normalizedRole}`,
+                first_name: dbRegister.firstName,
+                email: dbRegister.email,
+            });
+        } catch (verificationError: any) {
+            verificationDeliveryPending = true;
+            console.error('[auth.register] profile created; verification delivery failed', {
+                uid: dbRegister.uid || dbRegister.id,
+                error: verificationError?.message || 'unknown error',
+            });
         }
-
-        send(dbRegister.email, "verify_email", {
-            verify_url: verify + `&role=${role}`,
-            first_name: dbRegister.firstName,
-            email: dbRegister.email,
-        });
 
         return {
             dbRegister,
             // verify intentionally excluded from response — link travels via email only
             verificationType: "link",
-            message: "User created successfully. Verification link sent to email.",
+            verificationDeliveryPending,
+            message: verificationDeliveryPending
+                ? "User created successfully. Request a new verification email to continue."
+                : "User created successfully. Verification link sent to email.",
         };
     } catch (error) {
+        if (userData?.uid && !registrationCommitted) {
+            await firebaseFunction.deleteFirebaseUser(userData.uid).catch(() => {});
+        }
         throw error;
     }
 };
@@ -189,12 +228,13 @@ const registerUser = async (user: UserCredentialsReq) => {
 const verifyEmailOtp = async (payload: { email: string; otp: string }) => {
     const { email, otp } = payload;
 
-    if (!email || !otp) {
+    const canonicalEmail = normalizeEmail(email);
+    if (!canonicalEmail || !/^\d{6}$/.test(String(otp))) {
         throw "Missing required parameters";
     }
 
     try {
-        const otpRow = await userService.getLatestValidEmailOtp(email);
+        const otpRow = await userService.getLatestValidEmailOtp(canonicalEmail);
 
         if (!otpRow) {
             throw "Invalid or expired OTP";
@@ -206,9 +246,10 @@ const verifyEmailOtp = async (payload: { email: string; otp: string }) => {
             throw "Invalid or expired OTP";
         }
 
-        await userService.markEmailOtpAsUsed(otpRow.id);
+        const claimed = await userService.markEmailOtpAsUsed(otpRow.id);
+        if (!claimed) throw "Invalid or expired OTP";
 
-        const firebaseUser = await firebaseFunction.getFirebaseUserByEmail(email);
+        const firebaseUser = await firebaseFunction.getFirebaseUserByEmail(canonicalEmail);
 
         if (!firebaseUser) {
             throw "User not found in Firebase";
@@ -231,15 +272,13 @@ const verifyEmailOtp = async (payload: { email: string; otp: string }) => {
 const resendEmailOtp = async (payload: { email: string }) => {
     const { email } = payload;
 
-    if (!email) {
-        throw "Missing required parameters";
-    }
-
     // Always return the same response — never reveal account existence or send status.
     const NEUTRAL = { message: "If this account exists and is unverified, an OTP has been sent.", verificationType: "otp" };
+    const canonicalEmail = normalizeEmail(email);
+    if (!canonicalEmail) return NEUTRAL;
 
     try {
-        const dbUser = await userService.getUserByEmail(email);
+        const dbUser = await userService.getUserByEmail(canonicalEmail);
 
         if (!dbUser || dbUser.isEmailVerified) {
             return NEUTRAL;
@@ -247,15 +286,15 @@ const resendEmailOtp = async (payload: { email: string }) => {
 
         try {
             const otpCode = generateOTP();
-            await userService.storeEmailOtp(email, otpCode);
-            await send(email, "verify_email_otp", {
+            await userService.storeEmailOtp(canonicalEmail, otpCode);
+            await send(canonicalEmail, "verify_email_otp", {
                 otp_code: otpCode,
                 first_name: dbUser.firstName,
-                email,
+                email: canonicalEmail,
             });
         } catch (sendErr: any) {
             // DB / email failure must not reveal itself — log for ops, return neutral to caller.
-            console.error('resendEmailOtp: OTP send failed', { email: email?.slice(0, 3) + '***', err: sendErr?.message || sendErr });
+            console.error('resendEmailOtp: OTP send failed', { email: canonicalEmail.slice(0, 3) + '***', err: sendErr?.message || sendErr });
         }
 
         return NEUTRAL;
@@ -448,16 +487,25 @@ const addEmployees = async (employees: EmployeeInput[]) => {
     const allServiceIds = (await serviceService.getServicesSimpleList()).map((s) => s.id);
 
     const processOne = async (emp: EmployeeInput) => {
-        const { email, firstName, lastName, role = 2 } = emp;
+        const normalizedEmail = normalizeEmail(emp.email);
+        const firstName = normalizeProfileName(emp.firstName, "firstName");
+        const lastName = normalizeProfileName(emp.lastName, "lastName");
+        const role = Number(emp.role ?? 2);
         const password = emp.password || generateTempPassword();
 
-        if (!isValidEmail(email)) {
-            return { email, success: false, error: "Invalid email address" };
+        if (!normalizedEmail) {
+            return { email: emp.email, success: false, error: "Invalid email address" };
+        }
+        if (![1, 2].includes(role)) {
+            return { email: normalizedEmail, success: false, error: "Invalid employee role" };
+        }
+        if (!validatePassword(password)) {
+            return { email: normalizedEmail, success: false, error: "Password must be at least 7 characters" };
         }
 
-        const existing = await firebaseFunction.checkUserIfExistInFirebase(email);
+        const existing = await firebaseFunction.checkUserIfExistInFirebase(normalizedEmail);
         if (existing) {
-            return { email, success: false, error: "User already exists" };
+            return { email: normalizedEmail, success: false, error: "User already exists" };
         }
 
         // Role=1 (admin) users are invited by other admins, not through public
@@ -465,34 +513,42 @@ const addEmployees = async (employees: EmployeeInput[]) => {
         // verified at creation time so they can sign in immediately.
         const isAdmin = role === 1;
         const firebaseUser = await firebaseFunction.registerNewUserInFirebase({
-            email, password, firstName, lastName, role,
-            ...(isAdmin && { emailVerified: true }),
+            email: normalizedEmail, password, firstName, lastName, role,
         });
 
         if (!firebaseUser) {
-            return { email, success: false, error: "Failed to create user in Firebase" };
+            return { email: normalizedEmail, success: false, error: "Failed to create user in Firebase" };
         }
 
-        const dbUser = await userService.registerUserInDB({
-            uid: firebaseUser.uid,
-            email: firebaseUser.email || email,
-            password: hashPassword(password),
-            firstName,
-            lastName,
-            role,
-            phoneNumber: null,
-            isEmailVerified: isAdmin,
-            isPhoneVerified: false,
-        });
+        let dbUser;
+        try {
+            if (isAdmin) {
+                await firebaseFunction.updateFirebaseEmailVerified(firebaseUser.uid, true);
+            }
+            dbUser = await userService.registerUserInDB({
+                uid: firebaseUser.uid,
+                email: firebaseUser.email || normalizedEmail,
+                password: hashPassword(password),
+                firstName,
+                lastName,
+                role,
+                phoneNumber: null,
+                isEmailVerified: isAdmin,
+                isPhoneVerified: false,
+            });
+        } catch {
+            await firebaseFunction.deleteFirebaseUser(firebaseUser.uid).catch(() => {});
+            return { email: normalizedEmail, success: false, error: "Failed to create account profile" };
+        }
 
         if (!dbUser) {
-            await firebaseFunction.deleteFirebaseUser(firebaseUser.uid);
-            return { email, success: false, error: "Failed to create user in DB" };
+            await firebaseFunction.deleteFirebaseUser(firebaseUser.uid).catch(() => {});
+            return { email: normalizedEmail, success: false, error: "Failed to create account profile" };
         }
 
         const otpCode = generateOTP();
-
-        const [uploadedRequirements] = await Promise.all([
+        const taskNames = ['requirements', 'address', 'verification', 'services'] as const;
+        const provisioning = await Promise.allSettled([
             emp.requirementFiles?.length
                 ? Promise.all(
                     emp.requirementFiles.map((file, i) =>
@@ -524,24 +580,49 @@ const addEmployees = async (employees: EmployeeInput[]) => {
                 )
                 : Promise.resolve(),
 
-            userService.storeEmailOtp(email, otpCode),
+            userService.storeEmailOtp(normalizedEmail, otpCode),
 
             role === 2 && allServiceIds.length
                 ? technicianService.assignServicesToEmployee(firebaseUser.uid, allServiceIds)
                 : Promise.resolve(),
         ]);
 
-        send(email, "employee_invite", { email, password, otp_code: otpCode, first_name: firstName });
+        const uploadedRequirements = provisioning[0].status === 'fulfilled'
+            ? provisioning[0].value
+            : [];
+        const pendingTasks = provisioning
+            .map((result, index) => result.status === 'rejected' ? taskNames[index] : null)
+            .filter((task): task is typeof taskNames[number] => task !== null);
 
-        return { email, success: true, uid: firebaseUser.uid, requirements: uploadedRequirements };
+        let inviteDeliveryPending = false;
+        try {
+            await send(normalizedEmail, "employee_invite", {
+                email: normalizedEmail,
+                password,
+                otp_code: otpCode,
+                first_name: firstName,
+            });
+        } catch {
+            inviteDeliveryPending = true;
+        }
+
+        return {
+            email: normalizedEmail,
+            success: true,
+            uid: firebaseUser.uid,
+            requirements: uploadedRequirements,
+            provisioningPending: pendingTasks.length > 0,
+            pendingTasks,
+            inviteDeliveryPending,
+        };
     };
 
     return Promise.all(
         employees.map(async (emp) => {
             try {
                 return await processOne(emp);
-            } catch (error: any) {
-                return { email: emp.email, success: false, error: error?.message || String(error) };
+            } catch {
+                return { email: emp.email, success: false, error: "Account creation failed" };
             }
         })
     );
@@ -696,6 +777,27 @@ const resetPassword = async (payload: { oobCode: string; newPassword: string }) 
         if (firebaseUser) {
             const updateQuery = `UPDATE ${dbSchema}.user_credentials SET password = $1 WHERE uid = $2`;
             await dbQuery.query(updateQuery, [hashPassword(newPassword), firebaseUser.uid]);
+
+            /**
+             * End every session on the account (§ session policy).
+             *
+             * This path did not revoke anything. Firebase's `confirmPasswordReset`
+             * is widely believed to revoke refresh tokens and may well do so, but
+             * that behaviour was never verified against this project's
+             * configuration — and a password reset is the one action somebody
+             * takes when they think another person is in their account. An
+             * inherited assumption is the wrong control there.
+             *
+             * Explicit, idempotent, and effective on the NEXT request rather than
+             * at the next refresh, because `verifyAuth` compares `auth_time`
+             * against `tokensValidAfterTime` (services/tokenRevocation.ts).
+             *
+             * Deliberately not awaited into the failure path: the password has
+             * already changed and the oobCode is spent, so reporting failure here
+             * would tell the person their reset did not work when it did — and
+             * send them back for a code that no longer exists.
+             */
+            await endSessionsOnCredentialChange(firebaseUser.uid, 'password_reset');
         }
     } catch (syncErr: any) {
         console.error('resetPassword: DB hash sync failed after Firebase reset', { email: email?.slice(0, 3) + '***', syncErr: syncErr?.message || syncErr });

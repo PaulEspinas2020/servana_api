@@ -87,10 +87,39 @@ export const payoutsPayoutDialect = (raw: string | null | undefined): string => 
   return "pending";
 };
 
-/** `/provider/ledger`. Emits `settled` / `failed` / `pending`. */
-export const ledgerPayoutDialect = (raw: string | null | undefined): string => {
-  const c = canonicalPayoutStatus(raw);
-  if (c === "paid") return "settled";
-  if (c === "failed") return "failed";
+/**
+ * `/provider/ledger`, from an ALREADY-canonical value.
+ *
+ * Split out because the ledger endpoint now projects from the canonical earnings
+ * domain service, which hands it a `PayoutStatus` rather than the raw column.
+ * Without this the controller would have had to convert its canonical value back
+ * into the database's vocabulary to feed `ledgerPayoutDialect` — a round trip
+ * whose only purpose would be to satisfy a signature, and one more place the
+ * mapping could be got wrong.
+ */
+export const ledgerDialectOf = (canonical: PayoutStatus): string => {
+  if (canonical === "paid") return "settled";
+  if (canonical === "failed") return "failed";
   return "pending";
 };
+
+/** `/provider/ledger`. Emits `settled` / `failed` / `pending`. */
+export const ledgerPayoutDialect = (raw: string | null | undefined): string =>
+  ledgerDialectOf(canonicalPayoutStatus(raw));
+
+/**
+ * Hours between a booking being completed and the provider share becoming
+ * eligible for release.
+ *
+ * Lives here rather than in `disbursement.service.ts` because it is now read by
+ * BOTH the writer (the release scheduler) and the readers (the earnings
+ * endpoints, which report an expected arrival date). It was previously a
+ * private const in the writer, so every reader that wanted to show a date had
+ * to restate it — and Provider Web restated it as 48 in seventy places while
+ * the writer released at 72, telling providers their money was due a day early.
+ *
+ * A reader importing this cannot drift from the scheduler again. Note that
+ * `bookingCancellationPolicy.ts` has a genuine and unrelated 48-hour rule for
+ * cancellation notice; the two must not be conflated.
+ */
+export const PROVIDER_RELEASE_HOURS = 72;

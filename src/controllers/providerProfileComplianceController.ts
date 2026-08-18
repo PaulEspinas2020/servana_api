@@ -2,10 +2,35 @@ import { Request, Response } from 'express';
 import * as profileService from '../services/providerProfileComplianceService';
 import * as contactService from '../services/providerContactChangeService';
 import * as mediaService from '../services/providerProfileMediaService';
+import * as autoOnlineEngine from '../services/providerAutoOnlineEngine';
 
 const uidOf = (req: Request): string => String(req.user?.uid ?? '');
 const fail = (res: Response, error: any, fallback: string) => {
   const status = Number(error?.statusCode ?? 500);
+
+  // Log the 500s. Tagged domain errors (409, 422, 404 ...) carry their own
+  // meaning and the client renders them, so they need no server record — but an
+  // UNTAGGED error becomes a generic 500 here and, until now, vanished
+  // completely. That is why three providers reporting "Something went wrong on
+  // our side" during document upload produced no line anywhere in the logs, and
+  // why the cause could not be identified from the server at all.
+  //
+  // Server-side only. The response body is unchanged: the client still receives
+  // the generic message, never the driver text (§21).
+  if (status >= 500) {
+    console.error('[provider-compliance] unhandled failure:', {
+      fallback,
+      name: error?.name,
+      code: error?.code,
+      message: String(error?.message ?? '').slice(0, 300),
+      constraint: error?.constraint,
+      table: error?.table,
+      column: error?.column,
+      pgCode: error?.code,
+      stack: String(error?.stack ?? '').split(String.fromCharCode(10)).slice(0, 4).join(' | '),
+    });
+  }
+
   return res.status(status).json({
     status: 'failed',
     code: error?.code ?? (status === 500 ? 'PROFILE_COMPLIANCE_UNAVAILABLE' : 'REQUEST_REJECTED'),
@@ -117,6 +142,7 @@ export const uploadDocument = async (req: Request, res: Response) => {
       identifierLast4: req.body?.identifierLast4 == null ? null : String(req.body.identifierLast4),
       replacementForId: replacement,
     });
+    autoOnlineEngine.evaluateProvider(uidOf(req), 'system', uidOf(req)).catch(() => {});
     return res.status(201).json({ status: 'success', data });
   } catch (error) {
     return fail(res, error, 'Document could not be submitted');
@@ -127,9 +153,27 @@ export const getDocumentPreview = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.documentId);
     if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ status: 'failed', message: 'Document not found' });
+    // The payload contains a short-lived private storage URL. Prevent browsers
+    // and intermediary caches from retaining or replaying it.
+    res.set('Cache-Control', 'private, no-store, max-age=0');
+    res.set('Pragma', 'no-cache');
     return res.status(200).json({ status: 'success', data: await profileService.getDocumentPreview(uidOf(req), id) });
   } catch (error) {
     return fail(res, error, 'Document preview is temporarily unavailable');
+  }
+};
+
+export const deleteDocument = async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.documentId);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(404).json({ status: 'failed', message: 'Document not found' });
+    }
+    await profileService.deleteDocument(uidOf(req), id);
+    autoOnlineEngine.evaluateProvider(uidOf(req), 'system', uidOf(req)).catch(() => {});
+    return res.status(200).json({ status: 'success', data: { success: true } });
+  } catch (error) {
+    return fail(res, error, 'Document could not be deleted');
   }
 };
 

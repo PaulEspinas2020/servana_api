@@ -12,7 +12,7 @@ import {
   evaluateCancellation,
   CANCELLATION_NOTICE_HOURS,
   PROVIDER_CANCELLATION_REASONS,
-} from "../src/controllers/bookingCancellationPolicy";
+} from "../src/services/booking/bookingPolicies";
 
 const NOW = new Date("2026-08-10T12:00:00.000Z");
 const hoursFromNow = (h: number) =>
@@ -145,8 +145,12 @@ describe("record only — no penalty is computed anywhere", () => {
   // fee, strike or rating field appearing here later should break this.
   it("the result carries no consequence of any kind", () => {
     const r: any = check({});
+    // `allowedUntil` is a DEADLINE, not a consequence — it exists so clients
+    // render "you had until Thursday" instead of subtracting 48 hours from a
+    // schedule themselves. The penalty assertions below are the actual guard
+    // and are unchanged.
     expect(Object.keys(r).sort()).toEqual(
-      ["blockCode", "canCancel", "hoursUntilStart", "noticeHours", "reasons"].sort()
+      ["allowedUntil", "blockCode", "canCancel", "hoursUntilStart", "noticeHours", "reasons"].sort()
     );
     for (const k of ["penalty", "fee", "strike", "ratingImpact", "charge"]) {
       expect(r[k]).toBeUndefined();

@@ -33,7 +33,7 @@ declare global {
         phoneNumber?: string | null;
         isEmailVerified: boolean;
         isPhoneVerified: boolean;
-        platform?: "web" | "mobile";
+        platform?: "web" | "mobile" | "provider" | "customer";
         serviceIds?: string[];
     }
 

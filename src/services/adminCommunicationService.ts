@@ -88,85 +88,31 @@ export function redactForComm(obj: Record<string, unknown>): Record<string, unkn
   return out;
 }
 
-// ── Lazy schema init ──────────────────────────────────────────────────────────
-
-let schemaReady: Promise<void> | null = null;
-
-async function initSchema(): Promise<void> {
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.admin_communication_events (
-      id               BIGSERIAL PRIMARY KEY,
-      event_key        VARCHAR(64)   UNIQUE NOT NULL DEFAULT gen_random_uuid()::varchar,
-      channel          VARCHAR(32)   NOT NULL,
-      direction        VARCHAR(16)   NOT NULL DEFAULT 'outbound',
-      status           VARCHAR(32)   NOT NULL DEFAULT 'sent',
-      severity         VARCHAR(16)   NOT NULL DEFAULT 'info',
-      category         VARCHAR(64),
-      recipient_uid    VARCHAR(128),
-      recipient_email  VARCHAR(255),
-      recipient_name   VARCHAR(255),
-      recipient_role   VARCHAR(32),
-      sender_uid       VARCHAR(128),
-      sender_role      VARCHAR(32)   DEFAULT 'system',
-      entity_type      VARCHAR(64),
-      entity_id        VARCHAR(128),
-      template_name    VARCHAR(128),
-      subject          VARCHAR(512),
-      safe_body        TEXT,
-      provider_response JSONB,
-      retry_count      INTEGER       NOT NULL DEFAULT 0,
-      last_retry_at    TIMESTAMPTZ,
-      error_message    TEXT,
-      metadata         JSONB,
-      created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-      updated_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS idx_ace_created
-      ON ${dbSchema}.admin_communication_events (created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_ace_entity
-      ON ${dbSchema}.admin_communication_events (entity_type, entity_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_ace_recipient
-      ON ${dbSchema}.admin_communication_events (recipient_uid, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_ace_status
-      ON ${dbSchema}.admin_communication_events (status, channel, created_at DESC);
-
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.admin_notification_templates (
-      id            BIGSERIAL PRIMARY KEY,
-      template_key  VARCHAR(128)  UNIQUE NOT NULL,
-      name          VARCHAR(255)  NOT NULL,
-      channel       VARCHAR(32)   NOT NULL,
-      category      VARCHAR(64),
-      subject       VARCHAR(512),
-      body_template TEXT          NOT NULL,
-      variables     JSONB         NOT NULL DEFAULT '[]'::jsonb,
-      is_active     BOOLEAN       NOT NULL DEFAULT true,
-      created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-      updated_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-      archived_at   TIMESTAMPTZ
-    );
-    CREATE INDEX IF NOT EXISTS idx_ant_channel
-      ON ${dbSchema}.admin_notification_templates (channel, is_active);
-
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.chat_message_reports (
-      id              SERIAL      PRIMARY KEY,
-      reporter_uid    TEXT        NOT NULL,
-      message_id      INT         NOT NULL,
-      conversation_id INT         NOT NULL,
-      category        TEXT        NOT NULL,
-      description     TEXT,
-      status          TEXT        NOT NULL DEFAULT 'pending',
-      resolved_by     TEXT,
-      resolved_at     TIMESTAMPTZ,
-      resolution_note TEXT,
-      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
-}
-
-export function ensureCommunicationSchema(): Promise<void> {
-  if (!schemaReady) schemaReady = initSchema();
-  return schemaReady;
-}
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `admin_communication_events` (+4 indexes), `admin_notification_templates`
+// (+1 index) and `chat_message_reports` were created here at runtime by
+// `initSchema`, memoised behind `ensureCommunicationSchema`, awaited at the top
+// of nine operations, and declared as a startup dependency. All eight objects
+// come from `scripts/baseline/000-baseline.sql`.
+//
+// `event_key` is UNIQUE with a gen_random_uuid() default
+// (`admin_communication_events_event_key_key`). It is the external handle, not
+// the BIGSERIAL id, and it is what makes a retried send idempotent rather than
+// duplicated in an operator feed.
+//
+// -- chat_message_reports had TWO definitions, and this was the SUPERSET -------
+//
+// `chat/chat.repository.ts` also creates it, without `status`, `resolved_by`,
+// `resolved_at` or `resolution_note` — the four moderation columns this service
+// reads. Two `CREATE TABLE IF NOT EXISTS` for one object is a race with a silent
+// loser, and had the subset won on a fresh database, every moderation query here
+// would have failed with 42703. It never did, because the baseline creates the
+// full table and both statements were no-ops against it.
+//
+// The subset definition still exists (chat.repository is deferred — it also runs
+// a DML derivation of `chat_conversations.status`). That is safe ONLY because the
+// baseline owns the table. Do not promote the subset to "the" definition.
 
 // ── Row mappers ──────────────────────────────────────────────────────────────
 
@@ -274,7 +220,6 @@ function buildEventWhere(filters: CommFilters): { clauses: string[]; params: unk
 // ── Event log operations ──────────────────────────────────────────────────────
 
 export async function logCommunicationEvent(input: CommLogInput): Promise<string> {
-  await ensureCommunicationSchema();
   const eventKey = randomUUID();
   await dbQuery.query(
     `INSERT INTO ${dbSchema}.admin_communication_events
@@ -315,7 +260,6 @@ export async function updateEventStatus(
   status: CommStatus,
   opts?: { errorMessage?: string; providerResponse?: Record<string, unknown> },
 ): Promise<void> {
-  await ensureCommunicationSchema();
   await dbQuery.query(
     `UPDATE ${dbSchema}.admin_communication_events
      SET status = $1,
@@ -333,7 +277,6 @@ export async function updateEventStatus(
 }
 
 export async function listCommunicationEvents(filters: CommFilters) {
-  await ensureCommunicationSchema();
   const page = Math.max(1, filters.page || 1);
   const limit = Math.min(100, Math.max(1, filters.limit || 50));
   const offset = (page - 1) * limit;
@@ -364,7 +307,6 @@ export async function listCommunicationEvents(filters: CommFilters) {
 }
 
 export async function getCommunicationEventDetail(eventKey: string) {
-  await ensureCommunicationSchema();
   const { rows } = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.admin_communication_events WHERE event_key = $1 LIMIT 1`,
     [eventKey],
@@ -373,7 +315,6 @@ export async function getCommunicationEventDetail(eventKey: string) {
 }
 
 export async function getCommunicationSummary() {
-  await ensureCommunicationSchema();
   const { rows } = await dbQuery.query(`
     SELECT
       COUNT(*)                                                            AS total,
@@ -408,7 +349,6 @@ export async function getEntityCommunicationTimeline(
   entityId: string,
   limit = 50,
 ) {
-  await ensureCommunicationSchema();
   const { rows } = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.admin_communication_events
      WHERE entity_type = $1 AND entity_id = $2
@@ -422,7 +362,6 @@ export async function getRecipientCommunicationTimeline(
   recipientUid: string,
   limit = 50,
 ) {
-  await ensureCommunicationSchema();
   const { rows } = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.admin_communication_events
      WHERE recipient_uid = $1
@@ -435,7 +374,6 @@ export async function getRecipientCommunicationTimeline(
 // ── Retry operations ──────────────────────────────────────────────────────────
 
 export async function findRetryableFailures(limit = 50) {
-  await ensureCommunicationSchema();
   const { rows } = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.admin_communication_events
      WHERE status = 'failed' AND retry_count < 5
@@ -450,7 +388,6 @@ export async function markEventRetried(
   adminUid: string,
   newStatus: CommStatus = 'retried',
 ): Promise<boolean> {
-  await ensureCommunicationSchema();
   const { rowCount } = await dbQuery.query(
     `UPDATE ${dbSchema}.admin_communication_events
      SET status = $1,
@@ -469,7 +406,6 @@ export async function markEventRetried(
 }
 
 export async function markEventNonRetryable(eventKey: string): Promise<boolean> {
-  await ensureCommunicationSchema();
   const { rowCount } = await dbQuery.query(
     `UPDATE ${dbSchema}.admin_communication_events
      SET retry_count = 5, updated_at = NOW()
@@ -482,7 +418,6 @@ export async function markEventNonRetryable(eventKey: string): Promise<boolean> 
 // ── Template operations ───────────────────────────────────────────────────────
 
 export async function listNotificationTemplates(channel?: string, includeArchived = false) {
-  await ensureCommunicationSchema();
   const conditions: string[] = [];
   const params: unknown[] = [];
   let i = 1;
@@ -501,7 +436,6 @@ export async function listNotificationTemplates(channel?: string, includeArchive
 }
 
 export async function getNotificationTemplate(templateKey: string) {
-  await ensureCommunicationSchema();
   const { rows } = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.admin_notification_templates WHERE template_key = $1 LIMIT 1`,
     [templateKey],
@@ -510,7 +444,6 @@ export async function getNotificationTemplate(templateKey: string) {
 }
 
 export async function createNotificationTemplate(input: TemplateInput) {
-  await ensureCommunicationSchema();
   const { rows } = await dbQuery.query(
     `INSERT INTO ${dbSchema}.admin_notification_templates
        (template_key, name, channel, category, subject, body_template, variables)
@@ -533,7 +466,6 @@ export async function updateNotificationTemplate(
   templateKey: string,
   patch: Partial<Omit<TemplateInput, 'templateKey'>>,
 ) {
-  await ensureCommunicationSchema();
   const sets: string[] = [];
   const params: unknown[] = [];
   let i = 1;
@@ -560,7 +492,6 @@ export async function updateNotificationTemplate(
 }
 
 export async function archiveNotificationTemplate(templateKey: string): Promise<boolean> {
-  await ensureCommunicationSchema();
   const { rowCount } = await dbQuery.query(
     `UPDATE ${dbSchema}.admin_notification_templates
      SET archived_at = NOW(), is_active = false, updated_at = NOW()
@@ -653,7 +584,7 @@ export async function getAdminConversationMessages(conversationId: number, limit
       `SELECT m.*,
               uc.first_name, uc.last_name,
               COALESCE(
-                json_agg(a.*) FILTER (WHERE a.id IS NOT NULL), '[]'
+                json_agg(a.*) FILTER (WHERE a.id IS NOT NULL AND m.deleted_at IS NULL), '[]'
               ) AS attachments
          FROM ${dbSchema}.chat_messages m
          LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = m.sender_uid
@@ -705,7 +636,6 @@ export async function sendAdminMessage(
 
 export async function listMessageReports(limit = 50) {
   try {
-    await ensureCommunicationSchema();
     const { rows } = await dbQuery.query(
       `SELECT r.*, m.body AS message_body, m.sender_uid, m.conversation_id,
               uc_rep.first_name || ' ' || uc_rep.last_name AS reporter_name
@@ -739,22 +669,21 @@ export async function resolveMessageReport(
   action: 'dismiss' | 'redact' | 'warn',
   note?: string
 ) {
-  await ensureCommunicationSchema();
   const { rows } = await dbQuery.query(
     `UPDATE ${dbSchema}.chat_message_reports
      SET status = $1, resolved_by = $2, resolved_at = NOW(), resolution_note = $3
-     WHERE id = $4 RETURNING *`,
+     WHERE id = $4 AND COALESCE(status, 'pending') = 'pending' RETURNING *`,
     [action === 'dismiss' ? 'dismissed' : 'actioned', adminUid, note || null, reportId]
   );
   if (!rows.length) return null;
 
   if (action === 'redact') {
     const report = rows[0];
-    await dbQuery.query(
-      `UPDATE ${dbSchema}.chat_messages
-       SET body = '[Message removed by Servana moderator]', deleted_at = NOW()
-       WHERE id = $1`,
-      [report.message_id]
+    const { deleteMessage } = await import('../chat/chat.service');
+    await deleteMessage(
+      { uid: adminUid, role: 1 },
+      Number(report.conversation_id),
+      Number(report.message_id),
     );
   }
   return rows[0];
@@ -763,7 +692,6 @@ export async function resolveMessageReport(
 // ── Chat conversation summaries (custom Socket.IO chat system) ────────────────
 
 export async function getChatConversationSummaries(limit = 50, bookingId?: string) {
-  await ensureCommunicationSchema();
   // Uses the existing chat_conversations + chat_messages tables
   let where = '';
   const params: unknown[] = [limit];

@@ -184,8 +184,37 @@ describe('sign-in hands the client something it can renew', () => {
   });
 
   it('the route exists and is rate limited', () => {
+    // This asserted `signInLimiter` until 2026-08-09, when the limiters were
+    // split and the route moved to `tokenExchangeLimiter`. The split was the
+    // correct call, and putting the sign-in limiter back would be a live
+    // outage rather than a nitpick: signInLimiter allows 10 requests per 15
+    // minutes because it guards a PASSWORD, while a token refresh is a routine
+    // background call every running app makes. At 10/15min the customer app
+    // would start failing to renew sessions under normal use.
+    //
+    // So the assertion is on the property that matters — the route is limited,
+    // and NOT by the password limiter — rather than on one hardcoded name.
     const routes = read('routes', 'auth.route.ts');
-    expect(routes).toMatch(/\/auth\/refresh".*signInLimiter/);
+    const line = routes.match(/router\.post\("\/auth\/refresh"[^\n]*/)?.[0] ?? '';
+
+    expect(line).toContain('tokenExchangeLimiter');
+    expect(line).not.toContain('signInLimiter');
+  });
+
+  it('the limiter it uses is real, and looser than the password limiter', () => {
+    // Guards the other direction: renaming a limiter onto this route without
+    // giving it a budget suited to background refreshes would pass the check
+    // above while still breaking the app.
+    const routes = read('routes', 'auth.route.ts');
+    const block = routes.match(/const tokenExchangeLimiter = rateLimit\(\{[\s\S]*?\}\);/)?.[0] ?? '';
+    const max = Number(block.match(/max:\s*(\d+)/)?.[1] ?? 0);
+    const signInMax = Number(
+      (routes.match(/const signInLimiter = rateLimit\(\{[\s\S]*?\}\);/)?.[0] ?? '').match(/max:\s*(\d+)/)?.[1] ?? 0,
+    );
+
+    expect(max).toBeGreaterThan(0);
+    expect(signInMax).toBeGreaterThan(0);
+    expect(max).toBeGreaterThan(signInMax);
   });
 
   it('the route is NOT behind verifyAuth', () => {

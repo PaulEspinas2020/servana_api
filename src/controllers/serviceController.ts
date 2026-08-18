@@ -49,8 +49,14 @@ export const listAvailableSlots = async (req: Request, res: Response) => {
     const branchId = Number(req.params.branchId);
     const date = req.query.date?.toString();
 
-    if (!date)
-      return res.status(400).json({ success: false, message: "date is required" });
+    if (!Number.isSafeInteger(branchId) || branchId <= 0)
+      return res.status(400).json({ success: false, message: "A valid branch is required" });
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date))
+      return res.status(400).json({ success: false, message: "date must use YYYY-MM-DD" });
+    const [year, month, day] = date.split('-').map(Number);
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day)
+      return res.status(400).json({ success: false, message: "date must be a real calendar date" });
 
     const slots = await serviceService.getAvailableSlots(branchId, date);
     const toCamelRows = (rows: any[]) => rows.map(toCamel);

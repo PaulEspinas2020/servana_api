@@ -1,0 +1,31 @@
+{
+  // Typecheck for the TEST tree.
+  //
+  // `tsconfig.json` sets `rootDir: ./src` and `include: src/**/*.ts`, so
+  // `npm run typecheck` never looked at `tests/` at all. That was not obvious
+  // from the outside: a green `tsc --noEmit` reads as "everything compiles",
+  // and it was reported that way in this project's own gate output until a
+  // test file with an undefined identifier passed the typecheck and failed
+  // only inside jest.
+  //
+  // The failure mode that makes this worth a separate config: a suite that
+  // fails to COMPILE does not fail its assertions — it does not run at all.
+  // Jest reports one failed suite while the headline test count silently
+  // drops, so a semantic guard can stop guarding without anything turning red
+  // in a summary that is read by test count.
+  //
+  // Deliberately a SEPARATE config rather than widening the production one.
+  // `tests/` must not enter `rootDir`, the build output, or the shipped
+  // artefact; this compiles the same sources with the same strictness and
+  // emits nothing.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // tests/ sits beside src/, so the production rootDir cannot apply.
+    "rootDir": ".",
+    // Jest globals — `describe`, `it`, `expect`, `jest`.
+    "types": ["jest", "node"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

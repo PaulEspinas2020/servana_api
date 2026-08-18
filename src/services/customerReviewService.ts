@@ -1,8 +1,11 @@
 import dbQuery, { pool } from "../db/dbQuery";
 import { db } from "../config";
 import { createNotification } from './notification.service';
+import { publishEventSafely } from './events/eventOutbox';
+import { dispatchSoon } from './events/notificationProjector';
 import { getPublicRatingSummary, recalculateProviderRating, QueryRunner } from './ratingAggregationService';
 import { emitReputationUpdated } from './reputationRealtimeService';
+import { bookingCanonicalServiceSql } from './booking/eligibilityPipeline';
 
 const dbSchema = db.schema;
 
@@ -67,20 +70,44 @@ async function getBookingForReview(
   customerUid: string,
   runner: QueryRunner = (sql, params = []) => dbQuery.query(sql, params),
 ) {
-  // Fetch booking, verify ownership, get provider + service
+  /**
+   * Fetch the booking, verify ownership, resolve the provider and the CANONICAL
+   * service.
+   *
+   * ## The Catalog V2 defect this fixed
+   *
+   * This used to read `so.service_id` through
+   * `LEFT JOIN service_options so ON so.id = b.service_option_id`.
+   * `catalogPublicService` documents, in its own header, that
+   * `service_options.service_id` is "a foreign key to **service_families**" —
+   * legacy coarse provenance.
+   *
+   * Meanwhile `service_review_dimensions.service_id` REFERENCES
+   * `servana.services(id)`, the Catalog V2 canonical specific-service identity.
+   *
+   * Two different id spaces. Service-specific review dimensions were looked up
+   * with a FAMILY id against a table keyed on a SERVICE id, so they silently
+   * never matched and every review fell back to the global dimension set — and
+   * had the two ranges overlapped it would have matched the wrong service's
+   * dimensions instead.
+   *
+   * `bookingCanonicalServiceSql` is the one correct resolution, and it is the
+   * same helper the eligibility pipeline and the home composition use. It also
+   * handles the pre-Catalog-V2 booking, whose `catalog_service_id` is null and
+   * whose option id maps through `legacy_service_option_id`.
+   */
   const res = await runner(
     `SELECT
        b.id::text        AS id,
        b.user_id         AS customer_uid,
        b.status,
-       so.service_id::text AS service_id,
+       (${bookingCanonicalServiceSql(dbSchema, 'b')})::text AS service_id,
        bw.worker_uid     AS provider_uid,
        bw.status         AS assignment_status,
        bw.completed_at,
        uc.account_status AS customer_account_status,
        uc.role           AS customer_role
      FROM ${dbSchema}.bookings b
-     LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
      LEFT JOIN ${dbSchema}.booking_workers bw
        ON bw.booking_id = b.id
        AND bw.status = 'COMPLETED'
@@ -327,6 +354,16 @@ export async function createReview(payload: CreateReviewPayload) {
   } finally {
     client.release();
   }
+
+  // The canonical fact (TAB 09). Published beside the existing producer, with
+  // the projection reusing `review-received:{reviewId}` — the identical key —
+  // so the two collapse onto one notification rather than writing two.
+  void publishEventSafely({
+    name: 'ReviewCreated',
+    refs: { reviewId: reviewId!, providerUid: providerUid! },
+    display: {},
+    dedupeKey: `ReviewCreated:${reviewId!}`,
+  }).then(() => dispatchSoon());
 
   void createNotification(providerUid!, {
     notificationKey: `review-received:${reviewId!}`,

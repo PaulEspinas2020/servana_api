@@ -4,7 +4,12 @@ import { toCamel } from "../helpers/idGenerator";
 const dbSchema = db.schema;
 
 export const getAllServices = async () => {
-    const r = `SELECT id, name, category, created_at FROM ${dbSchema}.services ORDER BY name`;
+    // Soft-deleted services must not reach ANY consumer. `deleted_at` has
+    // existed on this table all along and nothing read it, so an admin
+    // "delete" left the row being served to the client app and to the
+    // provider service-application picker. Adding the predicate is a no-op
+    // for every existing consumer unless a row is explicitly soft-deleted.
+    const r = `SELECT id, name, category, created_at FROM ${dbSchema}.service_families WHERE deleted_at IS NULL ORDER BY name`;
 
     try {
         const res = await dbQuery.query(r, []);
@@ -18,7 +23,7 @@ export const getAllServices = async () => {
 
 export const getServicesSimpleList = async () => {
     const res = await dbQuery.query(
-        `SELECT id, name FROM ${dbSchema}.services ORDER BY name`,
+        `SELECT id, name FROM ${dbSchema}.service_families WHERE deleted_at IS NULL ORDER BY name`,
         []
     );
     return res.rows as { id: number; name: string }[];
@@ -121,9 +126,10 @@ export const getAvailableSlots = async (
       bs.slot_time,
       bs.max_capacity,
       COUNT(b.id) FILTER (
-        WHERE DATE(b.schedule)=DATE($2)
-          AND TO_CHAR(b.schedule, 'HH24:MI')=TO_CHAR(bs.slot_time, 'HH24:MI')
-          AND b.status IN ('PENDING_OTP','CONFIRMED','WORKER_ASSIGNED','EN_ROUTE','ARRIVED','IN_PROGRESS')
+        WHERE (b.schedule AT TIME ZONE 'Asia/Manila')::date = $2::date
+          AND (b.schedule AT TIME ZONE 'Asia/Manila')::time = bs.slot_time::time
+          AND UPPER(COALESCE(b.status, '')) NOT IN
+              ('CANCELLED','CANCELED','COMPLETED','REVIEWED','EXPIRED','FAILED','REFUNDED')
       ) AS booked_count
     FROM ${dbSchema}.branch_slots bs
     LEFT JOIN ${dbSchema}.bookings b
@@ -135,11 +141,16 @@ export const getAvailableSlots = async (
         [branchId, date]
     );
 
-    return res.rows.map((row: any) => ({
-        slot_time: row.slot_time,
-        available: row.booked_count < row.max_capacity,
-        remaining_capacity: row.max_capacity - row.booked_count
-    }));
+    return res.rows.map((row: any) => {
+        const booked = Number(row.booked_count ?? 0);
+        const capacity = Number(row.max_capacity ?? 0);
+        return {
+            branch_id: branchId,
+            slot_time: row.slot_time,
+            available: booked < capacity,
+            remaining_capacity: Math.max(0, capacity - booked)
+        };
+    });
 };
 
 export const createSlot = async (
@@ -147,6 +158,13 @@ export const createSlot = async (
     slotTime: string,
     maxCapacity: number
 ) => {
+    if (!Number.isSafeInteger(branchId) || branchId <= 0) throw new Error('A valid branch is required');
+    if (typeof slotTime !== 'string' || !/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(slotTime)) {
+        throw new Error('slotTime must be a real HH:mm time');
+    }
+    if (!Number.isSafeInteger(maxCapacity) || maxCapacity < 1 || maxCapacity > 1000) {
+        throw new Error('maxCapacity must be an integer from 1 to 1000');
+    }
     const res = await dbQuery.query(
         `
     INSERT INTO ${dbSchema}.branch_slots (branch_id, slot_time, max_capacity)
@@ -239,7 +257,7 @@ export const createFullService = async (payload: any) => {
          */
         const serviceRes = await dbQuery.query(
             `
-      INSERT INTO ${dbSchema}.services (name, category)
+      INSERT INTO ${dbSchema}.service_families (name, category)
       VALUES ($1, $2)
       RETURNING id
       `,
@@ -325,7 +343,7 @@ export const updateFullService = async (
          * 1. Validate service exists
          */
         const existing = await dbQuery.query(
-            `SELECT id FROM ${dbSchema}.services WHERE id = $1`,
+            `SELECT id FROM ${dbSchema}.service_families WHERE id = $1`,
             [serviceId]
         );
 
@@ -359,7 +377,7 @@ export const updateFullService = async (
          */
         await dbQuery.query(
             `
-      UPDATE ${dbSchema}.services
+      UPDATE ${dbSchema}.service_families
       SET name = $1,
           category = $2
       WHERE id = $3
@@ -472,7 +490,7 @@ export const hardDeleteService = async (serviceId: number) => {
         }
 
         const res = await dbQuery.query(
-            `SELECT id FROM ${dbSchema}.services WHERE id = $1`,
+            `SELECT id FROM ${dbSchema}.service_families WHERE id = $1`,
             [serviceId]
         );
 
@@ -503,7 +521,7 @@ export const hardDeleteService = async (serviceId: number) => {
 
         // 3. delete service
         await dbQuery.query(
-            `DELETE FROM ${dbSchema}.services WHERE id = $1`,
+            `DELETE FROM ${dbSchema}.service_families WHERE id = $1`,
             [serviceId]
         );
 
@@ -600,12 +618,13 @@ export const getFullServiceCatalog = async () => {
             COALESCE(m.inclusions, '[]'::jsonb) AS inclusions,
             COALESCE(m.exclusions, '[]'::jsonb) AS exclusions
         FROM ${dbSchema}.service_options so
-        LEFT JOIN ${dbSchema}.services s
+        LEFT JOIN ${dbSchema}.service_families s
             ON s.id = so.service_id
         LEFT JOIN ${dbSchema}.service_option_meta m
             ON m.service_option_id = so.id
         WHERE so.option_type = 'MAIN'
           AND so.is_active = true
+          AND s.deleted_at IS NULL
         ORDER BY so.service_id, so.level_2, so.level_3
     `, []);
 

@@ -17,44 +17,26 @@ import { auditFire } from './adminAuditService';
 const s = db.schema;
 
 // ── Lazy schema bootstrap — runs once per process ─────────────────────────────
-// guest_customers is created by ensureAdminCreateBookingSchema() but that only
-// runs when an admin creates a booking. Guard all reads with this singleton so
-// the table is always present before any query references it.
-
-let _guestTableReady = false;
-const ensureGuestCustomersTable = async (): Promise<void> => {
-  if (_guestTableReady) return;
-  await dbQuery.query(
-    `CREATE TABLE IF NOT EXISTS ${s}.guest_customers (
-       id                    SERIAL PRIMARY KEY,
-       guest_customer_id     UUID    NOT NULL DEFAULT gen_random_uuid(),
-       first_name            VARCHAR(100) NOT NULL,
-       last_name             VARCHAR(100) NOT NULL,
-       phone_normalized      VARCHAR(20)  NOT NULL,
-       email                 VARCHAR(255),
-       created_by_admin_uid  VARCHAR(256) NOT NULL DEFAULT 'system',
-       linked_customer_uid   VARCHAR(256),
-       linked_at             TIMESTAMPTZ,
-       linked_by_admin_uid   VARCHAR(256),
-       link_reason           TEXT,
-       created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
-     )`,
-    []
-  );
-  await dbQuery.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_gc_phone_unique ON ${s}.guest_customers (phone_normalized)`,
-    []
-  ).catch((err: any) => console.warn('[guestBootstrap] idx_gc_phone_unique:', err.message));
-  await dbQuery.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_gc_uuid ON ${s}.guest_customers (guest_customer_id)`,
-    []
-  ).catch((err: any) => console.warn('[guestBootstrap] idx_gc_uuid:', err.message));
-  await dbQuery.query(
-    `ALTER TABLE ${s}.guest_customers ADD COLUMN IF NOT EXISTS source_channel VARCHAR(50)`,
-    []
-  ).catch((err: any) => console.warn('[guestBootstrap] source_channel:', err.message));
-  _guestTableReady = true;
-};
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `guest_customers`, `idx_gc_phone_unique`, `idx_gc_uuid` and the additive
+// `source_channel` column were created here at runtime by
+// `ensureGuestCustomersTable`, awaited at the top of six operations. All four
+// come from `scripts/baseline/000-baseline.sql` now.
+//
+// This definition existed as a DEFENSIVE DUPLICATE, and its own comment said so:
+// `ensureAdminCreateBookingSchema` also created the table, but only ran when an
+// admin created a booking, so reads here could arrive first. That is a real
+// problem with runtime DDL and the wrong fix for it — two CREATE TABLE IF NOT
+// EXISTS for one object is a race with a silent loser, and the two definitions
+// have to be kept in step by hand forever. The baseline owning the table removes
+// the reason for the duplicate rather than the duplicate alone.
+//
+// `idx_gc_phone_unique` is UNIQUE on `phone_normalized`, which is what stops two
+// guest records for one number — the same protection `user_credentials` gets from
+// `idx_uc_phone_normalized_unique`. It was created with a `.catch()` that only
+// warned, so before the baseline carried it a duplicate phone number could
+// silently defeat it.
 
 // ── Allowed source-channel values ─────────────────────────────────────────────
 
@@ -79,7 +61,6 @@ export async function listGuests(params: ListGuestsParams): Promise<{
   page: number;
   limit: number;
 }> {
-  await ensureGuestCustomersTable();
   const page  = Math.max(1, params.page  || 1);
   const limit = Math.min(100, Math.max(1, params.limit || 25));
   const offset = (page - 1) * limit;
@@ -185,7 +166,6 @@ export async function getGuestMetrics(): Promise<{
   linkedToClient: number;
   withPaymentOutstanding: number;
 }> {
-  await ensureGuestCustomersTable();
   const res = await dbQuery.query(
     `WITH booking_stats AS (
        SELECT
@@ -228,7 +208,6 @@ export async function getGuestMetrics(): Promise<{
 // ── Guest detail ───────────────────────────────────────────────────────────────
 
 export async function getGuestDetail(guestCustomerId: string): Promise<any | null> {
-  await ensureGuestCustomersTable();
   const res = await dbQuery.query(
     `WITH booking_stats AS (
        SELECT
@@ -290,7 +269,6 @@ export async function getGuestDetail(guestCustomerId: string): Promise<any | nul
 // ── Guest bookings ─────────────────────────────────────────────────────────────
 
 export async function getGuestBookings(guestCustomerId: string): Promise<any[]> {
-  await ensureGuestCustomersTable();
   const res = await dbQuery.query(
     `SELECT
        b.id              AS booking_id,
@@ -346,7 +324,6 @@ export async function updateGuest(
   adminUid: string,
   fields: UpdateGuestFields
 ): Promise<any> {
-  await ensureGuestCustomersTable();
   // Validate source_channel if provided
   if (fields.sourceChannel && !VALID_SOURCE_CHANNELS.has(fields.sourceChannel)) {
     throw Object.assign(
@@ -496,7 +473,6 @@ export async function listAllCustomers(params: ListAllCustomersParams): Promise<
   page: number;
   limit: number;
 }> {
-  await ensureGuestCustomersTable();
   const page  = Math.max(1, params.page  || 1);
   const limit = Math.min(100, Math.max(1, params.limit || 25));
   const offset = (page - 1) * limit;

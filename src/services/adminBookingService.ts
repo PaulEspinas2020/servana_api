@@ -1,5 +1,5 @@
 import { db } from "../config";
-import dbQuery from "../db/dbQuery";
+import dbQuery, { pool } from "../db/dbQuery";
 import { send } from "../helpers/mailer";
 import { getUserInfoByBookingId } from "./user.service";
 import {
@@ -8,6 +8,33 @@ import {
   openConversationForConfirmedBooking,
   escalateToSupport,
 } from "../chat/chat.service";
+import { createCustomerNotification, createNotification } from "./notification.service";
+import { emitToProvider } from "../provider.realtime";
+import { deriveCanonicalState, BOOKING_STATES } from "./booking/canonicalState";
+import { toAdminProjection } from "./booking/projections";
+import {
+  adminOpsStatusSql,
+  adminCanonicalStateSql,
+  normaliseProviderUid,
+  isBookingState,
+} from "./booking/adminOpsStatusSql";
+import type { BookingState } from "./booking/canonicalState";
+
+/** Re-exported so the controller can reject an unknown filter value at the edge. */
+export { isBookingState } from "./booking/adminOpsStatusSql";
+import { reconcileWithRetryTracking } from "../chat/chat.reconciler";
+import {
+  transitionBooking,
+  TransitionError,
+  type TransitionResult,
+} from './booking/transitionExecutor';
+import {
+  CAPABILITY_GRANT_EXISTS_SQL,
+  BUSY_PROVIDERS_SQL,
+  bookingCanonicalServiceSql,
+  bookingEndSql,
+} from './booking/eligibilityPipeline';
+import { providerRoleSqlPredicate } from '../constants/providerRoles';
 const dbSchema = db.schema;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -35,6 +62,19 @@ interface AuditEvent {
 
 export interface BookingListFilter {
   search?: string;
+  /**
+   * The canonical filter. Prefer this: it can express EN_ROUTE and ARRIVED,
+   * which `operationsStatus` cannot, so an operator can filter to the states
+   * the board now shows them.
+   */
+  canonicalState?: BookingState | '';
+  /**
+   * @deprecated Compatibility only. Kept because live deep-links and saved
+   * dashboard tiles carry `?operationsStatus=`, and breaking a bookmarked URL
+   * is a real regression for an operator mid-shift. It filters on the collapsed
+   * value, so `accepted` still matches EN_ROUTE and ARRIVED — which is the
+   * behaviour those links already had.
+   */
   operationsStatus?: OperationsStatus | '';
   paymentMethod?: string;
   paymentStatus?: string;
@@ -51,103 +91,25 @@ export interface BookingListFilter {
 
 // ─── Schema Init ─────────────────────────────────────────────────────────────
 
-export const ensureBookingOpsSchema = async (): Promise<void> => {
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.booking_timeline_events (
-      id          SERIAL PRIMARY KEY,
-      booking_id  INTEGER NOT NULL,
-      event_type  VARCHAR(80) NOT NULL,
-      title       VARCHAR(200) NOT NULL,
-      description TEXT,
-      actor_type  VARCHAR(20) NOT NULL DEFAULT 'admin',
-      actor_uid   TEXT,
-      metadata    JSONB,
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `, []);
-
-  await dbQuery.query(`
-    CREATE INDEX IF NOT EXISTS idx_bte_booking_id
-    ON ${dbSchema}.booking_timeline_events (booking_id, created_at DESC)
-  `, []);
-
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.booking_notes (
-      id          SERIAL PRIMARY KEY,
-      booking_id  INTEGER NOT NULL,
-      note_text   TEXT NOT NULL,
-      author_uid  TEXT,
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `, []);
-
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.booking_escalations (
-      id             SERIAL PRIMARY KEY,
-      booking_id     INTEGER NOT NULL,
-      reason_code    VARCHAR(80),
-      reason         TEXT NOT NULL,
-      severity       VARCHAR(20) NOT NULL DEFAULT 'normal',
-      assigned_team  TEXT,
-      actor_uid      TEXT,
-      resolved_at    TIMESTAMPTZ,
-      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `, []);
-
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${dbSchema}.booking_audit_events (
-      id          SERIAL PRIMARY KEY,
-      booking_id  INTEGER,
-      actor_uid   TEXT,
-      actor_role  VARCHAR(20) NOT NULL DEFAULT 'admin',
-      action      VARCHAR(100) NOT NULL,
-      before_json JSONB,
-      after_json  JSONB,
-      reason      TEXT,
-      request_id  TEXT,
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `, []);
-
-  // booking_workers is a pre-existing table — add admin-portal columns if missing
-  await dbQuery.query(`
-    ALTER TABLE ${dbSchema}.booking_workers
-    ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ DEFAULT NOW()
-  `, []);
-
-  // Confirmation-on-behalf columns — wrapped individually so one DDL failure doesn't abort the rest
-  const confirmCols: [string, string][] = [
-    ['confirmation_source',  'VARCHAR(40)'],
-    ['admin_actor_uid',      'VARCHAR(256)'],
-    ['consent_method',       'VARCHAR(30)'],
-    ['consent_reference',    'TEXT'],
-    ['confirmation_reason',  'TEXT'],
-    ['confirmed_at',         'TIMESTAMPTZ'],
-  ];
-  for (const [col, typ] of confirmCols) {
-    try {
-      await dbQuery.query(`ALTER TABLE ${dbSchema}.booking_workers ADD COLUMN IF NOT EXISTS ${col} ${typ}`, []);
-    } catch { /* column may already exist with a different type — safe to skip */ }
-  }
-
-  // Sparse partial indexes for admin-confirm-on-behalf audit queries
-  try {
-    await dbQuery.query(
-      `CREATE INDEX IF NOT EXISTS idx_bw_confirmation_source ON ${dbSchema}.booking_workers (confirmation_source) WHERE confirmation_source IS NOT NULL`,
-      []
-    );
-    await dbQuery.query(
-      `CREATE INDEX IF NOT EXISTS idx_bw_consent_method ON ${dbSchema}.booking_workers (consent_method) WHERE consent_method IS NOT NULL`,
-      []
-    );
-  } catch { /* indexes optional — non-fatal if DDL fails */ }
-};
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `ensureBookingOpsSchema` created booking_timeline_events, booking_notes,
+// booking_audit_events and three indexes. It was the last REQUIRED BOOKING
+// entry in the startup graph. All of it comes from
+// `scripts/baseline/000-baseline.sql`.
+//
+// booking_audit_events is what `logBookingAudit` below writes every lifecycle
+// transition into. Its absence would not fail a booking -- the write is
+// fire-and-forget -- it would silently lose the audit trail, which is why this
+// was classified required rather than optional while the app created it.
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-const logBookingAudit = (event: AuditEvent): void => {
-  dbQuery.query(
+const logBookingAudit = (
+  event: AuditEvent,
+  runner: { query: (sql: string, params?: any[]) => Promise<any> } = dbQuery,
+): Promise<void> | void => {
+  const write = runner.query(
     `INSERT INTO ${dbSchema}.booking_audit_events
        (booking_id, actor_uid, actor_role, action, before_json, after_json, reason, request_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
@@ -161,7 +123,12 @@ const logBookingAudit = (event: AuditEvent): void => {
       event.reason ?? null,
       event.requestId ?? null,
     ]
-  ).catch((e) => { console.error('[booking-audit] write failed:', e?.message); });
+  );
+  if (runner === dbQuery) {
+    write.catch((e) => { console.error('[booking-audit] write failed:', e?.message); });
+    return;
+  }
+  return write.then(() => undefined);
 };
 
 const addTimelineEvent = async (
@@ -171,9 +138,10 @@ const addTimelineEvent = async (
   description: string | null = null,
   actorType: string = 'admin',
   actorUid: string | null = null,
-  metadata: any = null
+  metadata: any = null,
+  runner: { query: (sql: string, params?: any[]) => Promise<any> } = dbQuery,
 ): Promise<void> => {
-  await dbQuery.query(
+  await runner.query(
     `INSERT INTO ${dbSchema}.booking_timeline_events
        (booking_id, event_type, title, description, actor_type, actor_uid, metadata)
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
@@ -182,28 +150,117 @@ const addTimelineEvent = async (
   );
 };
 
+const publishAdminAssignment = (input: {
+  bookingId: number;
+  providerUid: string;
+  customerUid?: string | null;
+  reassigned?: boolean;
+}) => {
+  const code = `SVN-${String(input.bookingId).padStart(6, '0')}`;
+  createNotification(input.providerUid, {
+    notificationKey: `assigned_job_${input.bookingId}_${input.providerUid}`,
+    type: 'assigned_job',
+    severity: 'info',
+    title: input.reassigned ? 'Booking reassigned to you' : 'New Job Assigned',
+    safeBody: `You have been assigned to booking ${code}. Please review and respond.`,
+    safeContextLabel: code,
+    route: { page: 'jobs', bookingId: String(input.bookingId) },
+    canOpenDetail: true,
+  }).catch((e) => console.error('[admin-assignment] provider notification failed', e));
+
+  if (input.customerUid) {
+    createCustomerNotification(input.customerUid, {
+      notificationKey: `provider_assigned_${input.bookingId}`,
+      type: input.reassigned ? 'provider_reassigned' : 'provider_assigned',
+      severity: 'success',
+      title: input.reassigned ? 'Provider updated' : 'Provider assigned',
+      safeBody: input.reassigned
+        ? 'A new provider has been assigned and is reviewing your booking.'
+        : 'A provider has been assigned and is reviewing your booking.',
+      safeContextLabel: code,
+      route: { routeKey: 'BOOKING_DETAILS', resourceId: String(input.bookingId) },
+      canOpenDetail: true,
+    }).catch((e) => console.error('[admin-assignment] customer notification failed', e));
+  }
+
+  emitToProvider(input.providerUid, 'booking:updated', {
+    bookingId: String(input.bookingId),
+    status: 'ASSIGNED',
+    assignmentSource: input.reassigned ? 'admin_reassignment' : 'admin',
+    occurredAt: new Date().toISOString(),
+  });
+};
+
 // ─── Operations Status Mapping ────────────────────────────────────────────────
 
+/**
+ * Admin operations status — now a PROJECTION of the canonical machine.
+ *
+ * ## What this used to be
+ *
+ * A second, independent collapse of `bookings.status` + `booking_workers.status`,
+ * with its own rules and its own vocabulary. It disagreed with the
+ * customer/provider derivation in ways that mattered: it reported a provider
+ * who was EN_ROUTE or ARRIVED as merely `accepted`, and it alone knew about
+ * disputes. One booking, three surfaces, three answers.
+ *
+ * It now derives the canonical state and asks the Admin projection to name it.
+ * Both are shared with Customer and Provider, so the three cannot diverge.
+ *
+ * ## It still collapses EN_ROUTE and ARRIVED, and that is deliberate
+ *
+ * The Admin portal types this value as a closed union and looks its label and
+ * colour up in `Record<AdminBookingOperationsStatus, …>` maps. An unknown key
+ * returns `undefined`, so emitting `en_route` today renders a blank badge on a
+ * live platform.
+ *
+ * The collapse is therefore COMPATIBILITY DEBT rather than canonical truth. The
+ * full state travels beside it in `canonicalState` / `stateGroup` (see
+ * `bookingCanonicalStateFor`), which the current portal ignores and the next
+ * version reads. Once the portal consumes those, this function can be retired
+ * on telemetry.
+ *
+ * ## Three behaviour changes, all deliberate
+ *
+ * 1. An open escalation now outranks a terminal booking rather than being
+ *    checked before cancellation only — the transition table already allows
+ *    COMPLETED → DISPUTED, and a dispute ABOUT a cancellation is exactly the
+ *    case somebody escalates. Admin's visible behaviour is unchanged: it showed
+ *    `disputed` first before, and still does.
+ * 2. A status this platform does not recognise now reports
+ *    `awaiting_assignment` instead of `new`. An unrecognised status is by
+ *    definition not new, and surfacing it as needing a provider puts it in
+ *    front of an admin rather than mislabelling it.
+ * 3. A booking whose assignment row is DECLINED, REASSIGNED or CANCELLED now
+ *    reports `awaiting_assignment` instead of `assigned`, as does one still at
+ *    `WORKER_ASSIGNED` with `worker_uid` NULL. `declineJob` does not rewrite
+ *    `bookings.status`, so those rows sat in the admin list labelled Assigned
+ *    with nobody on them — the queue that most needs an operator's attention
+ *    was the one hidden from it. Both values are already in the portal's closed
+ *    union, so no badge goes blank. Found by the B1.1 accept tests, which
+ *    caught the same gap letting a provider re-accept a job they had declined.
+ */
 export const mapOperationsStatus = (
   bookingStatus: string | null,
   workerStatus: string | null,
   workerUid: string | null,
   hasEscalation: boolean = false
 ): OperationsStatus => {
-  if (hasEscalation) return 'disputed';
-  const bs = (bookingStatus ?? '').toUpperCase();
-  const ws = (workerStatus  ?? '').toUpperCase();
-
-  if (['CANCELLED', 'CANCELED'].includes(bs)) return 'cancelled';
-  if (ws === 'COMPLETED' || bs === 'COMPLETED') return 'completed';
-  if (ws === 'IN_PROGRESS') return 'in_progress';
-  if (ws === 'ACCEPTED') return 'accepted';
-  if (ws === 'ASSIGNED' || bs === 'WORKER_ASSIGNED') return 'assigned';
-  if (bs === 'PENDING_OTP') return 'new';
-  if (['CONFIRMED', 'PAID'].includes(bs) && !workerUid) return 'awaiting_assignment';
-  if (['CONFIRMED', 'PAID'].includes(bs) && workerUid)  return 'assigned';
-  return 'new';
+  const canonical = deriveCanonicalState({ bookingStatus, workerStatus, workerUid, hasEscalation });
+  return toAdminProjection(canonical).operationsStatus as OperationsStatus;
 };
+
+/**
+ * The full canonical state for a booking row, for the fields the portal will
+ * read once migrated. Additive — nothing today consumes it, and it is what
+ * makes the collapse above survivable rather than lossy.
+ */
+export const bookingCanonicalStateFor = (
+  bookingStatus: string | null,
+  workerStatus: string | null,
+  workerUid: string | null,
+  hasEscalation: boolean = false
+) => toAdminProjection(deriveCanonicalState({ bookingStatus, workerStatus, workerUid, hasEscalation }));
 
 // ─── Admin Booking List ───────────────────────────────────────────────────────
 
@@ -276,11 +333,26 @@ export const getAdminBookings = async (
 
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
-  // ops_status is a computed field — add it to the SQL so COUNT + LIMIT apply to the filtered set
-  if (filter.operationsStatus) {
+  /**
+   * Both filters are applied to the COMPUTED columns, not re-derived here, so
+   * COUNT and LIMIT see the same rows the operator does.
+   *
+   * Canonical wins when both are supplied. They are not equivalent — `accepted`
+   * matches three canonical states — so silently ANDing them would let a stale
+   * dashboard tile narrow a canonical request without saying so.
+   */
+  const canonical = filter.canonicalState && isBookingState(filter.canonicalState)
+    ? filter.canonicalState
+    : '';
+  const stateFilters: string[] = [];
+  if (canonical) {
+    params.push(canonical);
+    stateFilters.push(`AND canonical_state = $${pi++}`);
+  } else if (filter.operationsStatus) {
     params.push(filter.operationsStatus);
+    stateFilters.push(`AND ops_status = $${pi++}`);
   }
-  const opsFilter = filter.operationsStatus ? `AND ops_status = $${pi++}` : '';
+  const opsFilter = stateFilters.join(' ');
 
   const baseSQL = `
     WITH latest_assignment AS (
@@ -325,26 +397,15 @@ export const getAdminBookings = async (
         br.id                                        AS branch_id,
         br.name                                      AS branch_name,
         br.city                                      AS branch_city,
-        CASE
-          WHEN EXISTS (SELECT 1 FROM ${dbSchema}.booking_escalations esc
-                       WHERE esc.booking_id = b.id AND esc.resolved_at IS NULL) THEN 'disputed'
-          WHEN b.status IN ('CANCELLED','CANCELED')                             THEN 'cancelled'
-          WHEN b.status = 'COMPLETED' OR la.worker_status = 'COMPLETED'        THEN 'completed'
-          WHEN la.worker_status = 'IN_PROGRESS'                                 THEN 'in_progress'
-          WHEN la.worker_status = 'ACCEPTED'                                    THEN 'accepted'
-          WHEN la.worker_status = 'ASSIGNED' OR b.status = 'WORKER_ASSIGNED'   THEN 'assigned'
-          WHEN b.status = 'PENDING_OTP'                                         THEN 'new'
-          WHEN b.status IN ('CONFIRMED','PAID')
-            AND (b.worker_uid IS NULL OR b.worker_uid = '')                     THEN 'awaiting_assignment'
-          WHEN b.status IN ('CONFIRMED','PAID') AND b.worker_uid IS NOT NULL
-            AND b.worker_uid != ''                                               THEN 'assigned'
-          ELSE 'new'
-        END AS ops_status
+EXISTS (SELECT 1 FROM ${dbSchema}.booking_escalations esc2
+                 WHERE esc2.booking_id = b.id AND esc2.resolved_at IS NULL) AS has_escalation,
+${adminCanonicalStateSql({ schema: dbSchema, bookingAlias: 'b', assignmentAlias: 'la' })} AS canonical_state,
+${adminOpsStatusSql({ schema: dbSchema, bookingAlias: 'b', assignmentAlias: 'la' })} AS ops_status
       FROM ${dbSchema}.bookings b
       LEFT JOIN ${dbSchema}.user_credentials cu  ON cu.uid  = b.user_id
       LEFT JOIN ${dbSchema}.guest_customers  gc  ON gc.guest_customer_id = b.guest_customer_id
       LEFT JOIN ${dbSchema}.service_options so   ON so.id   = b.service_option_id
-      LEFT JOIN ${dbSchema}.services s           ON s.id    = so.service_id
+      LEFT JOIN ${dbSchema}.service_families s           ON s.id    = so.service_id
       LEFT JOIN latest_payment  lp               ON lp.booking_id = b.id
       LEFT JOIN ${dbSchema}.branches br          ON br.id   = b.branch_id
       LEFT JOIN latest_assignment la             ON la.booking_id = b.id
@@ -368,16 +429,49 @@ export const getAdminBookings = async (
     const opStatus = (row.ops_status as string) ?? mapOperationsStatus(
       row.raw_status,
       row.worker_status,
-      row.worker_uid
+      normaliseProviderUid(row.worker_uid),
     );
     const isLate = !!row.scheduled_at &&
       new Date(row.scheduled_at) < new Date() &&
       !['completed', 'cancelled'].includes(opStatus);
 
+    /**
+     * The canonical state travels BESIDE the legacy field, never instead of it.
+     *
+     * `operationsStatus` cannot express EN_ROUTE or ARRIVED and reports both as
+     * `accepted`; the portal's badge maps are keyed on the legacy union, so
+     * removing it would blank a badge on a live platform. Additive per §4:
+     * the new portal reads `canonicalState`, the old one keeps working, and the
+     * legacy field retires on telemetry rather than on optimism.
+     */
+    /**
+     * Read from the COMPUTED column, not re-derived here.
+     *
+     * Re-deriving would give the right answer today and be a second opinion
+     * tomorrow — and, worse, a row could then DISPLAY one state while having
+     * been FILTERED on another, which is the exact class of bug this whole
+     * exercise removed. The projection still supplies the label and the
+     * available actions, which are presentation over the same state.
+     */
+    const state = isBookingState(row.canonical_state)
+      ? row.canonical_state
+      : deriveCanonicalState({
+        bookingStatus: row.raw_status,
+        workerStatus: row.worker_status,
+        workerUid: normaliseProviderUid(row.worker_uid),
+        hasEscalation: !!row.has_escalation,
+      });
+    const canonical = toAdminProjection(state);
+
     return {
       bookingId: row.booking_id,
       rawStatus: row.raw_status,
       operationsStatus: opStatus,
+      canonicalState: canonical.canonicalState,
+      stateGroup: canonical.stateGroup,
+      stateLabel: canonical.label,
+      stateIsCollapsedInLegacyField: canonical.stateIsCollapsedInLegacyField,
+      terminal: canonical.terminal,
       customerType: (row.customer_type as 'guest' | 'client') ?? 'client',
       customerUid: row.customer_uid ?? null,
       guestCustomerId: row.guest_customer_id ?? null,
@@ -439,14 +533,37 @@ export const getAdminBookingMetrics = async (): Promise<any> => {
     completed: 0, cancelled: 0, disputed: 0,
   };
 
+  /**
+   * Counted CANONICALLY, then collapsed for the legacy fields.
+   *
+   * The tabs are the operator's index into the board, so a tab that cannot say
+   * EN_ROUTE leaves two states reachable only by scrolling. Counting canonically
+   * and deriving the legacy totals from the same pass means the two can never
+   * disagree about how many bookings exist.
+   */
+  const canonicalCounts: Record<string, number> = {};
+  for (const state of BOOKING_STATES) canonicalCounts[state] = 0;
+
   for (const row of res.rows) {
     counts['total']++;
-    const s = mapOperationsStatus(row.status, row.worker_status, row.worker_uid, !!row.has_escalation);
+    const state = deriveCanonicalState({
+      bookingStatus: row.status,
+      workerStatus: row.worker_status,
+      workerUid: normaliseProviderUid(row.worker_uid),
+      hasEscalation: !!row.has_escalation,
+    });
+    canonicalCounts[state] = (canonicalCounts[state] ?? 0) + 1;
+    const s = toAdminProjection(state).operationsStatus;
     counts[s] = (counts[s] ?? 0) + 1;
   }
 
   return {
     total: counts['total'],
+    /**
+     * Canonical counts, keyed by state. Additive — every legacy field below is
+     * unchanged, so a portal that has not migrated reads exactly what it did.
+     */
+    byCanonicalState: canonicalCounts,
     new: counts['new'],
     awaitingAssignment: counts['awaiting_assignment'],
     assigned: counts['assigned'],
@@ -504,7 +621,7 @@ export const getAdminBookingDetail = async (bookingId: number): Promise<any | nu
     LEFT JOIN ${dbSchema}.user_credentials cu ON cu.uid = b.user_id
     LEFT JOIN ${dbSchema}.guest_customers  gc ON gc.guest_customer_id = b.guest_customer_id
     LEFT JOIN ${dbSchema}.service_options so  ON so.id  = b.service_option_id
-    LEFT JOIN ${dbSchema}.services s          ON s.id   = so.service_id
+    LEFT JOIN ${dbSchema}.service_families s          ON s.id   = so.service_id
     LEFT JOIN ${dbSchema}.payments p          ON p.booking_id = b.id
     LEFT JOIN ${dbSchema}.branches br         ON br.id  = b.branch_id
     LEFT JOIN ${dbSchema}.user_address ua     ON ua.address_id = b.user_address_id
@@ -539,13 +656,45 @@ export const getAdminBookingDetail = async (bookingId: number): Promise<any | nu
   ]);
 
   const assignment = bwRes.rows[0] ?? null;
-  const hasEscalation = (escalationRes.rowCount ?? 0) > 0;
-  const opStatus = mapOperationsStatus(bk.status, assignment?.status ?? null, bk.worker_uid, hasEscalation);
+  /**
+   * Only an UNRESOLVED escalation makes a booking disputed.
+   *
+   * This counted every escalation row, so a settled dispute pinned the booking
+   * at `disputed` permanently — while the list and the metrics query, which
+   * both filter on `resolved_at IS NULL`, moved on. Two of the three call sites
+   * already agreed; this was the one that did not.
+   */
+  const hasEscalation = escalationRes.rows.some((e: any) => e.resolved_at === null);
+  const opStatus = mapOperationsStatus(
+    bk.status,
+    assignment?.status ?? null,
+    normaliseProviderUid(bk.worker_uid),
+    hasEscalation,
+  );
+
+  const canonical = bookingCanonicalStateFor(
+    bk.status,
+    assignment?.status ?? null,
+    normaliseProviderUid(bk.worker_uid),
+    hasEscalation,
+  );
 
   return {
     bookingId: bk.id,
     rawStatus: bk.status,
     operationsStatus: opStatus,
+    canonicalState: canonical.canonicalState,
+    stateGroup: canonical.stateGroup,
+    stateLabel: canonical.label,
+    stateIsCollapsedInLegacyField: canonical.stateIsCollapsedInLegacyField,
+    terminal: canonical.terminal,
+    /**
+     * What an admin may actually do from here, from the SAME transition
+     * whitelist the executor enforces. The portal previously hard-coded these
+     * as string arrays against `operationsStatus`, which is how a button stays
+     * enabled for a state that has since stopped accepting it.
+     */
+    availableActions: canonical.availableActions,
     customer: {
       uid: bk.customer_uid ?? null,
       name: (bk.customer_name ?? '').trim() || null,
@@ -688,7 +837,9 @@ export const addBookingNote = async (
 
 export const getAssignmentCandidates = async (bookingId: number): Promise<any[]> => {
   const bkRes = await dbQuery.query(
-    `SELECT b.schedule, so.service_id
+    `SELECT b.schedule, so.service_id,
+            ${bookingCanonicalServiceSql(dbSchema)} AS canonical_service_id,
+            ${bookingEndSql('b', 'so')} AS ends_at
      FROM ${dbSchema}.bookings b
      JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
      WHERE b.id = $1`,
@@ -696,26 +847,48 @@ export const getAssignmentCandidates = async (bookingId: number): Promise<any[]>
   );
   if (!bkRes.rowCount) return [];
 
-  const { schedule, service_id } = bkRes.rows[0];
+  const { schedule, service_id, canonical_service_id, ends_at } = bkRes.rows[0];
   const serviceId = Number(service_id);
+  // Canonical `services.id` for the canonical grant, legacy family id for the
+  // fallback. Two id spaces, so two parameters — see eligibilityPipeline.
+  const canonicalServiceId = canonical_service_id === null || canonical_service_id === undefined
+    ? null
+    : Number(canonical_service_id);
 
+  // Two corrections were made here, both about matching what adminAssignProvider
+  // will actually accept — a candidate list narrower than the assign guard hides
+  // usable providers, and one wider than it offers providers the assign rejects.
+  //
+  //  1. role IN (2,4), not role = 2. Role 4 is the second provider role (internal /
+  //     employee providers) and every other provider query in the codebase uses
+  //     IN (2,4). Filtering on 2 alone meant no internal provider could ever be
+  //     offered for a booking. Role 6 is deliberately NOT included: two production
+  //     accounts hold it and its meaning is undefined, so it fails closed.
+  //  2. Qualification is employee_services OR an approved worker_service_application,
+  //     which is exactly the UNION adminAssignProvider's eligibility check uses. The
+  //     INNER JOIN on employee_services alone hid providers whose approval had not
+  //     been mirrored into that table yet — assignable, but never listed.
+  //
+  // Both are now IMPORTED rather than restated. Agreement re-established by hand
+  // is agreement that lasts until the next edit to one copy: the role list and
+  // the grant sources come from the canonical declarations, so this producer
+  // cannot drift from the executor without the shared predicate changing.
   const providersRes = await dbQuery.query(
-    `SELECT uc.uid, uc.first_name, uc.last_name, uc.phone_number
+    `SELECT DISTINCT uc.uid, uc.first_name, uc.last_name, uc.phone_number
      FROM ${dbSchema}.user_credentials uc
-     JOIN ${dbSchema}.employee_services es ON es.employee_uid = uc.uid
-     WHERE es.service_id = $1 AND uc.is_archive = false AND uc.role::int = 2`,
-    [serviceId]
+     WHERE uc.is_archive = false
+       AND ${providerRoleSqlPredicate('uc.role')}
+       AND ${CAPABILITY_GRANT_EXISTS_SQL(dbSchema, 'uc.uid', '$2', '$1')}`,
+    [serviceId, canonicalServiceId]
   );
 
-  const windowStart = new Date(new Date(schedule).getTime() - 2 * 60 * 60 * 1000);
-  const windowEnd   = new Date(new Date(schedule).getTime() + 2 * 60 * 60 * 1000);
-
+  // Occupancy comes from the pipeline: half-open overlap against this booking's
+  // real span, and the same status list the executor excludes. Both spans are
+  // resolved from `duration_mins` in SQL, so this preview and the commit-time
+  // recheck cannot disagree about how long a job lasts.
   const busyRes = await dbQuery.query(
-    `SELECT DISTINCT worker_uid FROM ${dbSchema}.bookings
-     WHERE schedule BETWEEN $1 AND $2
-       AND status NOT IN ('COMPLETED','CANCELLED','CANCELED')
-       AND worker_uid IS NOT NULL AND id != $3`,
-    [windowStart, windowEnd, bookingId]
+    BUSY_PROVIDERS_SQL(dbSchema),
+    [schedule, ends_at, bookingId]
   );
   const busyUids = new Set(busyRes.rows.map((r: any) => r.worker_uid));
 
@@ -729,83 +902,159 @@ export const getAssignmentCandidates = async (bookingId: number): Promise<any[]>
     distanceKm: null,
     eligibilityStatus: busyUids.has(p.uid) ? 'warning' : 'eligible',
     eligibilityReasons: busyUids.has(p.uid)
-      ? ['Provider has a conflicting booking within 2 hours']
+      ? ['Provider has a conflicting booking overlapping this job']
       : [],
   }));
 };
 
 // ─── Admin Assign Provider ────────────────────────────────────────────────────
 
+/**
+ * ─── D4 · ADMIN_ASSIGN, on the canonical executor ────────────────────────────
+ *
+ * Everything that has to be true at the moment of commit now happens inside
+ * ONE transaction holding TWO locks, in a fixed order: the booking row, then
+ * a provider-scoped advisory lock.
+ *
+ * ## Why the target validation moved with it
+ *
+ * The ±2-hour conflict check is meaningful only while the provider advisory
+ * lock is held — without it, two admins assigning the same provider to two
+ * overlapping bookings both read "no conflict" and both commit. Validating
+ * here and then calling the executor would put the check outside the lock and
+ * recreate the race, so provider existence, role, archive state,
+ * qualification and the conflict check are all executor-side now.
+ *
+ * That is NOT provider selection. Which provider to suggest, how to rank them
+ * and whether auto-assignment picks them remain TAB 05's. This is the atomic
+ * validation required to safely commit a provider somebody already chose.
+ *
+ * ## BEHAVIOUR CHANGE: role-4 providers are assignable
+ *
+ * The legacy predicate was `role::int = 2`, so an admin could not assign a
+ * role-4 provider and was told "Provider not found". Roles 2 AND 4 are
+ * providers — this same file already used `IN (2, 4)` elsewhere. The predicate
+ * is now built from the canonical role set, so the two cannot disagree again.
+ *
+ * ## Lock ORDER changed, deliberately
+ *
+ * Legacy took the advisory lock BEFORE the booking row. The executor takes the
+ * booking row first. Two paths acquiring the same pair in opposite orders is a
+ * deadlock, so one order is standardised and enforced by test.
+ */
 export const adminAssignProvider = async (
   bookingId: number,
   providerUid: string,
   adminUid: string | null,
   reason?: string
 ): Promise<any> => {
-  const bkRes = await dbQuery.query(
-    `SELECT id, status, worker_uid FROM ${dbSchema}.bookings WHERE id = $1`,
-    [bookingId]
+  const context = await dbQuery.query(
+    `SELECT b.user_id, b.worker_uid,
+            uc.first_name, uc.last_name
+       FROM ${dbSchema}.bookings b
+       LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = $2
+      WHERE b.id = $1`,
+    [bookingId, providerUid],
   );
-  if (!bkRes.rowCount) throw new Error('Booking not found');
-  const before = bkRes.rows[0];
+  if (!context.rowCount) throw new Error('Booking not found');
+  const customerUid: string | null = context.rows[0].user_id ?? null;
+  const providerName = (`${context.rows[0].first_name ?? ''} ${context.rows[0].last_name ?? ''}`).trim();
 
-  const provRes = await dbQuery.query(
-    `SELECT uid, first_name, last_name, is_archive FROM ${dbSchema}.user_credentials
-     WHERE uid = $1 AND role::int = 2`,
-    [providerUid]
-  );
-  if (!provRes.rowCount) throw new Error('Provider not found');
-  if (provRes.rows[0].is_archive) throw new Error('Provider is archived and cannot be assigned');
-
-  const soRes = await dbQuery.query(
-    `SELECT so.service_id FROM ${dbSchema}.bookings b
-     JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-     WHERE b.id = $1`,
-    [bookingId]
-  );
-  const serviceId = soRes.rows[0]?.service_id;
-  if (serviceId) {
-    const eligRes = await dbQuery.query(
-      `SELECT 1 FROM ${dbSchema}.employee_services
-       WHERE employee_uid = $1 AND service_id = $2 LIMIT 1`,
-      [providerUid, serviceId]
-    );
-    if (!eligRes.rowCount) throw new Error('Provider is not qualified for this booking service');
+  /**
+   * Already assigned to THIS provider: idempotent success, as before.
+   *
+   * Checked ahead of the executor because the machine would answer
+   * INVALID_TRANSITION for a booking already at ASSIGNED, and this endpoint
+   * has always returned success for a repeat of the same assignment.
+   */
+  if (context.rows[0].worker_uid) {
+    if (String(context.rows[0].worker_uid) !== providerUid) {
+      throw new Error('Booking is already assigned; use the reassignment action');
+    }
+    return { bookingId, providerUid, providerName, status: 'WORKER_ASSIGNED', idempotent: true };
   }
 
-  await dbQuery.query(
-    `INSERT INTO ${dbSchema}.booking_workers (worker_uid, booking_id, status, assigned_at)
-     VALUES ($1, $2, 'ASSIGNED', NOW())`,
-    [providerUid, bookingId]
-  );
+  try {
+    await transitionBooking({
+      action: 'ADMIN_ASSIGN',
+      bookingId,
+      actorRole: 'admin',
+      actorUid: adminUid,
+      metadata: {
+        providerUid,
+        providerName,
+        ...(reason ? { reason } : {}),
+      },
+    });
+  } catch (error) {
+    if (error instanceof TransitionError) {
+      // GUARD_FAILED carries the legacy message verbatim; everything else is
+      // the state machine refusing, which legacy reported by status.
+      throw new Error(
+        error.code === 'GUARD_FAILED'
+          ? error.message
+          : `Booking cannot be assigned from status ${context.rows[0].worker_uid ?? 'unknown'}`,
+      );
+    }
+    throw error;
+  }
 
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET worker_uid = $1, status = 'WORKER_ASSIGNED' WHERE id = $2`,
-    [providerUid, bookingId]
-  );
-
-  const providerName = (`${provRes.rows[0].first_name ?? ''} ${provRes.rows[0].last_name ?? ''}`).trim();
-
-  await addTimelineEvent(
-    bookingId, 'booking_assigned',
-    `Provider assigned: ${providerName}`,
-    reason ?? null, 'admin', adminUid,
-    { providerUid, providerName }
-  );
-
-  logBookingAudit({
-    bookingId, actorUid: adminUid, actorRole: 'admin',
-    action: 'booking_assigned',
-    before: { workerUid: before.worker_uid, status: before.status },
-    after:  { workerUid: providerUid, status: 'WORKER_ASSIGNED' },
-    reason,
+  await logBookingAudit({
+    bookingId, actorUid: adminUid, actorRole: 'admin', action: 'booking_assigned',
+    before: { workerUid: null, status: null },
+    after: { workerUid: providerUid, status: 'WORKER_ASSIGNED' }, reason,
   });
 
+  publishAdminAssignment({ bookingId, providerUid, customerUid });
   return { bookingId, providerUid, providerName, status: 'WORKER_ASSIGNED' };
 };
 
 // ─── Admin Reassign Provider ──────────────────────────────────────────────────
 
+/**
+ * ─── D5 · ADMIN_REASSIGN, on the canonical executor ──────────────────────────
+ *
+ * The last admin lifecycle writer. Everything now happens in one transaction
+ * holding the booking row lock and — only for the INCOMING provider — the
+ * provider advisory lock, in that order.
+ *
+ * ## The same-provider no-op is preserved exactly
+ *
+ * Reassigning to the provider a booking already has succeeds and writes
+ * nothing: no closed row, no new row, no pointer change, no worker-code
+ * change, no canonical event, no timeline, no notification. It is declared on
+ * the action as `sameTarget: IDEMPOTENT_NO_OP` rather than falling out of a
+ * generic `from === to` rule, because writing nothing is the SAFE answer and
+ * the unsafe one is easy to reach by accident: closing and recreating the same
+ * provider's row would fabricate decline history that both the matching
+ * exclusion and the provider's acceptance rate read.
+ *
+ * Its precedence is preserved too. Legacy checked it before the terminal-status
+ * guard, so a same-provider reassign of a COMPLETED or CANCELLED booking
+ * answers success. Odd-looking, harmless, and measured.
+ *
+ * ## BEHAVIOUR CORRECTION: role-4 providers accepted
+ *
+ * The incoming-provider lookup was `role::int = 2`, so a role-4 target failed
+ * as "New provider not found" — the same defect D4 fixed on the assign path,
+ * in the same file. The canonical predicate is used now.
+ *
+ * ## The IN_PROGRESS refusal moved, not copied
+ *
+ * Legacy read the assignment row and refused IN_PROGRESS / COMPLETED itself.
+ * The machine already expresses that: `from` omits IN_PROGRESS, and COMPLETED
+ * is terminal. So the check is NOT reimplemented here — the refusal comes from
+ * the machine and is translated back into the legacy sentence at this
+ * boundary, which is a compatibility translation rather than a second source
+ * of truth.
+ *
+ * ## Outgoing row and canonical evidence are atomic
+ *
+ * The outgoing assignment closes as DECLINED — a compatibility value two live
+ * consumers read — and `booking_transitions` records ADMIN_REASSIGN as what
+ * actually happened. Both in one transaction: matching exclusion must never
+ * change without the canonical explanation of why, and vice versa.
+ */
 export const adminReassignProvider = async (
   bookingId: number,
   toProviderUid: string,
@@ -814,57 +1063,75 @@ export const adminReassignProvider = async (
 ): Promise<any> => {
   if (!reason?.trim()) throw new Error('Reason is required for reassignment');
 
-  const bkRes = await dbQuery.query(
-    `SELECT worker_uid, status FROM ${dbSchema}.bookings WHERE id = $1`,
-    [bookingId]
+  const before = await dbQuery.query(
+    `SELECT b.worker_uid, b.status, b.user_id,
+            uc.first_name, uc.last_name
+       FROM ${dbSchema}.bookings b
+       LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = $2
+      WHERE b.id = $1`,
+    [bookingId, toProviderUid],
   );
-  if (!bkRes.rowCount) throw new Error('Booking not found');
+  if (!before.rowCount) throw new Error('Booking not found');
 
-  const fromProviderUid = bkRes.rows[0].worker_uid;
+  const fromProviderUid: string | null = before.rows[0].worker_uid
+    ? String(before.rows[0].worker_uid)
+    : null;
+  const customerUid: string | null = before.rows[0].user_id ?? null;
+  const providerName =
+    (`${before.rows[0].first_name ?? ''} ${before.rows[0].last_name ?? ''}`).trim();
 
-  const provRes = await dbQuery.query(
-    `SELECT uid, first_name, last_name, is_archive FROM ${dbSchema}.user_credentials
-     WHERE uid = $1 AND role::int = 2`,
-    [toProviderUid]
-  );
-  if (!provRes.rowCount) throw new Error('New provider not found');
-  if (provRes.rows[0].is_archive) throw new Error('New provider is archived');
+  if (!fromProviderUid) throw new Error('Booking has no provider to reassign');
 
-  if (fromProviderUid) {
-    await dbQuery.query(
-      `UPDATE ${dbSchema}.booking_workers SET status = 'DECLINED'
-       WHERE booking_id = $1 AND worker_uid = $2 AND status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED')`,
-      [bookingId, fromProviderUid]
-    );
+  let result: TransitionResult;
+  try {
+    result = await transitionBooking({
+      action: 'ADMIN_REASSIGN',
+      bookingId,
+      actorRole: 'admin',
+      actorUid: adminUid,
+      metadata: { providerUid: toProviderUid, fromProviderUid, toProviderUid, providerName, reason },
+    });
+  } catch (error) {
+    if (error instanceof TransitionError) {
+      // Compatibility translation, not a second source of truth. The machine
+      // decided; these are the sentences this endpoint has always produced.
+      if (error.code === 'GUARD_FAILED') {
+        // Target-validation messages, already the legacy wording apart from
+        // the "New provider" prefix this endpoint uses.
+        throw new Error(error.message.replace(/^Provider /, 'New provider '));
+      }
+      if (error.code === 'TERMINAL_STATE') {
+        throw new Error(`Booking cannot be reassigned from status ${before.rows[0].status}`);
+      }
+      // The only remaining refusal from these source states is a provider who
+      // has already started work.
+      throw new Error('Booking cannot be reassigned while provider status is IN_PROGRESS');
+    }
+    throw error;
   }
 
-  await dbQuery.query(
-    `INSERT INTO ${dbSchema}.booking_workers (worker_uid, booking_id, status, assigned_at)
-     VALUES ($1, $2, 'ASSIGNED', NOW())`,
-    [toProviderUid, bookingId]
-  );
+  // The same-provider case wrote nothing, and said nothing to anybody.
+  if (result.noOp) {
+    return { bookingId, fromProviderUid, toProviderUid, idempotent: true };
+  }
 
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET worker_uid = $1, status = 'WORKER_ASSIGNED' WHERE id = $2`,
-    [toProviderUid, bookingId]
-  );
-
-  const providerName = (`${provRes.rows[0].first_name ?? ''} ${provRes.rows[0].last_name ?? ''}`).trim();
-
-  await addTimelineEvent(
-    bookingId, 'provider_reassigned',
-    `Provider reassigned to ${providerName}`,
-    reason, 'admin', adminUid,
-    { fromProviderUid, toProviderUid, providerName }
-  );
-
-  logBookingAudit({
-    bookingId, actorUid: adminUid, actorRole: 'admin',
-    action: 'booking_reassigned',
-    before: { workerUid: fromProviderUid },
-    after:  { workerUid: toProviderUid },
-    reason,
+  await logBookingAudit({
+    bookingId, actorUid: adminUid, actorRole: 'admin', action: 'booking_reassigned',
+    before: { workerUid: fromProviderUid }, after: { workerUid: toProviderUid }, reason,
   });
+
+  publishAdminAssignment({
+    bookingId,
+    providerUid: toProviderUid,
+    customerUid,
+    reassigned: true,
+  });
+  createNotification(fromProviderUid, {
+    notificationKey: `assignment_removed_${bookingId}_${fromProviderUid}`,
+    type: 'assignment_removed', severity: 'warning', title: 'Booking reassigned',
+    safeBody: `Booking SVN-${String(bookingId).padStart(6, '0')} is no longer assigned to you.`,
+    route: null, canOpenDetail: false,
+  }).catch((e) => console.error('[reassign] previous provider notification failed', e));
 
   // Move the booking conversation across with the assignment. The old provider
   // is marked left (can_send false), the new one admitted, and a system event
@@ -875,13 +1142,22 @@ export const adminReassignProvider = async (
       await handleProviderReassignment(bookingId, fromProviderUid, toProviderUid);
     } catch (err) {
       console.error('[reassign] chat membership update failed', bookingId, err);
+      /**
+       * Repair, rather than only logging.
+       *
+       * A failure here no longer widens anyone's access — `booking_workers`
+       * governs both authorization and the read floor, and `chat_participants`
+       * may only narrow. But realtime membership and unread counts are still
+       * wrong, so the projection is reconciled from the booking. Idempotent, so
+       * a redundant run costs nothing, and it escalates if it keeps failing
+       * instead of emitting the same line forever.
+       */
+      await reconcileWithRetryTracking(bookingId);
     }
   })();
 
   return { bookingId, fromProviderUid, toProviderUid, providerName };
 };
-
-// ─── Admin Reschedule ─────────────────────────────────────────────────────────
 
 export const adminRescheduleBooking = async (
   bookingId: number,
@@ -980,23 +1256,55 @@ export const adminCancelBooking = async (
     throw new Error(`Cannot cancel booking with status: ${prevStatus}`);
   }
 
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET status = 'CANCELLED', cancelled_at = NOW() WHERE id = $1`,
-    [bookingId]
-  );
-
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.booking_workers SET status = 'CANCELLED'
-     WHERE booking_id = $1 AND status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED')`,
-    [bookingId]
-  );
-
-  await addTimelineEvent(
-    bookingId, 'booking_cancelled',
-    'Booking cancelled by admin',
-    reason, 'admin', adminUid,
-    { reasonCode, refundAction }
-  );
+  /**
+   * ─── D2 · ADMIN_CANCEL, on the canonical executor ─────────────────────────
+   *
+   * Three statements become one transaction: the booking write, the closing of
+   * every live assignment row, and the timeline event that is the ONLY record
+   * of who cancelled.
+   *
+   * ## Admin cancellation has its own authority
+   *
+   * It shares a destination with CUSTOMER_CANCEL and PROVIDER_CANCEL and
+   * neither of their guards — not the customer stage list, not the 48-hour
+   * provider window. An admin cancelling a job already under way is precisely
+   * the support case those rules exist to escalate TO.
+   *
+   * ## The timeline event is provenance, not decoration
+   *
+   * There is no `cancellation_source` column on `bookings` — measured, not
+   * assumed. `actor_type = 'admin'` and the title on this row are the only
+   * things distinguishing an admin cancellation from a customer's in every
+   * support and audit view, which is why the write moved INSIDE the
+   * transaction rather than staying after it.
+   *
+   * ## What was deliberately NOT changed
+   *
+   * `bookings.worker_uid` is left pointing at the cancelled assignment,
+   * exactly as before. Clearing it would change what the admin portal shows
+   * for a cancelled booking — provider name present today, absent after — and
+   * that is a display change, not a lifecycle one. Recorded rather than
+   * quietly made.
+   */
+  try {
+    await transitionBooking({
+      action: 'ADMIN_CANCEL',
+      bookingId,
+      actorRole: 'admin',
+      actorUid: adminUid,
+      metadata: {
+        reason,
+        ...(reasonCode ? { reasonCode } : {}),
+        ...(refundAction ? { refundAction } : {}),
+      },
+    });
+  } catch (error) {
+    // The legacy message, verbatim.
+    if (error instanceof TransitionError) {
+      throw new Error(`Cannot cancel booking with status: ${prevStatus}`);
+    }
+    throw error;
+  }
 
   // Close the booking conversation so a cancelled job cannot become an
   // open-ended private channel between customer and provider. The transcript
@@ -1090,23 +1398,53 @@ export const adminApproveCompletion = async (
 
   const prevStatus = bkRes.rows[0].status;
 
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.bookings SET status = 'COMPLETED' WHERE id = $1`,
-    [bookingId]
-  );
-
-  await dbQuery.query(
-    `UPDATE ${dbSchema}.booking_workers
-     SET status = 'COMPLETED', completed_at = NOW()
-     WHERE booking_id = $1 AND status IN ('IN_PROGRESS','ACCEPTED','ASSIGNED')`,
-    [bookingId]
-  );
-
-  await addTimelineEvent(
-    bookingId, 'completion_approved',
-    'Completion approved by admin',
-    reason ?? null, 'admin', adminUid
-  );
+  /**
+   * ─── D3 · ADMIN_APPROVE_COMPLETION, on the canonical executor ────────────
+   *
+   * Measured before migrating, because the name does not say which it is: this
+   * is a FORCE COMPLETION, not an approval of something already finished. It
+   * had no status precondition at all — it read `bookings.status` only to fill
+   * the audit `before` field and then wrote COMPLETED unconditionally.
+   *
+   * ## Two branches, and the difference is recorded
+   *
+   * ASSIGNED / ACCEPTED / IN_PROGRESS  the booking moves to COMPLETED
+   * already COMPLETED                  an approval EVENT is recorded, and the
+   *                                    booking does not transition again
+   *
+   * Legacy recorded a second approval on the repeat, and that record is
+   * meaningful — an admin signing off on a finished job is a real act. What it
+   * is not is a second completion, so the evidence row carries
+   * `state_changed = false`. Two COMPLETED rows must never read as a booking
+   * that completed twice.
+   *
+   * ## A defect fixed by migrating
+   *
+   * With no precondition, approving a CANCELLED booking revived it — the mirror
+   * of the decline-on-cancelled defect from B1.2. The machine refuses a
+   * terminal source, so that is now impossible. Declared, not incidental.
+   *
+   * ## What is deliberately NOT inherited
+   *
+   * No `cashPaymentSettledBeforeCompletion`, no disbursement, no receipt email,
+   * no review trigger. Measured: this path has never done any of them — the
+   * money workflow belongs to `technicianService.completeJob`. Whether admin
+   * approval SHOULD move money is a finance decision, not a state-machine one.
+   */
+  try {
+    await transitionBooking({
+      action: 'ADMIN_APPROVE_COMPLETION',
+      bookingId,
+      actorRole: 'admin',
+      actorUid: adminUid,
+      metadata: reason ? { reason } : {},
+    });
+  } catch (error) {
+    if (error instanceof TransitionError) {
+      throw new Error(`Cannot approve completion for booking with status: ${prevStatus}`);
+    }
+    throw error;
+  }
 
   logBookingAudit({
     bookingId, actorUid: adminUid, actorRole: 'admin',
@@ -1169,24 +1507,44 @@ export const adminConfirmProviderAssignment = async (
     throw new Error(`Assignment cannot be confirmed — current status is ${bw.status}`);
   }
 
-  const updateRes = await dbQuery.query(
-    `UPDATE ${dbSchema}.booking_workers
-     SET status              = 'ACCEPTED',
-         confirmation_source = 'admin_on_behalf_of_provider',
-         admin_actor_uid     = $1,
-         consent_method      = $2,
-         consent_reference   = $3,
-         confirmation_reason = $4,
-         confirmed_at        = NOW()
-     WHERE booking_id = $5
-       AND worker_uid = $6
-       AND status     = 'ASSIGNED'
-     RETURNING confirmed_at`,
-    [adminUid, consentMethod, consentReference ?? null, reason, bookingId, providerUid]
-  );
-
-  if (!updateRes.rowCount) {
-    throw new Error('Confirmation failed — assignment may have changed concurrently');
+  /**
+   * ─── D1 · ADMIN_CONFIRM_ASSIGNMENT, on the canonical executor ──────────────
+   *
+   * Acknowledgement only. This never creates or replaces provider identity —
+   * the provider it confirms must already BE the current assignment — which is
+   * why it is a distinct action from ADMIN_ASSIGN despite both involving an
+   * admin and a provider.
+   *
+   * The whole consent trail (§23) is written in the SAME statement as the
+   * status, inside the transition transaction. An ACCEPTED row whose
+   * `confirmation_source` failed to land would be indistinguishable from the
+   * provider tapping Accept themselves, which is the one distinction this
+   * action exists to preserve.
+   *
+   * The three validations above are unchanged and still run first, so their
+   * messages reach clients exactly as before. The executor re-checks the
+   * provider match independently, because a caller that never touched this
+   * function must not be able to confirm on behalf of the wrong provider.
+   */
+  try {
+    await transitionBooking({
+      action: 'ADMIN_CONFIRM_ASSIGNMENT',
+      bookingId,
+      actorRole: 'admin',
+      actorUid: adminUid,
+      metadata: {
+        providerUid,
+        consentMethod,
+        consentReference: consentReference ?? null,
+        reason,
+      },
+    });
+  } catch (error) {
+    // The legacy message for a concurrent change, verbatim.
+    if (error instanceof TransitionError) {
+      throw new Error('Confirmation failed — assignment may have changed concurrently');
+    }
+    throw error;
   }
 
   await addTimelineEvent(
@@ -1244,11 +1602,20 @@ export const adminConfirmProviderAssignment = async (
     }
   })();
 
+  // `confirmed_at` came back from the UPDATE's RETURNING clause. The executor
+  // does not hand its rows back, so it is read after the commit — the row is
+  // this provider's and has just been written, so the value is the same one.
+  const confirmedRes = await dbQuery.query(
+    `SELECT confirmed_at FROM ${dbSchema}.booking_workers
+      WHERE booking_id = $1 AND worker_uid = $2`,
+    [bookingId, providerUid],
+  );
+
   return {
     bookingId,
     providerUid,
     confirmationSource: 'admin_on_behalf_of_provider',
-    confirmedAt: updateRes.rows[0].confirmed_at,
+    confirmedAt: confirmedRes.rows[0]?.confirmed_at ?? null,
     consentMethod,
   };
 };

@@ -3,52 +3,38 @@ import { db } from '../config';
 
 const dbSchema = db.schema;
 
-// ── Schema ────────────────────────────────────────────────────────────────────
-
-let schemaReady = false;
-
-export const ensureAttributionSchema = async (): Promise<void> => {
-  if (schemaReady) return;
-  try {
-    await dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_client_activity (
-        id            BIGSERIAL PRIMARY KEY,
-        provider_uid  TEXT        NOT NULL,
-        activity_type TEXT        NOT NULL,
-        client        TEXT        NOT NULL DEFAULT 'mobile',
-        confidence    TEXT        NOT NULL DEFAULT 'high',
-        metadata      JSONB,
-        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-    await dbQuery.query(`
-      CREATE INDEX IF NOT EXISTS idx_pca_provider_uid
-        ON ${dbSchema}.provider_client_activity (provider_uid, created_at DESC)
-    `);
-    await dbQuery.query(`
-      CREATE INDEX IF NOT EXISTS idx_pca_client_type
-        ON ${dbSchema}.provider_client_activity (client, activity_type, created_at DESC)
-    `);
-    await dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${dbSchema}.provider_source_attribution (
-        provider_uid              TEXT        PRIMARY KEY,
-        registration_source       TEXT        NOT NULL DEFAULT 'unknown',
-        registration_confidence   TEXT        NOT NULL DEFAULT 'low',
-        source_signals            JSONB       NOT NULL DEFAULT '[]',
-        first_seen_mobile_at      TIMESTAMPTZ,
-        first_seen_web_at         TIMESTAMPTZ,
-        last_mobile_at            TIMESTAMPTZ,
-        last_web_at               TIMESTAMPTZ,
-        mobile_activity_count     INTEGER     NOT NULL DEFAULT 0,
-        attribution_computed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-    schemaReady = true;
-  } catch (err) {
-    console.error('[mobile-attribution] schema error:', err);
-    throw err;
-  }
-};
+// ── Schema (TAB 02) ───────────────────────────────────────────────────────────
+//
+// `provider_client_activity` (+ idx_pca_provider_uid, idx_pca_client_type) and
+// `provider_source_attribution` were created here at runtime by
+// `ensureAttributionSchema`, declared as an optional startup dependency. That
+// function is gone; both tables come from `scripts/baseline/000-baseline.sql`.
+//
+// ⛔ P1 DEFECT, found by removing this DDL — NOT introduced by removing it.
+//
+// TWO runtime authorities defined `provider_source_attribution` with
+// INCOMPATIBLE shapes. This file declared PK `provider_uid` with
+// registration_confidence / source_signals / first_seen_mobile_at /
+// last_mobile_at / mobile_activity_count / attribution_computed_at.
+// `providerOnboardingService.ensureProviderWebSchema` declared PK `uid` with
+// first_seen_source / last_seen_source / first_provider_web_seen_at / …
+//
+// Both were `CREATE TABLE IF NOT EXISTS`, so whichever ran first won and the
+// other silently did nothing. Production has the providerOnboardingService
+// shape — `scripts/baseline/000-baseline.sql` proves it, since the baseline IS
+// production's dump. So NONE of the columns this file reads and writes exist
+// there, and these two endpoints fail with 42703 (undefined_column) today:
+//
+//   GET  /admin/providers/:uid/attribution        (SELECT … WHERE provider_uid)
+//   POST /admin/providers/attribution/backfill    (INSERT … ON CONFLICT (provider_uid))
+//
+// Both surface it as a 500 carrying the raw Postgres message.
+//
+// Deleting the DDL changes nothing about that — it was already inert in
+// production. It makes the disagreement VISIBLE instead of hiding it behind an
+// IF NOT EXISTS that quietly lost a race. Fixing it needs a decision about which
+// shape is canonical, then a migration; it is not a rename to do in passing,
+// because the admin portal reads one shape and provider-web writes the other.
 
 // ── Forward Activity Logging ─────────────────────────────────────────────────
 // Fire-and-forget: callers must NOT await this.
@@ -141,7 +127,7 @@ export const getProviderCatalogAssociation = async (
     `
     SELECT es.service_id, s.name AS service_name
     FROM   ${dbSchema}.employee_services es
-    LEFT JOIN ${dbSchema}.services s ON s.id = es.service_id
+    LEFT JOIN ${dbSchema}.service_families s ON s.id = es.service_id
     WHERE  es.employee_uid = $1
     `,
     [providerUid],

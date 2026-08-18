@@ -177,15 +177,25 @@ describe('booking lifecycle — identity from the token, not the query string', 
     expect(fn).not.toMatch(/fromToken\s*\?\?\s*claimed/);
   });
 
-  it('assignWorker keeps the query parameter, because it assigns someone else', () => {
-    const admin = controller.slice(
-      controller.indexOf('export const assignWorker'),
-      controller.indexOf('export const declineJob'),
+  it('the duplicate PUT assign route stays deleted', () => {
+    // It duplicated POST /admin/bookings/:id/assign but carried no
+    // requirePermission, took the provider from a query string with no
+    // requireProviderTarget, and wrote no audit event. Reintroducing it would
+    // reopen an unpermissioned path to the same mutation.
+    // Matches a real registration, not the comment that documents the removal.
+    expect(technicianRoutes).not.toMatch(
+      /router\.put\(\s*["'`]\/admin\/bookings\/:bookingId\/assign/,
     );
-    expect(admin).toMatch(/req\.query\.workerUid/);
-    // And it stays admin-gated, which is what makes that safe.
-    expect(guardsFor(technicianRoutes, 'put', '/admin/bookings/:bookingId/assign'))
-      .toContain('verifyRoles');
+    expect(controller).not.toMatch(/export const assignWorker/);
+  });
+
+  it('the surviving assignment route is permission-gated', () => {
+    const adminBookingRoutes = read('routes', 'adminBooking.routes.ts');
+    const line = adminBookingRoutes
+      .split('\n')
+      .find(l => l.includes("'/admin/bookings/:id/assign'") && l.includes('post'));
+    expect(line).toBeDefined();
+    expect(line).toMatch(/requirePermission\('bookings\.assign_provider'\)/);
   });
 });
 

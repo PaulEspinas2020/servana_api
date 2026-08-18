@@ -27,8 +27,21 @@ const routes = read('routes', 'booking.routes.ts');
 const controller = read('controllers', 'bookingController.ts');
 const service = read('services', 'bookingService.ts');
 
+/**
+ * TAB 06 moved the rotation itself into `bookingOtpService`, which is now the
+ * one implementation the canonical endpoint and this legacy route share. The
+ * properties below are unchanged; where they are, the source that has to prove
+ * them moved with them, so each assertion names the file that now owns it.
+ */
+const otpService = read('services', 'booking', 'bookingOtpService.ts');
+const otpPolicy = read('services', 'booking', 'experiencePolicy.ts');
+
 const resendService = service.slice(
   service.indexOf('export const resendBookingOtp'),
+  service.indexOf('export const deliverBookingOtpEmail'),
+);
+const deliveryService = service.slice(
+  service.indexOf('export const deliverBookingOtpEmail'),
   service.indexOf('export const confirmOtp'),
 );
 const resendController = controller.slice(
@@ -53,21 +66,34 @@ describe('resend OTP exists and is safe', () => {
     expect(resendController).toContain('assertBookingAccess');
   });
 
+  it('it delegates to the one canonical code service', () => {
+    // The point of delegating: a cooldown or an issue ceiling that only the v1
+    // endpoint applied would leave THIS route — the one the shipped app calls —
+    // as an unlimited rotation oracle.
+    expect(resendService).toContain('requestBookingOtp');
+    expect(resendService).toContain("purpose: 'BOOKING_CONFIRMATION'");
+  });
+
   it('a NEW code is issued rather than the old one re-sent', () => {
     // Re-sending would leave every superseded email valid forever, turning a
     // delivery problem into a security one.
-    expect(resendService).toContain('generateOTP()');
-    expect(resendService).toMatch(/UPDATE \$\{dbSchema\}\.bookings SET otp_code = \$1/);
+    expect(otpService).toContain('generateOTP()');
+    expect(otpService).toMatch(/UPDATE \$\{s\}\.bookings SET \$\{spec\.credentialColumn\} = \$1/);
   });
 
   it('only a booking still awaiting verification can be re-issued', () => {
     // Re-issuing against a confirmed, cancelled or completed booking would move
     // it backwards, and an OTP for a finished job only helps someone who should
     // not have one.
-    expect(resendService).toContain("status === 'PENDING_OTP'");
-    // Compatibility is limited to rows the old payment webhook corrupted:
-    // PAID with no worker. A paid booking already assigned must not move back.
-    expect(resendService).toContain("status === 'PAID' && !booking.worker_uid");
+    //
+    // The state list is now DECLARED on the purpose rather than written as an
+    // `if` in the service, so the same rule governs the canonical endpoint.
+    expect(otpService).toContain('otpAppliesInState(purpose, state)');
+    expect(otpPolicy).toMatch(/validStates: \['PENDING_OTP', 'AWAITING_ASSIGNMENT'\]/);
+    // Compatibility with rows the old payment webhook corrupted — PAID with no
+    // worker — survives because deriveCanonicalState maps exactly that shape to
+    // AWAITING_ASSIGNMENT. A paid booking already assigned derives ASSIGNED and
+    // is refused.
     expect(resendService).toContain('409');
   });
 
@@ -79,13 +105,16 @@ describe('resend OTP exists and is safe', () => {
   });
 
   it('a mail failure does not leave the customer holding a dead code', () => {
-    // The code is rotated before the send. If the send throws and we surfaced
-    // that as failure, the customer would keep using a code that no longer
-    // works — worse than a missing email.
-    const rotateIdx = resendService.indexOf('SET otp_code');
-    const tryIdx = resendService.indexOf('try {');
-    expect(rotateIdx).toBeLessThan(tryIdx);
-    expect(resendService).toMatch(/\}\s*catch\s*\{/);
+    // The code is rotated before the send. If the send threw and that surfaced
+    // as failure, the customer would keep using a code that no longer works —
+    // worse than a missing email.
+    const rotateIdx = otpService.indexOf('SET ${spec.credentialColumn}');
+    const deliverIdx = otpService.indexOf('if (params.deliver)');
+    expect(rotateIdx).toBeGreaterThan(-1);
+    expect(rotateIdx).toBeLessThan(deliverIdx);
+    // The delivery itself swallows, in both the service and the mail helper.
+    expect(otpService).toMatch(/console\.error\(`\[booking-otp\] delivery failed/);
+    expect(deliveryService).toMatch(/\}\s*catch\s*\{/);
   });
 
   it('a missing booking id is rejected before any lookup', () => {

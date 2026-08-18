@@ -1,0 +1,96 @@
+serviceOptionId,serviceName,currentCategory,currentServiceFamily,currentLevel2,currentOffering,basePrice,unit,status,bookingCount,migrationAction
+180,Wiring fuitures,Home Maintenance,Electrical Services,Electrical,Electrical Services,5000,1 hour,active,0,AUTO_MAPPABLE
+130,Aircon Cleaning for Cassette Type,Home Services,Aircon 2,Cleaning,(unmapped),3190,per unit,active,0,AUTO_MAPPABLE
+133,Aircon Cleaning for Ceiling Mounted Type,Home Services,Aircon 2,Cleaning,(unmapped),2199,per unit,active,0,AUTO_MAPPABLE
+132,Aircon Cleaning for Concealed Type,Home Services,Aircon 2,Cleaning,(unmapped),3200,per unit,active,0,AUTO_MAPPABLE
+126,Aircon Cleaning for Split Type (2 to 3HP),Home Services,Aircon 2,Cleaning,(unmapped),1590,per unit,active,0,AUTO_MAPPABLE
+27,Aircon Cleaning for Split Type (up to 1.5HP),Home Services,Aircon 2,Cleaning,(unmapped),1390,per unit,active,8,AUTO_MAPPABLE
+131,Aircon Cleaning for Suspended Type,Home Services,Aircon 2,Cleaning,(unmapped),3200,per unit,active,0,AUTO_MAPPABLE
+129,Aircon Cleaning for Tower Type,Home Services,Aircon 2,Cleaning,(unmapped),2290,per unit,active,0,AUTO_MAPPABLE
+124,Aircon Cleaning for Window Type (Inverter; 0.5 to 1.5HP),Home Services,Aircon 2,Cleaning,(unmapped),990,per unit,active,0,AUTO_MAPPABLE
+125,Aircon Cleaning for Window Type (Inverter; 2 to 2.5HP),Home Services,Aircon 2,Cleaning,(unmapped),1190,per unit,active,0,AUTO_MAPPABLE
+26,Aircon Cleaning for Window Type (Non-Inverter; 0.5 to 1.5HP),Home Services,Aircon 2,Cleaning,(unmapped),690,per unit,active,0,AUTO_MAPPABLE
+123,Aircon Cleaning for Window Type (Non-Inverter; 2 to 2.5HP),Home Services,Aircon 2,Cleaning,(unmapped),790,per unit,active,0,AUTO_MAPPABLE
+32,Floor-standing,Home Services,Aircon 2,Cleaning,(unmapped),3000,per unit,active,1,AUTO_MAPPABLE
+134,Freon Charge (per unit),Home Services,Aircon 2,Cleaning,(unmapped),2990,per unit,active,0,AUTO_MAPPABLE
+128,Pull-down Cleaning for Split Type (2 to 3HP),Home Services,Aircon 2,Cleaning,(unmapped),4990,per unit,active,0,AUTO_MAPPABLE
+127,Pull-down Cleaning for Split Type (up to 1.5HP),Home Services,Aircon 2,Cleaning,(unmapped),4490,per unit,active,0,AUTO_MAPPABLE
+135,Aircon Installation Split Type,Home Services,Aircon 2,Installation,(unmapped),7400,per unit,active,0,AUTO_MAPPABLE
+28,Aircon Installation Window Type,Home Services,Aircon 2,Installation,(unmapped),1400,per unit,active,0,AUTO_MAPPABLE
+136,Freon Charge ,Home Services,Aircon 2,Installation,(unmapped),2900,per unit,active,1,AUTO_MAPPABLE
+34,Quarterly,Home Services,Aircon 2,Maintenance Plan,(unmapped),3000,year,active,1,AUTO_MAPPABLE
+33,Refill,Home Services,Aircon 2,Refrigerant (freon),(unmapped),1800,per unit,active,1,AUTO_MAPPABLE
+139,Aircon Check up for Ceiling Mounted Type,Home Services,Aircon 2,Repair,(unmapped),400,per unit,active,0,AUTO_MAPPABLE
+138,Aircon Check up for Split Type,Home Services,Aircon 2,Repair,(unmapped),390,per unit,active,0,AUTO_MAPPABLE
+140,Aircon Check up for Tower Type,Home Services,Aircon 2,Repair,(unmapped),400,per unit,active,0,AUTO_MAPPABLE
+137,Aircon Check up for Window Type,Home Services,Aircon 2,Repair,(unmapped),300,per unit,active,0,AUTO_MAPPABLE
+145,Aircon System Reprocess Split Type (up to 1.5HP to),Home Services,Aircon 2,Repair,(unmapped),6900,per unit,active,0,AUTO_MAPPABLE
+146,Aircon System Reprocess Split Type  (up to 2 HP to 2.5 HP),Home Services,Aircon 2,Repair,(unmapped),7900,per unit,active,0,AUTO_MAPPABLE
+143,Aircon System Reprocess Window Type (0.5 HP to 1.5 HP),Home Services,Aircon 2,Repair,(unmapped),4400,per unit,active,0,AUTO_MAPPABLE
+144,Aircon System Reprocess Window Type (2 HP to 2.5 HP),Home Services,Aircon 2,Repair,(unmapped),5400,per unit,active,0,AUTO_MAPPABLE
+141,Aircon Type for Cassette,Home Services,Aircon 2,Repair,(unmapped),400,per unit,active,0,AUTO_MAPPABLE
+142,Freon Charge ,Home Services,Aircon 2,Repair,(unmapped),2900,per unit,active,0,AUTO_MAPPABLE
+4,Emperor's Drip,Personal Care,Beauty & Wellness,Beauty Drip,Aesthetics & Beauty,3500,per session,active,12,AUTO_MAPPABLE
+1,Gluta Drip,Personal Care,Beauty & Wellness,Beauty Drip,Aesthetics & Beauty,990,per session,active,31,AUTO_MAPPABLE
+5,Governor's Drip,Personal Care,Beauty & Wellness,Beauty Drip,Aesthetics & Beauty,4500,per session,active,4,AUTO_MAPPABLE
+3,Japanese Drip,Personal Care,Beauty & Wellness,Beauty Drip,Aesthetics & Beauty,2500,per session,active,8,AUTO_MAPPABLE
+2,Swiss Drip,Personal Care,Beauty & Wellness,Beauty Drip,Aesthetics & Beauty,1500,per session,active,0,AUTO_MAPPABLE
+17,Celebrity Hydra Facial,Personal Care,Beauty & Wellness,Facial,Aesthetics & Beauty,5000,per session,active,2,AUTO_MAPPABLE
+13,Collagen Facial,Personal Care,Beauty & Wellness,Facial,Aesthetics & Beauty,1500,per session,active,3,AUTO_MAPPABLE
+11,Deep Cleansing Facial,Personal Care,Beauty & Wellness,Facial,Aesthetics & Beauty,1000,per session,active,0,AUTO_MAPPABLE
+12,Hydra Facial,Personal Care,Beauty & Wellness,Facial,Aesthetics & Beauty,3500,per session,active,1,AUTO_MAPPABLE
+15,Pimple Facial,Personal Care,Beauty & Wellness,Facial,Aesthetics & Beauty,1500,per session,active,21,AUTO_MAPPABLE
+16,Signature Facial,Personal Care,Beauty & Wellness,Facial,Aesthetics & Beauty,2000,per session,active,0,AUTO_MAPPABLE
+18,Vampire Facial,Personal Care,Beauty & Wellness,Facial,Aesthetics & Beauty,6000,per session,active,0,AUTO_MAPPABLE
+14,Whitening Facial,Personal Care,Beauty & Wellness,Facial,Aesthetics & Beauty,1500,per session,active,0,AUTO_MAPPABLE
+218,Haircut - Basic Men's Haircut,Personal Care,Beauty & Wellness,Hair,Hair Services,300,session,active,0,AUTO_MAPPABLE
+222,Haircut - Haircut + Half Body Massage,Personal Care,Beauty & Wellness,Hair,Hair Services,550,session,active,0,AUTO_MAPPABLE
+220,Haircut - Haircut with Shampoo,Personal Care,Beauty & Wellness,Hair,Hair Services,400,session,active,0,AUTO_MAPPABLE
+221,Haircut - Haircut with Shave,Personal Care,Beauty & Wellness,Hair,Hair Services,500,session,active,0,AUTO_MAPPABLE
+223,Haircut - Premium Haircut + Charcoal Treatment,Personal Care,Beauty & Wellness,Hair,Hair Services,700,session,active,0,AUTO_MAPPABLE
+219,Haircut - Women's Haircut,Personal Care,Beauty & Wellness,Hair,Hair Services,400,session,active,0,AUTO_MAPPABLE
+229,Package Services - Haircut + Shampoo + Basic Hair Dye,Personal Care,Beauty & Wellness,Hair,Hair Services,1350,session,active,0,AUTO_MAPPABLE
+231,Package Services - Haircut + Shampoo + Shave + Charcoal Mask,Personal Care,Beauty & Wellness,Hair,Hair Services,1000,session,active,0,AUTO_MAPPABLE
+230,Package Services - Haircut + Shampoo + Treatment,Personal Care,Beauty & Wellness,Hair,Hair Services,1000,session,active,0,AUTO_MAPPABLE
+224,Trendy/Style Cuts - Curtain Cut,Personal Care,Beauty & Wellness,Hair,Hair Services,400,session,active,0,AUTO_MAPPABLE
+227,Trendy/Style Cuts - Edgar Cut,Personal Care,Beauty & Wellness,Hair,Hair Services,400,session,active,0,AUTO_MAPPABLE
+228,Trendy/Style Cuts - Mullet Cut,Personal Care,Beauty & Wellness,Hair,Hair Services,400,session,active,0,AUTO_MAPPABLE
+226,Trendy/Style Cuts - Pompadour/Long Trim,Personal Care,Beauty & Wellness,Hair,Hair Services,400,session,active,0,AUTO_MAPPABLE
+225,Trendy/Style Cuts - Wolf Cut,Personal Care,Beauty & Wellness,Hair,Hair Services,400,session,active,0,AUTO_MAPPABLE
+191,Body Massage,Personal Care,Beauty & Wellness,Massage,Massage Therapy,400,1 hour,active,0,AUTO_MAPPABLE
+197,Ear Candling,Personal Care,Beauty & Wellness,Massage,Massage Therapy,600,1 hour,active,0,AUTO_MAPPABLE
+193,Face Massage,Personal Care,Beauty & Wellness,Massage,Massage Therapy,400,1 hour,active,0,AUTO_MAPPABLE
+192,Foot Massage,Personal Care,Beauty & Wellness,Massage,Massage Therapy,400,1 hour,active,0,AUTO_MAPPABLE
+194,Head; Back & Shoulder Massage,Personal Care,Beauty & Wellness,Massage,Massage Therapy,400,1 hour,active,0,AUTO_MAPPABLE
+196,Hot Stone Massage,Personal Care,Beauty & Wellness,Massage,Massage Therapy,500,1 hour,active,0,AUTO_MAPPABLE
+200,Shiatzu Massage (Deep Tissue),Personal Care,Beauty & Wellness,Massage,Massage Therapy,1000,2 hours,active,0,AUTO_MAPPABLE
+198,Sports Massage,Personal Care,Beauty & Wellness,Massage,Massage Therapy,600,1 hour,active,0,AUTO_MAPPABLE
+199,Swedish Massage,Personal Care,Beauty & Wellness,Massage,Massage Therapy,1000,2 hours,active,0,AUTO_MAPPABLE
+195,Ventosa,Personal Care,Beauty & Wellness,Massage,Massage Therapy,500,1 hour,active,0,AUTO_MAPPABLE
+19,Body Massage,Personal Care,Massage ,Massage & Wellness,(unmapped),400,per hour,active,2,AUTO_MAPPABLE
+25,Ear Candling,Personal Care,Massage ,Massage & Wellness,(unmapped),600,per hour,active,12,AUTO_MAPPABLE
+21,Face Massage,Personal Care,Massage ,Massage & Wellness,(unmapped),400,per hour,active,0,AUTO_MAPPABLE
+20,Foot Massage,Personal Care,Massage ,Massage & Wellness,(unmapped),400,per hour,active,1,AUTO_MAPPABLE
+22,Head Back & Shoulder Massage,Personal Care,Massage ,Massage & Wellness,(unmapped),400,per hour,active,0,AUTO_MAPPABLE
+24,Hot Stone Massage,Personal Care,Massage ,Massage & Wellness,(unmapped),500,per hour,active,0,AUTO_MAPPABLE
+121,Shiatzu Massage (Deep Tissue),Personal Care,Massage ,Massage & Wellness,(unmapped),1000,per 2 hours,active,0,AUTO_MAPPABLE
+120,Sports Massage,Personal Care,Massage ,Massage & Wellness,(unmapped),600,per hour,active,0,AUTO_MAPPABLE
+122,Swedish Massage,Personal Care,Massage ,Massage & Wellness,(unmapped),1000,per 2 hours,active,0,AUTO_MAPPABLE
+23,Ventosa,Personal Care,Massage ,Massage & Wellness,(unmapped),500,per hour,active,0,AUTO_MAPPABLE
+210,Gel Polish - Gel Removal,Personal Care,Beauty & Wellness,Nails,Nail Care,200,session,active,0,AUTO_MAPPABLE
+206,Gel Polish - Manicure,Personal Care,Beauty & Wellness,Nails,Nail Care,350,session,active,0,AUTO_MAPPABLE
+208,Gel Polish - Mani/Pedi,Personal Care,Beauty & Wellness,Nails,Nail Care,800,session,active,0,AUTO_MAPPABLE
+209,Gel Polish - Mani/Pedi/Footspa,Personal Care,Beauty & Wellness,Nails,Nail Care,1100,session,active,0,AUTO_MAPPABLE
+207,Gel Polish - Pedicure,Personal Care,Beauty & Wellness,Nails,Nail Care,500,session,active,0,AUTO_MAPPABLE
+215,Nail Extensions - Gems/Rhines (L),Personal Care,Beauty & Wellness,Nails,Nail Care,20,per piece,active,0,AUTO_MAPPABLE
+214,Nail Extensions - Gems/Rhines (M),Personal Care,Beauty & Wellness,Nails,Nail Care,15,per piece,active,0,AUTO_MAPPABLE
+213,Nail Extensions - Gems/Rhines (S),Personal Care,Beauty & Wellness,Nails,Nail Care,10,per piece,active,0,AUTO_MAPPABLE
+217,Nail Extensions - Ribbons/Flowers,Personal Care,Beauty & Wellness,Nails,Nail Care,50,per nail,active,0,AUTO_MAPPABLE
+211,Nail Extensions - Soft gel/Polygel,Personal Care,Beauty & Wellness,Nails,Nail Care,1500,session,active,0,AUTO_MAPPABLE
+212,Nail Extensions - Soft gel removal,Personal Care,Beauty & Wellness,Nails,Nail Care,300,session,active,0,AUTO_MAPPABLE
+216,Nail Extensions - Stone Removal,Personal Care,Beauty & Wellness,Nails,Nail Care,200,session,active,0,AUTO_MAPPABLE
+204,Regular Polish - Mabi/Pedi/Footspa,Personal Care,Beauty & Wellness,Nails,Nail Care,800,session,active,0,AUTO_MAPPABLE
+201,Regular Polish - Manicure,Personal Care,Beauty & Wellness,Nails,Nail Care,250,session,active,0,AUTO_MAPPABLE
+203,Regular Polish - Mani/Pedi,Personal Care,Beauty & Wellness,Nails,Nail Care,500,session,active,0,AUTO_MAPPABLE
+205,Regular Polish - Mani/Pedi (Cleaning),Personal Care,Beauty & Wellness,Nails,Nail Care,400,session,active,0,AUTO_MAPPABLE
+202,Regular Polish - Pedicure,Personal Care,Beauty & Wellness,Nails,Nail Care,350,session,active,0,AUTO_MAPPABLE

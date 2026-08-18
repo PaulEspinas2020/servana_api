@@ -137,7 +137,14 @@ router.put("/workers/bookings/:bookingId/start", verifyAuth, requireProviderRole
 router.put("/workers/bookings/:bookingId/complete", verifyAuth, requireProviderRole, requireActiveProvider, technicianController.completeJob);
 
 // Admin-only routes — require authenticated admin (role 1)
-router.put("/admin/bookings/:bookingId/assign", verifyAuth, verifyRoles([1]), technicianController.assignWorker);
+//
+// PUT /admin/bookings/:bookingId/assign was removed here. It duplicated
+// POST /admin/bookings/:id/assign (adminBooking.routes.ts) but carried no
+// requirePermission, took the provider from a query string with no
+// requireProviderTarget, and wrote no audit event. Verified before removal: no
+// source in any of the five consumer repos calls it, and nginx logs covering
+// 2026-07-28 to 2026-08-11 record zero requests to it while containing other
+// /api/admin/bookings traffic. Use the canonical POST route.
 router.patch("/admin/workers/:uid/archive", verifyAuth, verifyRoles([1]), technicianController.setArchiveStatus);
 
 // Employee ↔ Services — admin surface only.

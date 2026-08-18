@@ -13,10 +13,7 @@ import {
   reportReview,
 } from "../services/customerReviewService";
 
-async function init() {
-  await ensureReviewTables();
-}
-init().catch(console.error);
+// Startup: declared in src/startup.ts (TAB 03).
 
 // ─── Eligibility ──────────────────────────────────────────────────────────────
 

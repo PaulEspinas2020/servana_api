@@ -40,11 +40,30 @@ router.get(
   ctrl.listAllSpecificServicesAdmin
 );
 
+// Distinct filter values for the Services Management filter bar.
+// MUST stay above /specific-services/:serviceOptionId — otherwise Express matches
+// "filter-options" as the id param and the handler 400s on a NaN id.
+router.get(
+  "/admin/provider-catalog/specific-services/filter-options",
+  verifyAuth, verifyRoles([1]), requirePermission('services.view'),
+  ctrl.getSpecificServiceFilterOptions
+);
+
 // Specific-service routes BEFORE :offeringId to avoid route shadowing
 router.get(
   "/admin/provider-catalog/specific-services/:serviceOptionId",
   verifyAuth, verifyRoles([1]), requirePermission('services.details.view'),
   ctrl.getSpecificService
+);
+router.post(
+  "/admin/provider-catalog/specific-services/:serviceOptionId/banner",
+  verifyAuth, verifyRoles([1]), requirePermission('services.specific.edit'),
+  ctrl.setSpecificServiceBanner
+);
+router.delete(
+  "/admin/provider-catalog/specific-services/:serviceOptionId/banner",
+  verifyAuth, verifyRoles([1]), requirePermission('services.specific.edit'),
+  ctrl.removeSpecificServiceBanner
 );
 router.patch(
   "/admin/provider-catalog/specific-services/:serviceOptionId",

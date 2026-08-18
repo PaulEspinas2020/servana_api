@@ -219,10 +219,39 @@ describe('adminEscalateBooking', () => {
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { adminOpsStatusSql, evaluateAdminOpsStatus } from '../src/services/booking/adminOpsStatusSql';
 
 const svcSrc  = fs.readFileSync(path.join(__dirname, '../src/services/adminBookingService.ts'), 'utf-8').replace(/\r\n/g, '\n');
 const ctrlSrc = fs.readFileSync(path.join(__dirname, '../src/controllers/adminBookingController.ts'), 'utf-8').replace(/\r\n/g, '\n');
 const routeSrc = fs.readFileSync(path.join(__dirname, '../src/routes/adminBooking.routes.ts'), 'utf-8').replace(/\r\n/g, '\n');
+
+/** Any source file, line endings normalised. */
+const readSrc = (rel: string): string =>
+  fs.readFileSync(path.join(__dirname, '..', 'src', rel), 'utf-8').replace(/\r\n/g, '\n');
+
+/**
+ * A whole exported function, sliced to its real END.
+ *
+ * These blocks used `slice(idx, idx + 3000)`. Adding a docblock to
+ * `adminConfirmProviderAssignment` pushed its email, audit and timeline calls
+ * past the window, and three assertions failed for a reason unrelated to the
+ * code they check — the fixed-window trap that
+ * `source-reads-normalise-line-endings.test.ts` exists to prevent, in a file
+ * it does not cover.
+ */
+const fnBodyOf = (src: string, name: string): string => {
+  const start = src.indexOf(`${name} =`);
+  const end = src.indexOf('\nexport const ', start);
+  return src.slice(start, end === -1 ? undefined : end);
+};
+
+/** The same, comments removed — prose naming a call is not a call. */
+const fnCodeOf = (src: string, name: string): string =>
+  fnBodyOf(src, name)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('//'))
+    .join('\n');
 
 describe('Admin booking list query contracts', () => {
   const listFn = svcSrc.slice(
@@ -241,11 +270,37 @@ describe('Admin booking list query contracts', () => {
     expect(listFn).not.toContain('rows = rows.filter');
   });
 
+  /**
+   * The CASE moved out of this function into `adminOpsStatusSql`, which
+   * generates it from a declared branch list. The property is unchanged and the
+   * assertion follows it — and it is now checked as EXECUTION SEMANTICS rather
+   * than as the position of one substring inside another.
+   *
+   * The old form compared source offsets in a template literal. It would have
+   * gone green for a CASE that ordered its branches correctly and classified
+   * everything wrongly, which is roughly what was happening: the expression it
+   * was guarding disagreed with the canonical derivation on 107 of 440
+   * combinations while passing this test.
+   */
   it('classifies cancellation before historical worker assignment states', () => {
-    const cancelled = listFn.indexOf("WHEN b.status IN ('CANCELLED','CANCELED')");
-    const assigned = listFn.indexOf("WHEN la.worker_status = 'ASSIGNED'");
+    const cancelledWithStaleAssignment = evaluateAdminOpsStatus({
+      bookingStatus: 'CANCELLED', workerStatus: 'ASSIGNED',
+      workerUid: 'provider-1', hasUnresolvedEscalation: false,
+    });
+    expect(cancelledWithStaleAssignment).toBe('cancelled');
+
+    // And in the emitted SQL, the branch order that makes it so.
+    const sql = adminOpsStatusSql({ schema: 'servana', bookingAlias: 'b', assignmentAlias: 'la' });
+    const cancelled = sql.indexOf("b.status IN ('CANCELLED','CANCELED')");
+    const assigned = sql.indexOf("la.worker_status = 'ASSIGNED'");
     expect(cancelled).toBeGreaterThan(-1);
     expect(cancelled).toBeLessThan(assigned);
+  });
+
+  it('no longer carries a state derivation of its own', () => {
+    // The whole point of the move: one derivation, generated, proven equivalent.
+    expect(listFn).not.toContain("WHEN b.status = 'PENDING_OTP'");
+    expect(listFn).toContain('adminOpsStatusSql({');
   });
 
   it('returns guestCustomerId on unified guest booking rows', () => {
@@ -262,39 +317,42 @@ describe('adminConfirmProviderAssignment — source contracts', () => {
     expect(svcSrc).toContain('consentMethod must be verbal | written | chat_message');
   });
 
-  it('UPDATE has AND status = ASSIGNED guard (idempotent concurrency protection)', () => {
-    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
-    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
-    expect(fn).toContain("AND status     = 'ASSIGNED'");
+  it('the ASSIGNED source restriction survived the move to the executor', () => {
+    // Was `AND status = 'ASSIGNED'` in the service's UPDATE. It is now the
+    // action's own `from`, checked under the row lock before any write.
+    const exe = readSrc('services/booking/transitionExecutor.ts');
+    const actions = exe.slice(
+      exe.indexOf('ADMIN_CONFIRM_ASSIGNMENT: {'),
+      exe.indexOf('ADMIN_CANCEL:'),
+    );
+    expect(actions).toContain("from: ['ASSIGNED']");
   });
 
   it("sets confirmation_source = 'admin_on_behalf_of_provider'", () => {
-    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
-    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
-    expect(fn).toContain("'admin_on_behalf_of_provider'");
+    const exe = readSrc('services/booking/transitionExecutor.ts');
+    expect(exe).toContain("'admin_on_behalf_of_provider'");
   });
 
   it('does NOT call acceptJob (mobile route stays untouched)', () => {
-    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
-    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    // Comment-stripped: a comment in this function explains that it mirrors
+    // what `acceptJob` does, and prose naming a call is not a call.
+    const fn = fnCodeOf(svcSrc, 'adminConfirmProviderAssignment');
     expect(fn).not.toContain('acceptJob');
+    expect(fn).toContain('transitionBooking');
   });
 
   it('does NOT call PUT /api/workers/bookings/:bookingId/accept', () => {
-    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
-    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    const fn = fnBodyOf(svcSrc, 'adminConfirmProviderAssignment');
     expect(fn).not.toContain('/api/workers/bookings');
   });
 
   it('sends booking_accepted email to customer', () => {
-    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
-    const fn = svcSrc.slice(fnIdx, fnIdx + 4000);
+    const fn = fnBodyOf(svcSrc, 'adminConfirmProviderAssignment');
     expect(fn).toContain("'booking_accepted'");
   });
 
   it('writes timeline event after successful UPDATE', () => {
-    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
-    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    const fn = fnBodyOf(svcSrc, 'adminConfirmProviderAssignment');
     expect(fn).toContain('addTimelineEvent');
     expect(fn).toContain('provider_acceptance_confirmed_by_admin');
   });
@@ -319,14 +377,12 @@ describe('adminConfirmProviderAssignment — source contracts', () => {
   });
 
   it('rowCount=0 guard throws meaningful error on concurrent change', () => {
-    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
-    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    const fn = fnBodyOf(svcSrc, 'adminConfirmProviderAssignment');
     expect(fn).toContain('assignment may have changed concurrently');
   });
 
   it('throws on blocked booking status (CANCELLED/COMPLETED)', () => {
-    const fnIdx = svcSrc.indexOf('adminConfirmProviderAssignment');
-    const fn = svcSrc.slice(fnIdx, fnIdx + 3000);
+    const fn = fnBodyOf(svcSrc, 'adminConfirmProviderAssignment');
     expect(fn).toContain("'CANCELLED'");
     expect(fn).toContain("'COMPLETED'");
   });

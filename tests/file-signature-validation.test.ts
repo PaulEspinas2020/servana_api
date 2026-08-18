@@ -173,10 +173,17 @@ describe("the upload path uses this, not the client's word", () => {
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
 
-  it("uploadWorkerRequirement calls validateDataUri", () => {
-    const fn = src.slice(
-      src.indexOf("export const uploadWorkerRequirement"),
-      src.indexOf("export const uploadWorkerProfilePhoto")
+  it("the canonical private document upload calls validateDataUri", () => {
+    const complianceService = fs
+      .readFileSync(
+        path.join(__dirname, "..", "src/services/providerProfileComplianceService.ts"),
+        "utf8"
+      )
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    const fn = complianceService.slice(
+      complianceService.indexOf("export const uploadDocument"),
+      complianceService.indexOf("export const listCertifications")
     );
     expect(fn).toContain("validateDataUri");
   });
@@ -184,7 +191,7 @@ describe("the upload path uses this, not the client's word", () => {
   it("no longer derives the MIME from the client's data URI string", () => {
     const fn = src.slice(
       src.indexOf("export const uploadWorkerRequirement"),
-      src.indexOf("export const uploadWorkerProfilePhoto")
+      src.indexOf("export const getWorkerRequirementsOwn")
     );
     expect(fn).not.toMatch(/file\.slice\(file\.indexOf\(":"\)/);
   });

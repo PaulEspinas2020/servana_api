@@ -256,11 +256,13 @@ export const countCustomerUnreadHandler = async (req: Request, res: Response) =>
 export const markCustomerNotificationReadHandler = async (req: Request, res: Response) => {
     const uid: string = (req as any).user?.uid;
     const key = req.params.key as string;
-    if (!key) {
-        return res.status(400).json({ status: 'error', message: 'key is required' });
+    if (!notificationService.isSafeNotificationKey(key)) {
+        return res.status(400).json({ status: 'error', message: 'Invalid notification key' });
     }
     try {
         const result = await notificationService.markCustomerNotificationReadByKey(uid, key);
+        if (!result.found) return res.status(404).json({ status: 'error', message: 'Notification not found' });
+        if (!result.allowed) return res.status(409).json({ status: 'error', message: 'Notification cannot be marked read' });
         return res.status(200).json({ status: 'success', data: result });
     } catch (_) {
         return res.status(500).json({ status: 'error', message: 'Failed to mark read' });
@@ -280,15 +282,14 @@ export const markAllCustomerNotificationsReadHandler = async (req: Request, res:
 export const deleteCustomerNotificationHandler = async (req: Request, res: Response) => {
     const uid: string = (req as any).user?.uid;
     const key = req.params.key as string;
-    if (!key) {
-        return res.status(400).json({ status: 'error', message: 'key is required' });
+    if (!notificationService.isSafeNotificationKey(key)) {
+        return res.status(400).json({ status: 'error', message: 'Invalid notification key' });
     }
     try {
         const result = await notificationService.deleteCustomerNotificationByKey(uid, key);
-        return res.status(result.found ? 200 : 404).json({
-            status: result.found ? 'success' : 'error',
-            data: result,
-        });
+        if (!result.found) return res.status(404).json({ status: 'error', message: 'Notification not found' });
+        if (!result.allowed) return res.status(409).json({ status: 'error', message: 'Notification cannot be dismissed' });
+        return res.status(200).json({ status: 'success', data: result });
     } catch (_) {
         return res.status(500).json({ status: 'error', message: 'Failed to delete notification' });
     }

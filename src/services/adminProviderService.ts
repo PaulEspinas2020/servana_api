@@ -15,6 +15,7 @@ import * as serviceApplicationService from './serviceApplicationService';
 import * as technicianService from './technicianService';
 import * as onboardingService from './adminOnboardingService';
 import { validateDataUri } from '../helpers/fileSignature';
+import { stripImageMetadata } from '../helpers/stripImageMetadata';
 import { assertCleanScan, scanProviderFile } from './providerManagedFileScanner';
 
 const dbSchema = db.schema;
@@ -41,20 +42,15 @@ export interface ProviderListFilter {
 
 // ── Provider activity tracking ────────────────────────────────────────────────
 
-let _activityColReady = false;
-const ensureLastActivityColumn = async (): Promise<void> => {
-  if (_activityColReady) return;
-  await dbQuery.query(
-    `ALTER TABLE ${db.schema}.user_credentials ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ`,
-    []
-  );
-  _activityColReady = true;
-};
+// `user_credentials.last_activity_at` used to be added here at runtime by
+// `ensureLastActivityColumn`, awaited by both operations below. It comes from
+// `scripts/baseline/000-baseline.sql` now (TAB 02). Nullable with no default: a
+// provider who has never been seen reads as NULL rather than as active, which is
+// what `listProviders` sorts on.
 
 export const touchProviderActivity = async (workerUid: string): Promise<void> => {
   if (!workerUid) return;
   try {
-    await ensureLastActivityColumn();
     await dbQuery.query(
       `UPDATE ${db.schema}.user_credentials SET last_activity_at = NOW() WHERE uid = $1`,
       [workerUid]
@@ -65,7 +61,6 @@ export const touchProviderActivity = async (workerUid: string): Promise<void> =>
 };
 
 export const listProviders = async (filter: ProviderListFilter = {}) => {
-  await ensureLastActivityColumn();
 
   const {
     search,
@@ -393,7 +388,7 @@ export const getProviderActiveServices = async (uid: string) => {
     `SELECT es.service_id, es.created_at,
             '' AS category, s.name AS service_name
      FROM ${dbSchema}.employee_services es
-     LEFT JOIN ${dbSchema}.services s ON s.id = es.service_id
+     LEFT JOIN ${dbSchema}.service_families s ON s.id = es.service_id
      WHERE es.employee_uid = $1
      ORDER BY es.created_at DESC`,
     [uid]
@@ -416,7 +411,7 @@ export const getProviderServiceApplications = async (uid: string) => {
             '' AS category, s.name AS service_name,
             rev.first_name AS reviewer_first, rev.last_name AS reviewer_last
      FROM ${dbSchema}.worker_service_applications wsa
-     LEFT JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+     LEFT JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
      LEFT JOIN ${dbSchema}.user_credentials rev ON rev.uid = wsa.reviewed_by
      WHERE wsa.worker_uid = $1
      ORDER BY wsa.submitted_at DESC`,
@@ -452,7 +447,7 @@ export const getProviderCatalogCapabilities = async (uid: string) => {
             s.name AS category, ecc.level_2 AS service_name
      FROM ${dbSchema}.employee_catalog_capabilities ecc
      LEFT JOIN ${dbSchema}.provider_catalog_offerings pco ON pco.id = ecc.offering_id
-     LEFT JOIN ${dbSchema}.services s ON s.id = ecc.service_id
+     LEFT JOIN ${dbSchema}.service_families s ON s.id = ecc.service_id
      WHERE ecc.employee_uid = $1
      ORDER BY ecc.approved_at DESC NULLS LAST`,
     [uid]
@@ -587,7 +582,10 @@ export const uploadProviderRequirement = async (
   const sanitizedType = String(requirementType ?? 'admin_supplied').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100);
   const scan = await scanProviderFile({ buffer: validation.buffer, mimeType: validation.mime, fileName: sanitizedName });
   assertCleanScan(scan);
-  const persistenceBuffer = scan.sanitizedBuffer ?? validation.buffer;
+  // §58, same as the provider self-upload path: strip EXIF/GPS before the file
+  // is persisted. An admin uploading on behalf of a provider is handling a
+  // photograph the provider took, so it carries the same location metadata.
+  const persistenceBuffer = stripImageMetadata(scan.sanitizedBuffer ?? validation.buffer, validation.mime);
   const persistenceDataUri = `data:${validation.mime};base64,${persistenceBuffer.toString('base64')}`;
   const requestId = `admin-document-${randomUUID()}`;
   const storage = await import('../helpers/firebaseStorageUploader');
@@ -749,7 +747,7 @@ export const getProviderJobs = async (uid: string, filter: ProviderJobsFilter = 
               uc.first_name AS customer_first, uc.last_name AS customer_last
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-       LEFT JOIN ${dbSchema}.services s ON s.id = so.service_id
+       LEFT JOIN ${dbSchema}.service_families s ON s.id = so.service_id
        LEFT JOIN ${dbSchema}.user_address ua ON ua.address_id = b.user_address_id
        LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = b.user_id
        WHERE ${where.join(' AND ')}

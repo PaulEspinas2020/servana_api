@@ -121,6 +121,16 @@ const firebaseAuthLogin = async (idToken: string, role: string = "2") => {
 
       throw new AccountLinkRequiredError(collision.via);
     }
+
+    // Login is not registration. Provider identities must be created through
+    // /auth/provider/register so profile and onboarding invariants cannot be
+    // bypassed with an arbitrary first-sight Firebase account.
+    if (role === "2") {
+      throw Object.assign(new Error("Provider account not found"), {
+        statusCode: 403,
+        code: "PROVIDER_ACCOUNT_NOT_FOUND",
+      });
+    }
   }
 
   const dbUser = await userService.upsertFirebaseUser({
@@ -154,8 +164,8 @@ const firebaseAuthLogin = async (idToken: string, role: string = "2") => {
       firebaseUser.uid,
       provenFrom(decoded, firebaseUser)
     );
-  } catch (err) {
-    console.warn("[firebase-login] could not record proven identifiers:", err);
+  } catch {
+    console.warn("[firebase-login] identifier verification sync deferred");
   }
 
   return {
@@ -190,7 +200,10 @@ const firebaseProviderRegister = async (
   if (!idToken) { throw new Error("Missing Firebase ID token"); }
   if (!firstName || !lastName) { throw new Error("firstName and lastName are required"); }
 
-  const decoded = await defaultAuthAdmin.verifyIdToken(idToken);
+  // A registration token is a credential just like a login token. Checking
+  // revocation here prevents a signed-out/revoked Firebase session from being
+  // replayed to create or rewrite the local provider profile.
+  const decoded = await defaultAuthAdmin.verifyIdToken(idToken, /* checkRevoked */ true);
   const firebaseUser = await defaultAuthAdmin.getUser(decoded.uid);
 
   // Persist the name on the Firebase user record so firebase-login picks it up on next sign-in.
@@ -222,8 +235,11 @@ const firebaseProviderRegister = async (
       firebaseUser.uid,
       provenFrom(decoded, firebaseUser)
     );
-  } catch (err) {
-    console.warn("[provider-register] could not record proven identifiers:", err);
+  } catch {
+    // Do not log identity data or persistence errors from the registration
+    // boundary. The readiness engine will keep the account gated until a later
+    // authenticated sync succeeds.
+    console.warn("[provider-register] identifier verification sync deferred");
   }
 
   return {
@@ -253,11 +269,74 @@ const firebaseProviderRegister = async (
  * is needed. The caller stores this token and sends it as Authorization: Bearer on every
  * subsequent authenticated request.
  */
+/**
+ * Thrown when a first-sight uid presents an identifier that already belongs to
+ * somebody's account. Carries a message written for the customer, because the
+ * generic "Authentication failed." tells them nothing they can act on.
+ */
+export class CustomerLinkCollisionError extends Error {
+  readonly linkCollision = true;
+  constructor(readonly via: "mobile" | "email", message: string) {
+    super(message);
+  }
+}
+
 const customerFirebaseLogin = async (idToken: string) => {
   if (!idToken) { throw new Error("Missing Firebase ID token"); }
 
   const decoded = await defaultAuthAdmin.verifyIdToken(idToken);
   const firebaseUser = await defaultAuthAdmin.getUser(decoded.uid);
+
+  /**
+   * Do not let a second account be created for somebody who already has one.
+   *
+   * Firebase issues a uid PER IDENTIFIER, and `upsertFirebaseUser` is
+   * `ON CONFLICT (uid)` — uid only. So a customer who registered by email and
+   * later signs in by phone arrives as a different uid and gets a second,
+   * empty account: no bookings, no addresses, nothing errored. To the person it
+   * reads as "my bookings are gone", which is indistinguishable from data loss.
+   *
+   * `firebaseAuthLogin` has guarded this since the link work; this route never
+   * got it, and this route is the one the live mobile app uses.
+   *
+   * ## Why this blocks instead of merging
+   *
+   * `mergePhoneIntoExistingAccount` DELETES the incoming Firebase user and
+   * returns a **custom** token, which the caller must exchange via
+   * `signInWithCustomToken`. The shipped app cannot do that: it reads
+   * `data.token` and uses it directly as a bearer
+   * (`auth_token_exchanger.dart:31`, `servana_api_client.dart`). Merging here
+   * would delete the uid its token belongs to and hand back a token it cannot
+   * use — a broken session instead of a duplicate account. Trading one silent
+   * failure for another is not a fix.
+   *
+   * So the customer route refuses and says which identifier to use. The merge
+   * stays available on `/auth/firebase-login`, whose callers do handle
+   * `relinked` + `customToken`.
+   *
+   * Scoped to FIRST-SIGHT uids only: if the uid already has a row this is a
+   * returning customer and nothing is checked, so no existing sign-in can be
+   * affected however the lookup behaves.
+   */
+  const { rows: existingRows } = await dbQuery.query(
+    `SELECT 1 FROM ${dbSchema}.user_credentials WHERE uid = $1 LIMIT 1`,
+    [firebaseUser.uid]
+  );
+  if (existingRows.length === 0) {
+    const collision = await findLinkCollision(
+      firebaseUser.uid,
+      firebaseUser.email || null,
+      firebaseUser.phoneNumber || null
+    );
+    if (collision) {
+      throw new CustomerLinkCollisionError(
+        collision.via,
+        collision.via === "mobile"
+          ? "This mobile number is already linked to a Servana account. Please sign in with the email address you used before."
+          : "This email address is already linked to a Servana account. Please sign in the way you did before.",
+      );
+    }
+  }
 
   let firstName = "";
   let lastName = "";
@@ -504,6 +583,19 @@ const getFirebaseUserByUid = async (uid: string) => {
     return await defaultAuthAdmin.getUser(uid);
 };
 
+/**
+ * Verifies an ID token presented as PROOF rather than as a session.
+ *
+ * `checkRevoked: true` deliberately, unlike `middleware/verifyAuth`, which uses
+ * the cached `tokensValidAfterTime` comparison to avoid a network round trip on
+ * every request. This runs once, on a rare path, and the thing being decided is
+ * whether to write a verified identifier onto an account — the one place where
+ * paying for a live answer from Firebase is obviously worth it.
+ */
+const verifyIdTokenStrict = async (idToken: string) => {
+    return await defaultAuthAdmin.verifyIdToken(idToken, /* checkRevoked */ true);
+};
+
 export {
     toE164PH,
     checkUserIfExistInFirebase,
@@ -515,6 +607,7 @@ export {
     customerFirebaseLogin,
     getFirebaseUserByEmail,
     getFirebaseUserByUid,
+    verifyIdTokenStrict,
     updateFirebaseEmailVerified,
     deleteFirebaseUser,
     generatePasswordResetLink,

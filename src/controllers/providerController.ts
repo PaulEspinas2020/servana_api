@@ -1,14 +1,17 @@
 ﻿import { Request, Response } from "express";
 import { db } from "../config";
-import { providerShareOf, PROVIDER_SHARE_RATE, PROVIDER_SHARE_PERCENT } from '../services/revenueSplit';
-import {
-  canonicalPayoutStatus,
-  earningsPayoutDialect,
-  payoutsPayoutDialect,
-  ledgerPayoutDialect,
-} from '../services/payoutStatus';
+import { PROVIDER_SHARE_PERCENT } from '../services/revenueSplit';
+import { ledgerDialectOf } from '../services/payoutStatus';
 import dbQuery from "../db/dbQuery";
+import {
+  EarningsRangeError,
+  getEarningTransaction as canonicalEarningTransaction,
+  getEarningsSummary as canonicalEarningsSummary,
+  listEarningsTransactions as canonicalEarningsTransactions,
+  listProviderPayouts as canonicalProviderPayouts,
+} from "../services/finance/providerEarningsService";
 import * as technicianService from "../services/technicianService";
+import { getIdentity } from "../services/identityService";
 import * as userService from "../services/user.service";
 import mongoDb from "../db/mongodbQuery";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
@@ -17,7 +20,11 @@ import { getProviderAggregate } from "../services/customerReviewService";
 import { BookingResponseConflict } from "../services/bookingResponseConflict";
 import { buildBookingTimeline, currentTimelineStep, mergeStoredEvents } from "./bookingTimeline";
 import { buildDisputeSummary } from "./bookingDisputeView";
-import { evaluateCancellation, CANCELLATION_NOTICE_HOURS } from "./bookingCancellationPolicy";
+import {
+  evaluateCancellation,
+  CANCELLATION_NOTICE_HOURS,
+} from "../services/booking/bookingPolicies";
+import { TransitionError } from "../services/booking/transitionExecutor";
 import { updateFirebasePassword, revokeTokenInFirebase, getFirebaseUserByUid } from "../services/firebaseFunctions.service";
 import * as serviceApplicationService from "../services/serviceApplicationService";
 import * as onboardingService from "../services/providerOnboardingService";
@@ -26,10 +33,12 @@ import * as availEngine from "../services/providerAvailabilityEngine";
 import * as areaEngine from "../services/providerServiceAreaEngine";
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 import * as availabilityService from "../services/providerOperationalAvailabilityService";
+import * as activationService from "../services/providerActivationService";
 import { touchProviderActivity } from "../services/adminProviderService";
 import { getProviderPerformance } from "../services/providerPerformanceService";
 import { randomUUID } from 'crypto';
 import { submitProfilePhoto } from '../services/providerProfileMediaService';
+import { deriveEffectiveBookingStatus } from '../services/bookingStatusProjection';
 
 const dbSchema = db.schema;
 
@@ -41,19 +50,41 @@ const WEB_ALL_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const ENGINE_DOW_LABELS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
 function bridgeToEngineSlots(schedule: any[]): availEngine.WeeklyScheduleSlot[] {
+  const invalid = (message: string): never => {
+    const error: any = new Error(message);
+    error.statusCode = 422;
+    throw error;
+  };
+  if (schedule.length > WEB_ALL_DAYS.length) {
+    invalid('schedule must contain at most one entry for each day');
+  }
   const slots: availEngine.WeeklyScheduleSlot[] = [];
+  const seenDays = new Set<string>();
   for (const day of schedule) {
-    const dow = DAY_TO_DOW[day.day] ?? -1;
-    if (dow === -1) continue;
+    if (!day || typeof day !== 'object') invalid('each schedule day must be an object');
+    const dayKey = typeof day.day === 'string' ? day.day.toLowerCase() : '';
+    const dow = DAY_TO_DOW[dayKey] ?? -1;
+    if (dow === -1) invalid(`invalid schedule day: ${String(day.day ?? '')}`);
+    if (seenDays.has(dayKey)) invalid(`schedule contains duplicate day: ${dayKey}`);
+    seenDays.add(dayKey);
+    if (typeof day.enabled !== 'boolean') invalid(`${dayKey}.enabled must be boolean`);
+    if (!Array.isArray(day.slots)) invalid(`${dayKey}.slots must be an array`);
+    if (!day.enabled && day.slots.length > 0) {
+      invalid(`${dayKey} cannot contain slots while disabled`);
+    }
+    if (day.enabled && day.slots.length === 0) {
+      invalid(`${dayKey} must contain at least one slot while enabled`);
+    }
     const dayLabel = ENGINE_DOW_LABELS[dow] ?? '';
-    if (!day.enabled || !Array.isArray(day.slots) || day.slots.length === 0) {
+    if (!day.enabled) {
       // Represent disabled day as an unavailable placeholder so the day is tracked
       slots.push({ dayOfWeek: dow as 0|1|2|3|4|5|6, dayLabel, startTime: '09:00', endTime: '17:00', isAvailable: false, maxJobs: null });
     } else {
       for (const s of day.slots) {
-        if (s.startTime && s.endTime) {
-          slots.push({ dayOfWeek: dow as 0|1|2|3|4|5|6, dayLabel, startTime: s.startTime, endTime: s.endTime, isAvailable: true, maxJobs: null });
+        if (!s || typeof s !== 'object' || typeof s.startTime !== 'string' || typeof s.endTime !== 'string') {
+          invalid(`${dayKey} contains a malformed slot`);
         }
+        slots.push({ dayOfWeek: dow as 0|1|2|3|4|5|6, dayLabel, startTime: s.startTime, endTime: s.endTime, isAvailable: true, maxJobs: null });
       }
     }
   }
@@ -90,32 +121,26 @@ function bridgeToWebTimeOff(timeOff: availEngine.ProviderTimeOff[]): any[] {
 
 // ─── Auth/Me ──────────────────────────────────────────────────────────────────
 
+/**
+ * GET /api/auth/me — the legacy identity read, kept on its legacy envelope.
+ *
+ * The projection used to be built inline here, which made this controller the
+ * only definition of "who is this caller". It now delegates to
+ * `identityService.getIdentity`, the same function `/api/v1/me` calls, so the
+ * canonical route and this alias cannot drift apart (§10). The response shape
+ * is byte-for-byte what it was — Provider Web reads `data.role` on every
+ * session bootstrap — so this is a pure de-duplication, not a contract change.
+ */
 export const getMe = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
 
-    const result = await dbQuery.query(
-      `SELECT uid, email, first_name, last_name, role, is_email_verified, phone_number
-       FROM ${dbSchema}.user_credentials WHERE uid = $1 LIMIT 1`,
-      [uid]
-    );
+    const user = await getIdentity(uid);
 
-    if (!result.rows.length) {
+    if (!user) {
       return res.status(404).json({ status: "failed", message: "User not found" });
     }
-
-    const row = result.rows[0];
-    const user = {
-      id: row.uid,
-      uid: row.uid,
-      email: row.email,
-      firstName: row.first_name,
-      lastName: row.last_name,
-      role: row.role,
-      isEmailVerified: row.is_email_verified,
-      phoneNumber: row.phone_number,
-    };
 
     return res.status(200).json({ status: "success", data: user });
   } catch (error: any) {
@@ -181,25 +206,41 @@ export const goOffline = async (req: Request, res: Response) => {
 
 const bookingCode = (id: any) => `SVN-${String(id).padStart(6, "0")}`;
 
-const toJobDto = (r: any) => ({
-  id: String(r.id),
-  bookingId: String(r.id),
-  bookingCode: bookingCode(r.id),
-  serviceName: r.service_name || "",
-  categoryName: r.category_name || "",
-  customerDisplayName: `${r.customer_first || ""} ${(r.customer_last || "").charAt(0)}.`.trim(),
-  customerInitials: `${(r.customer_first || " ").charAt(0)}${(r.customer_last || " ").charAt(0)}`.toUpperCase(),
-  addressLine: r.address_one || "",
-  city: r.post_town || "",
-  scheduledAt: r.schedule,
-  status: (r.status || "").toLowerCase(),
-  clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
-  paymentMethod: (r.payment_method || "cash").toLowerCase(),
-  bookingAmount: Number(r.final_price || 0),
-  currency: "PHP",
-  hasUnreadChat: false,
-  hasAdditionalWork: false,
-});
+const toJobDto = (r: any) => {
+  const workerStatus = String(r.worker_status ?? "").toUpperCase();
+  const effectiveStatus = workerStatus === "ASSIGNED"
+    ? "ASSIGNED"
+    : deriveEffectiveBookingStatus(r.status, workerStatus);
+  const fullDisclosure = new Set([
+    "ACCEPTED", "EN_ROUTE", "ARRIVED", "IN_PROGRESS", "COMPLETED",
+  ]).has(workerStatus);
+  const relinquished = new Set(["DECLINED", "CANCELED", "CANCELLED"]).has(workerStatus);
+  const first = relinquished ? "" : String(r.customer_first ?? "").trim();
+  const last = relinquished ? "" : String(r.customer_last ?? "").trim();
+
+  return {
+    id: String(r.id),
+    bookingId: String(r.id),
+    bookingCode: bookingCode(r.id),
+    serviceName: r.service_name || "",
+    categoryName: r.category_name || "",
+    customerDisplayName: last ? `${first} ${last.charAt(0).toUpperCase()}.`.trim() : first,
+    customerInitials: `${first.charAt(0)}${last.charAt(0)}`.toUpperCase(),
+    // Match mobile job-card disclosure: area before acceptance, street only
+    // after the provider accepts the relationship.
+    addressLine: fullDisclosure ? (r.address_one || "") : "",
+    city: relinquished ? "" : (r.post_town || ""),
+    scheduledAt: r.schedule,
+    status: effectiveStatus.toLowerCase(),
+    workerStatus: workerStatus.toLowerCase(),
+    clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
+    paymentMethod: (r.payment_method || "cash").toLowerCase(),
+    bookingAmount: Number(r.final_price || 0),
+    currency: "PHP",
+    hasUnreadChat: false,
+    hasAdditionalWork: false,
+  };
+};
 
 const JOB_SELECT = (statusFilter: string) => `
   SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
@@ -207,13 +248,36 @@ const JOB_SELECT = (statusFilter: string) => `
          COALESCE(ua.post_town,   b.service_address->>'city')        AS post_town,
          s.level_1 AS category_name, s.level_2 AS service_name,
          u.first_name AS customer_first, u.last_name AS customer_last,
-         p.status AS payment_status
+         p.status AS payment_status,
+         bw.worker_status
   FROM {SCHEMA}.bookings b
   LEFT JOIN {SCHEMA}.user_address ua ON ua.address_id = b.user_address_id
   LEFT JOIN {SCHEMA}.service_options so ON so.id = b.service_option_id
   LEFT JOIN {SCHEMA}.services s ON s.id = so.service_id
   LEFT JOIN {SCHEMA}.user_credentials u ON u.uid = b.user_id
-  LEFT JOIN {SCHEMA}.payments p ON p.booking_id = b.id
+  LEFT JOIN LATERAL (
+    SELECT p1.status
+    FROM {SCHEMA}.payments p1
+    WHERE p1.booking_id = b.id
+    ORDER BY p1.id DESC
+    LIMIT 1
+  ) p ON TRUE
+  -- LEAKAGE RULE. The lateral join is INNER, so an assignment row that does not
+  -- qualify removes the booking from this list entirely — which is the point: a
+  -- provider who declined, cancelled or was reassigned away must get the same
+  -- answer as for a booking that does not exist, not an empty husk with the PII
+  -- staged out.
+  --
+  -- Same declaration as the job-card query and the disclosure policy, so the
+  -- three cannot disagree about who has relinquished a job.
+  JOIN LATERAL (
+    SELECT bw1.status AS worker_status
+    FROM {SCHEMA}.booking_workers bw1
+    WHERE bw1.booking_id = b.id AND bw1.worker_uid = $1
+      AND UPPER(COALESCE(bw1.status, '')) IN (${READABLE_WORKER_STATUS_SQL})
+    ORDER BY bw1.assigned_at DESC NULLS LAST, bw1.id DESC
+    LIMIT 1
+  ) bw ON TRUE
   WHERE b.worker_uid = $1 AND ${statusFilter}
   ORDER BY b.schedule ASC
 `;
@@ -253,7 +317,10 @@ export const getDashboard = async (req: Request, res: Response) => {
         ),
         [uid]
       ),
-      dbQuery.query(jobSql("b.status IN ('WORKER_ASSIGNED', 'CONFIRMED')", 10), [uid]),
+      dbQuery.query(
+        jobSql("bw.worker_status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED')", 10),
+        [uid],
+      ),
       dbQuery.query(
         // Earnings come from disbursements.worker_share — the authoritative
         // 80% figure computed at completion — NOT from bookings.final_price,
@@ -322,350 +389,159 @@ export const getDashboard = async (req: Request, res: Response) => {
 
 // ─── Earnings ─────────────────────────────────────────────────────────────────
 
-// C20 F-03. This was one of three hand-written mappings over the same column,
-// each answering a different word. It now derives from `payoutStatus.ts`, which
-// emits exactly what this function always emitted — the point is that the three
-// dialects can no longer drift apart, not that any value changed.
-const normalizePayoutStatus = earningsPayoutDialect;
+/**
+ * The five legacy earnings endpoints, all delegating to ONE domain service.
+ *
+ * These paths are what Provider Web and ServanaWorker call today, and they are
+ * not being changed — the shapes below are the shapes those clients already
+ * parse. What changed is where the numbers come from: every one of them now
+ * projects from `services/finance/providerEarningsService`, which is the same
+ * domain service `/api/v1/provider/earnings/*` uses.
+ *
+ * That is the whole point of the tab's "Provider Web/Mobile earnings match
+ * exactly" gate. Before this, `getEarnings`, `getEarningsSummary` and
+ * `getLedger` each read the same four tables with their own SQL and their own
+ * fallbacks, and they disagreed: the ledger reported every completed booking as
+ * `settled` including failed payouts, the summary counted PROCESSING money in
+ * neither paid nor pending, and the list and the summary used different
+ * estimate fallbacks. Each was fixed separately, which is why the same class of
+ * defect kept reappearing in whichever endpoint nobody had looked at yet.
+ *
+ * The responses stay ADDITIVE. Every field these endpoints returned before is
+ * still returned, with the same name and the same meaning; the canonical DTO
+ * carries extra fields beside them (`economicModel`, `payoutBlockedBy`, minor
+ * units) that existing consumers ignore and a migrating client can adopt.
+ */
+
+const earningsRangeOf = (req: Request) => ({
+  startDate: typeof req.query.startDate === "string" ? req.query.startDate : undefined,
+  endDate: typeof req.query.endDate === "string" ? req.query.endDate : undefined,
+});
+
+/** The one refusal these endpoints can produce that is not a 500. */
+const sendEarningsError = (res: Response, error: unknown): Response => {
+  if (error instanceof EarningsRangeError) {
+    return res.status(400).json({ status: "failed", message: "Invalid date range" });
+  }
+  return res.status(500).json({ status: "failed", message: "Server error" });
+};
 
 export const getEarnings = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
-    const { startDate, endDate } = req.query;
-
-    let dateFilter = "";
-    const params: any[] = [uid];
-
-    if (startDate && endDate) {
-      if (isNaN(Date.parse(startDate as string)) || isNaN(Date.parse(endDate as string))) {
-        return res.status(400).json({ status: "failed", message: "Invalid date range" });
-      }
-      params.push(startDate, endDate);
-      dateFilter = `AND b.schedule >= $2 AND b.schedule <= $3`;
-    }
-
-    const result = await dbQuery.query(
-      // bw.completed_at is when the provider actually finished. It is joined
-      // because completedAt below used to be populated from b.schedule — the
-      // time the job was BOOKED for. On any job that ran late, started early or
-      // was rescheduled, the earnings history showed a completion time that
-      // never happened, and it silently agreed with scheduledAt on every row.
-      `SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
-              so.level_2 AS service_name,
-              p.status   AS payment_status,
-              d.status   AS payout_status,
-              d.released_at,
-              d.worker_share,
-              bw.completed_at
-       FROM ${dbSchema}.bookings b
-       LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-       LEFT JOIN ${dbSchema}.payments p ON p.booking_id = b.id
-       LEFT JOIN ${dbSchema}.disbursements d ON d.booking_id = b.id AND d.worker_uid = $1
-       LEFT JOIN ${dbSchema}.booking_workers bw
-              ON bw.booking_id = b.id AND bw.worker_uid = $1
-       WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
-       ${dateFilter}
-       ORDER BY b.schedule DESC`,
-      params
-    );
-
-    const data = result.rows.map((r: any) => {
-      const gross = Number(r.final_price || 0);
-      const workerShare = r.worker_share != null
-        ? Math.round(Number(r.worker_share) * 100) / 100
-        : providerShareOf(gross);
-      return {
-        id: String(r.id),
-        bookingId: String(r.id),
-        bookingCode: bookingCode(r.id),
-        serviceName: r.service_name || "",
-        // Falls back to the schedule only when the assignment row carries no
-        // completion time, so the field degrades to its old value rather than
-        // to null for any historical row written before completed_at was set.
-        completedAt: r.completed_at ?? r.schedule,
-        scheduledAt: r.schedule,
-        bookingAmount: gross,
-        providerShareAmount: workerShare,
-        providerSharePercent: PROVIDER_SHARE_PERCENT,
-        clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
-        bookingStatus: r.status ? r.status.toLowerCase() : "completed",
-        providerPayoutStatus: normalizePayoutStatus(r.payout_status),
-        // Additive (C20 F-03). Keeps PROCESSING distinct from PENDING, which
-        // the dialect above cannot express and §1 requires.
-        payoutStatusCanonical: canonicalPayoutStatus(r.payout_status),
-        disbursedAt: r.released_at || null,
-        paymentMethod: (r.payment_method || "cash").toLowerCase(),
-        currency: "PHP",
-      };
-    });
-
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+    const data = await canonicalEarningsTransactions(uid, earningsRangeOf(req));
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
+    return sendEarningsError(res, error);
   }
 };
 
 export const getEarningById = async (req: Request, res: Response) => {
   try {
-    const uid  = req.user?.uid;
-    const id   = Number(req.params.id);
+    const uid = req.user?.uid;
+    const id = Number(req.params.id);
     if (!uid || !Number.isFinite(id)) {
       return res.status(400).json({ status: "failed", message: "Invalid request" });
     }
-    const result = await dbQuery.query(
-      `SELECT b.id, b.status, b.schedule, b.final_price, b.payment_method,
-              so.level_2 AS service_name,
-              p.status   AS payment_status,
-              d.status   AS payout_status,
-              d.released_at,
-              d.worker_share,
-              bw.completed_at
-       FROM ${dbSchema}.bookings b
-       LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-       LEFT JOIN ${dbSchema}.payments        p  ON p.booking_id = b.id
-       LEFT JOIN ${dbSchema}.disbursements   d  ON d.booking_id = b.id AND d.worker_uid = $1
-       LEFT JOIN ${dbSchema}.booking_workers bw ON bw.booking_id = b.id AND bw.worker_uid = $1
-       WHERE b.id = $2 AND b.worker_uid = $1`,
-      [uid, id]
-    );
-    if (!result.rowCount) {
+    const data = await canonicalEarningTransaction(uid, id);
+    if (!data) {
       return res.status(404).json({ status: "failed", message: "Earning not found" });
     }
-    const r = result.rows[0];
-    const gross = Number(r.final_price || 0);
-    const workerShareDetail = r.worker_share != null
-      ? Math.round(Number(r.worker_share) * 100) / 100
-      : providerShareOf(gross);
-    const data = {
-      id:                  String(r.id),
-      bookingId:           String(r.id),
-      bookingCode:         bookingCode(r.id),
-      serviceName:         r.service_name || "",
-      completedAt:         r.completed_at ?? r.schedule,
-      scheduledAt:         r.schedule,
-      bookingAmount:       gross,
-      providerShareAmount: workerShareDetail,
-      providerSharePercent: PROVIDER_SHARE_PERCENT,
-      clientPaymentStatus: r.payment_status ? r.payment_status.toLowerCase() : "pending",
-      bookingStatus:       r.status ? r.status.toLowerCase() : "completed",
-      providerPayoutStatus: normalizePayoutStatus(r.payout_status),
-      // Additive (C20 F-03). Keeps PROCESSING distinct from PENDING.
-      payoutStatusCanonical: canonicalPayoutStatus(r.payout_status),
-      disbursedAt:         r.released_at || null,
-      paymentMethod:       (r.payment_method || "cash").toLowerCase(),
-      currency:            "PHP",
-    };
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
+    return sendEarningsError(res, error);
   }
 };
 
 export const getEarningsSummary = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
-    const { startDate, endDate } = req.query;
-
-    let dateFilter = "";
-    const params: any[] = [uid];
-
-    if (startDate && endDate) {
-      if (isNaN(Date.parse(startDate as string)) || isNaN(Date.parse(endDate as string))) {
-        return res.status(400).json({ status: "failed", message: "Invalid date range" });
-      }
-      params.push(startDate, endDate);
-      dateFilter = `AND b.schedule >= $2 AND b.schedule <= $3`;
-    }
-
-    // C20 F-04. This query had three defects, all of the same shape: it
-    // recomputed money that had already been calculated authoritatively.
-    //
-    //   1. `final_price * RATE` DROPPED ON-SITE UPSELL REVENUE. Disbursements
-    //      are computed from `final_price + additional_paid` (see
-    //      createDisbursement, whose own comment records fixing exactly this
-    //      bug at the writer). The fix never reached this reader, so a provider
-    //      who did approved additional work saw a total that omitted it.
-    //   2. `PROCESSING` WAS COUNTED NOWHERE. `total_paid` took RELEASED only
-    //      and `total_pending` took PENDING/FAILED/no-row, so money in flight
-    //      vanished from both — it left "pending" without arriving in "paid".
-    //   3. `FAILED` WAS COUNTED AS PENDING. That is the C20 F-01 defect in a
-    //      second endpoint: a payout that will not arrive without intervention,
-    //      presented as one that is on its way.
-    //
-    // The authoritative `d.worker_share` is now preferred wherever a
-    // disbursement row exists. The `final_price` fallback survives only for a
-    // completed booking that has no row yet — which is a genuine ESTIMATE, and
-    // is reported as one rather than sitting unlabelled beside settled fact.
-    const result = await dbQuery.query(
-      `SELECT
-         COUNT(*) AS total_jobs,
-         COALESCE(SUM(b.final_price), 0) AS total_gross,
-         COALESCE(SUM(CASE WHEN d.status = 'RELEASED' THEN d.worker_share ELSE 0 END), 0) AS total_paid,
-         COALESCE(SUM(CASE WHEN d.status IN ('PENDING','PROCESSING') THEN d.worker_share ELSE 0 END), 0) AS pending_recorded,
-         COALESCE(SUM(CASE WHEN d.id IS NULL
-                           THEN b.final_price * ${PROVIDER_SHARE_RATE} ELSE 0 END), 0) AS pending_estimated,
-         COALESCE(SUM(CASE WHEN d.status = 'FAILED' THEN d.worker_share ELSE 0 END), 0) AS total_failed,
-         COUNT(*) FILTER (WHERE d.id IS NULL) AS estimated_jobs
-       FROM ${dbSchema}.bookings b
-       LEFT JOIN ${dbSchema}.disbursements d ON d.booking_id = b.id AND d.worker_uid = $1
-       WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
-       ${dateFilter}`,
-      params
-    );
-
-    const s = result.rows[0] || {};
-    const money = (v: any) => Math.round(Number(v ?? 0) * 100) / 100;
-
-    const totalPaid        = money(s.total_paid);
-    const pendingRecorded  = money(s.pending_recorded);
-    const pendingEstimated = money(s.pending_estimated);
-    const totalFailed      = money(s.total_failed);
-    const estimatedJobs    = Number(s.estimated_jobs ?? 0);
-
-    // Rounded after summing, not before: rounding each part and adding would
-    // let the displayed total drift from the parts by a centavo.
-    const totalPending = money(Number(s.pending_recorded ?? 0) + Number(s.pending_estimated ?? 0));
-
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
     return res.status(200).json({
       status: "success",
-      data: {
-        // Every peso of provider share for completed bookings, authoritative
-        // where a disbursement exists. The old value was
-        // `providerShareOf(total_gross)`, which carried defect (1) above.
-        totalEarned:  money(totalPaid + totalPending + totalFailed),
-        totalPaid,
-        totalPending,
-        totalRefunded: 0,
-        periodLabel: startDate ? "Custom range" : "All time",
-        currency: "PHP",
-        jobsCount: Number(s.total_jobs ?? 0),
-
-        // ── Additive: existing consumers ignore these ────────────────────
-        // Money owed whose payout FAILED. Split out of totalPending because a
-        // failed payout needs intervention rather than patience, and folding
-        // it into "pending" tells the provider it is coming.
-        totalFailed,
-        // The portion of totalPending that is a real recorded amount, and the
-        // portion still estimated from final_price because no disbursement
-        // row exists yet. §9 requires estimates to be labelled as estimates.
-        pendingRecordedAmount:  pendingRecorded,
-        pendingEstimatedAmount: pendingEstimated,
-        pendingIsEstimate:      estimatedJobs > 0,
-        estimatedJobsCount:     estimatedJobs,
-      },
+      data: await canonicalEarningsSummary(uid, earningsRangeOf(req)),
     });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
+    return sendEarningsError(res, error);
   }
 };
 
+/**
+ * The provider ledger — the same transactions, in the shape this endpoint has
+ * always emitted.
+ *
+ * Kept as a distinct SHAPE and not a distinct TRUTH. Servana.com.ph renders
+ * `type`/`direction`/`amountMinor` rows from this path, so the projection stays;
+ * the figures underneath it are now the canonical ones, which is what stops it
+ * reporting a failed payout as settled money.
+ */
 export const getLedger = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
 
-    const result = await dbQuery.query(
-      `SELECT b.id, b.schedule, b.final_price, b.payment_method, b.status,
-              so.level_2   AS service_name,
-              d.status     AS payout_status,
-              d.worker_share,
-              d.released_at
-       FROM ${dbSchema}.bookings b
-       LEFT JOIN ${dbSchema}.service_options so ON so.id = b.service_option_id
-       LEFT JOIN ${dbSchema}.disbursements d
-              ON d.booking_id = b.id AND d.worker_uid = $1
-       WHERE b.worker_uid = $1 AND b.status = 'COMPLETED'
-       ORDER BY b.schedule DESC
-       LIMIT 50`,
-      [uid]
-    );
-
-    const data = result.rows.map((r: any) => {
-      const gross = Number(r.final_price || 0);
-      const code = bookingCode(r.id);
-
-      // C20 F-01. This used to hardcode `status: "settled"` for every completed
-      // booking and recompute the amount from final_price, without joining
-      // `disbursements` at all — so a payout that had FAILED, or had not been
-      // calculated yet, was reported to the provider as settled money.
-      //
-      // /provider/earnings/summary reads the same figures correctly, which meant
-      // two endpoints disagreed about one booking. §1 requires pending,
-      // available, held, processing, paid and reversed to stay distinct; one
-      // word for all of them is the opposite.
-      // C20 F-03. The third dialect, and the one this command introduced: the
-      // F-01 fix had to stop hardcoding `settled`, and added `settled` as a
-      // value in doing so. Derived from the same canonical source now.
-      const status = ledgerPayoutDialect(r.payout_status);
-      const payoutCanonical = canonicalPayoutStatus(r.payout_status);
-
-      // Prefer the authoritative disbursed amount. final_price × rate is only
-      // an ESTIMATE, used where no disbursement row exists yet, and it is
-      // labelled as one rather than presented as a settled figure.
-      const hasDisbursement = r.worker_share != null;
-      const amountMinor = hasDisbursement
-        ? Math.round(Number(r.worker_share) * 100)
-        : Math.round(providerShareOf(gross) * 100);
-
-      return {
-        id: `led-${r.id}`,
-        type: "booking_earning",
-        direction: "credit",
-        status,
-        payoutStatusCanonical: payoutCanonical,
-        isEstimate: !hasDisbursement,
-        amountMinor,
-        currency: "PHP",
-        description: `${r.service_name || "Service"} · ${code}`,
-        bookingId: String(r.id),
-        bookingCode: code,
-        additionalWorkRequestId: null,
-        payoutId: null,
-        reference: code,
-        occurredAt: r.schedule,
-        availableAt: null,
-        // Only a RELEASED disbursement has actually settled, and it settled
-        // when it was released — not when the booking was scheduled.
-        settledAt: payoutCanonical === "paid" ? (r.released_at ?? null) : null,
-      };
-    });
+    const transactions = await canonicalEarningsTransactions(uid);
+    const data = transactions.slice(0, 50).map((t) => ({
+      id: `led-${t.bookingId}`,
+      type: "booking_earning",
+      direction: "credit",
+      status: ledgerDialectOf(t.payoutStatusCanonical),
+      payoutStatusCanonical: t.payoutStatusCanonical,
+      isEstimate: t.isEstimate,
+      amountMinor: t.providerShareAmountMinor,
+      currency: t.currency,
+      description: `${t.serviceName || "Service"} · ${t.bookingCode}`,
+      bookingId: t.bookingId,
+      bookingCode: t.bookingCode,
+      additionalWorkRequestId: null,
+      payoutId: null,
+      reference: t.bookingCode,
+      occurredAt: t.scheduledAt,
+      availableAt: null,
+      // Only a RELEASED payout has actually settled, and it settled when it was
+      // released — not when the booking was scheduled.
+      settledAt: t.payoutStatusCanonical === "paid" ? t.disbursedAt : null,
+    }));
 
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
+    return sendEarningsError(res, error);
   }
 };
-
-// C20 F-03. Same column, second dialect — now derived rather than rewritten.
-// Note it still collapses PROCESSING into "pending", which §1 says must stay
-// distinct; that is preserved because consumers branch on these literals, and
-// the distinction is carried by `payoutStatusCanonical` alongside it.
-const _mapPayoutStatus = payoutsPayoutDialect;
 
 export const getPayouts = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
-    const rows = await disbursementService.listDisbursements({ workerUid: uid });
-    // Map to ProviderPayoutDto shape; exclude internal fields (servana_share, payout_error)
-    const data = rows.map((r: any) => ({
-      id:                String(r.id),
-      amountMinor:       Math.round(Number(r.worker_share || 0) * 100),
-      currency:          "PHP",
-      status:            _mapPayoutStatus(r.status),
-      payoutStatusCanonical: canonicalPayoutStatus(r.status),
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+
+    const payouts = await canonicalProviderPayouts(uid);
+    // The legacy ProviderPayoutDto shape. The four always-null fields are kept
+    // because both clients read them; the domain service does not invent them,
+    // and this projection does not invent values for them either.
+    const data = payouts.map((p) => ({
+      id: p.id,
+      amountMinor: p.amountMinor,
+      currency: p.currency,
+      status: p.status,
+      payoutStatusCanonical: p.payoutStatusCanonical,
       payoutMethodSummary: null,
-      initiatedAt:       r.created_at    ? new Date(r.created_at).toISOString()    : null,
-      expectedArrivalAt: r.release_after ? new Date(r.release_after).toISOString() : null,
-      completedAt:       r.released_at   ? new Date(r.released_at).toISOString()   : null,
-      failedAt:          null,
-      failureMessage:    null,
-      transactionCount:  1,
-      reference:         r.paymongo_payout_id ?? null,
-      events:            [],
+      initiatedAt: p.initiatedAt,
+      expectedArrivalAt: p.expectedArrivalAt,
+      completedAt: p.completedAt,
+      failedAt: null,
+      failureMessage: null,
+      transactionCount: 1,
+      // Processor identifiers are internal reconciliation data. Providers get a
+      // stable Servana reference that support can safely discuss instead.
+      reference: p.reference,
+      events: [],
       includedTransactionSummaries: [],
     }));
+
     return res.status(200).json({ status: "success", data });
   } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
+    return sendEarningsError(res, error);
   }
 };
 
@@ -752,7 +628,7 @@ export const getWorkerAvailability = async (req: Request, res: Response) => {
     const schedule = bridgeToWebSchedule(profile.weeklySchedule);
     return res.status(200).json({
       status: "success",
-      data: { schedule, timezone: profile.timezone, updatedAt: profile.updatedAt },
+      data: { schedule, timezone: profile.timezone, updatedAt: profile.updatedAt, version: profile.version },
     });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
@@ -763,16 +639,31 @@ export const saveWorkerAvailability = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const { schedule, timezone } = req.body;
+    const { schedule, timezone, expectedVersion } = req.body;
     if (!Array.isArray(schedule)) {
       return res.status(400).json({ status: "failed", message: "schedule must be an array" });
     }
+    const submittedDays = schedule.map((day: any) => day?.day);
+    const hasCanonicalWeek = schedule.length === WEB_ALL_DAYS.length
+      && new Set(submittedDays).size === WEB_ALL_DAYS.length
+      && WEB_ALL_DAYS.every(day => submittedDays.includes(day));
+    const hasInvalidShape = schedule.some((day: any) =>
+      typeof day?.enabled !== 'boolean' || !Array.isArray(day?.slots));
+    if (!hasCanonicalWeek || hasInvalidShape) {
+      return res.status(422).json({
+        status: "failed",
+        message: "schedule must contain each weekday exactly once with enabled and slots fields",
+      });
+    }
     const engineSlots = bridgeToEngineSlots(schedule);
-    const result = await availEngine.saveWeeklySchedule(uid, engineSlots, timezone ?? "Asia/Manila", uid);
-    return res.status(200).json({ status: "success", data: { success: true, updatedAt: result.updatedAt } });
+    const result = await availEngine.saveWeeklySchedule(uid, engineSlots, timezone ?? "Asia/Manila", uid, expectedVersion);
+    return res.status(200).json({ status: "success", data: { success: true, updatedAt: result.updatedAt, version: result.version } });
   } catch (error: any) {
     const code = error?.statusCode ?? 500;
-    return res.status(code).json({ status: "failed", message: "Server error" });
+    const message = [400, 409, 422].includes(code)
+      ? (error?.message ?? "Invalid request")
+      : "Server error";
+    return res.status(code).json({ status: "failed", message });
   }
 };
 
@@ -837,7 +728,7 @@ export const createWorkerTimeOff = async (req: Request, res: Response) => {
     // A 422 carries an actionable reason ("endTime must be later than
     // startTime"). Flattening every status to "Server error" would hide the
     // validation this endpoint just gained and leave the provider guessing.
-    const message = code === 422 || code === 400 || code === 404
+    const message = code === 422 || code === 400 || code === 404 || code === 409
       ? (error?.message ?? "Invalid request")
       : "Server error";
     return res.status(code).json({ status: "failed", message });
@@ -858,96 +749,38 @@ export const deleteWorkerTimeOff = async (req: Request, res: Response) => {
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (error: any) {
     const code = error?.statusCode ?? 500;
-    return res.status(code).json({ status: "failed", message: "Server error" });
+    const message = code === 404 ? (error?.message ?? "Time-off period not found") : "Server error";
+    return res.status(code).json({ status: "failed", message });
   }
 };
 
 // ─── Requirements (Firebase Storage, scoped to authenticated worker) ──────────
 
-const ALLOWED_REQUIREMENT_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] as const;
-
-/**
- * Ceiling for a provider compliance document.
- *
- * The old path had no size check at all: a data URI of any length was decoded
- * and uploaded. 10 MB is comfortably above a phone photo of an ID or permit and
- * well below anything that threatens the request pipeline.
- */
-const MAX_REQUIREMENT_BYTES = 10 * 1024 * 1024;
-
 export const uploadWorkerRequirement = async (req: Request, res: Response) => {
-  try {
-    const uid = req.user?.uid;
-    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const { file, name, requirementType } = req.body;
-    if (!file || !name) {
-      return res.status(400).json({ status: "failed", message: "file (data URI) and name are required" });
-    }
-    if (!file.startsWith("data:")) {
-      return res.status(422).json({ status: "failed", message: "file must be a data URI" });
-    }
-    // C19 §18/§54 (LJ-08). This used to read the MIME out of the data URI the
-    // CLIENT sent and check THAT against the allowlist — asking the uploader
-    // what the file is and believing the answer, so
-    // `data:image/png;base64,<any bytes>` passed a check that looked strict.
-    //
-    // Now validated by magic bytes, with the declared type required to match
-    // the actual content, plus a size ceiling the old path had no equivalent of.
-    const validation = validateDataUri(file, {
-      allowed: ALLOWED_REQUIREMENT_MIMES as readonly AllowedUploadMime[],
-      maxBytes: MAX_REQUIREMENT_BYTES,
-    });
-    if (!validation.ok) {
-      return res.status(422).json({
-        status: "failed",
-        code: validation.code,
-        message: validation.message,
-      });
-    }
-    const mimeType = validation.mime;
-    const sanitizedName = String(name).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
-    const sanitizedType = requirementType ? String(requirementType).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 50) : undefined;
-    const fileUrl = await uploadFileToStorage("provider-requirements", `${uid}_${Date.now()}`, file);
-    const inserted = await technicianService.addWorkerRequirements(uid, [{ fileUrl, fileName: sanitizedName, requirementType: sanitizedType }]);
-    const row = inserted[0];
-    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
-    return res.status(201).json({
-      status: "success",
-      data: {
-        requirementId: String(row.id),
-        status: "pending_review",
-        uploadedAt: row.uploadedAt,
-        requirementType: sanitizedType ?? null,
-      },
-    });
-  } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
-  }
+  void req;
+  return res.status(410).json({
+    status: "failed",
+    code: "LEGACY_DOCUMENT_ENDPOINT_RETIRED",
+    message: "Use POST /provider/documents for private document submission",
+  });
 };
 
 export const getWorkerRequirementsOwn = async (req: Request, res: Response) => {
-  try {
-    const uid = req.user?.uid;
-    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const requirements = await technicianService.getWorkerRequirements(uid);
-    return res.status(200).json({ status: "success", data: requirements });
-  } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
-  }
+  void req;
+  return res.status(410).json({
+    status: "failed",
+    code: "LEGACY_DOCUMENT_ENDPOINT_RETIRED",
+    message: "Use GET /provider/documents for private document metadata",
+  });
 };
 
 export const deleteWorkerRequirementOwn = async (req: Request, res: Response) => {
-  try {
-    const uid = req.user?.uid;
-    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
-    const id = Number(req.params.id);
-    if (!id) return res.status(400).json({ status: "failed", message: "Invalid id" });
-    await technicianService.deleteWorkerRequirement(uid, id);
-    autoOnlineEngine.evaluateProvider(uid, 'system', uid).catch(() => {});
-    return res.status(200).json({ status: "success", data: { success: true } });
-  } catch (error: any) {
-    return res.status(500).json({ status: "failed", message: "Server error" });
-  }
+  void req;
+  return res.status(410).json({
+    status: "failed",
+    code: "LEGACY_DOCUMENT_ENDPOINT_RETIRED",
+    message: "Use DELETE /provider/documents/:documentId",
+  });
 };
 
 // ─── Onboarding ───────────────────────────────────────────────────────────────
@@ -1052,8 +885,11 @@ export const workerAdditionalDecision = async (req: Request, res: Response) => {
 
     const ownership = await dbQuery.query(
       `SELECT bar.id, bar.status FROM ${dbSchema}.booking_additional_requests bar
-       JOIN ${dbSchema}.bookings b ON b.id = bar.booking_id
-       WHERE bar.id = $1 AND b.worker_uid = $2`,
+       WHERE bar.id = $1 AND EXISTS (
+         SELECT 1 FROM ${dbSchema}.booking_workers bw
+         WHERE bw.booking_id = bar.booking_id AND bw.worker_uid = $2
+           AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED')
+       )`,
       [id, uid]
     );
     if (!ownership.rowCount) {
@@ -1064,9 +900,9 @@ export const workerAdditionalDecision = async (req: Request, res: Response) => {
     }
 
     const { additionalService } = await import("../services/additional.service");
-    await additionalService.workerDecision(id, decision as "ACCEPT" | "REJECT");
+    const data = await additionalService.workerDecision(id, decision as "ACCEPT" | "REJECT");
 
-    return res.status(200).json({ status: "success", data: { success: true, decision } });
+    return res.status(200).json({ status: "success", success: true, data });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
   }
@@ -1083,18 +919,20 @@ export const withdrawAdditionalWork = async (req: Request, res: Response) => {
       `UPDATE ${dbSchema}.booking_additional_requests bar
        SET status = 'CANCELLED', decided_at = NOW()
        WHERE bar.id = $1
-         AND bar.status = 'WAITING_WORKER_APPROVAL'
+         AND bar.status IN ('PENDING_ADMIN_APPROVAL','WAITING_WORKER_APPROVAL')
          AND bar.booking_id IN (
-           SELECT id FROM ${dbSchema}.bookings WHERE worker_uid = $2
+           SELECT booking_id FROM ${dbSchema}.booking_workers
+           WHERE worker_uid = $2
+             AND status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED')
          )
-       RETURNING bar.id, bar.status, bar.decided_at`,
+       RETURNING bar.*`,
       [id, uid]
     );
 
     if (!result.rowCount) {
       return res.status(404).json({ status: "failed", message: "Request not found, already decided, or not assigned to you" });
     }
-    return res.status(200).json({ status: "success", data: { success: true, status: result.rows[0].status } });
+    return res.status(200).json({ status: "success", success: true, data: result.rows[0] });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
   }
@@ -1110,8 +948,11 @@ export const confirmProceedAdditionalWork = async (req: Request, res: Response) 
     // Ownership check: request must belong to a booking assigned to this worker
     const ownership = await dbQuery.query(
       `SELECT bar.id, bar.status FROM ${dbSchema}.booking_additional_requests bar
-       JOIN ${dbSchema}.bookings b ON b.id = bar.booking_id
-       WHERE bar.id = $1 AND b.worker_uid = $2`,
+       WHERE bar.id = $1 AND EXISTS (
+         SELECT 1 FROM ${dbSchema}.booking_workers bw
+         WHERE bw.booking_id = bar.booking_id AND bw.worker_uid = $2
+           AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED')
+       )`,
       [id, uid]
     );
     if (!ownership.rowCount) {
@@ -1121,16 +962,21 @@ export const confirmProceedAdditionalWork = async (req: Request, res: Response) 
       return res.status(409).json({ status: "failed", message: "Request must be in ACCEPTED state before confirming proceed" });
     }
 
-    // Mark as proceeding — worker has acknowledged and will perform the additional work
+    // Mark as in progress — worker has acknowledged and will perform the work.
+    // IN_PROGRESS is the canonical value used by additional.service; reads stay
+    // tolerant of historical PROCEEDING rows in the provider adapter.
     const result = await dbQuery.query(
       `UPDATE ${dbSchema}.booking_additional_requests
-       SET status = 'PROCEEDING'
-       WHERE id = $1
-       RETURNING id, status`,
+       SET status = 'IN_PROGRESS', updated_at = NOW()
+       WHERE id = $1 AND status = 'ACCEPTED'
+       RETURNING *, total_amount AS approved_amount`,
       [id]
     );
 
-    return res.status(200).json({ status: "success", data: { success: true, status: result.rows[0].status } });
+    if (!result.rowCount) {
+      return res.status(409).json({ status: "failed", message: "Request state changed; refresh and try again" });
+    }
+    return res.status(200).json({ status: "success", success: true, data: result.rows[0] });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
   }
@@ -1271,10 +1117,14 @@ export const getProviderAlerts = async (req: Request, res: Response) => {
 export const markNotificationRead = async (req: Request, res: Response) => {
   try {
     const { key } = req.params;
-    if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
+    if (!notificationService.isSafeNotificationKey(key)) {
+      return res.status(400).json({ status: "failed", message: "Invalid notification key" });
+    }
     const uid: string = (req as any).user?.uid;
-    await notificationService.markNotificationReadByKey(uid, key as string);
-    return res.status(200).json({ status: "success", data: { success: true } });
+    const result = await notificationService.markNotificationReadByKey(uid, key);
+    if (!result.found) return res.status(404).json({ status: "failed", message: "Notification not found" });
+    if (!result.allowed) return res.status(409).json({ status: "failed", message: "Notification cannot be marked read" });
+    return res.status(200).json({ status: "success", data: { success: true, changed: result.changed } });
   } catch (e: any) {
     return res.status(500).json({ status: "failed", message: e.message });
   }
@@ -1293,9 +1143,13 @@ export const markAllNotificationsRead = async (req: Request, res: Response) => {
 export const dismissNotification = async (req: Request, res: Response) => {
   try {
     const { key } = req.params;
-    if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
+    if (!notificationService.isSafeNotificationKey(key)) {
+      return res.status(400).json({ status: "failed", message: "Invalid notification key" });
+    }
     const uid: string = (req as any).user?.uid;
-    await notificationService.deleteNotificationByKey(uid, key as string);
+    const result = await notificationService.deleteNotificationByKey(uid, key);
+    if (!result.found) return res.status(404).json({ status: "failed", message: "Notification not found" });
+    if (!result.allowed) return res.status(409).json({ status: "failed", message: "Notification cannot be dismissed" });
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (e: any) {
     return res.status(500).json({ status: "failed", message: e.message });
@@ -1305,9 +1159,13 @@ export const dismissNotification = async (req: Request, res: Response) => {
 export const dismissAlert = async (req: Request, res: Response) => {
   try {
     const { key } = req.params;
-    if (!key) return res.status(400).json({ status: "failed", message: "key is required" });
+    if (!notificationService.isSafeNotificationKey(key)) {
+      return res.status(400).json({ status: "failed", message: "Invalid alert key" });
+    }
     const uid: string = (req as any).user?.uid;
-    await notificationService.deleteAlertByKey(uid, key as string);
+    const result = await notificationService.deleteAlertByKey(uid, key);
+    if (!result.found) return res.status(404).json({ status: "failed", message: "Alert not found" });
+    if (!result.allowed) return res.status(409).json({ status: "failed", message: "Alert cannot be dismissed" });
     return res.status(200).json({ status: "success", data: { success: true } });
   } catch (e: any) {
     return res.status(500).json({ status: "failed", message: e.message });
@@ -1944,6 +1802,43 @@ export const requestProviderDataExport = async (req: Request, res: Response) => 
   }
 };
 
+/**
+ * POST /provider/activation/policy-acknowledgement
+ *
+ * The provider accepts the Servana provider agreement.
+ *
+ * This endpoint did not exist, and `policy_acknowledgement` is a BLOCKING
+ * checklist requirement — so the row could never be ticked by anybody, on any
+ * client. See `acknowledgeProviderPolicy` for the measurement.
+ *
+ * Additive: a new route, no existing contract touched. Idempotent, so a retry
+ * or a double tap returns the ORIGINAL acceptance date rather than moving it.
+ */
+export const acknowledgeProviderPolicy = async (req: Request, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
+
+    // Optional, and recorded rather than validated: the client states which
+    // version of the agreement it displayed. Rejecting an unknown value would
+    // block acceptance whenever the document is revised before the app is.
+    const raw = (req.body ?? {}).policyVersion;
+    const policyVersion =
+      typeof raw === "string" && raw.trim() && raw.trim().length <= 64
+        ? raw.trim()
+        : null;
+
+    const result = await activationService.acknowledgeProviderPolicy(uid, {
+      version: policyVersion,
+    });
+
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error: any) {
+    console.error("[activation] policy acknowledgement failed:", error?.message);
+    return res.status(500).json({ status: "failed", message: "Server error" });
+  }
+};
+
 export const requestProviderDeactivation = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
@@ -2324,22 +2219,7 @@ export const deleteProviderFcmToken = async (req: Request, res: Response) => {
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
 
     const { token } = req.body ?? {};
-    if (token && typeof token === "string" && token.trim().length >= 10) {
-      await dbQuery.query(
-        `UPDATE ${dbSchema}.user_credentials
-         SET fcm_token = NULL
-         WHERE uid = $1 AND fcm_token = $2`,
-        [uid, token.trim()]
-      );
-    } else {
-      // No token supplied — the client lost it, or never had one. Release
-      // whatever this provider currently holds rather than refusing: a
-      // sign-out that leaves a live registration behind is the worse outcome.
-      await dbQuery.query(
-        `UPDATE ${dbSchema}.user_credentials SET fcm_token = NULL WHERE uid = $1`,
-        [uid]
-      );
-    }
+    await notificationService.releaseProviderDeviceToken(uid, token);
     return res.status(200).json({ status: "success", data: { released: true } });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
@@ -2354,27 +2234,8 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
     if (!token || typeof token !== 'string' || token.trim().length < 10) {
       return res.status(400).json({ status: "failed", message: "token is required" });
     }
-    const value = token.trim();
-
-    // A push token identifies a DEVICE, not a person, and providers share
-    // devices. Binding it to the caller without releasing it from whoever held
-    // it before leaves the previous provider still addressable at a handset
-    // someone else is now carrying — so a booking notification meant for A
-    // arrives on the phone B is holding, with A's customer's name in it.
-    //
-    // One token, one owner. Released first, in the same statement chain, so
-    // there is no window where two rows claim the same device.
-    await dbQuery.query(
-      `UPDATE ${dbSchema}.user_credentials
-       SET fcm_token = NULL
-       WHERE fcm_token = $1 AND uid <> $2`,
-      [value, uid]
-    );
-
-    await dbQuery.query(
-      `UPDATE ${dbSchema}.user_credentials SET fcm_token = $1 WHERE uid = $2`,
-      [value, uid]
-    );
+    const saved = await notificationService.registerProviderDeviceToken(uid, token);
+    if (!saved) return res.status(400).json({ status: "failed", message: "Invalid token" });
     return res.status(200).json({ status: "success", data: { saved: true } });
   } catch (error: any) {
     return res.status(500).json({ status: "failed", message: "Server error" });
@@ -2385,6 +2246,7 @@ export const saveProviderFcmToken = async (req: Request, res: Response) => {
 
 // Shared formatter to avoid duplication between list and single-card endpoints
 import { formatJobCard } from "./jobCardView";
+import { hasFullDisclosure, READABLE_WORKER_STATUS_SQL } from "./providerDisclosure";
 import { validateDataUri, AllowedUploadMime } from "../helpers/fileSignature";
 import { stripImageMetadata } from "../helpers/stripImageMetadata";
 import * as evidenceService from "../services/bookingEvidenceService";
@@ -2594,27 +2456,31 @@ export const cancelAcceptedBooking = async (req: Request, res: Response) => {
     const ctx = await loadCancellationContext(bookingId, uid);
     if (!ctx) return res.status(404).json({ success: false, message: "Booking not found" });
 
-    // Re-evaluated at mutation time (§1), not trusted from whatever the client
-    // was shown when it rendered the button.
-    const eligibility = evaluateCancellation({
-      workerStatus: ctx.worker_status,
-      schedule: ctx.schedule,
-      now: new Date(),
-      reasonCode,
-    });
-
-    if (!eligibility.canCancel) {
-      return res.status(409).json({
-        success: false,
-        code: eligibility.blockCode,
-        message: CANCELLATION_BLOCK_MESSAGES[eligibility.blockCode!] ?? "Cancellation is not available.",
-        data: eligibility,
-      });
-    }
-
+    /**
+     * The policy is NOT evaluated here any more.
+     *
+     * It used to be, and that was the problem: a rule enforced in a controller
+     * applies only to callers that go through that controller. It is now the
+     * canonical guard `providerCancellationWindow`, run inside the transition
+     * transaction, so nothing can reach a provider cancellation without it.
+     *
+     * What remains here is FORMATTING. The refusal carries the whole
+     * eligibility verdict, so this rebuilds the exact 409 Provider Web already
+     * branches on — same `code`, same message, same `data` — without a second
+     * evaluation that could disagree with the one that actually decided.
+     */
     const result = await technicianService.cancelAcceptedJob(bookingId, uid, reasonCode, note);
     return res.json({ success: true, message: "Booking cancelled", data: result });
   } catch (error: any) {
+    if (error instanceof TransitionError && error.code === 'POLICY_REFUSED') {
+      const blockCode = String(error.detail?.blockCode ?? '');
+      return res.status(409).json({
+        success: false,
+        code: blockCode,
+        message: CANCELLATION_BLOCK_MESSAGES[blockCode] ?? "Cancellation is not available.",
+        data: error.detail?.eligibility,
+      });
+    }
     return sendBookingResponseOutcome(res, error, "Booking cancelled");
   }
 };
@@ -2814,8 +2680,7 @@ export const getWorkerJobCard = async (req: Request, res: Response) => {
     if (!bookingId || isNaN(bookingId)) {
       return res.status(400).json({ success: false, message: "Invalid bookingId" });
     }
-    const jobs = await technicianService.getJobCardsByWorker(uid);
-    const job = jobs.find((j: any) => j.booking_id === bookingId);
+    const job = await technicianService.getJobCardByWorker(uid, bookingId);
     if (!job) return res.status(404).json({ success: false, message: "Job not found" });
     return res.json(formatJobCard(job));
   } catch (error: any) {
@@ -2857,7 +2722,9 @@ export const acceptBooking = async (req: Request, res: Response) => {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
     const bookingId = Number(req.params.bookingId);
-    if (!bookingId) return res.status(400).json({ success: false, message: "bookingId is required" });
+    if (!Number.isSafeInteger(bookingId) || bookingId <= 0) {
+      return res.status(400).json({ success: false, message: "bookingId must be a positive integer" });
+    }
     const result = await technicianService.acceptJob(bookingId, uid);
     touchProviderActivity(uid).catch(() => {});
     return res.json({ success: true, message: "Job accepted", data: result });
@@ -3061,8 +2928,11 @@ export const getProviderBookingDetail = async (req: Request, res: Response) => {
       return res.status(400).json({ status: "failed", message: "Invalid booking ID" });
     }
     const result = await dbQuery.query(
-      `SELECT b.*, p.status AS payment_status, p.method AS payment_method_used,
-              p.reference_no, p.proof_url,
+      `SELECT b.id, b.user_id, b.user_address_id, b.service_option_id,
+              b.schedule, b.payment_method, b.status,
+              b.quoted_price, b.final_price, b.pricing_breakdown,
+              b.worker_uid, b.service_address, b.created_at,
+              p.status AS payment_status, p.method AS payment_method_used,
               COALESCE(ua.address_one, b.service_address->>'addressLine') AS address,
               COALESCE(ua.post_town, b.service_address->>'city') AS post_town,
               ua.country, ua.zip_code,
@@ -3070,10 +2940,12 @@ export const getProviderBookingDetail = async (req: Request, res: Response) => {
               bw.assigned_at, bw.started_at, bw.completed_at
        FROM ${dbSchema}.bookings b
        LEFT JOIN ${dbSchema}.payments p ON p.booking_id = b.id
+         AND p.additional_request_id IS NULL
        LEFT JOIN ${dbSchema}.user_address ua ON ua.address_id = b.user_address_id
-       LEFT JOIN ${dbSchema}.booking_workers bw ON bw.booking_id = b.id
-         AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED','CANCELED','CANCELLED','DECLINED')
-       WHERE b.id = $1 AND b.worker_uid = $2`,
+       JOIN ${dbSchema}.booking_workers bw ON bw.booking_id = b.id
+         AND bw.worker_uid = $2
+         AND bw.status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED','IN_PROGRESS','COMPLETED')
+       WHERE b.id = $1`,
       [bookingId, uid]
     );
     if (!result.rows.length) {
@@ -3086,9 +2958,56 @@ export const getProviderBookingDetail = async (req: Request, res: Response) => {
        WHERE ba.booking_id = $1 ORDER BY ba.id ASC`,
       [bookingId]
     );
-    return res.status(200).json({ success: true, data: { ...result.rows[0], addons: addons.rows } });
-  } catch (err: any) {
-    return res.status(500).json({ status: "failed", message: err?.message || "Failed to fetch booking" });
+    const row = result.rows[0];
+    const workerStatus = String(row.worker_status ?? "").toUpperCase();
+
+    // Same staged disclosure as `jobCardView.formatJobCard`, for the same
+    // reason (Command 17 §11): before a provider accepts, they need enough to
+    // decide — service, schedule, AREA — and not the customer's street address.
+    // This route was spreading the raw row, so an ASSIGNED provider who had not
+    // accepted anything could read `address`, the whole `service_address` JSON
+    // and the zip code by calling it directly. Hiding a screen is not
+    // authorization (§12), and this route has no UI at all.
+    //
+    // Keys are emptied, never removed, so no consumer's shape changes.
+    // The SHARED decision, not a second copy of the list. This site and
+    // formatJobCard used to hold equal sets by inspection alone; a comment
+    // claiming they matched was the only thing keeping them together.
+    const operational = hasFullDisclosure(workerStatus);
+
+    const serviceAddress = row.service_address && typeof row.service_address === "object"
+      ? { ...row.service_address }
+      : row.service_address;
+    if (!operational && serviceAddress && typeof serviceAddress === "object") {
+      // The JSON blob carries the street under its own key, so emptying the
+      // flattened `address` column alone would have leaked it right back.
+      delete (serviceAddress as Record<string, unknown>).addressLine;
+      delete (serviceAddress as Record<string, unknown>).addressTwo;
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...row,
+        address: operational ? row.address : null,
+        zip_code: operational ? row.zip_code : null,
+        service_address: serviceAddress,
+        // post_town (the area) stays at every status — it is what a travel
+        // decision needs and matches the job-card contract.
+        //
+        // Additive: the three job-list endpoints emit `clientPaymentStatus`
+        // lower-cased, and Provider Web's `mapClientPaymentStatus` is
+        // case-sensitive. This route emitted only raw UPPERCASE
+        // `payment_status`, which that mapper renders as "unknown". Raw key
+        // kept for compatibility.
+        clientPaymentStatus: row.payment_status ? String(row.payment_status).toLowerCase() : "pending",
+        addons: addons.rows,
+      },
+    });
+  } catch {
+    // §21 — no driver text, no constraint names. Both Flutter apps render this
+    // field straight to the user.
+    return res.status(500).json({ status: "failed", message: "Failed to fetch booking" });
   }
 };
 
@@ -3104,7 +3023,9 @@ export const getProviderBookingTracking = async (req: Request, res: Response) =>
       return res.status(400).json({ status: "failed", message: "Invalid booking ID" });
     }
     const ownerCheck = await dbQuery.query(
-      `SELECT id FROM ${dbSchema}.bookings WHERE id = $1 AND worker_uid = $2`,
+      `SELECT booking_id FROM ${dbSchema}.booking_workers
+       WHERE booking_id = $1 AND worker_uid = $2
+         AND status IN ('ASSIGNED','ACCEPTED','EN_ROUTE','ARRIVED','IN_PROGRESS','COMPLETED')`,
       [bookingId, uid]
     );
     if (!ownerCheck.rowCount) {
@@ -3118,8 +3039,9 @@ export const getProviderBookingTracking = async (req: Request, res: Response) =>
       [bookingId]
     );
     return res.status(200).json({ success: true, data: tracking.rows });
-  } catch (err: any) {
-    return res.status(500).json({ status: "failed", message: err?.message || "Failed to fetch tracking" });
+  } catch {
+    // §21 — see getProviderBookingDetail.
+    return res.status(500).json({ status: "failed", message: "Failed to fetch tracking" });
   }
 };
 
@@ -3133,16 +3055,32 @@ export const getAdditionalRequests = async (req: Request, res: Response) => {
     const result = await dbQuery.query(
       `SELECT bar.id, bar.booking_id, bar.status,
               bar.total_amount AS amount,
+              CASE WHEN bar.status IN (
+                'WAITING_FOR_PAYMENT','WAITING_WORKER_APPROVAL','ACCEPTED',
+                'IN_PROGRESS','PROCEEDING','COMPLETED'
+              ) THEN bar.total_amount ELSE NULL END AS approved_amount,
               bar.created_at, bar.updated_at, bar.decided_at
        FROM ${dbSchema}.booking_additional_requests bar
-       JOIN ${dbSchema}.bookings b ON b.id = bar.booking_id
-       WHERE b.worker_uid = $1
+       WHERE EXISTS (
+         SELECT 1 FROM ${dbSchema}.booking_workers bw
+         WHERE bw.booking_id = bar.booking_id AND bw.worker_uid = $1
+           AND bw.status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','COMPLETED')
+       )
        ORDER BY bar.created_at DESC
        LIMIT 50`,
       [uid]
     );
-    return res.status(200).json({ success: true, data: result.rows });
-  } catch (err: any) {
-    return res.status(500).json({ status: "failed", message: err?.message || "Failed to fetch additional requests" });
+    // Additive: the split rate travels with the data instead of each client
+    // restating it. Provider Web held its own `PROVIDER_SHARE_PERCENT = 0.80`
+    // here, a second hardcode of a number only the backend actually decides —
+    // and the earnings endpoints already send it.
+    const data = result.rows.map((r: any) => ({
+      ...r,
+      providerSharePercent: PROVIDER_SHARE_PERCENT,
+    }));
+    return res.status(200).json({ success: true, data });
+  } catch {
+    // §21 — no driver text; both Flutter apps render this straight to the user.
+    return res.status(500).json({ status: "failed", message: "Failed to fetch additional requests" });
   }
 };

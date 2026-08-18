@@ -13,6 +13,9 @@ dotenv.config();
 
 const app = express();
 const router = express.Router();
+// KEEP IN SYNC with ALLOWED_ORIGINS in src/chat/chat.gateway.ts. They are two
+// lists of the same thing: an origin added here but not there gets working REST
+// calls and a chat socket that silently refuses to connect.
 const whitelist = [
   "http://localhost:4200",
   "http://localhost:4201",
@@ -20,6 +23,11 @@ const whitelist = [
   "https://admin.servana.com.ph",
   "https://www.servana.com.ph",
   "https://servana.com.ph",
+  // Customer web portal. Added 2026-08-09 — without it every request from the
+  // customer web origin is refused by CORS, which the browser reports as a
+  // network failure rather than as a rejection, so it reads like the API is
+  // down. Purely additive: no existing origin is affected.
+  "https://client.servana.com.ph",
 ];
 const corsOptionsDelegate = function (req: any, callback: any) {
     var corsOptions;
@@ -42,6 +50,34 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
   (req as any).id = randomUUID();
   next();
 });
+
+/**
+ * ─── Observability (TAB 14, §140–§142) ──────────────────────────────────────
+ *
+ * Two middlewares, mounted as early as possible and in this order.
+ *
+ * `correlationMiddleware` runs AFTER the UUID stamp above and replaces that id
+ * when the caller supplied a usable one of their own, so a client's trace and
+ * ours become one trace. The inbound value is pattern-checked before it is
+ * adopted — a caller controls that header, and an unbounded string from the
+ * network would otherwise reach every log line and every error envelope. It
+ * also sets `X-Request-Id` on the response for EVERY route, not only v1: a
+ * customer reporting "it failed at 3:14" should be able to quote an id whatever
+ * they were calling.
+ *
+ * `requestLogMiddleware` records the metric for every request and emits one
+ * structured line on `res.finish`, so the status and latency are the real ones.
+ * It reads no body, no query string and no headers beyond the client label —
+ * the safe entity ids come from route parameters through a deny-by-default
+ * allow-list. A log that carries an address because somebody logged `req.body`
+ * is a breach with a retention period.
+ *
+ * Both are wrapped internally: an observability bug is a missing line, never a
+ * 500 on a live client.
+ */
+import { correlationMiddleware, requestLogMiddleware } from "./observability/requestLog";
+app.use(correlationMiddleware);
+app.use(requestLogMiddleware);
 app.use(
   "/api/paymongo/webhook",
   express.raw({ type: "application/json" })
@@ -63,10 +99,66 @@ app.use((req, _res, next) => {
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// SWEEP request parity — enriches incoming request bodies with cross-platform field aliases
-app.use(requestParityMiddleware);
-// SWEEP response parity — enriches every JSON response with cross-platform field aliases
-app.use(parityMiddleware);
+// SWEEP request parity — enriches incoming request bodies with cross-platform
+// field aliases. Exempt under /api/v1 for the same reason the response half is:
+// a v1 endpoint declares the body it accepts, and a middleware that invents
+// additional keys means the declared shape is not the shape the handler reads.
+app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.path.startsWith('/api/v1')) return next();
+    return requestParityMiddleware(req, res, next);
+});
+// SWEEP response parity — enriches every JSON response with cross-platform field aliases.
+//
+// The canonical Admin Catalog is exempt, and the reason is not tidiness.
+// Parity maps `name` → `serviceName`, `service_name`, `level2`, `level_2`, so a
+// canonical Service came back carrying `level2: "Wiring fuitures"` — its own
+// name. In the legacy model `level2` is the SUBCATEGORY. Shipping a key whose
+// established meaning is contradicted by its value, on the exact contract the
+// Flutter clients are about to migrate onto, would plant precisely the
+// ambiguity Catalog V2 exists to remove (§52).
+//
+// Scoped by path prefix so no existing route's response shape moves (§4).
+//
+// The public canonical catalog carries the same exemption and needs it more,
+// not less: it is the surface the Flutter clients actually migrate onto, so a
+// parity-generated `level2` there would be read by a customer app as the
+// Subcategory name while holding the Service's own name. Neither prefix
+// overlaps an existing route — provider catalog is `/api/provider-catalog/*`.
+// `/api/v1` carries the same exemption for a stronger reason than the catalog
+// prefixes do. v1 publishes an explicit DTO per endpoint and an OpenAPI
+// document generated from it. A middleware that adds keys to every response
+// makes that document false the moment it runs — the wire would carry fields
+// the contract does not declare, and a client generated from the spec would be
+// reading a shape nobody wrote down. Explicit DTOs and global field rewriting
+// are two answers to the same question, and only one of them can be true.
+//
+// `tests/v1-parity-exemption.test.ts` pins this. It is the kind of guarantee
+// that survives exactly as long as nobody edits this list by hand.
+//
+// `/healthz` and `/readyz` are exempt for a third reason, found by booting the
+// server rather than by reading it. They are OPERATIONAL PROBES, not client API,
+// and the parity middleware was rewriting them: every dependency in the
+// readiness payload came back carrying `serviceName`, `service_name`, `level2`
+// and `level_2`, all set to the dependency's name.
+//
+// `level2` is a catalog concept — a legacy Level-2 service label. On a readiness
+// probe it is meaningless, it inflates a payload a load balancer polls
+// constantly, and it actively misleads: an operator debugging an outage should
+// not find catalog vocabulary in a health response and wonder what it means.
+//
+// Safe to change: probes are consumed by their STATUS CODE, and these fields are
+// nonsense no client could have depended on.
+export const CANONICAL_CONTRACT_PREFIXES = [
+  '/api/v1',
+  '/api/admin/catalog',
+  '/api/catalog',
+  '/healthz',
+  '/readyz',
+];
+app.use((req: Request, res: Response, next: NextFunction) => {
+    if (CANONICAL_CONTRACT_PREFIXES.some((p) => req.path.startsWith(p))) return next();
+    return parityMiddleware(req, res, next);
+});
 app.use((req: Request, res: Response, next: NextFunction) => {
     if (req.is("multipart/form-data") == "multipart/form-data") {
         const form = formidable({ multiples: true, maxFileSize: 15 * 1024 * 1024 });
@@ -93,6 +185,54 @@ app.get("/hello", (req: Request, res: Response) => {
     res.json({ message: "Hello, from router!" });
 });
 
+/**
+ * ─── CANONICAL v1 — mounted FIRST, deliberately ─────────────────────────────
+ *
+ * Every path below this line belongs to the legacy tree, and that tree contains
+ * `GET /api/:id` (booking.routes) — a single-segment wildcard at the API root.
+ * Anything registered after it that is one segment long is unreachable, which
+ * is exactly what happened to `GET /api/catalog`.
+ *
+ * `/api/v1/*` is two segments so it could not be shadowed by that route today,
+ * but "could not be shadowed today" is the property that quietly stops being
+ * true. Mounting the canonical namespace first makes it unshadowable by
+ * construction, and `tests/route-shadowing.test.ts` fails the build if any
+ * route in the composed app eclipses another.
+ *
+ * The v1 router ends in its own 404, so an unknown `/api/v1` path says so
+ * rather than falling through to the legacy tree and answering 401.
+ */
+import v1Router from "./api/v1/register";
+app.use("/api/v1", cors(corsOptionsDelegate), v1Router);
+
+/**
+ * Counts every legacy route that the v1 contract names as superseded.
+ *
+ * Mounted after v1 and before the legacy tree, so a v1 call is never counted as
+ * legacy traffic and every legacy call is counted exactly once regardless of
+ * which router eventually answers it. The watch list is derived from
+ * `V1_CONTRACT.legacy`, so it cannot fall out of step with the migration matrix.
+ *
+ * Read it with: pm2 logs servana-prod | grep legacy-contract
+ */
+import { legacyContractTelemetry } from "./api/v1/legacyTelemetry";
+app.use(legacyContractTelemetry);
+
+/**
+ * Deprecation signalling for legacy aliases (§149).
+ *
+ * Mounted immediately beside the telemetry so the route that is COUNTED is the
+ * route that is ANNOUNCED — one derivation from `V1_CONTRACT.legacy` feeds both,
+ * and a route cannot be advertised as superseded without also being measured.
+ *
+ * Response headers only: `Deprecation`, `Link rel="successor-version"`, and
+ * `Sunset` only where a date can honestly be kept. No status code, body or
+ * behaviour changes, because five live clients depend on these paths and a
+ * deprecation notice that alters a response is not a notice.
+ */
+import { deprecationHeaders } from "./api/v1/deprecation";
+app.use(deprecationHeaders);
+
 import authRoute from "./routes/auth.route";
 app.use("/api", cors(corsOptionsDelegate), authRoute);
 
@@ -104,6 +244,25 @@ app.use("/api", cors(corsOptionsDelegate), serviceRoute);
 
 import pricingRoutes from "./routes/pricing.routes";
 app.use("/api", cors(corsOptionsDelegate), pricingRoutes);
+
+/**
+ * The public canonical catalog is mounted BEFORE bookings, and the order is
+ * load-bearing.
+ *
+ * `booking.routes` registers `GET /:id`. Mounted at `/api`, that matches any
+ * single-segment GET — so with the catalog router below it, `GET /api/catalog`
+ * resolved to the booking getter: 401 for the unauthenticated customer app the
+ * route exists for, and 400 "Invalid booking id" for everyone else. The three
+ * deeper `/catalog/*` paths were unaffected, which is what made it survive a
+ * green test run.
+ *
+ * Moving the mount is the whole fix. No path, payload or guard changes, and no
+ * booking id can be the literal string "catalog", so no booking call is
+ * affected. Retiring `GET /:id` instead would have been the tidier repair and
+ * is not available: it is a live protected-client contract (§5).
+ */
+import catalogPublicRoutes from "./routes/catalogPublic.routes";
+app.use("/api", cors(corsOptionsDelegate), catalogPublicRoutes);
 
 import bookingRoutes from "./routes/booking.routes";
 app.use("/api", cors(corsOptionsDelegate), bookingRoutes);
@@ -132,6 +291,24 @@ app.use("/api", cors(corsOptionsDelegate), locationRoutes);
 import providerCatalogRoutes from "./routes/providerCatalog.routes";
 app.use("/api", cors(corsOptionsDelegate), providerCatalogRoutes);
 
+// Canonical Admin Catalog — Category → Subcategory → Service, keyed on
+// services.id. Additive: it introduces new paths only and leaves every existing
+// route, including the /api/services* provider-compatibility projections,
+// untouched (§4).
+import catalogAdminRoutes from "./routes/catalogAdmin.routes";
+app.use("/api", cors(corsOptionsDelegate), catalogAdminRoutes);
+
+// Canonical PUBLIC Catalog — the customer-facing read half of the same model.
+// Catalog V2 shipped Admin-only, which left the Client App with no canonical
+// hierarchy it could legally read: `/api/admin/catalog/*` requires role 1, and
+// a customer app must never hold that. Without this router the only way to give
+// the app a Category → Subcategory → Service tree was to rebuild it in Dart
+// from the legacy option shape — manufacturing the catalog on the frontend,
+// which §3 and §30 forbid. Read-only and additive (§4).
+//
+// MOUNTED ABOVE `booking.routes`, not here — see the comment there. Leaving the
+// registration at this position is what made `GET /api/catalog` unreachable.
+
 import adminProviderRoutes from "./routes/adminProvider.routes";
 app.use("/api", cors(corsOptionsDelegate), adminProviderRoutes);
 
@@ -144,26 +321,10 @@ app.use("/api", cors(corsOptionsDelegate), adminOnboardingRoutes);
 import adminBookingRoutes from "./routes/adminBooking.routes";
 app.use("/api", cors(corsOptionsDelegate), adminBookingRoutes);
 
-import { ensureAdminCreateBookingSchema } from "./services/adminCreateBookingService";
-(async () => {
-  try {
-    await ensureAdminCreateBookingSchema();
-  } catch (err) {
-    console.error("[admin-create-booking] schema error:", err);
-  }
-})();
 
 import adminBookingDraftRoutes from "./routes/adminBookingDraft.routes";
 app.use("/api", cors(corsOptionsDelegate), adminBookingDraftRoutes);
 
-import { ensureAdminBookingDraftSchema } from "./services/adminBookingDraftService";
-(async () => {
-  try {
-    await ensureAdminBookingDraftSchema();
-  } catch (err) {
-    console.error("[admin-booking-draft] schema error:", err);
-  }
-})();
 
 import adminDashboardRoutes from "./routes/adminDashboard.routes";
 app.use("/api", cors(corsOptionsDelegate), adminDashboardRoutes);
@@ -211,6 +372,24 @@ import accountDeletionRoutes, { accountDeletionPageRouter } from "./routes/accou
 app.use("/api", cors(corsOptionsDelegate), accountDeletionRoutes);
 app.use(accountDeletionPageRouter);
 
+/**
+ * ─── The terminal error handler (TAB 09) ────────────────────────────────────
+ *
+ * MUST be the last app.use. Express selects a four-argument handler only from
+ * middleware registered AFTER the route that threw, so mounting this above any
+ * route would silently exclude that route from it.
+ *
+ * Without it, an error escaping a route reached Express's built-in handler,
+ * which replies with the error message and — outside production — the stack. A
+ * pg error message carries the SQL, table and constraint name, which is exactly
+ * what a 5xx must never expose.
+ *
+ * It is a safety net, not a policy change: it only runs where nothing has
+ * replied, so no existing response shape moves.
+ */
+import { terminalErrorHandler } from "./middleware/terminalErrorHandler";
+app.use(terminalErrorHandler);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
@@ -222,153 +401,125 @@ initProviderSocket(io);
 // statement is IF NOT EXISTS, so this is a no-op after the first boot. It is
 // not awaited — a DDL hiccup must not stop the server coming up, and every
 // read path COALESCEs the new columns.
-import { ensureChatLifecycleSchema } from "./chat/chat.repository";
-ensureChatLifecycleSchema().catch((e) =>
-  console.error("[chat] lifecycle schema init failed:", e)
-);
-
+/**
+ * Startup phases.
+ *
+ * What was here: twelve fire-and-forget `(async () => …)()` bootstraps, each
+ * swallowing its error into `console.error`, followed immediately by
+ * `httpServer.listen()`. The server accepted requests while its schema was
+ * still being created, and nothing said which of the twelve mattered.
+ *
+ * The graph now lives in `startup.ts` as data, `initializeDependencies` awaits
+ * it before anything listens, and readiness reflects the result.
+ */
 import { startScheduler } from "./scheduler";
-startScheduler();
-
-import { initProviderCatalogSchema, seedBuiltInOfferings } from "./services/providerCatalogService";
-(async () => {
-  try {
-    await initProviderCatalogSchema();
-    await seedBuiltInOfferings();
-  } catch (err) {
-    console.error("[provider-catalog] schema/seed error:", err);
-  }
-})();
-
-import { ensureOnboardingSchema, seedReasonCodes, seedRequirementDefinitions } from "./services/adminOnboardingService";
-(async () => {
-  try {
-    await ensureOnboardingSchema();
-    await seedReasonCodes();
-    await seedRequirementDefinitions();
-  } catch (err) {
-    console.error("[admin-onboarding] schema/seed error:", err);
-  }
-})();
-
-import { ensureAttributionSchema } from "./services/adminMobileAttributionService";
-(async () => {
-  try {
-    await ensureAttributionSchema();
-  } catch (err) {
-    console.error("[mobile-attribution] schema error:", err);
-  }
-})();
-
-import { ensureProviderWebSchema } from "./services/providerOnboardingService";
-(async () => {
-  try {
-    await ensureProviderWebSchema();
-  } catch (err) {
-    console.error("[provider-web-onboarding] schema error:", err);
-  }
-})();
-
-import { ensureBookingOpsSchema } from "./services/adminBookingService";
-(async () => {
-  try {
-    await ensureBookingOpsSchema();
-  } catch (err) {
-    console.error("[booking-ops] schema error:", err);
-  }
-})();
-
-import { ensureAuditSchema } from "./services/adminAuditService";
-(async () => {
-  try {
-    await ensureAuditSchema();
-  } catch (err) {
-    console.error("[admin-audit] schema error:", err);
-  }
-})();
-
-import { ensureCommunicationSchema } from "./services/adminCommunicationService";
-(async () => {
-  try {
-    await ensureCommunicationSchema();
-  } catch (err) {
-    console.error("[admin-communication] schema error:", err);
-  }
-})();
-
-import { bootstrap as bootstrapAutoOnline } from "./services/providerAutoOnlineEngine";
-(async () => {
-  try {
-    await bootstrapAutoOnline();
-  } catch (err) {
-    console.error("[auto-online] schema error:", err);
-  }
-})();
-
-import { ensureFinanceSchema } from "./services/adminFinanceService";
-(async () => {
-  try {
-    await ensureFinanceSchema();
-  } catch (err) {
-    console.error("[admin-finance] schema error:", err);
-  }
-})();
-
-/**
- * Identity columns MUST be ensured at boot.
- *
- * upsertFirebaseUser has written email_normalized / phone_normalized since
- * f97fc0d, but this bootstrap was written and never called — so the columns did
- * not exist in production and EVERY Firebase sign-in failed with
- * `42703 column "email_normalized" does not exist`.
- *
- * It went unnoticed because email/password sign-in uses a different endpoint
- * that never touches this table's normalized columns. Only phone auth, which
- * goes through firebase-login, was broken — so it read as a mobile-specific bug
- * rather than as a missing migration.
- */
-import { ensureIdentityColumns } from "./services/identityColumns";
-(async () => {
-  try {
-    await ensureIdentityColumns();
-  } catch (err) {
-    console.error("[identity] column bootstrap failed:", err);
-  }
-})();
-
-import { ensurePermissionSchema } from "./services/adminPermissionService";
-(async () => {
-  try {
-    await ensurePermissionSchema();
-  } catch (err) {
-    console.error("[admin-permission] schema error:", err);
-  }
-})();
-
 import { assertContinueUrlsAreUsable } from "./constants/platformContinueUrls";
-import { ensureDashboardSchema } from "./services/adminDashboardService";
-(async () => {
-  try {
-    await ensureDashboardSchema();
-  } catch (err) {
-    console.error("[admin-dashboard] schema error:", err);
-  }
-})();
+import { STARTUP_DEPENDENCIES } from "./startup";
+import {
+  initializeDependencies,
+  installSignalHandlers,
+  isLive,
+  isReady,
+  readinessSnapshot,
+} from "./lifecycle";
 
 /**
- * Refuse to start on a Firebase continue URL that could never work.
+ * Liveness and readiness are separate answers.
  *
- * These URLs are only ever exercised by an email somebody receives, so a typo
- * in `CUSTOMER_RESET_URL` is the kind of defect that surfaces as a locked-out
- * customer that support cannot explain. Checking at boot is the last cheap
- * moment; the alternative is finding out from the person it happened to.
+ * Liveness says the process is up; a failing liveness probe means RESTART ME.
+ * Readiness says it is safe to route work here; a failing readiness probe means
+ * SEND TRAFFIC ELSEWHERE. Conflating them turns a degraded dependency into a
+ * restart loop, which is how a slow database becomes an outage.
  *
- * Deliberately before `listen`, and deliberately fatal. A process that starts
- * and silently emails broken password-reset links is worse than one that
- * refuses to start and names the variable that is wrong.
+ * Both are public: they carry no account data, and a probe that needs a
+ * credential is a probe that stops being run.
  */
+app.get("/healthz", (_req: Request, res: Response) => {
+  res.status(isLive() ? 200 : 503).json({ status: isLive() ? "alive" : "shutting_down" });
+});
+
+app.get("/readyz", (_req: Request, res: Response) => {
+  res.status(isReady() ? 200 : 503).json(readinessSnapshot());
+});
+
 assertContinueUrlsAreUsable();
 
-httpServer.listen(port, () => {
+/**
+ * Listen only after the dependency graph has been awaited.
+ *
+ * The previous code called `listen` on the line after twelve un-awaited
+ * bootstraps, so the first requests of every deploy raced the schema they
+ * needed. Now the graph resolves first and readiness reflects it: a required
+ * dependency that failed leaves `/readyz` returning 503, so a load balancer
+ * routes elsewhere while the process stays up and says why.
+ *
+ * The listener still binds in either case. Refusing to bind would leave an
+ * operator with no endpoint to ask WHY it is unhealthy, which is the state
+ * this whole change exists to end.
+ */
+/**
+ * Composed for import; started only when RUN as the entry point.
+ *
+ * TAB 03 asks that "tests can import and compose the app without opening ports
+ * or touching real services". Importing this module used to do both: it awaited
+ * a dependency graph that connects to PostgreSQL, bound a port, and started
+ * cron.
+ *
+ * `require.main === module` is true for `node dist/app.js` — the only way this
+ * process is ever launched, per package.json `start` — and false for every
+ * import. So production behaviour is unchanged and a test can now compose the
+ * real application instead of replicating its mounting.
+ *
+ * That also closes TAB 01's remaining criterion: `tests/v1-router.test.ts`
+ * builds its own app under a comment reading "Mounted exactly as app.ts mounts
+ * it", guarded by `tests/v1-mount-parity.test.ts` because it could not import
+ * the real one. It can now.
+ */
+export const startServer = async (): Promise<void> => {
+  const results = await initializeDependencies(STARTUP_DEPENDENCIES);
+  const unhealthy = results.filter((r) => r.state !== 'ready');
+
+  httpServer.listen(port, () => {
     console.log(`Magic is running on port ${port}`);
-});
+    console.log(
+      `[lifecycle] ${results.length - unhealthy.length}/${results.length} dependencies ready` +
+        (unhealthy.length
+          ? ` — degraded: ${unhealthy.map((r) => `${r.name}(${r.kind}/${r.state})`).join(', ')}`
+          : ''),
+    );
+  });
+
+  // Workers start AFTER the schema they read. A scheduler tick that fires
+  // against a half-built schema is the same defect as an early request, and it
+  // has no client to report the error to.
+  startScheduler();
+
+  installSignalHandlers(() => [
+    // Order matters: stop taking new work, then close what work uses.
+    {
+      name: 'http',
+      timeoutMs: 10_000,
+      close: () => new Promise<void>((resolve) => httpServer.close(() => resolve())),
+    },
+    {
+      name: 'socket.io',
+      timeoutMs: 5_000,
+      close: () => new Promise<void>((resolve) => io.close(() => resolve())),
+    },
+    {
+      name: 'postgres',
+      timeoutMs: 5_000,
+      close: async () => {
+        const { pool } = await import('./db/dbQuery');
+        await pool.end();
+      },
+    },
+  ]);
+};
+
+/** The composed application, for tests and for anything that embeds it. */
+export { app, httpServer, io };
+
+if (require.main === module) {
+  void startServer();
+}

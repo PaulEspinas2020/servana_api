@@ -8,6 +8,7 @@
 
 import dbQuery from '../db/dbQuery';
 import { db } from '../config';
+import { excludeSyntheticSql } from "./booking/syntheticBookings";
 
 const s = db.schema;
 
@@ -209,6 +210,9 @@ export const getSupplyGaps = async (
        AND b.worker_uid IS NULL
        AND b.schedule >= NOW()
        AND b.schedule < NOW() + INTERVAL '${daysAhead} days'
+       -- A synthetic booking is not demand, and must not pull supply planning
+       -- toward a job nobody is waiting for.
+       AND ${excludeSyntheticSql('b')}
      LIMIT 20`,
     []
   );
@@ -230,6 +234,7 @@ export const getSupplyGaps = async (
            AND b.worker_uid IS NULL
            AND so.service_id IS NOT DISTINCT FROM $1
            AND b.branch_id IS NOT DISTINCT FROM $2
+           AND ${excludeSyntheticSql('b')}
            AND b.schedule::date = $3::date`,
         [combo.service_id, combo.branch_id, dateStr]
       );

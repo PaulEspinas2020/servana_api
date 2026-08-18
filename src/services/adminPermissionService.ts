@@ -1,5 +1,5 @@
-import dbQuery from '../db/dbQuery';
-import { markInviteAccepted, ensureInviteColumns } from './adminInviteState';
+import dbQuery, { pool } from '../db/dbQuery';
+import { markInviteAccepted } from './adminInviteState';
 import { db } from '../config';
 import { auditFire } from './adminAuditService';
 import { toCamel } from '../helpers/idGenerator';
@@ -409,8 +409,12 @@ async function insertAdminUserRow(opts: {
   createdBy: string;
   onConflict: AdminRowConflict;
   returning?: boolean;
-}): Promise<any | null> {
-  const res = await dbQuery.query(
+}, client?: { query: (text: string, values?: any[]) => Promise<any> }): Promise<any | null> {
+  // `client` lets a caller run this inside an existing transaction. bootstrapSuperAdmin
+  // needs that: its "is there already a Super Admin?" check and this insert must not be
+  // separable, or two concurrent callers can both pass the check.
+  const runner = client ?? dbQuery;
+  const res = await runner.query(
     `INSERT INTO ${s}.admin_users ${ADMIN_USER_COLUMNS}
      VALUES ($1, $2, $3, $4, 'active', $5)
      ${CONFLICT_SQL[opts.onConflict]}
@@ -420,89 +424,34 @@ async function insertAdminUserRow(opts: {
   return res.rows?.[0] ?? null;
 }
 
-export async function ensurePermissionSchema(): Promise<void> {
+/**
+ * Seed the admin permission catalog and promote pre-existing role=1 accounts.
+ *
+ * -- Renamed from ensurePermissionSchema (TAB 02) -------------------------------
+ *
+ * It used to create `admin_users`, `admin_permission_definitions`,
+ * `admin_permission_grants`, `admin_permission_events` and four indexes, and THEN
+ * seed. The DDL is gone — all five objects come from
+ * `scripts/baseline/000-baseline.sql` — and the name went with it, because a
+ * function called `ensurePermissionSchema` that does not touch schema is a lie
+ * that the next reader has to discover by reading the body.
+ *
+ * What remains is DATA, and it is still required at boot for a real reason: an
+ * `admin_permission_grants` row is meaningless without the matching
+ * `admin_permission_definitions` row, so an unseeded database can hold grants
+ * that resolve to nothing. That is an AUTHORIZATION outcome decided by absence,
+ * which is why the startup entry stays `required`.
+ *
+ * Both halves are idempotent — `ON CONFLICT (admin_uid) DO NOTHING` for the
+ * promotion, `ON CONFLICT (permission_key) DO UPDATE` for the catalog — so this
+ * is safe on every boot and is what lets a definition's label or risk_level be
+ * corrected by editing PERMISSION_SEEDS rather than by a migration.
+ *
+ * The promotion is deliberately narrow: it only inserts, never revokes. Removing
+ * an admin is a decision with an actor and a reason, and this runs unattended.
+ */
+export async function seedAdminPermissions(): Promise<void> {
   const s = db.schema;
-
-  // admin_users
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.admin_users (
-      admin_uid       TEXT PRIMARY KEY,
-      email           TEXT NOT NULL,
-      display_name    TEXT,
-      is_super_admin  BOOLEAN NOT NULL DEFAULT FALSE,
-      account_status  TEXT NOT NULL DEFAULT 'active',
-      created_by      TEXT,
-      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_by      TEXT,
-      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      deactivated_at  TIMESTAMPTZ,
-      version         INTEGER NOT NULL DEFAULT 1
-    )
-  `);
-
-  // invited_at / accepted_at. Added here rather than lazily, because the admin
-  // user LIST query derives invitationState from them — a lazily-added column
-  // means the first page load after deploy fails on a database that has not yet
-  // sent an invitation, which is every database at the moment of deploy.
-  await ensureInviteColumns();
-
-  // admin_permission_definitions
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.admin_permission_definitions (
-      permission_key        TEXT PRIMARY KEY,
-      module                TEXT NOT NULL,
-      group_label           TEXT NOT NULL,
-      label                 TEXT NOT NULL,
-      description           TEXT,
-      action_type           TEXT NOT NULL,
-      risk_level            TEXT NOT NULL DEFAULT 'low',
-      requires              JSONB NOT NULL DEFAULT '[]',
-      conflicts_with        JSONB NOT NULL DEFAULT '[]',
-      is_dangerous          BOOLEAN NOT NULL DEFAULT FALSE,
-      is_hidden_from_normal_ui BOOLEAN NOT NULL DEFAULT FALSE,
-      is_active             BOOLEAN NOT NULL DEFAULT TRUE,
-      display_order         INTEGER NOT NULL DEFAULT 0,
-      created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  // admin_permission_grants
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.admin_permission_grants (
-      id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      admin_uid      TEXT NOT NULL,
-      permission_key TEXT NOT NULL,
-      granted        BOOLEAN NOT NULL,
-      granted_by     TEXT NOT NULL,
-      granted_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      revoked_by     TEXT,
-      revoked_at     TIMESTAMPTZ,
-      reason         TEXT,
-      version        INTEGER NOT NULL DEFAULT 1
-    )
-  `);
-  await dbQuery.query(`CREATE INDEX IF NOT EXISTS idx_perm_grants_uid ON ${s}.admin_permission_grants(admin_uid)`);
-  await dbQuery.query(`CREATE INDEX IF NOT EXISTS idx_perm_grants_key ON ${s}.admin_permission_grants(permission_key)`);
-  await dbQuery.query(`CREATE INDEX IF NOT EXISTS idx_perm_grants_uid_granted ON ${s}.admin_permission_grants(admin_uid) WHERE revoked_at IS NULL`);
-
-  // admin_permission_events (append-only)
-  await dbQuery.query(`
-    CREATE TABLE IF NOT EXISTS ${s}.admin_permission_events (
-      event_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      target_admin_uid    TEXT NOT NULL,
-      actor_admin_uid     TEXT NOT NULL,
-      event_type          TEXT NOT NULL,
-      added_permissions   JSONB NOT NULL DEFAULT '[]',
-      removed_permissions JSONB NOT NULL DEFAULT '[]',
-      before_permissions  JSONB,
-      after_permissions   JSONB,
-      reason              TEXT NOT NULL,
-      request_id          TEXT,
-      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-  await dbQuery.query(`CREATE INDEX IF NOT EXISTS idx_perm_events_target ON ${s}.admin_permission_events(target_admin_uid)`);
 
   // Bootstrap: promote existing role=1 users to Super Admin if no super admins exist
   await dbQuery.query(`
@@ -1184,43 +1133,113 @@ export async function assertAtLeastOneSuperAdmin(excludeUid?: string): Promise<v
   }
 }
 
-// One-time bootstrap: promote caller to Super Admin when no Super Admins exist
+// One-time bootstrap: promote caller to Super Admin when no Super Admins exist.
+//
+// This route is reachable by ANY authenticated Firebase user — a customer, a
+// provider — because of an unavoidable chicken-and-egg: the very first Super Admin
+// cannot already be an admin. That makes the checks below the only thing standing
+// between a customer account and full platform control, so they are deliberately
+// strict and fail closed.
+//
+// Three things were wrong with the previous version:
+//
+//  1. It counted only `account_status = 'active'`. Deactivating every Super Admin
+//     — an ordinary admin action, or an accident — silently REOPENED self-promotion
+//     to the whole authenticated internet. Existence, not activeness, is what makes
+//     bootstrap unnecessary, so the count no longer filters on status.
+//  2. The count and the insert were separate statements with no transaction and no
+//     lock, so two simultaneous callers could both read zero and both be promoted.
+//     Everything now runs in one transaction behind an advisory lock.
+//  3. Only success was audited. A refused attempt is the more interesting security
+//     event, and it left no trace at all.
+//
+// It also now distinguishes a genuine first run from a half-configured system: if
+// admin_users has rows but none of them is a Super Admin, the caller must already
+// be one of those admins. Only a completely empty admin table is open to any
+// authenticated caller, because only then is there nobody who could do it instead.
 export async function bootstrapSuperAdmin(
   adminUid: string,
   email: string,
   displayName: string | null,
   requestId: string | null
 ): Promise<{ adminUid: string; isSuperAdmin: boolean }> {
-  const superAdminCount = await dbQuery.query(
-    `SELECT COUNT(*) FROM ${s}.admin_users WHERE is_super_admin = TRUE AND account_status = 'active'`
-  );
-  if (Number(superAdminCount.rows[0]?.count ?? 0) > 0) {
-    throw Object.assign(
-      new Error('Super Admin already exists — bootstrap not allowed'),
-      { code: 'CONFLICT' }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Serialise concurrent bootstrap attempts; the lock is released at COMMIT.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      'servana-admin-bootstrap-super-admin',
+    ]);
+
+    const counts = await client.query(
+      `SELECT COUNT(*) FILTER (WHERE is_super_admin = TRUE) AS super_admins,
+              COUNT(*)                                      AS admins
+         FROM ${s}.admin_users`
     );
+    const superAdmins = Number(counts.rows[0]?.super_admins ?? 0);
+    const admins      = Number(counts.rows[0]?.admins ?? 0);
+
+    const deny = async (message: string, code: string) => {
+      await client.query('ROLLBACK').catch(() => {});
+      auditFire({
+        actionCategory: 'admin', action: 'super_admin_bootstrap_denied',
+        entityType: 'admin_user' as any, entityId: adminUid,
+        actorUid: adminUid, actorDisplayName: displayName, outcome: 'blocked',
+        metadata: { reason: code, superAdmins, admins }, requestId,
+      });
+      throw Object.assign(new Error(message), { code: 'CONFLICT' });
+    };
+
+    if (superAdmins > 0) {
+      // Covers suspended/deactivated Super Admins too — see (1) above.
+      await deny('Super Admin already exists — bootstrap not allowed', 'SUPER_ADMIN_EXISTS');
+    }
+
+    if (admins > 0) {
+      const isExistingAdmin = await client.query(
+        `SELECT 1 FROM ${s}.admin_users WHERE admin_uid = $1 LIMIT 1`,
+        [adminUid]
+      );
+      if (!isExistingAdmin.rowCount) {
+        await deny(
+          'Admin accounts already exist — an existing admin must perform this bootstrap',
+          'NOT_AN_EXISTING_ADMIN'
+        );
+      }
+    }
+
+    await insertAdminUserRow({
+      adminUid, email, displayName,
+      isSuperAdmin: true,
+      createdBy: "bootstrap",
+      onConflict: "elevate",
+    }, client);
+    // Same NOT NULL requirement as createAdminUser, and it was the same bug here.
+    // Found only because a test asserted the broken shape was GONE rather than
+    // that the fixed shape was present — the first phrasing would have passed
+    // with this copy still sitting untouched a thousand lines below.
+    //
+    // Inside the transaction on purpose: this is the half that actually grants
+    // role 1. Committing the admin_users row without it, or vice versa, leaves a
+    // Super Admin the role checks do not recognise (or a role-1 account with no
+    // admin record) with no way to tell which half landed.
+    const boot = splitNameForCredentials(displayName, email);
+    await client.query(
+      `INSERT INTO ${s}.user_credentials (uid, email, first_name, last_name, role)
+       VALUES ($1, $2, $3, $4, 1)
+       ON CONFLICT (uid) DO UPDATE SET
+         role = 1,
+         email = COALESCE(${s}.user_credentials.email, EXCLUDED.email)`,
+      [adminUid, email, boot.first, boot.last]
+    );
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
-
-  await insertAdminUserRow({
-    adminUid, email, displayName,
-    isSuperAdmin: true,
-    createdBy: "bootstrap",
-    onConflict: "elevate",
-  });
-
-  // Same NOT NULL requirement as createAdminUser, and it was the same bug here.
-  // Found only because a test asserted the broken shape was GONE rather than
-  // that the fixed shape was present — the first phrasing would have passed
-  // with this copy still sitting untouched a thousand lines below.
-  const boot = splitNameForCredentials(displayName, email);
-  await dbQuery.query(
-    `INSERT INTO ${s}.user_credentials (uid, email, first_name, last_name, role)
-     VALUES ($1, $2, $3, $4, 1)
-     ON CONFLICT (uid) DO UPDATE SET
-       role = 1,
-       email = COALESCE(${s}.user_credentials.email, EXCLUDED.email)`,
-    [adminUid, email, boot.first, boot.last]
-  );
 
   auditFire({
     actionCategory: 'admin', action: 'super_admin_granted',

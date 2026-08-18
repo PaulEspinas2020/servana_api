@@ -41,8 +41,24 @@ describe('admin operational notifications', () => {
   });
 
   it('schedules the active-booking summary for 07:00 Asia/Manila', () => {
-    expect(scheduler).toContain("cron.schedule('0 7 * * *'");
-    expect(scheduler).toContain("timezone: 'Asia/Manila'");
+    /**
+     * This read the inline `cron.schedule('0 7 * * *', ...)` call. TAB 08 moved
+     * the six jobs into the `SCHEDULED_JOBS` registry so scheduling is separate
+     * from execution, so the schedule and timezone are asserted from the registry
+     * itself rather than from the shape of the registration call.
+     *
+     * Asserting the exported value is stronger than asserting the source text:
+     * it survives a reformat, and it fails if the entry is registered with the
+     * wrong cadence rather than merely written differently.
+     */
+    const { SCHEDULED_JOBS } = require('../src/scheduler');
+    const daily = SCHEDULED_JOBS.find(
+      (j: any) => j.name === 'daily-admin-booking-summary',
+    );
+    expect(daily).toBeDefined();
+    expect(daily.schedule).toBe('0 7 * * *');
+    // Without the timezone the summary follows host UTC and lands at 15:00 Manila.
+    expect(daily.options?.timezone).toBe('Asia/Manila');
     expect(scheduler).toContain("type: 'daily_active_bookings'");
   });
 });

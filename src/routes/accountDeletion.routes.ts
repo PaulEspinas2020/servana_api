@@ -3,9 +3,11 @@ import { rateLimit } from "express-rate-limit";
 import { rateLimitBody } from "../helpers/rateLimitBody";
 import verifyAuth from "../middleware/verifyAuth";
 import * as ctrl from "../controllers/accountDeletionController";
-import { ensureAccountDeletionTable } from "../services/accountDeletionService";
 
-ensureAccountDeletionTable().catch(console.error);
+// No schema bootstrap here, and none in startup either (TAB 02). This module
+// used to issue DDL at import — the worst place for it, since it ran whenever
+// the router was loaded. `account_deletion_requests` now comes from the
+// baseline; see the schema note in services/accountDeletionService.
 
 /**
  * Tighter than the sign-in limiter. The public form is unauthenticated and

@@ -9,6 +9,12 @@ import { clearFcmToken } from "../services/notification.service";
 import { refreshIdToken, TokenRefreshError } from '../services/tokenRefreshService';
 import { sendAuthError } from "../errors/authErrors";
 import { continueUrlFor } from "../constants/platformContinueUrls";
+import {
+  normalizeProviderRegistrationInput,
+  normalizeProviderSourceClient,
+  ProfileCreationValidationError,
+  projectProviderRegistrationResponse,
+} from "../services/profileCreationContract";
 
 const signin = async (req: Request, res: Response) => {
     const { email, password, fcmToken } = req.body;
@@ -72,14 +78,34 @@ const adminSignin = async (req: Request, res: Response) => {
 const signup = async (req: Request, res: Response) => {
     try {
         const dbResponse = await authService.registerUser(req.body);
+        const userId =
+            (dbResponse as any).dbRegister?.uid ||
+            (dbResponse as any).dbRegister?.id || null;
+
+        // Keep classic provider-mobile signup aligned with the Firebase-first
+        // provider web path. These hooks are deliberately non-blocking: the
+        // account/profile write above is authoritative and must not be reported
+        // as failed because attribution or an eligibility refresh is delayed.
+        if (Number(req.body?.role) === 2 && userId) {
+            const inferredSource = req.body?.sourceClient ??
+                (req.body?.platform === 'mobile' ? 'provider_mobile' : 'provider_web');
+            const sourceClient = normalizeProviderSourceClient(inferredSource);
+            upsertSourceAttribution(userId, sourceClient, true, 'registration').catch(() => {});
+            autoOnlineEngine.evaluateProvider(userId, 'system', null).catch(() => {});
+        }
         // Inline response — avoid singleton successMessage race condition under concurrent requests.
         // Only forward known safe string error messages; never expose Error objects (may contain Firebase internals).
         return res.status(200).json({
             status: 'success',
             data: {
                 success: true,
-                userId: (dbResponse as any).dbRegister?.uid || null,
+                userId,
                 message: (dbResponse as any).message,
+                verificationType: (dbResponse as any).verificationType,
+                verificationDeliveryPending:
+                    (dbResponse as any).verificationDeliveryPending ??
+                    (dbResponse as any).otpDeliveryPending ?? false,
+                onboardingPending: (dbResponse as any).onboardingPending ?? false,
             },
         });
     } catch (error: any) {
@@ -170,6 +196,15 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
 
     const result = await firebaseFunction.firebaseAuthLogin(idToken, role);
 
+    const requestedRole = role === undefined ? 2 : Number(role);
+    const resolvedRole = Number(result?.data?.role);
+    if (requestedRole === 2 && ![2, 4].includes(resolvedRole)) {
+      return res.status(403).json({
+        status: "failed",
+        message: "This account is not registered as a service provider.",
+      });
+    }
+
     // Non-blocking attribution: only record when sourceClient is explicitly sent
     if (sourceClient && result?.data?.uid) {
       upsertSourceAttribution(result.data.uid, sourceClient, false).catch(() => {});
@@ -192,7 +227,6 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
     // the cause discarded, so a database constraint, a Firebase outage and a
     // genuinely bad token were indistinguishable in production — and the portal
     // renders all of them as "session expired", which points at the wrong thing.
-    console.error("[firebase-login] failed:", error?.code ?? "", error?.message ?? error);
 
     // Signing in with an identifier that belongs to an existing account is not
     // an authentication failure. Told to try again, the person will keep failing
@@ -201,6 +235,14 @@ export const firebaseAuthLoginController = async (req: Request, res: Response) =
       // Keeps the specific message — it names which identifier to use, which is
       // the whole point. The generic one would send them round the same loop.
       return sendAuthError(res, "ACCOUNT_LINK_REQUIRED", error.message);
+    }
+
+    if (error?.code === "PROVIDER_ACCOUNT_NOT_FOUND") {
+      return res.status(403).json({
+        status: "failed",
+        code: "PROVIDER_ACCOUNT_NOT_FOUND",
+        message: "Create your provider account before signing in.",
+      });
     }
 
     if (error?.message?.includes("disabled")) {
@@ -241,6 +283,25 @@ export const customerFirebaseLoginController = async (req: Request, res: Respons
     }
     return res.status(200).json(result);
   } catch (error: any) {
+    /**
+     * A link collision answers 200 with no token, deliberately.
+     *
+     * The shipped mobile client throws on ANY non-2xx before the body is read,
+     * and on 401 it also fires `onUnauthorized`, which drives a session-expiry
+     * redirect (`servana_api_client.dart` `_decodeJson`). Either would hide the
+     * message and, at sign-in, show "session expired" to somebody who has no
+     * session yet.
+     *
+     * Its exchanger treats "200 with an empty `token`" as a clean, displayable
+     * failure and surfaces the top-level `message`
+     * (`auth_token_exchanger.dart:30-35`), so this is the one shape the
+     * installed app can actually present. `{status:'failed'}` with 200 is also
+     * what the web's `unwrap()` already reads as a failure, so no consumer
+     * mistakes it for success.
+     */
+    if (error?.linkCollision) {
+      return res.status(200).json({ status: "failed", message: error.message });
+    }
     const isDisabled = error?.disabled || error?.message?.includes("disabled");
     return res.status(isDisabled ? 403 : 401).json({
       status: "failed",
@@ -253,35 +314,50 @@ export const customerFirebaseLoginController = async (req: Request, res: Respons
 
 export const providerRegisterController = async (req: Request, res: Response) => {
   try {
-    const { idToken, firstName, lastName, sourceClient } = req.body;
-
-    if (!idToken) {
-      return res.status(400).json({ status: "failed", message: "idToken is required" });
-    }
-    if (!firstName || !lastName) {
-      return res.status(400).json({ status: "failed", message: "firstName and lastName are required" });
-    }
+    const { idToken, firstName, lastName, sourceClient } =
+      normalizeProviderRegistrationInput(req.body);
 
     const result = await firebaseFunction.firebaseProviderRegister(
       idToken,
-      String(firstName).trim(),
-      String(lastName).trim(),
+      firstName,
+      lastName,
     );
+
+    const registeredRole = Number(result?.data?.role);
+    if (![2, 4].includes(registeredRole)) {
+      return res.status(403).json({
+        status: "failed",
+        message: "This account is not registered as a service provider.",
+      });
+    }
 
     // Non-blocking attribution: record registration source for the newly created provider
     if (result?.data?.uid) {
-      const src = (sourceClient as string) || 'provider_web';
-      upsertSourceAttribution(result.data.uid, src as any, true, 'registration').catch(() => {});
+      upsertSourceAttribution(result.data.uid, sourceClient, true, 'registration').catch(() => {});
       // Non-blocking auto-online eligibility check on new provider registration
       autoOnlineEngine.evaluateProvider(result.data.uid, 'system', null).catch(() => {});
     }
 
-    return res.status(200).json(result);
+    return res.status(200).json(projectProviderRegistrationResponse(result));
   } catch (error: any) {
+    if (error instanceof ProfileCreationValidationError) {
+      return res.status(error.statusCode).json({
+        status: 'failed',
+        code: error.code,
+        field: error.field,
+        message: error.message,
+      });
+    }
     const isDisabled = error?.message?.includes("disabled");
-    return res.status(isDisabled ? 403 : 400).json({
+    const isInvalidToken = typeof error?.code === "string" && error.code.startsWith("auth/");
+    const responseStatus = isDisabled ? 403 : isInvalidToken ? 401 : 500;
+    return res.status(responseStatus).json({
       status: "failed",
-      message: isDisabled ? "This account has been disabled. Please contact support." : "Registration failed. Please try again.",
+      message: isDisabled
+        ? "This account has been disabled. Please contact support."
+        : isInvalidToken
+        ? "Authentication failed."
+        : "Registration failed. Please try again.",
     });
   }
 };
@@ -301,10 +377,11 @@ export const addEmployeesController = async (req: Request, res: Response) => {
             autoOnlineEngine.evaluateProvider((r as any).uid, 'system', null).catch(() => {});
         });
 
-        return res.status(200).json({
-            status: "success",
+        const created = results.length - failed.length;
+        return res.status(created === 0 ? 422 : 200).json({
+            status: created === 0 ? "failed" : failed.length > 0 ? "partial" : "success",
             total: results.length,
-            created: results.length - failed.length,
+            created,
             failed: failed.length,
             results,
         });

@@ -440,19 +440,51 @@ describe('adminCommunicationService.ts — service contract', function () {
   test('exports archiveNotificationTemplate',    function () { expect(src).toContain('export async function archiveNotificationTemplate'); });
   test('exports previewNotificationTemplate',    function () { expect(src).toContain('export function previewNotificationTemplate'); });
   test('exports getChatConversationSummaries',   function () { expect(src).toContain('export async function getChatConversationSummaries'); });
-  test('exports ensureCommunicationSchema',      function () { expect(src).toContain('export function ensureCommunicationSchema'); });
+  test('exports NO schema bootstrap (TAB 02)',    function () { expect(src).not.toContain('export function ensureCommunicationSchema'); });
   test('exports redactForComm',                  function () { expect(src).toContain('export function redactForComm'); });
-  test('creates admin_communication_events table', function () {
-    expect(src).toContain('admin_communication_events');
+  /**
+   * These asserted the DDL text inside `initSchema`. That bootstrap is gone
+   * (TAB 02) — all eight objects come from `scripts/baseline/000-baseline.sql` —
+   * so the assertions read the schema that will actually exist.
+   *
+   * Note that two of them would still have PASSED against the service source:
+   * it queries `admin_communication_events` and `admin_notification_templates`
+   * by name, so `toContain` matched regardless of whether anything created them.
+   * That is the weakness of asserting on a mention rather than a definition.
+   */
+  var baseline = fs
+    .readFileSync(path.join(__dirname, '..', 'scripts', 'baseline', '000-baseline.sql'), 'utf8')
+    .replace(/\r\n/g, '\n');
+
+  test('the service issues no DDL at all', function () {
+    /**
+     * Comments stripped first. The comment that REPLACED the bootstrap explains
+     * what it used to create, so a bare substring check matches its own
+     * documentation — which is exactly how this assertion first failed.
+     */
+    var code = src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter(function (l) { return !/^\s*\/\//.test(l); })
+      .join('\n');
+    expect(code).not.toContain('CREATE TABLE');
+    expect(code).not.toContain('CREATE INDEX');
   });
-  test('creates admin_notification_templates table', function () {
-    expect(src).toContain('admin_notification_templates');
+  test('both tables are declared by the baseline', function () {
+    expect(baseline).toContain('CREATE TABLE servana.admin_communication_events (');
+    expect(baseline).toContain('CREATE TABLE servana.admin_notification_templates (');
   });
   test('retry_count capped at 5', function () { expect(src).toContain('retry_count < 5'); });
   test('retry increments retry_count', function () { expect(src).toContain('retry_count + 1'); });
-  test('uses gen_random_uuid for event_key', function () { expect(src).toContain('gen_random_uuid'); });
-  test('has index on entity_type + entity_id', function () { expect(src).toContain('idx_ace_entity'); });
-  test('has index on status + channel', function () { expect(src).toContain('idx_ace_status'); });
+  test('event_key is UNIQUE with a uuid default, which is what makes a resend idempotent', function () {
+    // The service never generates event_key itself — it relies on the default.
+    var table = /CREATE TABLE servana\.admin_communication_events \(([\s\S]*?)\n\);/.exec(baseline);
+    expect(table).not.toBeNull();
+    expect(table[1]).toMatch(/event_key[^,]*gen_random_uuid/);
+    expect(baseline).toContain('admin_communication_events_event_key_key UNIQUE (event_key)');
+  });
+  test('has index on entity_type + entity_id', function () { expect(baseline).toContain('idx_ace_entity'); });
+  test('has index on status + channel', function () { expect(baseline).toContain('idx_ace_status'); });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -470,8 +502,11 @@ describe('app.ts — adminCommunication registration', function () {
   test('mounts adminCommunicationRoutes under /api', function () {
     expect(src).toContain("adminCommunicationRoutes");
   });
-  test('calls ensureCommunicationSchema on startup', function () {
-    expect(src).toContain('ensureCommunicationSchema');
+  test('does NOT bootstrap communication schema at startup (TAB 02)', function () {
+    // The entry is removed, not downgraded — there is no DDL left to gate on.
+    var startupSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'startup.ts'), 'utf8').replace(/\r\n/g, '\n');
+    expect(startupSrc).not.toContain('ensureCommunicationSchema');
+    expect(startupSrc).not.toContain("name: 'admin-communication-schema'");
   });
 });
 

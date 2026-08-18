@@ -36,41 +36,25 @@ const s = db.schema;
 
 export type DeletionSource = "app" | "web";
 
-export const ensureAccountDeletionTable = async (): Promise<void> => {
-  await dbQuery.query(
-    `CREATE TABLE IF NOT EXISTS ${s}.account_deletion_requests (
-       id              BIGSERIAL PRIMARY KEY,
-       uid             VARCHAR(128),
-       identifier      VARCHAR(254) NOT NULL,
-       identifier_type VARCHAR(10)  NOT NULL,
-       source          VARCHAR(10)  NOT NULL,
-       status          VARCHAR(20)  NOT NULL DEFAULT 'pending',
-       requested_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
-       processed_at    TIMESTAMPTZ,
-       processed_by    VARCHAR(128),
-       note            TEXT
-     )`,
-    []
-  );
-
-  // One open request per identifier. Someone who submits the form three times
-  // because nothing visibly happened should not create three tickets for an
-  // operator to reconcile — and the partial predicate means a NEW request can
-  // still be filed after an earlier one is processed.
-  await dbQuery.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_adr_open_identifier
-       ON ${s}.account_deletion_requests (identifier)
-       WHERE status = 'pending'`,
-    []
-  );
-
-  await dbQuery.query(
-    `CREATE INDEX IF NOT EXISTS idx_adr_pending
-       ON ${s}.account_deletion_requests (requested_at)
-       WHERE status = 'pending'`,
-    []
-  );
-};
+/**
+ * ── Schema (TAB 02) ──────────────────────────────────────────────────────────
+ *
+ * `account_deletion_requests` and its two partial indexes used to be created
+ * here, at runtime, by `ensureAccountDeletionTable` — originally at import of the
+ * ROUTE module, then as an optional startup dependency. That function is gone.
+ *
+ * The schema now comes from `scripts/baseline/000-baseline.sql`, which is
+ * production's own dump and carries the table, both indexes and the sequence.
+ * `npm run db:verify:embedded` proves a fresh database reaches it, so nothing
+ * here needs to check.
+ *
+ * The indexes are worth knowing about even though this file no longer creates
+ * them. `idx_adr_open_identifier` is UNIQUE on (identifier) WHERE status =
+ * 'pending', which is what makes the `ON CONFLICT DO NOTHING` below collapse
+ * repeat submissions into one operator ticket — and the partial predicate is
+ * what still allows a NEW request after an earlier one is processed. Drop that
+ * index and the insert below silently starts creating duplicates.
+ */
 
 /**
  * Record a deletion request for a typed identifier.

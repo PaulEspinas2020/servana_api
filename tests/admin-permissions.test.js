@@ -12,6 +12,7 @@ const MW     = path.resolve(__dirname, '../src/middleware/requirePermission.ts')
 const CTRL   = path.resolve(__dirname, '../src/controllers/adminPermissionController.ts');
 const ROUTES = path.resolve(__dirname, '../src/routes/adminPermission.routes.ts');
 const APP    = path.resolve(__dirname, '../src/app.ts');
+const STARTUP = path.resolve(__dirname, '../src/startup.ts');
 const AUDIT  = path.resolve(__dirname, '../src/services/adminAuditService.ts');
 
 // ── Route files ───────────────────────────────────────────────────────────────
@@ -33,12 +34,18 @@ describe('adminPermissionService — file structure', () => {
   const src = read(SVC);
 
   test('imports dbQuery and db from config', () => {
-    expect(src).toContain("import dbQuery from '../db/dbQuery'");
+    // Matches the default import regardless of any named imports alongside it —
+    // pinning the exact string broke as soon as `pool` was added for
+    // bootstrapSuperAdmin's transaction, which is not what this test is about.
+    expect(src).toMatch(/import dbQuery(?:,\s*\{[^}]*\})?\s+from '\.\.\/db\/dbQuery'/);
     expect(src).toContain("import { db } from '../config'");
   });
 
-  test('exports ensurePermissionSchema', () => {
-    expect(src).toContain('export async function ensurePermissionSchema');
+  test('exports seedAdminPermissions, and no schema bootstrap (TAB 02)', () => {
+    // Renamed when the DDL was removed: the function seeds the permission
+    // catalog and promotes role=1 accounts, and touches no schema.
+    expect(src).toContain('export async function seedAdminPermissions');
+    expect(src).not.toContain('export async function ensurePermissionSchema');
   });
 
   test('exports getAdminUser', () => {
@@ -118,42 +125,49 @@ describe('adminPermissionService — file structure', () => {
   });
 });
 
-describe('adminPermissionService — schema bootstrap', () => {
+describe('adminPermissionService — the four tables come from the baseline (TAB 02)', () => {
   const src = read(SVC);
+  const baseline = fs
+    .readFileSync(path.join(__dirname, '..', 'scripts', 'baseline', '000-baseline.sql'), 'utf8')
+    .replace(/\r\n/g, '\n');
 
-  test('creates admin_users table with IF NOT EXISTS', () => {
-    expect(src).toContain('CREATE TABLE IF NOT EXISTS');
-    expect(src).toContain('admin_users');
+  /**
+   * These asserted the service source contained `CREATE TABLE IF NOT EXISTS`,
+   * `idx_perm_grants_uid`, and so on. That was the right check while the service
+   * created its own schema at boot.
+   *
+   * It does not any more. The four tables and four indexes are in
+   * `scripts/baseline/000-baseline.sql` — production's own dump, and what
+   * `db:verify:embedded` builds a fresh database from — so the assertions check
+   * the schema that will actually exist rather than code that meant to create it.
+   */
+
+  test('the service issues no DDL at all', () => {
+    expect(src).not.toContain('CREATE TABLE');
+    expect(src).not.toContain('CREATE INDEX');
+    expect(src).not.toContain('ADD COLUMN');
   });
 
-  test('creates admin_permission_definitions table', () => {
-    expect(src).toContain('admin_permission_definitions');
+  test('all four tables are declared by the baseline', () => {
+    ['admin_users', 'admin_permission_definitions', 'admin_permission_grants', 'admin_permission_events']
+      .forEach((table) => {
+        expect(baseline).toContain('CREATE TABLE servana.' + table + ' (');
+      });
   });
 
-  test('creates admin_permission_grants table', () => {
-    expect(src).toContain('admin_permission_grants');
+  test('all four indexes are declared by the baseline', () => {
+    ['idx_perm_grants_uid', 'idx_perm_grants_key', 'idx_perm_grants_uid_granted', 'idx_perm_events_target']
+      .forEach((idx) => {
+        expect(baseline).toContain(idx);
+      });
   });
 
-  test('creates admin_permission_events table', () => {
-    expect(src).toContain('admin_permission_events');
-  });
-
-  test('bootstraps existing role=1 users as Super Admins', () => {
-    expect(src).toContain('user_credentials');
-    expect(src).toContain('role = 1');
+  test('the seeding it still does is idempotent, so every boot is safe', () => {
+    // Both halves run unattended on each start. The promotion only ever INSERTs:
+    // removing an admin is a decision with an actor and a reason.
     expect(src).toContain('ON CONFLICT (admin_uid) DO NOTHING');
-  });
-
-  test('seeds permissions with ON CONFLICT DO UPDATE', () => {
-    expect(src).toContain('ON CONFLICT (permission_key) DO UPDATE SET');
-  });
-
-  test('creates index on admin_permission_grants(admin_uid)', () => {
-    expect(src).toContain('idx_perm_grants_uid');
-  });
-
-  test('creates index on admin_permission_events(target_admin_uid)', () => {
-    expect(src).toContain('idx_perm_events_target');
+    expect(src).toContain('ON CONFLICT (permission_key) DO UPDATE');
+    expect(src).not.toMatch(/DELETE FROM \$\{s\}\.admin_users/);
   });
 });
 
@@ -251,11 +265,50 @@ describe('adminPermissionService — safety guards', () => {
     expect(segment).toContain('assertAtLeastOneSuperAdmin');
   });
 
+  // Scans the WHOLE function body rather than a fixed byte window. The previous
+  // `substring(fnStart, fnStart + 600)` broke the moment the function grew a
+  // comment, which says nothing about whether the guard still works.
+  function bootstrapBody() {
+    const start = src.indexOf('export async function bootstrapSuperAdmin');
+    expect(start).toBeGreaterThan(-1);
+    const after = src.indexOf('\nexport ', start + 1);
+    return src.substring(start, after === -1 ? src.length : after);
+  }
+
   test('bootstrapSuperAdmin rejects if super admin already exists', () => {
-    const fnStart = src.indexOf('export async function bootstrapSuperAdmin');
-    const segment = src.substring(fnStart, fnStart + 600);
+    const segment = bootstrapBody();
     expect(segment).toContain('Super Admin already exists');
     expect(segment).toContain("code: 'CONFLICT'");
+  });
+
+  test('bootstrapSuperAdmin counts super admins regardless of account_status', () => {
+    // Filtering the count on account_status = 'active' meant deactivating every
+    // Super Admin reopened self-promotion to any authenticated user.
+    const segment = bootstrapBody();
+    expect(segment).toContain("FILTER (WHERE is_super_admin = TRUE)");
+    expect(segment).not.toContain("account_status = 'active'");
+  });
+
+  test('bootstrapSuperAdmin checks and writes inside one locked transaction', () => {
+    // Without this the check and the insert are separable and two concurrent
+    // callers can both pass the "no super admin yet" check.
+    const segment = bootstrapBody();
+    expect(segment).toContain('pg_advisory_xact_lock');
+    expect(segment).toContain("client.query('BEGIN')");
+    expect(segment).toContain("client.query('COMMIT')");
+    expect(segment).toContain("client.query('ROLLBACK')");
+  });
+
+  test('bootstrapSuperAdmin requires an existing admin when admin users exist', () => {
+    // Only a completely empty admin_users table is open to any authenticated
+    // caller; otherwise a customer could claim the first Super Admin slot.
+    const segment = bootstrapBody();
+    expect(segment).toContain('NOT_AN_EXISTING_ADMIN');
+  });
+
+  test('bootstrapSuperAdmin audits refused attempts', () => {
+    const segment = bootstrapBody();
+    expect(segment).toContain('super_admin_bootstrap_denied');
   });
 
   test('updateAdminUserPermissions requires reason', () => {
@@ -504,18 +557,30 @@ describe('app.ts — permission route registration', () => {
     expect(segment).toContain('/api');
   });
 
-  test('imports ensurePermissionSchema', () => {
-    expect(src).toContain('ensurePermissionSchema');
+  /**
+   * TAB 03 moved these bootstraps out of app.ts into a declared dependency
+   * graph. The IIFE and its `[admin-permission]` catch are gone — replaced by
+   * a classification and a central failure path — so the assertions now check
+   * the thing that carries the guarantee.
+   *
+   * This is strictly stronger. "app.ts mentions ensurePermissionSchema" could
+   * not distinguish a live bootstrap from a stale import; the graph says the
+   * dependency exists AND that authorization is `required`, so a failure
+   * withholds readiness rather than being logged.
+   */
+  test('the permission SEED is a declared startup dependency', () => {
+    const startup = fs.readFileSync(STARTUP, 'utf8').replace(/\r\n/g, '\n');
+    expect(startup).toContain('seedAdminPermissions');
+    expect(startup).toContain("name: 'admin-permission-seed'");
   });
 
-  test('calls ensurePermissionSchema in IIFE', () => {
-    expect(src).toContain('await ensurePermissionSchema()');
-  });
-
-  test('permission IIFE has error handler', () => {
-    const idx = src.indexOf('ensurePermissionSchema');
-    const segment = src.substring(idx, idx + 200);
-    expect(segment).toContain('[admin-permission]');
+  test('authorization is classified required, not optional', () => {
+    // TAB 03 stop condition: an authorization dependency must never be
+    // silently downgraded to optional.
+    const startup = fs.readFileSync(STARTUP, 'utf8').replace(/\r\n/g, '\n');
+    const idx = startup.indexOf("name: 'admin-permission-seed'");
+    expect(idx).toBeGreaterThan(-1);
+    expect(startup.substring(idx, idx + 200)).toContain("kind: 'required'");
   });
 });
 
@@ -812,11 +877,21 @@ describe('Security — no sensitive data in default admin user listings', () => 
     expect(segment).not.toContain('secret');
   });
 
-  test('permission grants table stores granted_by but not requester credentials', () => {
-    const tableIdx = src.indexOf('admin_permission_grants');
-    const segment = src.substring(tableIdx, tableIdx + 500);
-    expect(segment).toContain('granted_by');
-    expect(segment).not.toContain('password');
+  test('permission grants store granted_by and no credential columns', () => {
+    /**
+     * This used to slice 500 characters after the first mention of
+     * `admin_permission_grants` in the service, which worked only because the
+     * CREATE TABLE was there. The column list now lives in the baseline, so
+     * the window is taken from the real definition.
+     */
+    const baseline = fs
+      .readFileSync(path.join(__dirname, '..', 'scripts', 'baseline', '000-baseline.sql'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const table = /CREATE TABLE servana\.admin_permission_grants \(([\s\S]*?)\n\);/.exec(baseline);
+    expect(table).not.toBeNull();
+    expect(table[1]).toContain('granted_by');
+    expect(table[1]).not.toContain('password');
+    expect(table[1]).not.toContain('token');
   });
 });
 

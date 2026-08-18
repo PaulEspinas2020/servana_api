@@ -14,9 +14,19 @@
  * the conflicts come back with it, and the copy says the booking is still
  * theirs.
  */
+const mockDbQuery = jest.fn();
+const mockTxQuery = jest.fn((sql: string, params?: any[]) => {
+  const text = String(sql);
+  if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(text) || text.includes('pg_advisory_xact_lock'))
+    return Promise.resolve({ rows: [], rowCount: 0 });
+  if (text.includes('SELECT id FROM test.worker_time_off'))
+    return Promise.resolve({ rows: [], rowCount: 0 });
+  return mockDbQuery(sql, params);
+});
 jest.mock("../src/db/dbQuery", () => ({
   __esModule: true,
-  default: { query: jest.fn() },
+  default: { query: mockDbQuery },
+  pool: { connect: jest.fn(async () => ({ query: mockTxQuery, release: jest.fn() })) },
 }));
 jest.mock("../src/config", () => ({ __esModule: true, db: { schema: "test" } }));
 
@@ -25,6 +35,7 @@ import {
   createTimeOff,
   findTimeOffBookingConflicts,
 } from "../src/services/providerAvailabilityEngine";
+import { NON_OCCUPYING_STATUSES } from "../src/services/booking/eligibilityPipeline";
 
 const query = (dbQuery as any).query as jest.Mock;
 
@@ -153,10 +164,25 @@ describe("the query finds what it must", () => {
     expect(sql).toMatch(/UNION/);
   });
 
-  it("ignores cancelled and completed work", async () => {
-    // Neither is a commitment the provider still holds.
+  it("ignores work the provider is no longer committed to", async () => {
+    /**
+     * Was `NOT IN ('CANCELLED', 'COMPLETED')`, written here by hand.
+     *
+     * That is the same "does this booking occupy the provider" question the
+     * assignment executor answers, and the two lists disagreed: this one
+     * treated a REFUNDED booking, or one cancelled under the one-L production
+     * spelling, as a live commitment. A provider could be refused time off
+     * because of a booking nobody expected them to work.
+     *
+     * The list now comes from the shared declaration, so this suite asserts
+     * against the same source the executor uses rather than a copy of it.
+     */
     const sql = await sqlOf(allDay);
-    expect(sql).toMatch(/NOT IN \('CANCELLED', 'COMPLETED'\)/);
+    for (const status of NON_OCCUPYING_STATUSES) {
+      expect(sql).toContain(`'${status}'`);
+    }
+    expect(sql).toContain('CANCELED');   // the one-L spelling this used to miss
+    expect(sql).toContain('REFUNDED');
   });
 
   it("compares dates in the operational timezone, not the server's", async () => {

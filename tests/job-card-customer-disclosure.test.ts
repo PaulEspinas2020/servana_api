@@ -19,6 +19,7 @@ import { formatJobCard } from "../src/controllers/jobCardView";
 
 const row = (workerStatus: string) => ({
   booking_id: 101,
+  worker_uid: "provider-1",
   status: "CONFIRMED",
   schedule: "2026-08-10T09:00:00.000Z",
   payment_method: "CASH",
@@ -33,6 +34,10 @@ const row = (workerStatus: string) => ({
   zip_code: "1226",
   country: "PH",
   label: "Home",
+  delivery_instructions: "Use the side entrance",
+  // A real production location id, so the coordinate path is exercised rather
+  // than skipped by a null.
+  location_id: "loc_14.562312_121.019540",
   service_name: "Deep Clean",
   service_type: "standard",
   pricing_breakdown: {},
@@ -49,7 +54,13 @@ const TOP_KEYS = [
 ];
 const CUSTOMER_KEYS = ["uid", "name", "phone"];
 const ADDRESS_KEYS = [
-  "addressOne", "addressTwo", "city", "zipCode", "country", "label",
+  "addressOne", "addressTwo", "city", "zipCode", "country", "label", "instructions",
+  // Added 2026-08-11 (SW-05). Present on every branch and NULL wherever the
+  // street is null, because a precise pin IS the street address. This list is
+  // exact on purpose — the comment below says a field appearing here is a
+  // disclosure decision — so adding these two had to be a deliberate edit here,
+  // which is exactly what the guard is for.
+  "lat", "lng",
 ];
 
 const ALL_STATUSES = [
@@ -88,11 +99,23 @@ describe("before acceptance, the provider gets an area — not an identity", () 
     expect(out.address.addressOne).toBeNull();
     expect(out.address.addressTwo).toBeNull();
     expect(out.address.zipCode).toBeNull();
+    expect(out.address.instructions).toBeNull();
   });
 
   it("still gives enough to make a travel decision", () => {
     expect(out.address.city).toBe("Makati");
     expect(out.address.country).toBe("PH");
+  });
+
+  it("withholds the coordinates, which ARE the street address", () => {
+    // SW-05. The row HAS a valid location id; the gate is disclosure, not
+    // availability. Sending a pin here would hand over precisely what
+    // addressOne above deliberately withholds — a map pin on a house is not a
+    // weaker form of an address, it is the same fact.
+    expect(out.address.lat).toBeNull();
+    expect(out.address.lng).toBeNull();
+    expect(JSON.stringify(out)).not.toContain("14.562312");
+    expect(JSON.stringify(out)).not.toContain("121.01954");
   });
 
   it("masks the surname rather than dropping the name entirely", () => {
@@ -116,11 +139,14 @@ describe("a provider who declined retains nothing", () => {
     expect(out.customer.phone).toBeNull();
     expect(out.address.city).toBeNull();
     expect(out.address.addressOne).toBeNull();
+    expect(out.address.lat).toBeNull();
+    expect(out.address.lng).toBeNull();
     const json = JSON.stringify(out);
     expect(json).not.toContain("Maria");
     expect(json).not.toContain("Santos");
     expect(json).not.toContain("Makati");
     expect(json).not.toContain("+639171234567");
+    expect(json).not.toContain("14.562312");
   });
 });
 
@@ -136,6 +162,36 @@ describe("the operational window keeps full detail", () => {
     expect(out.address.addressTwo).toBe("Unit 5");
     expect(out.address.city).toBe("Makati");
     expect(out.address.zipCode).toBe("1226");
+    expect(out.address.instructions).toBe("Use the side entrance");
+    // SW-05 — the pin travels with the street, parsed from the canonical
+    // loc_{lat}_{lng} rather than re-derived on the device.
+    expect(out.address.lat).toBe(14.562312);
+    expect(out.address.lng).toBe(121.01954);
+  });
+
+  it("sends no pin when the address row has no usable location id", () => {
+    // SW-13. One production row holds a Google place id here. A provider gets
+    // the address text and no map, which is honest; guessing would put them at
+    // the wrong door.
+    const out: any = formatJobCard({
+      ...row("ACCEPTED"),
+      location_id: "ChIJ8T1GpMGzljMRq2q5T1u7I0w",
+    });
+    expect(out.address.addressOne).toBe("45 Ayala Avenue");
+    expect(out.address.lat).toBeNull();
+    expect(out.address.lng).toBeNull();
+  });
+
+  it("falls back to service_address coordinates for admin-created bookings", () => {
+    // Those have no user_address row at all, so location_id is absent.
+    const out: any = formatJobCard({
+      ...row("ACCEPTED"),
+      location_id: null,
+      service_address_lat: "14.5995",
+      service_address_lon: "120.9842",
+    });
+    expect(out.address.lat).toBe(14.5995);
+    expect(out.address.lng).toBe(120.9842);
   });
 });
 

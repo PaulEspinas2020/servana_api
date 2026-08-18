@@ -9,6 +9,7 @@ import * as provider from "../controllers/providerController";
 import * as locationAccess from "../controllers/providerLocationAccessController";
 import * as accountState from "../controllers/providerAccountStateController";
 import * as profileCompliance from "../controllers/providerProfileComplianceController";
+import * as providerCalendar from "../controllers/providerCalendarController";
 import * as reputation from "../controllers/providerReputationController";
 import * as supportCases from "../controllers/providerSupportCaseController";
 
@@ -50,10 +51,15 @@ router.post("/provider/public-profile-revisions", verifyAuth, requireProviderRol
 router.get("/provider/document-types", verifyAuth, requireProviderRole, profileCompliance.getDocumentCatalog);
 router.get("/provider/documents", verifyAuth, requireProviderRole, profileCompliance.getDocuments);
 router.post("/provider/documents", verifyAuth, requireProviderRole, profileCompliance.uploadDocument);
+router.delete("/provider/documents/:documentId", verifyAuth, requireProviderRole, profileCompliance.deleteDocument);
 router.get("/provider/documents/:documentId/preview", verifyAuth, requireProviderRole, profileCompliance.getDocumentPreview);
 router.get("/provider/certifications", verifyAuth, requireProviderRole, profileCompliance.getCertifications);
 router.post("/provider/certifications", verifyAuth, requireProviderRole, profileCompliance.submitCertification);
 router.get("/provider/compliance", verifyAuth, requireProviderRole, profileCompliance.getCompliance);
+// Calendar aggregation. ServanaWorker's Calendar tab has called this since it
+// shipped; the route was never added, so the screen 404'd on every load.
+// Read-only, provider identity from the token only.
+router.get("/provider/calendar", verifyAuth, requireProviderRole, providerCalendar.getCalendar);
 router.get("/provider/verification-timeline", verifyAuth, requireProviderRole, profileCompliance.getVerificationTimeline);
 router.post("/provider/contact-changes", verifyAuth, requireProviderRole, profileCompliance.requestContactChange);
 router.post("/provider/contact-changes/confirm", verifyAuth, requireProviderRole, profileCompliance.confirmContactChange);
@@ -140,9 +146,9 @@ router.post("/worker/onboarding/submit", verifyAuth, requireProviderRole, provid
 router.post("/worker/onboarding/step", verifyAuth, requireProviderRole, provider.saveOnboardingStep);
 
 // Additional work — worker decisions (auth-scoped, ownership-checked)
-router.post("/worker/additional-work/:id/decision", verifyAuth, requireProviderRole, provider.workerAdditionalDecision);
-router.post("/worker/additional-work/:id/withdraw", verifyAuth, requireProviderRole, provider.withdrawAdditionalWork);
-router.post("/worker/additional-work/:id/confirm-proceed", verifyAuth, requireProviderRole, provider.confirmProceedAdditionalWork);
+router.post("/worker/additional-work/:id/decision", verifyAuth, requireProviderRole, requireActiveProvider, provider.workerAdditionalDecision);
+router.post("/worker/additional-work/:id/withdraw", verifyAuth, requireProviderRole, requireActiveProvider, provider.withdrawAdditionalWork);
+router.post("/worker/additional-work/:id/confirm-proceed", verifyAuth, requireProviderRole, requireActiveProvider, provider.confirmProceedAdditionalWork);
 
 // Service area (P0-06)
 router.get("/worker/service-area", verifyAuth, requireProviderRole, provider.getWorkerServiceArea);
@@ -173,6 +179,11 @@ router.post("/provider/payout", verifyAuth, requireProviderRole, requireActivePr
 // Privacy / account actions (P1)
 router.get("/provider/privacy", verifyAuth, requireProviderRole, provider.getProviderPrivacy);
 router.post("/provider/privacy/export", verifyAuth, requireProviderRole, provider.requestProviderDataExport);
+// The provider accepts the Servana provider agreement.
+// `policy_acknowledgement` is a BLOCKING checklist requirement and nothing
+// wrote `policy_acknowledged_at` anywhere — measured on production, 0 rows
+// acknowledged — so no provider could ever clear it. Additive route.
+router.post("/provider/activation/policy-acknowledgement", verifyAuth, requireProviderRole, provider.acknowledgeProviderPolicy);
 router.post("/provider/account/deactivate", verifyAuth, requireProviderRole, provider.requestProviderDeactivation);
 router.post("/provider/account/delete", verifyAuth, requireProviderRole, provider.requestProviderDeletion);
 

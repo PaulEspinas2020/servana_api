@@ -17,75 +17,47 @@
  */
 
 import dbQuery from '../db/dbQuery';
+import { pool } from '../db/dbQuery';
 import { db } from '../config';
+import {
+  NON_OCCUPYING_STATUSES,
+  OVERLAPS_SPAN_SQL,
+  serviceDurationMinsSql,
+} from './booking/eligibilityPipeline';
 
 const s = db.schema;
 
-// ── Schema bootstrap ──────────────────────────────────────────────────────────
+/** The executor's occupancy list, as a SQL literal list. Built, never retyped. */
+const OCCUPANCY_EXCLUSION_SQL = NON_OCCUPYING_STATUSES.map((st) => `'${st}'`).join(', ');
 
-const ensureAvailabilityColumns = async () => {
-  await dbQuery.query(
-    `CREATE TABLE IF NOT EXISTS ${s}.worker_availability (
-       worker_uid TEXT PRIMARY KEY,
-       schedule   JSONB NOT NULL DEFAULT '[]',
-       timezone   TEXT NOT NULL DEFAULT 'Asia/Manila',
-       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-     )`,
-    []
-  );
-  // Additive columns — safe for mobile (nullable / have defaults)
-  await dbQuery.query(
-    `ALTER TABLE ${s}.worker_availability
-       ADD COLUMN IF NOT EXISTS updated_by TEXT,
-       ADD COLUMN IF NOT EXISTS version    INTEGER NOT NULL DEFAULT 1`,
-    []
-  );
-};
-
-const ensureTimeOffColumns = async () => {
-  await dbQuery.query(
-    `CREATE TABLE IF NOT EXISTS ${s}.worker_time_off (
-       id         SERIAL PRIMARY KEY,
-       worker_uid TEXT NOT NULL,
-       start_date DATE NOT NULL,
-       end_date   DATE NOT NULL,
-       reason     TEXT,
-       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-     )`,
-    []
-  );
-  // Additive columns
-  await dbQuery.query(
-    `ALTER TABLE ${s}.worker_time_off
-       ADD COLUMN IF NOT EXISTS created_by   TEXT,
-       ADD COLUMN IF NOT EXISTS status       TEXT NOT NULL DEFAULT 'active',
-       ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ,
-       ADD COLUMN IF NOT EXISTS cancelled_by TEXT,
-       -- C22 §17. The provider web portal has shipped a partial-day time-off
-       -- form since before this table existed: an "All day" checkbox that,
-       -- when cleared, collects a start and end time. The route destructured
-       -- those fields and passed only the dates on, and there were no columns
-       -- to hold them — so a provider asking for two hours off lost the whole
-       -- day, silently, and the response echoed allDay: true.
-       ADD COLUMN IF NOT EXISTS all_day    BOOLEAN NOT NULL DEFAULT TRUE,
-       ADD COLUMN IF NOT EXISTS start_time TIME,
-       ADD COLUMN IF NOT EXISTS end_time   TIME,
-       ADD COLUMN IF NOT EXISTS note       TEXT`,
-    []
-  );
-};
-
-// Bootstrap is called lazily on first use
-let _bootstrapped = false;
-const bootstrap = async () => {
-  if (_bootstrapped) return;
-  await Promise.all([ensureAvailabilityColumns(), ensureTimeOffColumns()]);
-  _bootstrapped = true;
-};
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `worker_availability` and `worker_time_off` were created here at runtime by
+// `ensureAvailabilityColumns` / `ensureTimeOffColumns`, behind a memoised
+// `bootstrap()` awaited at the top of seven operations. All of it is gone; both
+// tables come from `scripts/baseline/000-baseline.sql`.
+//
+// `technicianService` ALSO created both tables. Two CREATE TABLE IF NOT EXISTS
+// for one object is a race with a silent loser, so removing this one leaves a
+// single runtime definition -- see `npm run schema:authority`, which now counts
+// contested objects and fails when a losing definition names a column the
+// repository does not have.
+//
+// Two details the removed DDL carried that are NOT obvious from the queries:
+//
+//   worker_time_off.all_day / start_time / end_time (C22 §17) exist because the
+//     provider web portal shipped a partial-day form before the columns did: a
+//     provider asking for two hours off lost the whole day, silently, and the
+//     response echoed allDay: true. The baseline has all three.
+//
+//   worker_availability.schedule defaults to '{}' in production but this code
+//     declared '[]'. Inert today -- both writers list `schedule` explicitly, so
+//     the default never applies -- but a future INSERT that omits it would store
+//     an empty OBJECT where every reader expects an ARRAY. Supply it explicitly.
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-import { zonedParts, operationalDate, OPERATIONAL_TIMEZONE } from './operationalTimezone';
+import { zonedParts, zonedDateTimeToUtc, operationalDate, OPERATIONAL_TIMEZONE } from './operationalTimezone';
 
 export interface WeeklyScheduleSlot {
   dayOfWeek: 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -140,15 +112,30 @@ const DOW_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Fri
 export const validateWeeklySchedule = (slots: WeeklyScheduleSlot[]): string[] => {
   const errors: string[] = [];
   if (!Array.isArray(slots)) { errors.push('schedule must be an array'); return errors; }
+  if (slots.length > 100) { errors.push('schedule cannot contain more than 100 slots'); return errors; }
+
+  const validTime = (value: unknown): value is string => {
+    if (typeof value !== 'string' || !TIME_RE.test(value)) return false;
+    const [hour, minute] = value.split(':').map(Number);
+    return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
+  };
 
   for (let i = 0; i < slots.length; i++) {
     const slot = slots[i];
-    if (!VALID_DOW.includes(slot.dayOfWeek)) errors.push(`slot[${i}]: invalid dayOfWeek ${slot.dayOfWeek}`);
-    if (!TIME_RE.test(slot.startTime))       errors.push(`slot[${i}]: startTime must be HH:mm`);
-    if (!TIME_RE.test(slot.endTime))         errors.push(`slot[${i}]: endTime must be HH:mm`);
-    if (slot.startTime >= slot.endTime)      errors.push(`slot[${i}]: startTime must be before endTime`);
-    if (slot.maxJobs !== undefined && slot.maxJobs !== null && slot.maxJobs < 1)
-                                             errors.push(`slot[${i}]: maxJobs must be >= 1`);
+    if (!slot || typeof slot !== 'object') { errors.push(`slot[${i}]: must be an object`); continue; }
+    if (!Number.isInteger(slot.dayOfWeek) || !VALID_DOW.includes(slot.dayOfWeek))
+      errors.push(`slot[${i}]: invalid dayOfWeek ${slot.dayOfWeek}`);
+    const startValid = validTime(slot.startTime);
+    const endValid = validTime(slot.endTime);
+    if (!startValid) errors.push(`slot[${i}]: startTime must be a real HH:mm time`);
+    if (!endValid)   errors.push(`slot[${i}]: endTime must be a real HH:mm time`);
+    if (startValid && endValid && slot.startTime >= slot.endTime)
+      errors.push(`slot[${i}]: startTime must be before endTime`);
+    if (typeof slot.isAvailable !== 'boolean')
+      errors.push(`slot[${i}]: isAvailable must be boolean`);
+    if (slot.maxJobs !== undefined && slot.maxJobs !== null &&
+        (!Number.isInteger(slot.maxJobs) || slot.maxJobs < 1 || slot.maxJobs > 100))
+      errors.push(`slot[${i}]: maxJobs must be an integer from 1 to 100`);
   }
 
   // Overlap check per day
@@ -173,7 +160,6 @@ export const validateWeeklySchedule = (slots: WeeklyScheduleSlot[]): string[] =>
 // ── Read ──────────────────────────────────────────────────────────────────────
 
 export const getAvailabilityProfile = async (providerUid: string): Promise<ProviderAvailabilityProfile> => {
-  await bootstrap();
 
   const [availRes, timeOffRes] = await Promise.all([
     dbQuery.query(
@@ -240,7 +226,10 @@ export const getAvailabilityProfile = async (providerUid: string): Promise<Provi
     nextAvailableAt,
     updatedAt:    row?.updated_at  ?? null,
     updatedBy:    row?.updated_by  ?? null,
-    version:      Number(row?.version ?? 1),
+    // Version zero is the compare-and-set token for a record that does not
+    // exist yet. Returning one here made a provider's very first save look
+    // stale as soon as clients began sending expectedVersion.
+    version:      row ? Number(row.version ?? 1) : 0,
     compatibility: {
       legacyWorkerAvailabilitySynced: true,
       source: row ? 'canonical' : 'missing',
@@ -257,7 +246,6 @@ export const saveWeeklySchedule = async (
   actorUid: string,
   expectedVersion?: number,
 ): Promise<{ version: number; updatedAt: string }> => {
-  await bootstrap();
 
   const errors = validateWeeklySchedule(schedule);
   if (errors.length > 0) {
@@ -275,19 +263,11 @@ export const saveWeeklySchedule = async (
   }
 
   // Optimistic locking — if expectedVersion provided, enforce it
-  if (expectedVersion !== undefined) {
-    const currentRes = await dbQuery.query(
-      `SELECT version FROM ${s}.worker_availability WHERE worker_uid = $1`,
-      [providerUid]
-    );
-    const currentVersion = Number(currentRes.rows[0]?.version ?? 0);
-    if (currentRes.rowCount && currentVersion !== expectedVersion) {
-      const err: any = new Error(
-        `Version conflict: expected ${expectedVersion} but backend has ${currentVersion}. Reload and try again.`
-      );
-      err.statusCode = 409;
-      throw err;
-    }
+  if (expectedVersion !== undefined &&
+      (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0)) {
+    const err: any = new Error('expectedVersion must be a non-negative integer');
+    err.statusCode = 422;
+    throw err;
   }
 
   // Normalize slot shape to canonical before storing
@@ -302,16 +282,31 @@ export const saveWeeklySchedule = async (
 
   const res = await dbQuery.query(
     `INSERT INTO ${s}.worker_availability (worker_uid, schedule, timezone, updated_at, updated_by, version)
-     VALUES ($1, $2, $3, NOW(), $4, 1)
+     SELECT $1, $2::jsonb, $3, NOW(), $4, 1
+      WHERE $5::integer IS NULL
+         OR $5::integer = 0
+         OR EXISTS (
+              SELECT 1 FROM ${s}.worker_availability current
+               WHERE current.worker_uid = $1
+                 AND current.version = $5::integer
+            )
      ON CONFLICT (worker_uid) DO UPDATE
        SET schedule   = EXCLUDED.schedule,
            timezone   = EXCLUDED.timezone,
            updated_at = NOW(),
            updated_by = $4,
            version    = ${s}.worker_availability.version + 1
+       WHERE $5::integer IS NULL
+          OR ${s}.worker_availability.version = $5::integer
      RETURNING updated_at, version`,
-    [providerUid, JSON.stringify(normalized), timezone, actorUid]
+    [providerUid, JSON.stringify(normalized), timezone, actorUid, expectedVersion ?? null]
   );
+
+  if (!res.rowCount) {
+    const err: any = new Error('This schedule changed on another device. Reload it and try again.');
+    err.statusCode = 409;
+    throw err;
+  }
 
   return {
     version:   Number(res.rows[0].version),
@@ -322,7 +317,6 @@ export const saveWeeklySchedule = async (
 // ── Time-off CRUD ─────────────────────────────────────────────────────────────
 
 export const listTimeOff = async (providerUid: string): Promise<ProviderTimeOff[]> => {
-  await bootstrap();
   const res = await dbQuery.query(
     `SELECT id, start_date, end_date, reason, created_at,
               COALESCE(all_day, TRUE) AS all_day,
@@ -372,7 +366,16 @@ const NOTE_MAX = 500;
 const normaliseNote = (raw: unknown): string | null => {
   if (typeof raw !== 'string') return null;
   const t = raw.trim();
-  return t === '' ? null : t.slice(0, NOTE_MAX);
+  return t === '' ? null : t;
+};
+
+const isCalendarDate = (raw: unknown): raw is string => {
+  if (typeof raw !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return false;
+  const [year, month, day] = raw.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day;
 };
 
 
@@ -424,19 +427,22 @@ export const findTimeOffBookingConflicts = async (
   const to   = window.allDay ? '24:00' : (window.endTime   ?? '24:00');
 
   const res = await dbQuery.query(
+    // Same occupancy question as every other conflict query, so the same list:
+    // a booking cancelled under the one-L production spelling, or refunded, does
+    // not occupy the provider and must not block their time-off request.
     `WITH assigned AS (
        SELECT b.id, b.schedule, b.status, b.service_option_id
          FROM ${s}.bookings b
-        WHERE b.worker_uid = $1 AND b.status NOT IN ('CANCELLED', 'COMPLETED')
+        WHERE b.worker_uid = $1 AND b.status NOT IN (${OCCUPANCY_EXCLUSION_SQL})
        UNION
        SELECT b.id, b.schedule, b.status, b.service_option_id
          FROM ${s}.bookings b
          JOIN ${s}.booking_workers bw ON bw.booking_id = b.id
-        WHERE bw.worker_uid = $1 AND b.status NOT IN ('CANCELLED', 'COMPLETED')
+        WHERE bw.worker_uid = $1 AND b.status NOT IN (${OCCUPANCY_EXCLUSION_SQL})
      )
      SELECT a.id, a.schedule, a.status,
             sv.name AS service_name,
-            COALESCE(so.duration_mins, 120) AS duration_mins,
+            ${serviceDurationMinsSql('so')} AS duration_mins,
             to_char(a.schedule AT TIME ZONE $5, 'YYYY-MM-DD') AS local_date,
             to_char(a.schedule AT TIME ZONE $5, 'HH24:MI')    AS local_time
        FROM assigned a
@@ -448,9 +454,10 @@ export const findTimeOffBookingConflicts = async (
           OR (
             -- Half-open overlap against the booking's real span, so time off
             -- ending at 12:00 does not collide with a booking starting at 12:00.
+            -- Same duration expression as every other occupancy question.
             (a.schedule AT TIME ZONE $5)::time < $7::time
             AND ((a.schedule AT TIME ZONE $5)
-                 + (COALESCE(so.duration_mins, 120) || ' minutes')::interval)::time > $6::time
+                 + (${serviceDurationMinsSql('so')} || ' minutes')::interval)::time > $6::time
           )
         )
       ORDER BY a.schedule ASC
@@ -482,10 +489,22 @@ export const createTimeOff = async (
   },
   actorUid: string,
 ): Promise<ProviderTimeOff & { bookingConflicts: TimeOffBookingConflict[] }> => {
-  await bootstrap();
 
-  if (!payload.startDate || !payload.endDate) {
-    const err: any = new Error('startDate and endDate are required');
+  if (!isCalendarDate(payload.startDate) || !isCalendarDate(payload.endDate)) {
+    const err: any = new Error('startDate and endDate must be real dates in YYYY-MM-DD format');
+    err.statusCode = 422;
+    throw err;
+  }
+
+  const reason = typeof payload.reason === 'string' ? payload.reason.trim() : '';
+  if (reason.length > 80 || /[\u0000-\u001F\u007F]/.test(reason)) {
+    const err: any = new Error('reason must be at most 80 characters and contain no control characters');
+    err.statusCode = 422;
+    throw err;
+  }
+  const note = normaliseNote(payload.note);
+  if (note !== null && note.length > NOTE_MAX) {
+    const err: any = new Error(`note must be at most ${NOTE_MAX} characters`);
     err.statusCode = 422;
     throw err;
   }
@@ -541,20 +560,52 @@ export const createTimeOff = async (
     endTime,
   });
 
-  const res = await dbQuery.query(
-    `INSERT INTO ${s}.worker_time_off
-       (worker_uid, start_date, end_date, reason, created_by, status,
-        all_day, start_time, end_time, note)
-     VALUES ($1, $2, $3, $4, $5, 'active', $6, $7::time, $8::time, $9)
-     RETURNING id, start_date, end_date, reason, created_at, created_by,
-               COALESCE(status, 'active') AS status, cancelled_at, cancelled_by,
-               COALESCE(all_day, TRUE) AS all_day,
-               to_char(start_time, 'HH24:MI') AS start_time,
-               to_char(end_time,   'HH24:MI') AS end_time,
-               note`,
-    [providerUid, payload.startDate, payload.endDate, payload.reason ?? null, actorUid,
-     allDay, startTime, endTime, normaliseNote(payload.note)]
-  );
+  const client = await pool.connect();
+  let res: any;
+  try {
+    await client.query('BEGIN');
+    // Serialise time-off writes per provider. Without this, two simultaneous
+    // tabs can both pass an overlap check and create duplicate/contradictory
+    // periods.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`worker-time-off:${providerUid}`]);
+    const overlap = await client.query(
+      `SELECT id FROM ${s}.worker_time_off
+        WHERE worker_uid = $1
+          AND COALESCE(status, 'active') = 'active'
+          AND start_date <= $3::date AND end_date >= $2::date
+          AND (
+            COALESCE(all_day, TRUE) = TRUE OR $4::boolean = TRUE
+            OR (start_time < $6::time AND end_time > $5::time)
+          )
+        LIMIT 1`,
+      [providerUid, payload.startDate, payload.endDate, allDay, startTime, endTime],
+    );
+    if (overlap.rowCount) {
+      const err: any = new Error('Time off overlaps an existing active period.');
+      err.statusCode = 409;
+      throw err;
+    }
+    res = await client.query(
+      `INSERT INTO ${s}.worker_time_off
+         (worker_uid, start_date, end_date, reason, created_by, status,
+          all_day, start_time, end_time, note)
+       VALUES ($1, $2, $3, $4, $5, 'active', $6, $7::time, $8::time, $9)
+       RETURNING id, start_date, end_date, reason, created_at, created_by,
+                 COALESCE(status, 'active') AS status, cancelled_at, cancelled_by,
+                 COALESCE(all_day, TRUE) AS all_day,
+                 to_char(start_time, 'HH24:MI') AS start_time,
+                 to_char(end_time,   'HH24:MI') AS end_time,
+                 note`,
+      [providerUid, payload.startDate, payload.endDate, reason || null, actorUid,
+       allDay, startTime, endTime, note],
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 
   const r = res.rows[0];
   return {
@@ -581,7 +632,6 @@ export const cancelTimeOff = async (
   actorUid: string,
   reason?: string,
 ): Promise<ProviderTimeOff> => {
-  await bootstrap();
 
   const res = await dbQuery.query(
     `UPDATE ${s}.worker_time_off
@@ -715,7 +765,6 @@ export const filterUidsAvailableAt = async (
   opts: { missingScheduleIsAvailable: boolean },
 ): Promise<{ eligible: string[]; excluded: Array<{ uid: string; reason: string }> }> => {
   if (!uids.length) { return { eligible: [], excluded: [] }; }
-  await bootstrap();
 
   const { dow, startTime, endTime } = windowParts(startAt, endAt);
   // C22 §5. Was toISOString().slice(0, 10) — the UTC date, which in Manila is
@@ -774,7 +823,6 @@ export const explainAvailability = async (
   startAt: string,
   endAt: string,
 ): Promise<AvailabilityExplanation> => {
-  await bootstrap();
 
   const reasons: AvailabilityExplanation['reasons'] = [];
   const bookingStart = new Date(startAt);
@@ -806,24 +854,36 @@ export const explainAvailability = async (
          )`,
       [providerUid, operationalDate(startAt), zonedParts(startAt).hhmm, zonedParts(endAt).hhmm]
     ),
-    // Booking conflict: active booking within ±2-hour window.
-    // Admin-created bookings set worker_uid on the bookings row AND write a
-    // booking_workers row — union both so admin bookings are caught too.
+    /**
+     * Booking conflict: half-open overlap against each job's real span.
+     *
+     * The predicate is the executor's, imported rather than restated, so this
+     * Admin answer and the assignment it previews cannot disagree about the
+     * same provider.
+     *
+     * Note `$3` is now genuinely the END of the window. Under the old fixed
+     * ±2h rule this query was passed `startAt` twice and the second value was
+     * inert — the padding did the work, and the caller's carefully computed end
+     * instant was thrown away.
+     *
+     * Admin-created bookings set worker_uid on the bookings row AND write a
+     * booking_workers row — union both so admin bookings are caught too.
+     */
     dbQuery.query(
-      `SELECT id FROM ${s}.bookings
-       WHERE worker_uid = $1
-         AND status NOT IN ('CANCELLED', 'COMPLETED')
-         AND schedule BETWEEN $2::timestamptz - INTERVAL '2 hours'
-                          AND $3::timestamptz + INTERVAL '2 hours'
+      `SELECT b.id FROM ${s}.bookings b
+       LEFT JOIN ${s}.service_options so ON so.id = b.service_option_id
+       WHERE b.worker_uid = $1
+         AND b.status NOT IN (${OCCUPANCY_EXCLUSION_SQL})
+         AND ${OVERLAPS_SPAN_SQL('$2::timestamptz', '$3::timestamptz')}
        UNION
        SELECT b.id FROM ${s}.bookings b
        JOIN ${s}.booking_workers bw ON bw.booking_id = b.id
+       LEFT JOIN ${s}.service_options so ON so.id = b.service_option_id
        WHERE bw.worker_uid = $1
-         AND b.status NOT IN ('CANCELLED', 'COMPLETED')
-         AND b.schedule BETWEEN $2::timestamptz - INTERVAL '2 hours'
-                            AND $3::timestamptz + INTERVAL '2 hours'
+         AND b.status NOT IN (${OCCUPANCY_EXCLUSION_SQL})
+         AND ${OVERLAPS_SPAN_SQL('$2::timestamptz', '$3::timestamptz')}
        LIMIT 1`,
-      [providerUid, startAt, startAt]
+      [providerUid, startAt, endAt]
     ),
   ]);
 
@@ -842,7 +902,7 @@ export const explainAvailability = async (
     reasons.push({
       code: 'BOOKING_CONFLICT',
       severity: 'blocker',
-      message: `Provider has an existing booking within the ±2-hour window (booking #${conflictRes.rows[0].id})`,
+      message: `Provider has an existing booking overlapping this window (booking #${conflictRes.rows[0].id})`,
     });
   }
 
@@ -889,27 +949,29 @@ const computeNextAvailable = (
 
   const now = new Date();
   const activeTimeOff = timeOff.filter(t => t.status === 'active');
+  const operationalToday = zonedParts(now).ymd;
+  const dayZero = Date.parse(`${operationalToday}T00:00:00.000Z`);
 
   for (let i = 0; i < 14; i++) {
     // C22 §5. Walking days with the host clock put the boundary at UTC
     // midnight — 08:00 Manila — so for eight hours every morning this
     // reported the previous day's availability as "next".
-    const candidate = new Date(now.getTime() + i * 24 * 60 * 60 * 1000);
-    const parts = zonedParts(candidate);
-    const dow = parts.dayOfWeek;
-    const dateStr = parts.ymd;
+    const dateStr = new Date(dayZero + i * 86_400_000).toISOString().slice(0, 10);
+    const dow = new Date(`${dateStr}T00:00:00.000Z`).getUTCDay();
 
     // Check time-off
-    const blocked = activeTimeOff.some(t => t.startDate <= dateStr && t.endDate >= dateStr);
-    if (blocked) continue;
+    const daySlots = schedule
+      .filter(sl => sl.dayOfWeek === dow && sl.isAvailable)
+      .sort((a, b) => a.startTime.localeCompare(b.startTime));
+    for (const slot of daySlots) {
+      const blocked = activeTimeOff.some((entry) => {
+        if (entry.startDate > dateStr || entry.endDate < dateStr) return false;
+        if (entry.allDay || !entry.startTime || !entry.endTime) return true;
+        return entry.startTime < slot.endTime && entry.endTime > slot.startTime;
+      });
+      if (blocked) continue;
 
-    // Check schedule
-    const daySlots = schedule.filter(sl => sl.dayOfWeek === dow && sl.isAvailable);
-    if (daySlots.length > 0) {
-      const first = daySlots.sort((a, b) => a.startTime.localeCompare(b.startTime))[0];
-      const [h, m] = first.startTime.split(':').map(Number);
-      const result = new Date(candidate);
-      result.setHours(h, m, 0, 0);
+      const result = zonedDateTimeToUtc(dateStr, slot.startTime);
       if (result > now) return result.toISOString();
     }
   }

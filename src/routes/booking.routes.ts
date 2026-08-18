@@ -43,4 +43,22 @@ router.post("/:id/confirm-otp", verifyAuth, bookingController.confirmOtp);
 router.post("/:bookingId/resend-otp", verifyAuth, bookingController.resendOtp);
 router.get("/:id", verifyAuth, bookingController.getBooking);
 router.get("/:id/tracking", verifyAuth, bookingController.getTracking);
+
+// Command 6 §11 — the customer's own booking history.
+//
+// The timeline builder already existed but was reachable only at
+// /provider/bookings/:bookingId/timeline behind requireProviderRole, so a
+// customer had no authoritative history of their own booking. The customer
+// mobile app worked around it by delegating to /:id/tracking and filed the gap
+// as BACKEND_GAP-C15-002.
+//
+// Additive: the provider route is untouched. Access is assertBookingAccess in
+// the controller — the same check /:id and /:id/tracking use — and the events
+// are re-voiced for the customer, because the shared builder is written from
+// the provider's seat where "YOU" means the provider.
+//
+// Registered after /:id deliberately: a two-segment path cannot be shadowed by
+// the single-segment wildcard above, and keeping it beside /:id/tracking is
+// what makes the pair obvious to the next reader.
+router.get("/:id/timeline", verifyAuth, bookingController.getCustomerBookingTimeline);
 export default router;

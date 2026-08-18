@@ -1,0 +1,402 @@
+/**
+ * The transactional outbox (§92).
+ *
+ * ## The problem it exists to remove
+ *
+ * Notifications were sent by calling `createNotification` from wherever the fact
+ * happened. That produces two failure modes and both have occurred here:
+ *
+ *   - **notify-before-commit.** The notification is written (or a push is sent)
+ *     and the transaction then rolls back. The provider is told they have a job
+ *     that does not exist, and there is no way to take it back.
+ *   - **commit-then-lose.** The transaction commits and the process dies before
+ *     the fire-and-forget notification runs. The fact happened and nobody was
+ *     told, and nothing anywhere records that a notification was owed.
+ *
+ * An outbox closes both by writing the EVENT in the same transaction as the
+ * fact. If the transaction rolls back, the event is not there. If it commits,
+ * the event is durable and a dispatcher will project it — now, or on the next
+ * boot, or on the next sweep.
+ *
+ * ## Publishing outside a transaction is allowed, and says so
+ *
+ * Several producers have no transaction to join: `chat.service.sendMessage`
+ * commits per statement, and `paymentService` writes through `dbQuery`. Passing
+ * no client publishes on the pool, which is still durable and still deduplicated
+ * — it just does not inherit the fact's atomicity. `DOMAIN_EVENTS[x].transactional`
+ * declares which producers have the stronger guarantee, so the registry does not
+ * overstate what the platform actually does.
+ *
+ * ## Dispatch is idempotent at two layers
+ *
+ * The outbox row is claimed with a compare-and-swap on `status`, so two
+ * dispatchers cannot both project it. And every notification the projector
+ * writes carries a deterministic key under an owner-scoped unique index, so even
+ * if a row WERE projected twice, the second projection writes nothing. The
+ * second layer is the one that matters: the first only prevents wasted work, the
+ * second prevents a duplicate reaching a person.
+ */
+
+import type { PoolClient } from 'pg';
+import dbQuery from '../../db/dbQuery';
+import { db } from '../../config';
+import {
+  DOMAIN_EVENTS,
+  forbiddenRefsPresent,
+  isDomainEventName,
+  missingRequiredRefs,
+  type DomainEventEnvelope,
+  type DomainEventName,
+  type EntityRef,
+} from './domainEvents';
+import { recordEventSignal } from './eventTelemetry';
+
+const s = db.schema;
+
+/** A minimal query surface, satisfied by both a pool and a transaction client. */
+interface Queryable {
+  query(text: string, params?: unknown[]): Promise<{ rows: any[]; rowCount: number | null }>;
+}
+
+export const OUTBOX_STATUS = {
+  PENDING: 'PENDING',
+  DISPATCHED: 'DISPATCHED',
+  FAILED: 'FAILED',
+} as const;
+
+export type OutboxStatus = (typeof OUTBOX_STATUS)[keyof typeof OUTBOX_STATUS];
+
+// ─── Schema ───────────────────────────────────────────────────────────────────
+
+let schemaReady: Promise<void> | null = null;
+
+/**
+ * Additive, IF NOT EXISTS, and lazily applied — the convention every tab since
+ * 029 has used. `scripts/migrations/033-domain-event-outbox.sql` performs the
+ * same DDL so a DBA can apply it deliberately; whichever runs first wins.
+ *
+ * It THROWS rather than degrading. An outbox that silently fails to exist is a
+ * platform that silently stops reacting to its own events, and the first
+ * evidence would be a support ticket weeks later.
+ */
+export const ensureOutboxSchema = async (): Promise<void> => {
+  if (schemaReady) return schemaReady;
+  schemaReady = (async () => {
+    await dbQuery.query(
+      `CREATE TABLE IF NOT EXISTS ${s}.domain_event_outbox (
+         id            BIGSERIAL PRIMARY KEY,
+         event_name    VARCHAR(64)  NOT NULL,
+         event_version INTEGER      NOT NULL DEFAULT 1,
+         dedupe_key    TEXT,
+         refs          JSONB        NOT NULL DEFAULT '{}'::jsonb,
+         display       JSONB        NOT NULL DEFAULT '{}'::jsonb,
+         metadata      JSONB        NOT NULL DEFAULT '{}'::jsonb,
+         status        VARCHAR(16)  NOT NULL DEFAULT 'PENDING',
+         attempts      INTEGER      NOT NULL DEFAULT 0,
+         last_error    TEXT,
+         occurred_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+         dispatched_at TIMESTAMPTZ
+       )`,
+      [],
+    );
+    await dbQuery.query(
+      `CREATE INDEX IF NOT EXISTS idx_domain_event_outbox_pending
+         ON ${s}.domain_event_outbox (status, id)
+       WHERE status = 'PENDING'`,
+      [],
+    );
+    /**
+     * The publish-side idempotency guard.
+     *
+     * Partial, because most events have no natural dedupe key and two genuinely
+     * separate facts must both be publishable. Where a producer CAN name the
+     * fact — `BookingAssigned` for booking 75 to provider X — supplying the key
+     * makes a retried publish a no-op rather than a second event.
+     */
+    await dbQuery.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_domain_event_outbox_dedupe
+         ON ${s}.domain_event_outbox (event_name, dedupe_key)
+       WHERE dedupe_key IS NOT NULL`,
+      [],
+    );
+  })().catch((error) => {
+    schemaReady = null;
+    throw error;
+  });
+  return schemaReady;
+};
+
+// ─── Publishing ───────────────────────────────────────────────────────────────
+
+export class EventPublishError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = 'EventPublishError';
+  }
+}
+
+export interface PublishInput {
+  name: DomainEventName;
+  refs: Partial<Record<EntityRef, string | number>>;
+  /** Safe display substitutions. Never a name, address, phone or note. */
+  display?: Record<string, string>;
+  metadata?: Record<string, unknown>;
+  /**
+   * Names the FACT, for publish-side idempotency. Two publishes with the same
+   * (name, dedupeKey) produce one event.
+   */
+  dedupeKey?: string | null;
+  /**
+   * The transaction to publish INSIDE. Supply it and the event shares the
+   * fact's atomicity; omit it and the event is durable but independent.
+   */
+  client?: PoolClient | null;
+  occurredAt?: Date;
+}
+
+export interface PublishedEvent {
+  id: number;
+  name: DomainEventName;
+  /** False when a dedupeKey collapsed this publish onto an existing event. */
+  created: boolean;
+}
+
+const MAX_DISPLAY_VALUE = 120;
+
+/**
+ * Display values are bounded and stripped of control characters here, not
+ * trusted from the producer.
+ *
+ * They end up in a push payload, which the OS renders on a lock screen. §58: a
+ * customer's name or address must never travel that way, and a producer that
+ * passes one is a bug this cannot detect — but an unbounded string that breaks
+ * the notification pipeline is one it can.
+ */
+const safeDisplay = (display: Record<string, string> = {}): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(display).slice(0, 16)) {
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,31}$/.test(key)) continue;
+    out[key] = String(value ?? '')
+      .replace(/[\x00-\x1f\x7f]/g, ' ')
+      .trim()
+      .slice(0, MAX_DISPLAY_VALUE);
+  }
+  return out;
+};
+
+const safeRefs = (
+  refs: Partial<Record<EntityRef, string | number>>,
+): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(refs)) {
+    if (value === undefined || value === null || String(value).trim() === '') continue;
+    out[key] = String(value).slice(0, 128);
+  }
+  return out;
+};
+
+/**
+ * Write one event.
+ *
+ * Refuses rather than degrades: an unknown name, a missing required canonical id
+ * or a forbidden ref is a `throw`. A producer that publishes the wrong shape
+ * would otherwise produce an event that projects to nothing, and "the
+ * notification never arrived" is the hardest class of bug to trace backwards.
+ */
+export const publishEvent = async (input: PublishInput): Promise<PublishedEvent> => {
+  if (!isDomainEventName(input.name)) {
+    recordEventSignal('EVENT_PUBLISH_REJECTED', 'UNKNOWN_EVENT');
+    throw new EventPublishError(
+      'UNKNOWN_EVENT',
+      `${String(input.name)} is not in DOMAIN_EVENTS. Declare it before publishing it.`,
+    );
+  }
+
+  const forbidden = forbiddenRefsPresent(input.refs as Record<string, unknown>);
+  if (forbidden.length) {
+    recordEventSignal('EVENT_PUBLISH_REJECTED', 'FORBIDDEN_REF');
+    throw new EventPublishError(
+      'FORBIDDEN_REF',
+      `Event ${input.name} may not carry ${forbidden.join(', ')}. Catalog V2 keys on ` +
+        'services.id, and a screen name is not an identity.',
+    );
+  }
+
+  const missing = missingRequiredRefs(input.name, input.refs);
+  if (missing.length) {
+    recordEventSignal('EVENT_PUBLISH_REJECTED', 'MISSING_REF');
+    throw new EventPublishError(
+      'MISSING_REF',
+      `Event ${input.name} requires ${missing.join(', ')}.`,
+    );
+  }
+
+  await ensureOutboxSchema();
+
+  const spec = DOMAIN_EVENTS[input.name];
+  const runner: Queryable = input.client ?? dbQuery;
+  const occurredAt = (input.occurredAt ?? new Date()).toISOString();
+
+  const result = await runner.query(
+    `INSERT INTO ${s}.domain_event_outbox
+       (event_name, event_version, dedupe_key, refs, display, metadata, occurred_at)
+     VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7)
+     ON CONFLICT (event_name, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+     RETURNING id`,
+    [
+      input.name,
+      spec.version,
+      input.dedupeKey ?? null,
+      JSON.stringify(safeRefs(input.refs)),
+      JSON.stringify(safeDisplay(input.display)),
+      JSON.stringify(input.metadata ?? {}),
+      occurredAt,
+    ],
+  );
+
+  if (!result.rows.length) {
+    // A dedupeKey collapsed it. Resolve the original so the caller still gets an
+    // id — a publisher that cannot tell "already published" from "failed" will
+    // eventually treat both as failure and retry forever.
+    const existing = await runner.query(
+      `SELECT id FROM ${s}.domain_event_outbox WHERE event_name = $1 AND dedupe_key = $2`,
+      [input.name, input.dedupeKey],
+    );
+    recordEventSignal('EVENT_PUBLISHED', input.name);
+    return { id: Number(existing.rows[0]?.id ?? 0), name: input.name, created: false };
+  }
+
+  recordEventSignal('EVENT_PUBLISHED', input.name);
+  return { id: Number(result.rows[0].id), name: input.name, created: true };
+};
+
+/**
+ * Publish without ever throwing into the caller.
+ *
+ * §45, the rule this repository already applies to notifications: a committed
+ * fact must not be undone because its announcement failed. Producers that call
+ * this from AFTER their commit use it; producers publishing INSIDE a transaction
+ * use `publishEvent` directly, because there the throw is the point — if the
+ * event cannot be written, the fact should not commit either.
+ */
+export const publishEventSafely = async (input: PublishInput): Promise<PublishedEvent | null> => {
+  try {
+    return await publishEvent(input);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(`[events] publish failed name=${String(input.name)}:`, (error as Error)?.message);
+    return null;
+  }
+};
+
+// ─── Reading ──────────────────────────────────────────────────────────────────
+
+const toEnvelope = (row: any): DomainEventEnvelope => ({
+  id: Number(row.id),
+  name: row.event_name as DomainEventName,
+  version: Number(row.event_version ?? 1),
+  refs: (row.refs ?? {}) as Partial<Record<EntityRef, string | number>>,
+  display: (row.display ?? {}) as Record<string, string>,
+  occurredAt: String(row.occurred_at),
+  metadata: (row.metadata ?? {}) as Record<string, unknown>,
+});
+
+export const getEvent = async (id: number): Promise<DomainEventEnvelope | null> => {
+  await ensureOutboxSchema();
+  const { rows } = await dbQuery.query(
+    `SELECT * FROM ${s}.domain_event_outbox WHERE id = $1`,
+    [id],
+  );
+  return rows.length ? toEnvelope(rows[0]) : null;
+};
+
+/**
+ * Claim up to `limit` pending events.
+ *
+ * `FOR UPDATE SKIP LOCKED` plus a status compare-and-swap: two dispatchers
+ * running at once take disjoint sets rather than both taking the same row and
+ * relying on the notification key to sort it out afterwards.
+ */
+export const claimPending = async (limit = 50): Promise<DomainEventEnvelope[]> => {
+  await ensureOutboxSchema();
+  const { rows } = await dbQuery.query(
+    `UPDATE ${s}.domain_event_outbox
+        SET attempts = attempts + 1
+      WHERE id IN (
+        SELECT id FROM ${s}.domain_event_outbox
+         WHERE status = 'PENDING'
+         ORDER BY id
+         LIMIT $1
+         FOR UPDATE SKIP LOCKED
+      )
+      RETURNING *`,
+    [Math.max(1, Math.min(limit, 500))],
+  );
+  return rows.map(toEnvelope);
+};
+
+export const markDispatched = async (id: number): Promise<void> => {
+  await dbQuery.query(
+    `UPDATE ${s}.domain_event_outbox
+        SET status = 'DISPATCHED', dispatched_at = NOW(), last_error = NULL
+      WHERE id = $1`,
+    [id],
+  );
+  recordEventSignal('EVENT_DISPATCHED');
+};
+
+/**
+ * A failed dispatch stays PENDING and is retried, until the attempt ceiling.
+ *
+ * Retrying forever is how a poison row becomes an infinite loop that starves
+ * every event behind it. FAILED is terminal for the dispatcher and visible to
+ * an operator, which is the correct place for a decision nobody can automate.
+ */
+export const MAX_DISPATCH_ATTEMPTS = 8;
+
+export const markFailed = async (id: number, error: unknown, attempts: number): Promise<void> => {
+  const terminal = attempts >= MAX_DISPATCH_ATTEMPTS;
+  await dbQuery.query(
+    `UPDATE ${s}.domain_event_outbox
+        SET status = $2, last_error = $3
+      WHERE id = $1`,
+    [id, terminal ? OUTBOX_STATUS.FAILED : OUTBOX_STATUS.PENDING, String((error as Error)?.message ?? error).slice(0, 500)],
+  );
+  recordEventSignal('EVENT_DISPATCH_FAILED', terminal ? 'TERMINAL' : 'RETRYING');
+};
+
+export interface OutboxBacklog {
+  pending: number;
+  failed: number;
+  oldestPendingAt: string | null;
+}
+
+/**
+ * The backlog, for operators and for the reconciliation test.
+ *
+ * Published-minus-dispatched is the only number that says whether the platform
+ * is still reacting to itself. A dispatcher that stopped looks exactly like a
+ * quiet day until this is read.
+ */
+export const backlog = async (): Promise<OutboxBacklog> => {
+  await ensureOutboxSchema();
+  const { rows } = await dbQuery.query(
+    `SELECT
+       COUNT(*) FILTER (WHERE status = 'PENDING')  AS pending,
+       COUNT(*) FILTER (WHERE status = 'FAILED')   AS failed,
+       MIN(occurred_at) FILTER (WHERE status = 'PENDING') AS oldest_pending_at
+     FROM ${s}.domain_event_outbox`,
+    [],
+  );
+  const row = rows[0] ?? {};
+  return {
+    pending: Number(row.pending ?? 0),
+    failed: Number(row.failed ?? 0),
+    oldestPendingAt: row.oldest_pending_at ? String(row.oldest_pending_at) : null,
+  };
+};
+
+/** Test seam — forget the memoised schema promise between suites. */
+export const __resetOutboxSchema = (): void => {
+  schemaReady = null;
+};

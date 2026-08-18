@@ -13,8 +13,9 @@ describe('PayMongo integration boundaries', () => {
   });
 
   test('checkout responses must contain both processor id and URL', () => {
-    expect(payment.match(/PayMongo returned an incomplete checkout session/g)?.length).toBe(2);
+    expect(payment).toContain('if (!providerPaymentId || !checkoutUrl)');
     expect(payment).toContain('if (!response.ok)');
+    expect(payment).toContain('checkout.paymongo.com');
   });
 
   test('paid checkout event captures the refundable pay_ id and matches PHP amount', () => {
@@ -30,9 +31,11 @@ describe('PayMongo integration boundaries', () => {
 
   test('refunds atomically claim PAID rows and only use pay_ identifiers', () => {
     expect(refund).toContain("status = 'REFUNDING'");
-    expect(refund).toContain("WHERE id = $1 AND status = 'PAID' RETURNING id");
+    expect(refund).toMatch(/WHERE id = \$1 AND status = 'PAID'[\s\S]*RETURNING id, refund_attempt/);
     expect(refund).toContain("startsWith('pay_')");
     expect(refund).toContain("WHERE id = $1 AND status = 'REFUNDING'");
+    expect(refund).toContain('isDefinitelyRejected(err)');
+    expect(refund).toContain('Refund outcome is pending reconciliation');
   });
 
   test('internal webhook failures are not reflected to callers', () => {

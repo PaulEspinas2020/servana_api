@@ -12,98 +12,42 @@ import dbQuery from '../db/dbQuery';
 import { pool } from '../db/dbQuery';
 import { db } from '../config';
 import { createNotification } from './notification.service';
-import { ensureActivationSchema } from './providerActivationService';
+import { publishEventSafely } from './events/eventOutbox';
+import { dispatchSoon } from './events/notificationProjector';
 import { evaluateServicePolicy, ServicePolicyCode } from './providerServicePolicyService';
+import {
+  projectFamilyGrant,
+  projectFamilyGrantSafely,
+} from './booking/capabilityProjection';
 
 const dbSchema = db.schema;
 
-let _tableReady: Promise<void> | null = null;
-
-const ensureTable = (): Promise<void> => {
-  if (_tableReady) return _tableReady;
-  _tableReady = (async () => {
-    await dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_service_applications (
-        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        worker_uid    TEXT NOT NULL,
-        service_id    INT NOT NULL REFERENCES ${dbSchema}.services(id),
-        status        TEXT NOT NULL DEFAULT 'pending_review'
-                      CHECK (status IN ('pending_review','action_required','rejected','cancelled','approved')),
-        submitted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        cancelled_at  TIMESTAMPTZ,
-        approved_at   TIMESTAMPTZ,
-        reviewed_at   TIMESTAMPTZ,
-        reviewed_by   TEXT,
-        review_reason TEXT,
-        provider_reason_code TEXT,
-        provider_reason_detail TEXT,
-        client_request_id VARCHAR(128),
-        requirements_version INT NOT NULL DEFAULT 1,
-        service_snapshot JSONB,
-        version       INT NOT NULL DEFAULT 1
-      )
-    `);
-
-    // Partial unique index: only one open application per worker+service
-    await dbQuery.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS wsa_unique_open_application
-      ON ${dbSchema}.worker_service_applications (worker_uid, service_id)
-      WHERE status IN ('pending_review', 'action_required')
-    `);
-
-    await dbQuery.query(`
-      CREATE INDEX IF NOT EXISTS wsa_worker_uid_idx
-      ON ${dbSchema}.worker_service_applications (worker_uid)
-    `);
-
-    await dbQuery.query(`
-      CREATE INDEX IF NOT EXISTS wsa_service_id_idx
-      ON ${dbSchema}.worker_service_applications (service_id)
-    `);
-
-    await dbQuery.query(`
-      CREATE INDEX IF NOT EXISTS wsa_status_idx
-      ON ${dbSchema}.worker_service_applications (status)
-    `);
-
-    // Existing installations predate the fields above, so CREATE TABLE alone
-    // is insufficient. These additive migrations are safe to retry.
-    await dbQuery.query(`ALTER TABLE ${dbSchema}.worker_service_applications ADD COLUMN IF NOT EXISTS provider_reason_code TEXT`);
-    await dbQuery.query(`ALTER TABLE ${dbSchema}.worker_service_applications ADD COLUMN IF NOT EXISTS provider_reason_detail TEXT`);
-    await dbQuery.query(`ALTER TABLE ${dbSchema}.worker_service_applications ADD COLUMN IF NOT EXISTS client_request_id VARCHAR(128)`);
-    await dbQuery.query(`ALTER TABLE ${dbSchema}.worker_service_applications ADD COLUMN IF NOT EXISTS requirements_version INT NOT NULL DEFAULT 1`);
-    await dbQuery.query(`ALTER TABLE ${dbSchema}.worker_service_applications ADD COLUMN IF NOT EXISTS service_snapshot JSONB`);
-    await dbQuery.query(`ALTER TABLE ${dbSchema}.employee_services ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`);
-    await dbQuery.query(`ALTER TABLE ${dbSchema}.employee_services ADD COLUMN IF NOT EXISTS pause_reason TEXT`);
-    await dbQuery.query(`ALTER TABLE ${dbSchema}.employee_services ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-
-    await dbQuery.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS wsa_provider_request_idempotency
-      ON ${dbSchema}.worker_service_applications (worker_uid, client_request_id)
-      WHERE client_request_id IS NOT NULL
-    `);
-
-    await dbQuery.query(`
-      CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_service_application_timeline (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        application_id UUID NOT NULL REFERENCES ${dbSchema}.worker_service_applications(id),
-        event_key TEXT NOT NULL,
-        event_code TEXT NOT NULL,
-        provider_label TEXT NOT NULL,
-        provider_explanation TEXT,
-        actor_category TEXT NOT NULL DEFAULT 'system',
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (application_id, event_key)
-      )
-    `);
-  })().catch((err) => {
-    // Reset so next request retries
-    _tableReady = null;
-    throw err;
-  });
-  return _tableReady;
-};
+// -- Schema (TAB 02) ----------------------------------------------------------
+//
+// `ensureTable` created `worker_service_applications` (+5 indexes),
+// `worker_service_application_timeline`, and added five columns to the former
+// and three to `employee_services`. All of it comes from
+// `scripts/baseline/000-baseline.sql`.
+//
+// TWO PARTIAL UNIQUE INDEXES do real work here, and neither is visible from the
+// queries below now that the CREATE statements are gone. Both were checked
+// against the baseline PREDICATE-FOR-PREDICATE, not just by name, because a
+// partial index with a different WHERE clause enforces a different rule:
+//
+//   wsa_unique_open_application
+//     UNIQUE (worker_uid, service_id) WHERE status IN (pending_review,
+//     action_required). ONE OPEN application per worker+service, enforced by the
+//     database. The predicate is what still allows a worker to reapply after a
+//     rejection — approved and rejected rows are outside the index — so
+//     widening it to all statuses would silently ban reapplication.
+//
+//   wsa_provider_request_idempotency
+//     UNIQUE (worker_uid, client_request_id) WHERE client_request_id IS NOT NULL.
+//     A retried submission becomes one application, not two. The predicate keeps
+//     every legacy row with no client_request_id out of the constraint.
+//
+// `employee_services.status` defaults to 'active' and is NOT NULL, which is why
+// pause/resume can be a status change rather than a delete.
 
 const APPLICATION_FIELDS = `
   id, worker_uid, service_id, status,
@@ -148,11 +92,10 @@ const addTimelineEvent = async (
 
 /** All applications for a provider, including immutable terminal history. */
 export const getApplicationsByWorker = async (workerUid: string) => {
-  await ensureTable();
   const res = await dbQuery.query(
     `SELECT ${APPLICATION_SELECT_FIELDS}, s.name AS service_name, s.category AS service_category
      FROM ${dbSchema}.worker_service_applications wsa
-     JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+     JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
      WHERE wsa.worker_uid = $1
      ORDER BY
        CASE wsa.status WHEN 'action_required' THEN 0 WHEN 'pending_review' THEN 1
@@ -196,12 +139,11 @@ export const evaluateApplicationEligibility = async (
   workerUid: string,
   serviceId: number,
 ): Promise<ServiceApplicationEligibility> => {
-  await ensureTable();
   const serviceRes = await dbQuery.query(
     `SELECT s.id, s.name, s.category,
             COALESCE(MAX(o.version), 1)::int AS catalog_version,
             BOOL_OR(o.status = 'active' AND o.provider_web_visible = true AND m.is_active = true) AS application_open
-     FROM ${dbSchema}.services s
+     FROM ${dbSchema}.service_families s
      LEFT JOIN ${dbSchema}.provider_catalog_offering_mappings m ON m.service_id = s.id
      LEFT JOIN ${dbSchema}.provider_catalog_offerings o ON o.id = m.offering_id
      WHERE s.id = $1
@@ -281,11 +223,10 @@ export const evaluateApplicationEligibility = async (
 };
 
 export const getApplicationByWorker = async (applicationId: string, workerUid: string) => {
-  await ensureTable();
   const result = await dbQuery.query(
     `SELECT ${APPLICATION_SELECT_FIELDS}, s.name AS service_name, s.category AS service_category
      FROM ${dbSchema}.worker_service_applications wsa
-     JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+     JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
      WHERE wsa.id = $1 AND wsa.worker_uid = $2 LIMIT 1`,
     [applicationId, workerUid],
   );
@@ -300,15 +241,13 @@ export const getApplicationByWorker = async (applicationId: string, workerUid: s
 };
 
 export const getProviderServicesOverview = async (workerUid: string) => {
-  await ensureTable();
-  await ensureActivationSchema();
   const [services, applications, account] = await Promise.all([
     dbQuery.query(
       `SELECT es.service_id, s.name, s.category, es.created_at AS approved_at,
               COALESCE(es.status, 'active') AS operational_status,
               es.pause_reason, es.updated_at
        FROM ${dbSchema}.employee_services es
-       JOIN ${dbSchema}.services s ON s.id = es.service_id
+       JOIN ${dbSchema}.service_families s ON s.id = es.service_id
        WHERE es.employee_uid = $1 ORDER BY s.name`,
       [workerUid],
     ),
@@ -359,14 +298,13 @@ export const approveApplicationAtomic = async (
   expectedVersion: number,
   internalNote?: string,
 ) => {
-  await ensureTable();
   const client = await pool.connect();
   let committed: any;
   try {
     await client.query('BEGIN');
     const locked = await client.query(
       `SELECT wsa.*, s.name AS service_name FROM ${dbSchema}.worker_service_applications wsa
-       JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+       JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
        WHERE wsa.id = $1 FOR UPDATE`,
       [applicationId],
     );
@@ -382,6 +320,20 @@ export const approveApplicationAtomic = async (
       `INSERT INTO ${dbSchema}.employee_services (employee_uid, service_id)
        VALUES ($1, $2) ON CONFLICT (employee_uid, service_id) DO NOTHING`,
       [app.worker_uid, app.service_id],
+    );
+    /**
+     * The canonical projection, in the SAME transaction as the legacy grant.
+     *
+     * This path already owns a transaction, so the two capability records
+     * cannot disagree: either the provider is approved in both tables or in
+     * neither. A failure here rolls the approval back, which is correct where
+     * atomicity is available — the alternative is an approval whose canonical
+     * row silently never existed.
+     */
+    await projectFamilyGrant(
+      (sql, params) => client.query(sql, params as any[]),
+      dbSchema,
+      { providerUid: app.worker_uid, familyId: Number(app.service_id), origin: 'application_approved' },
     );
     const updated = await client.query(
       `UPDATE ${dbSchema}.worker_service_applications
@@ -405,6 +357,25 @@ export const approveApplicationAtomic = async (
   } finally {
     client.release();
   }
+  /**
+   * The canonical fact (TAB 09).
+   *
+   * The five keyed producers in this module are KEPT: each carries the specific
+   * decision — approved, rejected, action required — and the event's own
+   * projection is a generic "your application has an update". Collapsing them
+   * would lose the decision, so the event carries the fact and the existing
+   * notifications carry the detail. Their keys differ, so both are delivered;
+   * that is the one place in this tab where two notifications for one fact is
+   * the intended outcome, and the registry records it under `supersedes`.
+   */
+  void publishEventSafely({
+    name: 'ProviderApplicationUpdated',
+    refs: { applicationId, providerUid: committed.worker_uid },
+    display: {},
+    metadata: { decision: 'approved', version: committed.version },
+    dedupeKey: `ProviderApplicationUpdated:${applicationId}:${committed.version}`,
+  }).then(() => dispatchSoon());
+
   createNotification(committed.worker_uid, {
     notificationKey: `svc_app_approved_${applicationId}_${committed.version}`,
     type: 'requirement_review', severity: 'info', title: 'Application approved',
@@ -424,7 +395,6 @@ export const decideApplicationAtomic = async (
   providerReasonDetail: string,
   internalNote?: string,
 ) => {
-  await ensureTable();
   if (!/^[A-Z0-9_]{3,80}$/.test(providerReasonCode)) {
     throw applicationError('A stable provider reason code is required.', 'INVALID_PROVIDER_REASON_CODE', 400);
   }
@@ -438,7 +408,7 @@ export const decideApplicationAtomic = async (
     await client.query('BEGIN');
     const locked = await client.query(
       `SELECT wsa.*, s.name AS service_name FROM ${dbSchema}.worker_service_applications wsa
-       JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+       JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
        WHERE wsa.id = $1 FOR UPDATE`,
       [applicationId],
     );
@@ -484,7 +454,6 @@ export const decideApplicationAtomic = async (
 
 /** Create a pending_review application. Blocks duplicates and already-active services. */
 const submitApplicationLegacy = async (workerUid: string, serviceId: number) => {
-  await ensureTable();
 
   // Guard: already an active assignment?
   const activeCheck = await dbQuery.query(
@@ -535,7 +504,6 @@ export const submitApplication = async (
   serviceId: number,
   input: { clientRequestId: string; requirementsVersion: number },
 ) => {
-  await ensureTable();
   const clientRequestId = input.clientRequestId?.trim();
   if (!clientRequestId || clientRequestId.length < 16 || clientRequestId.length > 128) {
     throw applicationError('clientRequestId must be between 16 and 128 characters.', 'INVALID_IDEMPOTENCY_KEY', 400);
@@ -638,7 +606,6 @@ export const submitApplication = async (
 };
 
 const resubmitApplicationLegacy = async (applicationId: string, workerUid: string) => {
-  await ensureTable();
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.worker_service_applications
      SET status       = 'pending_review',
@@ -677,7 +644,6 @@ export const resubmitApplication = async (
   workerUid: string,
   input: { clientRequestId: string; expectedVersion: number },
 ) => {
-  await ensureTable();
   const requestId = input.clientRequestId?.trim();
   if (!requestId || requestId.length < 16 || requestId.length > 128) {
     throw applicationError('clientRequestId must be between 16 and 128 characters.', 'INVALID_IDEMPOTENCY_KEY', 400);
@@ -730,14 +696,13 @@ export const resubmitApplication = async (
 };
 
 export const approveApplication = async (applicationId: string, adminUid: string) => {
-  await ensureTable();
   const appRes = await dbQuery.query(
     `SELECT wsa.id, wsa.worker_uid, wsa.service_id, wsa.status,
             wsa.submitted_at, wsa.updated_at, wsa.cancelled_at, wsa.approved_at,
             wsa.reviewed_at, wsa.review_reason, wsa.version,
             s.name AS service_name
      FROM ${dbSchema}.worker_service_applications wsa
-     LEFT JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+     LEFT JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
      WHERE wsa.id = $1 AND wsa.status IN ('pending_review', 'action_required') LIMIT 1`,
     [applicationId],
   );
@@ -753,6 +718,20 @@ export const approveApplication = async (applicationId: string, adminUid: string
     `INSERT INTO ${dbSchema}.employee_services (employee_uid, service_id)
      VALUES ($1, $2) ON CONFLICT (employee_uid, service_id) DO NOTHING`,
     [app.worker_uid, app.service_id],
+  );
+  /**
+   * The canonical projection, at the same durability as the legacy write it
+   * mirrors — this path has never been transactional.
+   *
+   * `Safely`, deliberately: failing a provider's approval because a projection
+   * statement errored would be worse than the drift it prevents. The matcher
+   * still falls back to the legacy grant, so the provider stays assignable, and
+   * the parity report plus `npm run capability:reconcile` close the gap.
+   */
+  await projectFamilyGrantSafely(
+    (sql, params) => dbQuery.query(sql, params as any[]),
+    dbSchema,
+    { providerUid: app.worker_uid, familyId: Number(app.service_id), origin: 'application_approved' },
   );
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.worker_service_applications
@@ -784,7 +763,6 @@ export const approveApplication = async (applicationId: string, adminUid: string
 
 /** Admin: reject an application with a mandatory review reason. */
 export const rejectApplication = async (applicationId: string, adminUid: string, reason: string) => {
-  await ensureTable();
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.worker_service_applications
      SET status       = 'rejected',
@@ -802,7 +780,7 @@ export const rejectApplication = async (applicationId: string, adminUid: string,
     const app = res.rows[0];
     // Fetch service name for notification copy
     const svcRes = await dbQuery.query(
-      `SELECT name FROM ${dbSchema}.services WHERE id = $1 LIMIT 1`,
+      `SELECT name FROM ${dbSchema}.service_families WHERE id = $1 LIMIT 1`,
       [app.service_id],
     ).catch(() => ({ rows: [] }));
     const serviceName: string = svcRes.rows[0]?.name ?? `service #${app.service_id}`;
@@ -826,7 +804,6 @@ export const rejectApplication = async (applicationId: string, adminUid: string,
  * The provider will be prompted to correct and resubmit.
  */
 export const flagApplicationActionRequired = async (applicationId: string, adminUid: string, reason: string) => {
-  await ensureTable();
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.worker_service_applications
      SET status       = 'action_required',
@@ -843,7 +820,7 @@ export const flagApplicationActionRequired = async (applicationId: string, admin
   if (res.rowCount) {
     const app = res.rows[0];
     const svcRes = await dbQuery.query(
-      `SELECT name FROM ${dbSchema}.services WHERE id = $1 LIMIT 1`,
+      `SELECT name FROM ${dbSchema}.service_families WHERE id = $1 LIMIT 1`,
       [app.service_id],
     ).catch(() => ({ rows: [] }));
     const serviceName: string = svcRes.rows[0]?.name ?? `service #${app.service_id}`;
@@ -868,7 +845,6 @@ export const listApplicationsAdmin = async (params: {
   sortBy?: 'submittedAt' | 'updatedAt' | 'status'; sortOrder?: 'asc' | 'desc';
   page?: number; limit?: number;
 }) => {
-  await ensureTable();
   const page  = Math.max(1, params.page ?? 1);
   const limit = Math.min(100, Math.max(1, params.limit ?? 25));
   const offset = (page - 1) * limit;
@@ -907,7 +883,7 @@ export const listApplicationsAdmin = async (params: {
        COUNT(*) OVER() AS total_count
      FROM ${dbSchema}.worker_service_applications wsa
      LEFT JOIN ${dbSchema}.user_credentials uc ON uc.uid = wsa.worker_uid
-     LEFT JOIN ${dbSchema}.services s ON s.id = wsa.service_id
+     LEFT JOIN ${dbSchema}.service_families s ON s.id = wsa.service_id
      ${where}
      ORDER BY ${sortField} ${sortDir}, wsa.id ASC
      LIMIT $${idx} OFFSET $${idx + 1}`,
@@ -931,7 +907,6 @@ export const listApplicationsAdmin = async (params: {
 
 /** Atomically cancel an application — only works for pending/action_required. */
 export const cancelApplication = async (applicationId: string, workerUid: string) => {
-  await ensureTable();
 
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.worker_service_applications
