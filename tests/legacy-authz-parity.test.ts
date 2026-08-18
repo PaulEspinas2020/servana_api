@@ -35,6 +35,7 @@ import {
   authOf,
   capabilitiesOf,
   capabilityLoosenings,
+  resolvedChain,
 } from '../scripts/legacy-authz-inventory';
 import { buildMountedRoutes } from '../scripts/lib/routeTable';
 
@@ -94,5 +95,52 @@ describe('legacy → v1 authorization parity', () => {
 
   it('no v1 successor drops a capability its legacy route requires', () => {
     expect(capabilityLoosenings()).toEqual([]);
+  });
+
+  /**
+   * The ladder reads middleware by NAME, and 224 of 520 legacy routes declare
+   * their auth as `...adminOnly` — an array defined in the same file as
+   * `[verifyAuth, verifyRoles([1]), adminRateLimit]`. The literal spread carries
+   * none of the ladder's names, so every one of those routes classified as
+   * `public`: the WEAKEST rung.
+   *
+   * That is not a cosmetic mislabel. `loosenings()` reports only when the legacy
+   * route is STRICTER than its v1 successor, so a route mis-read as `public` can
+   * never produce a finding — the gate was blind across 43% of the legacy
+   * surface, and 83% of its own "public" bucket was wrong.
+   *
+   * Resolution is per-file on purpose: `technician.routes.ts` defines the same
+   * alias as `verifyRoles([0, 1])`, so a single shared definition would report
+   * role 0 as admin.
+   */
+  it('resolves a spread middleware alias against the file that defines it', () => {
+    const adminRoute = buildMountedRoutes().find(
+      (r) => r.handlers.join(' ').includes('...adminOnly') && r.file.includes('adminCustomer'),
+    );
+    expect(adminRoute).toBeDefined();
+
+    // Before resolution the chain names no ladder middleware at all.
+    expect(adminRoute!.handlers.join(' ')).not.toMatch(/verifyRoles/);
+    // After it, the real chain is visible and the route reads as admin.
+    expect(resolvedChain(adminRoute!)).toMatch(/verifyRoles\(\[1\]\)/);
+    expect(authOf(adminRoute!)).toBe('admin');
+  });
+
+  it('leaves an alias it cannot resolve exactly as written (negative fixture)', () => {
+    // Widening the chain is safe; inventing one is not. An unknown alias must
+    // pass through untouched rather than resolve to something convenient.
+    const fake = { handlers: ['...noSuchAlias', 'ctrl.handler'], file: 'src/routes/adminCustomer.routes.ts' } as never;
+    expect(resolvedChain(fake)).toContain('...noSuchAlias');
+    expect(authOf(fake)).toBe('public');
+  });
+
+  it('no longer classifies the bulk of the legacy surface as public', () => {
+    // The number that made the blindness visible. 270 of 520 were called public
+    // before resolution; anything near that again means the alias stopped
+    // resolving and the gate went quiet without failing.
+    const legacy = buildMountedRoutes().filter((r) => !r.fullPath.startsWith('/api/v1'));
+    const pub = legacy.filter((r) => authOf(r) === 'public');
+    expect(pub.length).toBeLessThan(legacy.length / 4);
+    expect(pub.filter((r) => r.handlers.join(' ').includes('...'))).toEqual([]);
   });
 });

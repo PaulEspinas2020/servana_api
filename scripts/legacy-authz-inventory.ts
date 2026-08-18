@@ -37,6 +37,8 @@
  * Run: npm run authz:legacy
  */
 
+import fs from 'fs';
+import path from 'path';
 import { buildMountedRoutes, type MountedRoute } from './lib/routeTable';
 import { V1_CONTRACT, V1_PREFIX, type AuthMode } from '../src/api/v1/contract';
 import { objectScopedEntries } from '../src/api/v1/authzMatrix';
@@ -105,8 +107,76 @@ const STRICTNESS: Record<AuthMode, number> = {
   admin: 3,
 };
 
-export const authOf = (route: MountedRoute): AuthMode => {
+/**
+ * Inline a spread middleware alias before reading the chain.
+ *
+ * ## The measured defect
+ *
+ * `authOf` matches middleware by NAME in the handler text. 224 of 520 legacy
+ * routes are declared as `router.get(path, ...adminOnly, handler)`, and
+ * `adminOnly` is `[verifyAuth, verifyRoles([1]), adminRateLimit]` defined in the
+ * same file. The literal `...adminOnly` contains none of the ladder's names, so
+ * every one of those routes was classified `public` — the WEAKEST rung.
+ *
+ * That is not merely a wrong label. `loosenings()` reports only when the legacy
+ * route is STRICTER than its v1 successor, so a legacy route mis-read as
+ * `public` can never produce a finding. The gate was silently blind across 43%
+ * of the legacy surface, and its own "public" bucket was 83% wrong.
+ *
+ * Resolution is per-FILE and deliberately not global: `technician.routes.ts`
+ * defines `adminOnly` as `verifyRoles([0, 1])`, not `[1]`, so a single shared
+ * definition would have reported role 0 as admin. The alias means whatever the
+ * file it appears in says it means.
+ *
+ * Only aliases the file actually defines are inlined; anything unresolved is
+ * left as written, so this can widen the read chain but never invent one.
+ */
+const REPO_ROOT = path.resolve(__dirname, '..');
+const aliasCache = new Map<string, Map<string, string>>();
+
+const aliasesIn = (file: string): Map<string, string> => {
+  const cached = aliasCache.get(file);
+  if (cached) return cached;
+  const found = new Map<string, string>();
+  try {
+    const text = fs.readFileSync(path.resolve(REPO_ROOT, file), 'utf8');
+    // Bracket-BALANCED, not `[^\]]*`. `[verifyAuth, verifyRoles([1]), adminRateLimit]`
+    // contains a nested `]`, so a naive scan stops inside `verifyRoles([1` and
+    // silently drops everything after it — including, in principle, a
+    // `requireCapability` at the end of the array. A chain truncated mid-alias
+    // reads as weaker than it is, which is the defect this resolution exists to
+    // remove, reintroduced one level down.
+    for (const m of text.matchAll(/const\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=\s*\[/g)) {
+      const open = m.index! + m[0].length - 1;
+      let depth = 0;
+      let close = -1;
+      for (let i = open; i < text.length; i += 1) {
+        const ch = text[i];
+        if (ch === '[') depth += 1;
+        else if (ch === ']') {
+          depth -= 1;
+          if (depth === 0) { close = i; break; }
+        }
+      }
+      if (close !== -1) found.set(m[1], text.slice(open + 1, close));
+    }
+  } catch {
+    // A route file that cannot be read resolves no aliases. The chain is then
+    // read as written, which is the previous behaviour.
+  }
+  aliasCache.set(file, found);
+  return found;
+};
+
+export const resolvedChain = (route: MountedRoute): string => {
   const chain = route.handlers.join(' ');
+  if (!chain.includes('...')) return chain;
+  const aliases = aliasesIn(route.file);
+  return chain.replace(/\.\.\.([A-Za-z_][A-Za-z0-9_]*)/g, (whole, name) => aliases.get(name) ?? whole);
+};
+
+export const authOf = (route: MountedRoute): AuthMode => {
+  const chain = resolvedChain(route);
   for (const rung of LADDER) if (rung.matches.test(chain)) return rung.mode;
   return 'public';
 };
@@ -221,7 +291,7 @@ export const loosenings = (): Loosening[] => {
 const CAPABILITY_CALL = /\brequireCapability\s*\(\s*["'`]([A-Za-z0-9_]+)["'`]/g;
 
 export const capabilitiesOf = (route: MountedRoute): string[] => {
-  const chain = route.handlers.join(' ');
+  const chain = resolvedChain(route);
   const found = new Set<string>();
   for (const match of chain.matchAll(CAPABILITY_CALL)) found.add(match[1]);
   return [...found].sort();
