@@ -17,24 +17,27 @@ import { getWorkerBankAccount } from "./technicianService";
 import { SyntheticFinancialRefusal } from "./booking/syntheticBookings";
 
 const dbSchema = db.schema;
+import { PAYMONGO_BASE_URL, PAYMONGO_TIMEOUT_MS, paymongoBasicAuth } from "./finance/paymongoClient";
+
 
 // Rates live in revenueSplit.ts — see that file for why they are not here.
-const PAYMONGO_BASE_URL  = "https://api.paymongo.com/v1";
+// PAYMONGO_BASE_URL and PAYMONGO_TIMEOUT_MS come from finance/paymongoClient.
 // Single definition, shared with the earnings readers so a date shown to a
 // provider cannot disagree with the job that actually releases the money.
 const RELEASE_HOURS      = PROVIDER_RELEASE_HOURS;
-const PAYMONGO_TIMEOUT_MS = 15_000;
+
 
 const PAYOUT_SUCCEEDED_STATUSES = new Set(["succeeded", "deposited"]);
 const PAYOUT_PENDING_STATUSES = new Set(["pending", "processing", "in_transit", "on_hold"]);
 const PAYOUT_FAILED_STATUSES = new Set(["failed", "returned", "cancelled", "rejected"]);
 
 const getAuthHeader = () => {
-  // Use the same key contract as checkout and refunds. Keeping a separate
-  // PAYMONGO_SK variable made payouts silently run in a different mode.
-  const key = process.env.PAYMONGO_SECRET_KEY || process.env.PAYMONGO_SK_DEV || "";
-  if (!key) throw new Error("PayMongo is not configured");
-  return `Basic ${Buffer.from(`${key}:`).toString("base64")}`;
+  // The same key contract as checkout and refunds, and now literally the same
+  // resolver: keeping a separate PAYMONGO_SK variable here once made payouts
+  // silently run in a different mode from checkout.
+  const auth = paymongoBasicAuth();
+  if (!auth) throw new Error("PayMongo is not configured");
+  return auth;
 };
 
 const computeSplit = (total: number) => {

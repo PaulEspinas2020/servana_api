@@ -6,12 +6,16 @@ import { getUserInfoByBookingId } from "./user.service";
 import { ensureFinanceLedgerSchema, recordPaymentRefunded } from "./finance/financeLedger";
 
 const dbSchema = db.schema;
-const PAYMONGO_REFUND_TIMEOUT_MS = 15_000;
+import { PAYMONGO_BASE_URL, PAYMONGO_TIMEOUT_MS, paymongoBasicAuth } from "./finance/paymongoClient";
+
+// The refund timeout is the shared one; a refund is not special in how long it
+// may take, only in what an ambiguous outcome means (see isDefinitelyRejected).
+const PAYMONGO_REFUND_TIMEOUT_MS = PAYMONGO_TIMEOUT_MS;
 
 const paymongoAuthHeader = () => {
-  const key = process.env.PAYMONGO_SECRET_KEY || process.env.PAYMONGO_SK_DEV || "";
-  if (!key) throw new Error("PayMongo is not configured");
-  return `Basic ${Buffer.from(`${key}:`).toString("base64")}`;
+  const auth = paymongoBasicAuth();
+  if (!auth) throw new Error("PayMongo is not configured");
+  return auth;
 };
 
 // A timeout/5xx is an unknown outcome: PayMongo may have accepted the refund
@@ -151,7 +155,7 @@ class RefundService {
     try {
       // 3. Call PayMongo refund API
       const refundRes = await axios.post(
-        "https://api.paymongo.com/v1/refunds",
+        `${PAYMONGO_BASE_URL}/refunds`,
         {
           data: {
             attributes: {
@@ -271,7 +275,7 @@ class RefundService {
 
     try {
       const refundRes = await axios.post(
-      "https://api.paymongo.com/v1/refunds",
+      `${PAYMONGO_BASE_URL}/refunds`,
       {
         data: {
           attributes: {

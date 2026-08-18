@@ -5,10 +5,84 @@ const read = (file: string) => fs.readFileSync(path.join(__dirname, "..", "src",
 
 describe("PayMongo payout and retry boundaries", () => {
   test("disbursements share the checkout/refund secret-key contract", () => {
-    const source = read("services/disbursement.service.ts");
-    expect(source).toContain("process.env.PAYMONGO_SECRET_KEY || process.env.PAYMONGO_SK_DEV");
-    expect(source).toContain('throw new Error("PayMongo is not configured")');
-    expect(source).not.toContain("process.env.PAYMONGO_SK ||");
+    /**
+     * This asserted that the literal expression
+     * `process.env.PAYMONGO_SECRET_KEY || process.env.PAYMONGO_SK_DEV` appeared
+     * in the payout file, because a separate PAYMONGO_SK variable had once made
+     * payouts silently run in a different mode from checkout.
+     *
+     * The contract is now STRUCTURAL rather than textual: all three money
+     * services resolve the key through `finance/paymongoClient`, so they cannot
+     * drift apart by editing one file. Asserting the shared resolver — and that
+     * nothing reads the environment directly — is what the original text check
+     * was standing in for.
+     */
+    const client = read("services/finance/paymongoClient.ts");
+    expect(client).toContain("process.env.PAYMONGO_SECRET_KEY || process.env.PAYMONGO_SK_DEV");
+    expect(client).not.toContain("process.env.PAYMONGO_SK ||");
+
+    for (const file of [
+      "services/disbursement.service.ts",
+      "services/paymentService.ts",
+      "services/refund.service.ts",
+    ]) {
+      const source = read(file);
+      expect(source).toContain("paymongoBasicAuth");
+      // No second SECRET-KEY contract may reappear in any of the three.
+      // Scoped to the key vars deliberately: paymentService legitimately reads
+      // PAYMONGO_RETURN_URL, PAYMONGO_WEBHOOK_SECRET and PAYMONGO_EXPECT_LIVE_MODE,
+      // which are different settings and not part of this contract.
+      expect(source).not.toContain("PAYMONGO_SECRET_KEY");
+      expect(source).not.toContain("PAYMONGO_SK_DEV");
+    }
+  });
+
+  test("each capability keeps its OWN error contract", () => {
+    /**
+     * The three are deliberately NOT merged. A shared throw would have changed
+     * what a customer sees when checkout is down, and what a failed payout or an
+     * ambiguous refund records.
+     *
+     * paymentService   typed 503 reaching a customer mid-checkout
+     * disbursement     plain Error, recorded as a payout failure reason
+     * refund           plain Error, must NOT mark the refund rejected
+     */
+    expect(read("services/paymentService.ts")).toContain(
+      'throw paymentError("Online payment is temporarily unavailable", "PAYMONGO_NOT_CONFIGURED", 503)',
+    );
+    expect(read("services/disbursement.service.ts")).toContain(
+      'throw new Error("PayMongo is not configured")',
+    );
+    expect(read("services/refund.service.ts")).toContain(
+      'throw new Error("PayMongo is not configured")',
+    );
+
+    // The shared transport must not throw on its own — it returns null so each
+    // caller can keep the error its callers already handle.
+    const client = read("services/finance/paymongoClient.ts");
+    expect(client).not.toMatch(/^\s*(throw|  throw) /m);
+  });
+
+  test("payment, refund and disbursement remain SEPARATE capabilities", () => {
+    /**
+     * Centralizing the transport must not become merging the domains. A refund is
+     * irreversible, a payout moves money to a third party, and a checkout is
+     * customer-initiated — three risk profiles that should not share a blast
+     * radius. Each keeps its own service file and its own entry points.
+     */
+    const fs2 = require("fs");
+    const path2 = require("path");
+    for (const file of [
+      "services/paymentService.ts",
+      "services/refund.service.ts",
+      "services/disbursement.service.ts",
+    ]) {
+      expect(fs2.existsSync(path2.join(__dirname, "..", "src", file))).toBe(true);
+    }
+    // The v1 surface reuses the payment implementation rather than forking it.
+    const v1 = read("services/finance/bookingPaymentService.ts");
+    expect(v1).toContain("from '../paymentService'");
+    expect(v1).not.toContain("api.paymongo.com");
   });
 
   test("a processor response needs both an id and a succeeded status before release", () => {

@@ -1,4 +1,6 @@
 import { db } from "../config";
+import { PAYMONGO_BASE_URL, PAYMONGO_TIMEOUT_MS, paymongoBasicAuth } from "./finance/paymongoClient";
+
 import { returnOriginMatches } from "./paymentReturnOrigin";
 import { Request, Response } from "express";
 import dbQuery, { pool } from "../db/dbQuery";
@@ -190,19 +192,21 @@ export const markCashPaid = async (bookingId: number) => {
   return r.rows[0];
 };
 
-const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SECRET_KEY || process.env.PAYMONGO_SK_DEV || "";
-const PAYMONGO_BASE_URL = "https://api.paymongo.com/v1";
-const PAYMONGO_TIMEOUT_MS = 15_000;
+// Transport comes from finance/paymongoClient — one key contract for checkout,
+// refunds and payouts. The key is resolved at CALL time there; it used to be
+// captured in a module-level const here, which is empty for good if dotenv loads
+// after this import.
 
 const paymentError = (message: string, code: string, statusCode: number) =>
   Object.assign(new Error(message), { code, statusCode });
 
 const getAuthHeader = () => {
-  if (!PAYMONGO_SECRET_KEY) {
+  const auth = paymongoBasicAuth();
+  if (!auth) {
+    // Customer-facing and mid-checkout: stays a typed 503, not a bare Error.
     throw paymentError("Online payment is temporarily unavailable", "PAYMONGO_NOT_CONFIGURED", 503);
   }
-  const token = Buffer.from(`${PAYMONGO_SECRET_KEY}:`).toString("base64");
-  return `Basic ${token}`;
+  return auth;
 };
 
 /**
