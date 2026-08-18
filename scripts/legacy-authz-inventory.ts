@@ -290,10 +290,34 @@ export const loosenings = (): Loosening[] => {
  */
 const CAPABILITY_CALL = /\brequireCapability\s*\(\s*["'`]([A-Za-z0-9_]+)["'`]/g;
 
+/**
+ * `requireActiveProvider` is a THIRD dimension the ladder cannot see.
+ *
+ * It is not a role rung and not a named capability, so a chain carrying it
+ * resolves to plain `provider` — identical to a v1 entry declaring
+ * `auth: 'provider'`. Its own docblock states what it exists to prevent: a
+ * suspended provider's Firebase token stays valid, `verifyAuth` keeps passing,
+ * and "anyone holding that token, including the suspended provider with any HTTP
+ * client, could still accept bookings, start jobs and move their location."
+ *
+ * All seven legacy provider job actions carry it. Their v1 successors carried no
+ * active-status check at all — not in the chain, not in `domains/bookingActions`,
+ * not in `transitionExecutor` — so the v1 surface reopened exactly the hole this
+ * middleware was written to close, on a WRITE path that assigns real work.
+ *
+ * It is reported as the capability it corresponds to. `canAcceptJobs` is
+ * `fullyActive && complianceCurrent`, which is false for a suspended provider —
+ * deliberately unlike `canViewEarnings`, which stays true because a suspended
+ * provider may still see what they earned.
+ */
+const ACTIVE_PROVIDER_CALL = /\brequireActiveProvider\b/;
+const ACTIVE_PROVIDER_CAPABILITY = 'canAcceptJobs';
+
 export const capabilitiesOf = (route: MountedRoute): string[] => {
   const chain = resolvedChain(route);
   const found = new Set<string>();
   for (const match of chain.matchAll(CAPABILITY_CALL)) found.add(match[1]);
+  if (ACTIVE_PROVIDER_CALL.test(chain)) found.add(ACTIVE_PROVIDER_CAPABILITY);
   return [...found].sort();
 };
 

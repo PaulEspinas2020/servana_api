@@ -2812,6 +2812,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/accept',
     summary: 'Accepts the assignment.',
     auth: 'provider',
+    capability: 'canAcceptJobs',
     idempotent: false,
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
@@ -2848,6 +2849,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/decline',
     summary: 'Declines the assignment, returning the booking to the pool.',
     auth: 'provider',
+    capability: 'canAcceptJobs',
     idempotent: false,
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
@@ -2884,6 +2886,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/en-route',
     summary: 'Marks the provider on the way.',
     auth: 'provider',
+    capability: 'canAcceptJobs',
     idempotent: false,
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
@@ -2920,6 +2923,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/arrived',
     summary: 'Marks the provider at the address.',
     auth: 'provider',
+    capability: 'canAcceptJobs',
     idempotent: false,
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
@@ -2956,6 +2960,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/start',
     summary: 'Starts the job. Requires the customer worker code.',
     auth: 'provider',
+    capability: 'canAcceptJobs',
     idempotent: false,
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
@@ -2996,6 +3001,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/complete',
     summary: 'Completes the job.',
     auth: 'provider',
+    capability: 'canAcceptJobs',
     idempotent: false,
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
@@ -3032,6 +3038,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/cancel',
     summary: 'Cancels a job the provider had already accepted, subject to the notice policy.',
     auth: 'provider',
+    capability: 'canAcceptJobs',
     idempotent: false,
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the repeat ' +
@@ -3302,6 +3309,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/bookings/:bookingId/additional-work',
     summary: 'Raises a change order against the booking, as a child request awaiting approval.',
     auth: 'provider',
+    capability: 'canAcceptJobs',
     idempotent: false,
     replayGuard:
       'The write requires an IN_PROGRESS assignment row held under FOR UPDATE, ' +

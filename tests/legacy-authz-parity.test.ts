@@ -143,4 +143,40 @@ describe('legacy → v1 authorization parity', () => {
     expect(pub.length).toBeLessThan(legacy.length / 4);
     expect(pub.filter((r) => r.handlers.join(' ').includes('...'))).toEqual([]);
   });
+
+  /**
+   * `requireActiveProvider` was a third invisible dimension.
+   *
+   * Not a role rung and not a named capability, so a chain carrying it resolved
+   * to plain `provider` — identical to a v1 entry declaring `auth: 'provider'`.
+   * All seven legacy provider job actions carry it, and their v1 successors
+   * carried no active-status check anywhere: not in the chain, not in
+   * `domains/bookingActions`, not in `transitionExecutor`.
+   *
+   * Its own docblock says what that means: a suspended provider's token stays
+   * valid, `verifyAuth` keeps passing, and "anyone holding that token, including
+   * the suspended provider with any HTTP client, could still accept bookings,
+   * start jobs and move their location." The v1 surface reopened that on a WRITE
+   * path, and the eighth case — additional-work — is one the portal has already
+   * migrated to.
+   */
+  it('reads requireActiveProvider as the capability it enforces', () => {
+    const guarded = {
+      handlers: ['verifyAuth', 'requireProviderRole', 'requireActiveProvider', 'ctrl.acceptJob'],
+      file: 'src/routes/provider.routes.ts',
+    } as never;
+    const plain = {
+      handlers: ['verifyAuth', 'requireProviderRole', 'ctrl.get'],
+      file: 'src/routes/provider.routes.ts',
+    } as never;
+
+    expect(capabilitiesOf(guarded)).toContain('canAcceptJobs');
+    // The negative fixture: without it, a matcher returning the capability for
+    // every provider chain would make the gate unfailable in the other direction.
+    expect(capabilitiesOf(plain)).toEqual([]);
+    // Both still read as `provider` on the role ladder, which is exactly why the
+    // ladder alone could never separate them.
+    expect(authOf(guarded)).toBe('provider');
+    expect(authOf(plain)).toBe('provider');
+  });
 });
