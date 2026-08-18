@@ -193,6 +193,91 @@ export const loosenings = (): Loosening[] => {
   return found;
 };
 
+/**
+ * Capabilities the legacy chain demands, by NAME.
+ *
+ * ## Why the ladder alone could not see this
+ *
+ * `authOf` reports a chain at its strictest ROLE rung, and its vocabulary is
+ * `verifyRoles`, `requireProviderRole`, `verifyAuth`. `requireCapability` is not
+ * in it, so a chain of
+ *
+ *   [verifyAuth, requireProviderRole, requireCapability("canViewEarnings")]
+ *
+ * resolves to `provider` — indistinguishable from a v1 entry declaring
+ * `auth: 'provider'` and nothing else. `STRICTNESS[legacy] <= STRICTNESS[v1]`
+ * is then true, the comparison short-circuits, and a removed enforcement point
+ * reads as parity.
+ *
+ * That is not a hypothetical: the three v1 earnings endpoints were mounted
+ * without the capability their live legacy aliases require, and this gate
+ * reported zero loosenings throughout.
+ *
+ * A capability is ORTHOGONAL to the role ladder rather than another rung on it —
+ * a request can be required to be a provider AND to hold a capability — so it is
+ * compared as its own dimension instead of being folded into STRICTNESS, which
+ * would have lost which capability was dropped.
+ */
+const CAPABILITY_CALL = /\brequireCapability\s*\(\s*["'`]([A-Za-z0-9_]+)["'`]/g;
+
+export const capabilitiesOf = (route: MountedRoute): string[] => {
+  const chain = route.handlers.join(' ');
+  const found = new Set<string>();
+  for (const match of chain.matchAll(CAPABILITY_CALL)) found.add(match[1]);
+  return [...found].sort();
+};
+
+export interface CapabilityLoosening {
+  legacyPath: string;
+  legacyCapabilities: string[];
+  v1Id: string;
+  v1Path: string;
+  v1Capability: string | null;
+  dropped: string[];
+}
+
+/**
+ * v1 entries whose superseded legacy route demanded a capability they do not.
+ *
+ * The same supersession rule as `loosenings()`: `ROLE_SPECIFIC` and `KEEP` are
+ * not supersessions, so they are not compared.
+ */
+export const capabilityLoosenings = (): CapabilityLoosening[] => {
+  const mounted = buildMountedRoutes();
+  const byPath = new Map<string, MountedRoute>();
+  for (const route of mounted) {
+    const key = `${route.verb.toUpperCase()} ${normalise(route.fullPath)}`;
+    if (!byPath.has(key)) byPath.set(key, route);
+  }
+
+  const found: CapabilityLoosening[] = [];
+  for (const entry of V1_CONTRACT) {
+    for (const legacy of entry.legacy ?? []) {
+      if (legacy.disposition === 'ROLE_SPECIFIC' || legacy.disposition === 'KEEP') continue;
+
+      const route = byPath.get(`${legacy.method.toUpperCase()} ${normalise(legacy.path)}`);
+      if (!route) continue;
+
+      const legacyCapabilities = capabilitiesOf(route);
+      if (!legacyCapabilities.length) continue;
+
+      const declared = (entry as { capability?: string }).capability ?? null;
+      const dropped = legacyCapabilities.filter((c) => c !== declared);
+      if (!dropped.length) continue;
+
+      found.push({
+        legacyPath: `${legacy.method.toUpperCase()} ${legacy.path}`,
+        legacyCapabilities,
+        v1Id: entry.id,
+        v1Path: `${entry.method.toUpperCase()} /api/v1${entry.path}`,
+        v1Capability: declared,
+        dropped,
+      });
+    }
+  }
+  return found;
+};
+
 if (require.main === module) {
   const mounted = buildMountedRoutes();
   const counts = new Map<AuthMode, number>();
@@ -218,5 +303,13 @@ if (require.main === module) {
     log(`      -> ${l.v1Path}  (${l.v1Auth})   [${l.v1Id}]`);
   }
 
-  process.exitCode = loose.length ? 1 : 0;
+  const capLoose = capabilityLoosenings();
+  log(`\n  v1 successors that DROPPED a capability the legacy route requires: ${capLoose.length}`);
+  for (const l of capLoose) {
+    log(`    ${l.legacyPath}  requires ${l.legacyCapabilities.join(', ')}`);
+    log(`      -> ${l.v1Path}  declares ${l.v1Capability ?? 'none'}   [${l.v1Id}]`);
+    log(`         DROPPED: ${l.dropped.join(', ')}`);
+  }
+
+  process.exitCode = loose.length || capLoose.length ? 1 : 0;
 }

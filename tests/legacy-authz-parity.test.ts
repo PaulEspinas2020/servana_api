@@ -30,7 +30,12 @@
  * Getting to zero honestly is what makes the first real one credible.
  */
 
-import { loosenings, authOf } from '../scripts/legacy-authz-inventory';
+import {
+  loosenings,
+  authOf,
+  capabilitiesOf,
+  capabilityLoosenings,
+} from '../scripts/legacy-authz-inventory';
 import { buildMountedRoutes } from '../scripts/lib/routeTable';
 
 describe('legacy → v1 authorization parity', () => {
@@ -55,5 +60,39 @@ describe('legacy → v1 authorization parity', () => {
 
   it('no superseded legacy route is stricter than its v1 successor', () => {
     expect(loosenings()).toEqual([]);
+  });
+
+  /**
+   * The role ladder was not the whole rule, and its silence was not evidence.
+   *
+   * `authOf` knows `verifyRoles`, `requireProviderRole` and `verifyAuth`. It has
+   * no word for `requireCapability`, so a chain of
+   * [verifyAuth, requireProviderRole, requireCapability("canViewEarnings")]
+   * resolved to plain `provider` — equal to the v1 entry's `provider`, so the
+   * strictness comparison short-circuited and the check above reported zero
+   * while three live v1 earnings endpoints were reachable without the capability
+   * their legacy aliases require.
+   *
+   * When this dimension was first added it found FOUR. That is the number worth
+   * remembering: a gate reporting zero because it cannot see the thing is
+   * indistinguishable from a gate reporting zero because the thing is absent.
+   */
+  it('reads capabilities out of a chain (positive AND negative fixture)', () => {
+    const guarded = {
+      handlers: ['verifyAuth', 'requireProviderRole', 'requireCapability("canViewEarnings")'],
+    } as never;
+    const plain = { handlers: ['verifyAuth', 'requireProviderRole'] } as never;
+
+    expect(capabilitiesOf(guarded)).toEqual(['canViewEarnings']);
+    // The negative fixture matters more than the positive one here: a matcher
+    // that returned a capability for every chain would make the gate below
+    // unfailable in the other direction.
+    expect(capabilitiesOf(plain)).toEqual([]);
+    expect(authOf(guarded)).toBe('provider');
+    expect(authOf(plain)).toBe('provider');
+  });
+
+  it('no v1 successor drops a capability its legacy route requires', () => {
+    expect(capabilityLoosenings()).toEqual([]);
   });
 });

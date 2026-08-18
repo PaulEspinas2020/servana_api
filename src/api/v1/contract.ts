@@ -30,6 +30,10 @@
  */
 
 import { V1ErrorCode } from './errors';
+// `import type` — erased at compile time, so naming the capability set here
+// cannot create a runtime cycle between the contract and the services it
+// describes. One source for the names; a typo fails the build.
+import type { Capabilities } from '../../services/providerAccountStateService';
 
 export const V1_PREFIX = '/api/v1';
 
@@ -119,6 +123,39 @@ export interface ContractEntry {
    * without reading Express middleware chains.
    */
   permission?: string;
+  /**
+   * A provider CAPABILITY the caller must also hold, beyond the role in `auth`.
+   *
+   * The provider-side twin of `permission` above, and it exists for the reason
+   * that field's docblock already names: a v1 successor that drops a check the
+   * legacy route enforces is *privilege escalation arriving as a migration*.
+   *
+   * ## The measured case
+   *
+   * The legacy earnings routes carry
+   * `requireCapability("canViewEarnings")` on top of `requireProviderRole`,
+   * because a provider whose application is not APPROVED holds the role but must
+   * not read earnings. The contract had no way to say that, so the three v1
+   * earnings successors were mounted with the role check alone. Both trees are
+   * live and the legacy mappings are `ALIAS_TEMPORARILY`, so `/api/v1/provider/
+   * earnings/summary` was a strictly weaker route to the same data than
+   * `/api/provider/earnings/summary`.
+   *
+   * ## Why no gate caught it
+   *
+   * `scripts/legacy-authz-inventory.ts` derives the legacy rule from middleware
+   * NAMES, and its ladder knows only `verifyRoles`, `requireProviderRole` and
+   * `verifyAuth`. A chain carrying `requireCapability` resolved to plain
+   * `provider`, which equals the v1 entry's `provider`, so the strictness
+   * comparison short-circuited and reported parity. The gate had no word for the
+   * thing that was removed. `capabilityLoosenings()` now compares this field
+   * against the mounted chain and fails when a supersession drops one.
+   *
+   * Orthogonal to `auth` rather than another rung on it: a request can be
+   * required to be a provider AND to hold a capability, and folding them
+   * together would lose which capability was demanded.
+   */
+  capability?: keyof Capabilities;
   /**
    * `true` when a repeat of the identical request produces the identical
    * end state. GETs are idempotent by definition; a mutation must say so
@@ -3670,6 +3707,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/earnings/summary',
     summary: "The provider's own earnings totals, with pending split from failed and estimated.",
     auth: 'provider',
+    capability: 'canViewEarnings',
     idempotent: true,
     responseSchema: 'ProviderEarningsSummary',
     errors: ['EARNINGS_RANGE_INVALID'],
@@ -3704,6 +3742,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/earnings/transactions',
     summary: "One row per completed job with its gross, the provider's share and its payout state.",
     auth: 'provider',
+    capability: 'canViewEarnings',
     idempotent: true,
     responseSchema: 'ProviderEarningsTransactions',
     errors: ['EARNINGS_RANGE_INVALID'],
@@ -3754,6 +3793,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/earnings/payouts',
     summary: "The provider's own payouts, with the 72-hour window's expected arrival date.",
     auth: 'provider',
+    capability: 'canViewEarnings',
     idempotent: true,
     responseSchema: 'ProviderPayouts',
     errors: [],

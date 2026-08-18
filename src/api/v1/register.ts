@@ -36,6 +36,7 @@ import { Request, Response, Router, RequestHandler, NextFunction } from 'express
 import verifyAuth from '../../middleware/verifyAuth';
 import verifyRoles from '../../middleware/verifyRoles';
 import requireProviderRole from '../../middleware/requireProviderRole';
+import requireCapability from '../../middleware/requireCapability';
 import { ContractEntry, IMPLEMENTED, V1_CONTRACT, HttpMethod } from './contract';
 import { fail } from './envelope';
 import { V1ErrorCode } from './errors';
@@ -182,16 +183,30 @@ export const v1AuthEnvelope = (inner: RequestHandler): RequestHandler =>
     return inner(req, res, ((err?: unknown) => { restore(); next(err as any); }) as NextFunction);
   };
 
+/**
+ * The capability rung, appended AFTER the role rung.
+ *
+ * Order is not cosmetic. `requireCapability` reads the provider account state
+ * for `req.user.uid`, so it needs `verifyAuth` to have run; and running it
+ * before the role check would answer a non-provider with a capability denial
+ * rather than a role one, which are different screens for the caller.
+ */
+const capabilityChain = (entry: ContractEntry): RequestHandler[] =>
+  entry.capability
+    ? [v1AuthEnvelope(requireCapability(entry.capability) as RequestHandler)]
+    : [];
+
 export const authChain = (entry: ContractEntry): RequestHandler[] => {
+  const capability = capabilityChain(entry);
   switch (entry.auth) {
     case 'public':
-      return [];
+      return [...capability];
     case 'authenticated':
-      return [v1AuthEnvelope(verifyAuth)];
+      return [v1AuthEnvelope(verifyAuth), ...capability];
     case 'provider':
-      return [v1AuthEnvelope(verifyAuth), v1AuthEnvelope(requireProviderRole as RequestHandler)];
+      return [v1AuthEnvelope(verifyAuth), v1AuthEnvelope(requireProviderRole as RequestHandler), ...capability];
     case 'admin':
-      return [v1AuthEnvelope(verifyAuth), v1AuthEnvelope(verifyRoles([1]) as RequestHandler)];
+      return [v1AuthEnvelope(verifyAuth), v1AuthEnvelope(verifyRoles([1]) as RequestHandler), ...capability];
     default: {
       // Exhaustiveness: a new AuthMode must be handled here or the build fails.
       const unreachable: never = entry.auth;
