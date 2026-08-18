@@ -29,6 +29,7 @@
     "backfill:verified-identifiers": "ts-node -r dotenv/config scripts/backfill-verified-identifiers.ts",
     "migrations:plan": "ts-node -r dotenv/config scripts/run-migrations.ts",
     "migrations:apply": "ts-node -r dotenv/config scripts/run-migrations.ts --apply",
+    "migrations:ledger:repair": "ts-node scripts/repair-migration-ledger.ts",
     "migrate:legacy-provider-documents:plan": "ts-node -r dotenv/config scripts/migrate-legacy-provider-documents.ts",
     "migrate:legacy-provider-documents:apply": "ts-node -r dotenv/config scripts/migrate-legacy-provider-documents.ts --apply",
     "measure:reviews": "node scripts/measure-review-api.mjs",
