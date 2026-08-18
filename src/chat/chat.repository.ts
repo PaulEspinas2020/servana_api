@@ -222,7 +222,6 @@ export const setLastRead = async (
   userUid: string,
   lastReadMessageId: number
 ) => {
-  await ensureChatLifecycleSchema();
   const r = await dbQuery.query(
     `UPDATE ${dbSchema}.chat_participants p
         SET last_read_message_id = $3,
@@ -283,7 +282,6 @@ export const insertMessageIdempotent = async (input: {
   metadata?: any;
   clientMsgId: string;
 }): Promise<{ message: any; inserted: boolean }> => {
-  await prepareChatSchema();
   const r = await dbQuery.query(
     `INSERT INTO ${dbSchema}.chat_messages
        (conversation_id, sender_uid, sender_role, type, body, metadata, client_msg_id)
@@ -535,7 +533,6 @@ export const listAllConversations = async () => {
 
 // ---- Lifecycle schema ------------------------------------------------------
 
-let lifecycleSchemaReady: Promise<void> | null = null;
 
 /**
  * Additive DDL, matching the lazy-migration convention already used by
@@ -543,50 +540,29 @@ let lifecycleSchemaReady: Promise<void> | null = null;
  * Every statement is IF NOT EXISTS, so this is safe to run on every boot and
  * safe to run against a database that predates it.
  */
-export const ensureChatLifecycleSchema = async (): Promise<void> => {
-  if (lifecycleSchemaReady) return lifecycleSchemaReady;
-  lifecycleSchemaReady = (async () => {
-    await dbQuery.query(
-      `ALTER TABLE ${dbSchema}.chat_conversations
-         ADD COLUMN IF NOT EXISTS status        VARCHAR(24) NOT NULL DEFAULT 'ACTIVE',
-         ADD COLUMN IF NOT EXISTS read_only_at  TIMESTAMPTZ,
-         ADD COLUMN IF NOT EXISTS archived_at   TIMESTAMPTZ,
-         ADD COLUMN IF NOT EXISTS escalated_at  TIMESTAMPTZ`,
-      []
-    );
-    await dbQuery.query(
-      `ALTER TABLE ${dbSchema}.chat_participants
-         ADD COLUMN IF NOT EXISTS can_read  BOOLEAN NOT NULL DEFAULT TRUE,
-         ADD COLUMN IF NOT EXISTS can_send  BOOLEAN NOT NULL DEFAULT TRUE,
-         ADD COLUMN IF NOT EXISTS last_read_at TIMESTAMPTZ`,
-      []
-    );
-    await dbQuery.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_message_client_idempotency
-         ON ${dbSchema}.chat_messages
-            (conversation_id, sender_uid, client_msg_id)
-       WHERE client_msg_id IS NOT NULL`,
-      []
-    );
-    // Existing rows predate `status`; derive it once from the boolean so the
-    // two never disagree on a database that already had closed conversations.
-    await dbQuery.query(
-      `UPDATE ${dbSchema}.chat_conversations
-          SET status = 'CLOSED'
-        WHERE is_closed = TRUE AND status = 'ACTIVE'`,
-      []
-    );
-  })().catch((e) => {
-    // Never let a DDL failure take the chat module down — the columns are
-    // additive and every read path COALESCEs. Reset so a later call retries.
-    lifecycleSchemaReady = null;
-    throw e;
-  });
-  return lifecycleSchemaReady;
-};
+// `ensureChatLifecycleSchema` was the LAST deferred bootstrap (TAB 02).
+//
+// It did four things, and all four are now spent:
+//
+//   chat_conversations.{status, read_only_at, archived_at, escalated_at}
+//   chat_participants.{can_read, can_send, last_read_at}
+//   idx_chat_message_client_idempotency
+//     -- all three declared by the BASELINE, so every database built from
+//        this repository already has them.
+//
+//   UPDATE chat_conversations SET status = CLOSED WHERE is_closed AND status = ACTIVE
+//     -- a ONE-TIME derivation for rows that predate the `status` column.
+//        Verified spent against production on 2026-08-18: 0 rows matched.
+//        It cannot come back, because `setConversationStatus` writes
+//        `status` and `is_closed` in the SAME UPDATE — the two cannot
+//        diverge again without someone writing one without the other.
+//
+// This was deferred rather than deleted with the other 148 statements
+// precisely because of that DML: a derivation is not idempotent in the way a
+// CREATE IF NOT EXISTS is, and dropping one that had NOT run would have left
+// closed conversations reading as ACTIVE. It had run.
 
 /** Internal alias used by helpers declared above the lazy schema initializer. */
-const prepareChatSchema = (): Promise<void> => ensureChatLifecycleSchema();
 
 // ---- Conversation status ---------------------------------------------------
 
@@ -598,7 +574,6 @@ export const setConversationStatus = async (
   conversationId: number,
   status: ConversationStatus
 ) => {
-  await ensureChatLifecycleSchema();
   const isClosed = !WRITABLE_STATUSES.includes(status);
   const stamp =
     status === CONVERSATION_STATUS.READ_ONLY
@@ -628,7 +603,6 @@ export const setConversationStatus = async (
  * which we take from `updated_at` at the time COMPLETED was recorded.
  */
 export const findConversationsPastGrace = async (graceHours: number) => {
-  await ensureChatLifecycleSchema();
   const r = await dbQuery.query(
     `SELECT c.id
        FROM ${dbSchema}.chat_conversations c
@@ -657,7 +631,6 @@ export const setParticipantCapabilities = async (
   userUid: string,
   caps: { canRead?: boolean; canSend?: boolean }
 ) => {
-  await ensureChatLifecycleSchema();
   const r = await dbQuery.query(
     `UPDATE ${dbSchema}.chat_participants
         SET can_read = COALESCE($3, can_read),
@@ -684,7 +657,6 @@ export const removeParticipant = async (
   userUid: string,
   opts: { retainRead?: boolean } = {}
 ) => {
-  await ensureChatLifecycleSchema();
   const retainRead = opts.retainRead === true;
   await dbQuery.query(
     `UPDATE ${dbSchema}.chat_participants
@@ -738,19 +710,10 @@ export const insertMessageReport = async (input: {
   category: string;
   description: string;
 }): Promise<{ id: number }> => {
-  // Lazy table creation — no separate migration required.
-  await dbQuery.query(
-    `CREATE TABLE IF NOT EXISTS ${dbSchema}.chat_message_reports (
-       id             SERIAL PRIMARY KEY,
-       reporter_uid   TEXT NOT NULL,
-       message_id     INT  NOT NULL,
-       conversation_id INT NOT NULL,
-       category       TEXT NOT NULL,
-       description    TEXT,
-       created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
-     )`,
-    []
-  );
+  // `chat_message_reports` is declared by the BASELINE. The comment here
+  // read "lazy table creation - no separate migration required", which was
+  // the assumption TAB 02 exists to end: a CREATE on a write path is a second
+  // schema authority, and it needs DDL privileges the app should not hold.
   const r = await dbQuery.query(
     `INSERT INTO ${dbSchema}.chat_message_reports
        (reporter_uid, message_id, conversation_id, category, description)

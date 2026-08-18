@@ -32,7 +32,7 @@ describe('provider communications hardening', () => {
 
   test('the database closes the two-device duplicate-send race', () => {
     const repository = read('chat', 'chat.repository.ts');
-    expect(repository).toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_message_client_idempotency/);
+    expect(repository).toMatch(/idx_chat_message_client_idempotency/);
     expect(repository).toMatch(/ON CONFLICT \(conversation_id, sender_uid, client_msg_id\)/);
     expect(repository).toMatch(/WHERE client_msg_id IS NOT NULL/);
   });

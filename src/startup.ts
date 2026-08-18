@@ -51,7 +51,6 @@
 
 import type { Dependency } from './lifecycle';
 
-import { ensureChatLifecycleSchema } from './chat/chat.repository';
 import { seedBuiltInOfferings } from './services/providerCatalogService';
 import { seedReasonCodes, seedRequirementDefinitions } from './services/adminOnboardingService';
 import { seedAdminPermissions } from './services/adminPermissionService';
@@ -81,13 +80,6 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
     timeoutMs: SCHEMA_TIMEOUT_MS,
     start: ensureReviewTables,
     why: 'Was executed at import of customerReviewController.',
-  },
-  {
-    name: 'chat-lifecycle-schema',
-    kind: 'optional',
-    timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: ensureChatLifecycleSchema,
-    why: 'Every read path COALESCEs the columns this adds, so their absence degrades chat rather than breaking it.',
   },
   {
     name: 'provider-catalog',

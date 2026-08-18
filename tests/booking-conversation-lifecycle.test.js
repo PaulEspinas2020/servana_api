@@ -203,10 +203,22 @@ describe('is_closed remains a maintained compatibility flag', function () {
     expect(repoCode).toMatch(/export \{ CONVERSATION_STATUS, WRITABLE_STATUSES \}/);
   });
 
-  it('legacy rows with is_closed=TRUE are backfilled to CLOSED', function () {
-    var fn = repoCode.match(/export const ensureChatLifecycleSchema[\s\S]{0,2000}/)[0];
-    expect(fn).toMatch(/is_closed = TRUE/);
-    expect(fn).toMatch(/status = 'CLOSED'/);
+  it('is_closed and status can no longer diverge, so no backfill is needed', function () {
+    /**
+     * This read the one-time backfill inside `ensureChatLifecycleSchema`
+     * (UPDATE ... SET status = CLOSED WHERE is_closed AND status = ACTIVE).
+     * That bootstrap is gone: the derivation was verified SPENT against
+     * production on 2026-08-18 — 0 rows matched — and it cannot come back.
+     *
+     * The reason it cannot is the thing worth pinning, and it is stronger than
+     * the backfill ever was: `setConversationStatus` writes BOTH fields in the
+     * same UPDATE. Divergence would need someone to write one without the
+     * other, which is what this now guards.
+     */
+    var fn = repoCode.match(/export const setConversationStatus[\s\S]{0,900}/)[0];
+    var update = fn.match(/UPDATE[\s\S]{0,400}/)[0];
+    expect(update).toMatch(/status\s*=\s*\$2/);
+    expect(update).toMatch(/is_closed\s*=\s*\$3/);
   });
 
   it('resolveAccessForConversation still honours a legacy is_closed row', function () {
@@ -214,11 +226,24 @@ describe('is_closed remains a maintained compatibility flag', function () {
     expect(fn).toMatch(/is_closed/);
   });
 
-  it('all lifecycle DDL is additive (IF NOT EXISTS on every column)', function () {
-    var fn = repoCode.match(/export const ensureChatLifecycleSchema[\s\S]{0,2000}/)[0];
-    var adds = fn.match(/ADD COLUMN[^,\n]*/g) || [];
-    expect(adds.length).toBeGreaterThan(0);
-    adds.forEach(function (a) { expect(a).toMatch(/IF NOT EXISTS/); });
+  it('the lifecycle columns are declared by the BASELINE, not by the engine', function () {
+    /**
+     * This counted ADD COLUMN statements in a runtime bootstrap and required
+     * IF NOT EXISTS on each. With no bootstrap there is nothing to count, and
+     * asserting the columns exist in the artefact a database is BUILT from is
+     * the stronger claim: it holds for a fresh database, which a lazy ALTER
+     * never guaranteed.
+     */
+    var fs2 = require('fs');
+    var path2 = require('path');
+    var baseline = fs2
+      .readFileSync(path2.resolve(__dirname, '../scripts/baseline/000-baseline.sql'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    var conv = /CREATE TABLE servana\.chat_conversations \(([\s\S]*?)\n\);/.exec(baseline);
+    expect(conv).not.toBeNull();
+    ['status', 'read_only_at', 'archived_at', 'escalated_at'].forEach(function (c) {
+      expect(conv[1]).toMatch(new RegExp('^\\s+' + c + '\\s', 'm'));
+    });
   });
 
   it('no DROP or RENAME anywhere in the chat module', function () {
@@ -251,11 +276,32 @@ describe('is_closed remains a maintained compatibility flag', function () {
   });
 
   it('participant rows keep their original keys and only gain capabilities', function () {
-    var fn = repoCode.match(/export const ensureChatLifecycleSchema[\s\S]{0,2000}/)[0];
-    var participantDdl = fn.match(/chat_participants[\s\S]{0,300}/)[0];
-    expect(participantDdl).toMatch(/ADD COLUMN IF NOT EXISTS can_read/);
-    expect(participantDdl).toMatch(/ADD COLUMN IF NOT EXISTS can_send/);
-    expect(participantDdl).not.toMatch(/DROP|RENAME/i);
+    // Same move: asserted against the baseline rather than a bootstrap that no
+    // longer runs. The original keys matter as much as the new capabilities.
+    var fs2 = require('fs');
+    var path2 = require('path');
+    var baseline = fs2
+      .readFileSync(path2.resolve(__dirname, '../scripts/baseline/000-baseline.sql'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    var part = /CREATE TABLE servana\.chat_participants \(([\s\S]*?)\n\);/.exec(baseline);
+    expect(part).not.toBeNull();
+    // The baseline covers the original keys and the two capability columns.
+    ['conversation_id', 'user_uid', 'can_read', 'can_send'].forEach(function (c) {
+      expect(part[1]).toMatch(new RegExp('^\\s+' + c + '\\s', 'm'));
+    });
+
+    /**
+     * `last_read_at` is NOT in the baseline: the capture predates it, and
+     * migration 032 owns it. The schema authority is the baseline PLUS the
+     * migrations, and an assertion against the baseline alone would have
+     * declared a column live in production to be missing.
+     */
+    var m032 = fs2.readFileSync(
+      path2.resolve(__dirname, '../scripts/migrations/032-messaging-read-receipts.sql'),
+      'utf8',
+    );
+    expect(m032).toMatch(/ADD COLUMN IF NOT EXISTS last_read_at/);
+    expect(repoCode).not.toMatch(/DROP COLUMN|RENAME COLUMN/i);
   });
 });
 

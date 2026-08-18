@@ -252,7 +252,6 @@ const conversationClosedMessage = (conversation: any, access?: AccessResult): st
  * `getBookingConversation`, and it gates. See `getExistingConversation`.
  */
 export const getOrCreateConversation = async (bookingId: number) => {
-  await repo.ensureChatLifecycleSchema();
   let conversation = await repo.findConversationByBookingId(bookingId);
   let created = false;
   if (!conversation) {
