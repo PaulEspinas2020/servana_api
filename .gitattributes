@@ -1,0 +1,15 @@
+# Line endings are pinned because they are load-bearing here, not cosmetic.
+#
+# scripts/migrations/*.sql are hashed into servana.schema_migrations, and
+# run-migrations.ts refuses to proceed when an applied migration's recorded
+# checksum no longer matches the file. When the byte sequence depends on who
+# checked the file out, that check fails for everyone except the machine that
+# wrote the ledger row — which is exactly what happened before d4b0150.
+#
+# migrationChecksum() now normalises line endings before hashing, so the hash
+# itself is already CRLF-safe and these rules cannot change any checksum.
+# They exist so that the NEXT byte-sensitive gate does not have to rediscover
+# this the expensive way.
+
+*.sql text eol=lf
+*.ts  text eol=lf
