@@ -49,7 +49,8 @@ import {
   verifyBaseline,
 } from './lib/schemaBaseline';
 import { residualTransactionControl } from './lib/migrationSafety';
-
+
+import { migrationChecksum } from './lib/migrationChecksum';
 const args = process.argv.slice(2);
 const liveArg = args.find((a) => a.startsWith('--live='))?.slice('--live='.length) ?? '';
 
@@ -300,7 +301,7 @@ const pendingAfterBaseline = async (): Promise<string[]> => {
       .filter(({ file, sql }) => {
         const recorded = ledger.get(file);
         if (!recorded) return true;
-        return recorded !== createHash('sha256').update(sql).digest('hex');
+        return recorded !== migrationChecksum(sql);
       })
       .map((m) => m.file);
   } finally {

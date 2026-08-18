@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { migrationChecksum } from './lib/migrationChecksum';
 import fs from 'fs';
 import path from 'path';
 import { pool } from '../src/db/dbQuery';
@@ -41,7 +41,7 @@ async function main() {
     const pending: Array<{ name: string; sql: string; checksum: string }> = [];
     for (const name of files) {
       const raw = fs.readFileSync(path.join(migrationsDir, name), 'utf8');
-      const checksum = createHash('sha256').update(raw).digest('hex');
+      const checksum = migrationChecksum(raw);
       const recorded = ledger.get(name);
       if (recorded && recorded !== checksum) throw new Error(`Applied migration checksum changed: ${name}`);
       if (!recorded) pending.push({ name, sql: stripTransaction(raw), checksum });

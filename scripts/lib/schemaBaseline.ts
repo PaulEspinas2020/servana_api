@@ -58,7 +58,8 @@ import {
   type SchemaCatalog,
 } from './schemaModel';
 import { APPROVED_OWNER_ROLES } from './migrationSafety';
-
+
+import { migrationChecksum } from './migrationChecksum';
 export const MIGRATIONS_DIR = path.resolve(__dirname, '..', 'migrations');
 export const BASELINE_DIR = path.resolve(__dirname, '..', 'baseline');
 export const BASELINE_FILE = path.join(BASELINE_DIR, '000-baseline.sql');
@@ -163,7 +164,7 @@ export const ledgerAtBaselineSql = (): string => {
   const rows = migrationInputs()
     .filter(({ file }) => reflected.has(file))
     .map(({ file, sql }) => {
-      const checksum = createHash('sha256').update(sql).digest('hex');
+      const checksum = migrationChecksum(sql);
       return `  ('${file.replace(/'/g, "''")}', '${checksum}')`;
     })
     .join(',\n');

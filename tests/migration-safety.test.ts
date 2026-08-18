@@ -217,9 +217,21 @@ describe('the runner can see every migration', () => {
     const source = fs.readFileSync(path.resolve(__dirname, '..', 'scripts', 'run-migrations.ts'), 'utf8');
     expect(source).toContain('MIGRATION_REMOTE_ACK');
     expect(source).toContain('Applied migration checksum changed');
-    // The checksum is taken from the RAW file, which is what makes fixing the
-    // stripper safe: no checksum moves.
-    expect(source).toMatch(/checksum = createHash\('sha256'\)\.update\(raw\)/);
+    /**
+     * The checksum is still taken from the RAW file — stripping transaction
+     * control does not move it — but it is no longer hashed here.
+     *
+     * This asserted the literal `createHash('sha256').update(raw)`, and that
+     * idiom was the defect: it hashes bytes, so a Windows checkout (CRLF) and
+     * a Linux one (LF) produced different values for identical SQL. Every
+     * migration mismatched on the deploy host and no deploy could apply
+     * anything.
+     *
+     * `migrationChecksum` normalises line endings first, so the hash answers
+     * "has the CONTENT changed" rather than "which OS wrote this file".
+     */
+    expect(source).toContain('migrationChecksum(raw)');
+    expect(source).not.toMatch(/createHash\('sha256'\)\.update\(raw\)/);
     expect(source).toMatch(/stripTransaction\(raw\)/);
   });
 });
