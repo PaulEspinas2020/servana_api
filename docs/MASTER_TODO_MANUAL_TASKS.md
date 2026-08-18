@@ -12,7 +12,7 @@
 >
 > **Status legend:** `OPEN` · `DONE` · `SUPERSEDED`
 
-Last updated: 2026-08-18 (TAB 00)
+Last updated: 2026-08-18 (TAB 01)
 
 ---
 
@@ -46,6 +46,8 @@ Last updated: 2026-08-18 (TAB 00)
 | 01.1 | Before enforcing `payouts.*` on the disbursement routes, query which admins currently hold those grants and confirm the operations team is covered — **grant first, enforce second** | `PROD-ACCESS` | Grant list captured; ops coverage confirmed by a named person |
 | 01.2 | Confirm the true caller count of `/api/admin/disbursements/*` across all six consumers by **reading the repositories** | `NO-REPO` | Each of the six repos grepped; caller count recorded per repo |
 | 01.3 | Confirm zero traffic on `/api/admin/disbursements/*` from legacy route telemetry before any deletion — "unreachable" is not "deletable" | `PROD-ACCESS` | A full business week of telemetry showing observed silence |
+| 01.4 | Grant `payouts.trigger_due_run` to the operators who legitimately run the due-payout batch. It is now enforced and was previously enforced by nothing, so **only Super Admins can run the batch until this is done** | `PROD-ACCESS`, `HUMAN-JUDGEMENT` | Named operators hold the grant; a non-super admin completes one batch run |
+| 01.5 | Confirm no client depends on the legacy retry being SYNCHRONOUS. It now queues (row → `PENDING`, hourly job releases), matching the finance surface the portal already uses | `NO-REPO` | The five consumer repos grepped for `/admin/disbursements/:id/retry` |
 
 ## TAB 03 — Delivery pipeline
 

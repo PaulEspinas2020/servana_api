@@ -218,10 +218,10 @@ later domain command starts from a route list rather than from a grep.
 | `PATCH` | `/api/chat/conversations/:id/messages/:msgId` | `src/chat/chat.routes.ts:20` |
 | `DELETE` | `/api/chat/conversations/:id/messages/:msgId` | `src/chat/chat.routes.ts:21` |
 | `POST` | `/api/chat/conversations/:id/close` | `src/chat/chat.routes.ts:25` |
-| `GET` | `/api/admin/disbursements` | `src/routes/disbursement.routes.ts:9` |
-| `GET` | `/api/admin/disbursements/booking/:bookingId` | `src/routes/disbursement.routes.ts:12` |
-| `POST` | `/api/admin/disbursements/:id/retry` | `src/routes/disbursement.routes.ts:15` |
-| `POST` | `/api/admin/disbursements/trigger` | `src/routes/disbursement.routes.ts:18` |
+| `GET` | `/api/admin/disbursements` | `src/routes/disbursement.routes.ts:64` |
+| `GET` | `/api/admin/disbursements/booking/:bookingId` | `src/routes/disbursement.routes.ts:67` |
+| `POST` | `/api/admin/disbursements/:id/retry` | `src/routes/disbursement.routes.ts:70` |
+| `POST` | `/api/admin/disbursements/trigger` | `src/routes/disbursement.routes.ts:73` |
 | `GET` | `/api/provider/account-state` | `src/routes/provider.routes.ts:40` |
 | `POST` | `/api/provider/service-preference` | `src/routes/provider.routes.ts:42` |
 | `GET` | `/api/provider/profile-fields` | `src/routes/provider.routes.ts:48` |

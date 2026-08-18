@@ -27,7 +27,7 @@ Status legend: `OPEN` · `BLOCKING LAUNCH` · `DONE`
 
 | # | Task | Why it is manual | Status |
 |---|---|---|---|
-| M-07 | **Supply the provider portal repository.** `PaulEspinas2020/servana_service-provider` returns **404** from the GitHub API and is not on this machine. Need the correct URL, or a local clone. | Eleven TABs are owned by ServanaWorkerWeb and cannot start without it: **03, 05, 07, 08, 09, 10, 12, 13, 14, 15, 18, 19**. `/Users/user/ServanaClientAPP` is `Upupapp/ServanaClientAPP` — a different repository, not a substitute. | OPEN — BLOCKING 11 TABs |
+| ~~M-07~~ | ~~**Supply the provider portal repository.**~~ `PaulEspinas2020/servana_service-provider` returns **404** from the GitHub API and is not on this machine. Need the correct URL, or a local clone. | Eleven TABs are owned by ServanaWorkerWeb and cannot start without it: **03, 05, 07, 08, 09, 10, 12, 13, 14, 15, 18, 19**. `/Users/user/ServanaClientAPP` is `Upupapp/ServanaClientAPP` — a different repository, not a substitute. | **DONE 2026-08-18** — repo is PRIVATE (hence the API 404); cloned to `/Users/user/ServanaWorkerWeb` @ `e57259d` |
 | M-08 | **Provision a dedicated production provider account** for certification, isolated from real customer bookings, with a documented reset procedure (TAB 12 mandate 1). Provide credentials or a token. | Needs a real account and production credentials. Without it the authenticated half of every smoke — 26 provider-scoped v1 endpoints — cannot be exercised. | OPEN — BLOCKING TAB 02 (partial) + TAB 12 |
 | M-09 | Confirm whether these repositories should be **public**. `servana_api` is public today. | Owner decision. | OPEN |
 

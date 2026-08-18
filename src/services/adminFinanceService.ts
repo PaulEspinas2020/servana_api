@@ -801,7 +801,7 @@ export async function runDuePayoutBatch(
     auditFire({
       action: 'finance_payout_due_run_triggered',
       actionCategory: 'payment',
-      outcome: 'failure',
+      outcome: 'failed',
       actorUid: adminUid,
       actorType: 'admin',
       actorDisplayName: adminName,
