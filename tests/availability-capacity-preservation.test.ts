@@ -129,3 +129,47 @@ describe('a web schedule save preserves mobile capacity', () => {
     expect(getAvailabilityProfile).toHaveBeenCalledWith('provider-1');
   });
 });
+
+/**
+ * One rule for a missing version, on every platform (TAB 06 mandate 2).
+ *
+ * The two branches of the save statement disagreed about what 0 meant, and the
+ * two clients disagreed with each other on top of it. Provider Web sent
+ * `expectedVersion: 0` when it had no version; Provider Mobile omitted the
+ * field. Stored versions start at 1 and only rise, so 0 could never match an
+ * existing row — every such web save answered 409 "changed on another device"
+ * when nothing had, and reloading could not fix it. Mobile, meanwhile, got no
+ * check at all.
+ *
+ * The rule now written into the engine: a missing version SKIPS the check, and
+ * 0 counts as missing. "Always enforce" was rejected because enforcement needs a
+ * value to compare — it could only mean rejecting the write, which would require
+ * every client to send the field. Mobile does not, five clients consume this
+ * backend, and the standing rule is additive only.
+ */
+describe('a missing version means the same thing on every platform', () => {
+  const engine = jest.requireActual('../src/services/providerAvailabilityEngine');
+
+  it('normalises 0 to null, so it can never be compared against a stored version', () => {
+    // The property, read off the source of the statement that enforces it: both
+    // branches receive one normalised value rather than disagreeing about zero.
+    const source: string = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'src', 'services', 'providerAvailabilityEngine.ts'),
+      'utf8',
+    );
+    expect(source).toContain('const enforcedVersion = expectedVersion && expectedVersion > 0 ? expectedVersion : null;');
+    // The parameter handed to the query is the normalised one, not the raw field.
+    expect(source).toContain('actorUid, enforcedVersion]');
+    // And the INSERT branch no longer needs its own special case for zero,
+    // because zero never reaches the statement any more.
+    expect(source).not.toContain('OR $5::integer = 0');
+    expect(engine.saveWeeklySchedule).toEqual(expect.any(Function));
+  });
+
+  it('still rejects a version that is not a non-negative integer', async () => {
+    // The validation that must NOT be relaxed by treating 0 as absent.
+    await expect(
+      engine.saveWeeklySchedule('provider-1', [], 'Asia/Manila', 'provider-1', -1),
+    ).rejects.toThrow(/expectedVersion must be a non-negative integer/);
+  });
+});
