@@ -66,7 +66,6 @@ import {
   transitionBooking,
   TransitionError,
   BOOKING_ACTIONS,
-  __resetTransitionSchema,
 } from '../src/services/booking/transitionExecutor';
 
 const PROVIDER = 'provider-a';
@@ -96,7 +95,6 @@ const seed = (o: {
 
 beforeEach(() => {
   reset();
-  __resetTransitionSchema();
   disbursements.length = 0;
   disbursementFails = false;
 });

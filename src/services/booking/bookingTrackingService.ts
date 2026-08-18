@@ -33,7 +33,6 @@ import dbQuery from '../../db/dbQuery';
 import { db } from '../../config';
 import * as technician from '../technicianService';
 import { deriveCanonicalState, type BookingState } from './canonicalState';
-import { ensureTransitionSchema } from './transitionExecutor';
 import {
   evaluateTrackingVisibility,
   TRACKING_LOCATION_STATES,
@@ -88,7 +87,6 @@ const lastMovementAt = async (bookingId: number): Promise<Date | null> => {
   // The executor owns this table's DDL and creates it lazily, so a read that
   // arrives before any transition has ever been written must not fail on a
   // missing relation.
-  await ensureTransitionSchema();
   const { rows } = await dbQuery.query(
     `SELECT occurred_at
        FROM ${s}.booking_transitions

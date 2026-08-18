@@ -35,7 +35,6 @@ jest.mock('../src/services/disbursement.service', () => ({ createDisbursement: j
 import { store, calls, reset, flush } from './support/bookingDbFake';
 import { declineJob } from '../src/services/technicianService';
 import { BookingResponseConflict } from '../src/services/bookingResponseConflict';
-import { __resetTransitionSchema } from '../src/services/booking/transitionExecutor';
 
 const PROVIDER = 'provider-a';
 const BOOKING = 601;
@@ -58,7 +57,6 @@ const seed = (o: { bookingStatus?: string; assignmentStatus?: string; workerUid?
 
 beforeEach(() => {
   reset();
-  __resetTransitionSchema();
 });
 
 describe('the decline releases the booking in one transaction', () => {

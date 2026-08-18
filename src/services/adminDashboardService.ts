@@ -221,13 +221,13 @@ const FALLBACK_ONBOARDING: AdminOnboardingHealth = {
   queueTotal: 0, inReview: 0, readyForFinalReview: 0, highPriority: 0, waitingForProvider: 0,
 };
 
-// ── Schema bootstrap (called once from app.ts IIFE) ─────────────────────────
-
-export const ensureDashboardSchema = async (): Promise<void> => {
-  try {
-    await dbQuery.query(`ALTER TABLE ${s}.bookings ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
-  } catch { /* no-op */ }
-};
+// `ensureDashboardSchema` added `bookings.cancelled_at`. The BASELINE already
+// declares that column, so this was redundant before 036 and is not gated on it
+// — note the table is `bookings`, not `booking_workers`, whose similarly named
+// cancellation columns ARE 036's.
+//
+// It also swallowed its own failure in a bare `catch {}`, so a permissions error
+// here would have been invisible.
 
 // ── Main aggregation ─────────────────────────────────────────────────────────
 

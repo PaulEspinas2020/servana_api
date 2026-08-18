@@ -54,7 +54,6 @@ import type { Dependency } from './lifecycle';
 import { ensureChatLifecycleSchema } from './chat/chat.repository';
 import { seedBuiltInOfferings } from './services/providerCatalogService';
 import { seedReasonCodes, seedRequirementDefinitions } from './services/adminOnboardingService';
-import { ensureDashboardSchema } from './services/adminDashboardService';
 import { seedAdminPermissions } from './services/adminPermissionService';
 import { ensureReviewTables } from './services/customerReviewService';
 
@@ -110,12 +109,5 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
     why:
       'Onboarding reference DATA only — the schema comes from the baseline now ' +
       '(TAB 02). An incomplete seed shows fewer reason codes, not a wrong booking.',
-  },
-  {
-    name: 'admin-dashboard-schema',
-    kind: 'optional',
-    timeoutMs: SCHEMA_TIMEOUT_MS,
-    start: ensureDashboardSchema,
-    why: 'Read-only aggregates for the admin dashboard.',
   },
 ]);

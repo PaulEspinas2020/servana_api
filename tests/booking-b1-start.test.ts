@@ -44,7 +44,6 @@ import { startJob } from '../src/services/technicianService';
 import {
   transitionBooking,
   TransitionError,
-  __resetTransitionSchema,
 } from '../src/services/booking/transitionExecutor';
 
 const PROVIDER = 'provider-a';
@@ -76,7 +75,6 @@ const executorStart = (code: string, actorUid = PROVIDER) =>
 
 beforeEach(() => {
   reset();
-  __resetTransitionSchema();
 });
 
 describe('START RAW WRITE: REMOVED', () => {
@@ -140,7 +138,6 @@ describe('WORKER CODE CHECK: ATOMIC IN EXECUTOR', () => {
     // tapped "on my way" must still be able to start.
     for (const from of ['ACCEPTED', 'EN_ROUTE', 'ARRIVED']) {
       reset();
-      __resetTransitionSchema();
       seed({ assignmentStatus: from });
       await startJob(BOOKING, PROVIDER, CODE);
       expect(store.assignments[0].status).toBe('IN_PROGRESS');
@@ -235,13 +232,11 @@ describe('the legacy contract is preserved exactly', () => {
       { bookingStatus: 'CANCELLED' },
     ]) {
       reset();
-      __resetTransitionSchema();
       seed(seedWith);
       await expect(startJob(BOOKING, PROVIDER, CODE)).rejects.toThrow('Job cannot be started');
     }
 
     reset();
-    __resetTransitionSchema();
     seed();
     await expect(startJob(BOOKING, PROVIDER, '000000')).rejects.toThrow('Job cannot be started');
   });

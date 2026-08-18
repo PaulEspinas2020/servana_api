@@ -99,40 +99,12 @@ const DEFAULT_REQUIREMENTS: EvidenceRequirement[] = [
   },
 ];
 
-let schemaReady: Promise<void> | null = null;
-
-/** Lazily creates the evidence table, matching the repo's existing pattern. */
-export const ensureEvidenceSchema = (): Promise<void> => {
-  schemaReady ??= (async () => {
-    await dbQuery.query(
-      `CREATE TABLE IF NOT EXISTS ${dbSchema}.booking_evidence (
-         id                SERIAL PRIMARY KEY,
-         booking_id        INTEGER NOT NULL,
-         worker_uid        TEXT    NOT NULL,
-         requirement_code  VARCHAR(60) NOT NULL,
-         stage             VARCHAR(30) NOT NULL,
-         file_url          TEXT    NOT NULL,
-         mime_type         VARCHAR(60) NOT NULL,
-         bytes             INTEGER NOT NULL,
-         state             VARCHAR(20) NOT NULL DEFAULT 'UPLOADED',
-         review_note       TEXT,
-         created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-         removed_at        TIMESTAMPTZ
-       )`,
-      []
-    );
-    // Every read is "this booking, this provider" — index accordingly.
-    await dbQuery.query(
-      `CREATE INDEX IF NOT EXISTS idx_booking_evidence_booking_worker
-         ON ${dbSchema}.booking_evidence (booking_id, worker_uid)`,
-      []
-    );
-  })().catch((e) => {
-    schemaReady = null; // let a transient failure be retried
-    throw e;
-  });
-  return schemaReady;
-};
+// `ensureEvidenceSchema` created `booking_evidence` and its index on the
+// first evidence read or write of every process. Migration 036 owns both,
+// with an identical definition.
+//
+// ORDERING: deploy.yml runs `migrations:apply` after build and BEFORE the PM2
+// restart, so 036 lands before any code that reads this table is serving.
 
 /** Requirements applicable to a booking. */
 export function requirementsForBooking(): EvidenceRequirement[] {
@@ -193,7 +165,6 @@ export async function listEvidence(
   bookingId: number,
   workerUid: string
 ): Promise<EvidenceItem[]> {
-  await ensureEvidenceSchema();
   const res = await dbQuery.query(
     `SELECT id, requirement_code, stage, state, mime_type, bytes,
             created_at, review_note
@@ -222,7 +193,6 @@ export async function attachEvidence(params: {
   mimeType: string;
   bytes: number;
 }): Promise<EvidenceItem> {
-  await ensureEvidenceSchema();
   const res = await dbQuery.query(
     `INSERT INTO ${dbSchema}.booking_evidence
        (booking_id, worker_uid, requirement_code, stage, file_url, mime_type, bytes, state)
@@ -263,7 +233,6 @@ export async function removeEvidence(
   workerUid: string,
   evidenceId: number
 ): Promise<boolean> {
-  await ensureEvidenceSchema();
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.booking_evidence
         SET removed_at = NOW()

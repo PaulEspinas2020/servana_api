@@ -50,7 +50,6 @@ import {
   TransitionError,
   getAvailableActions,
   BOOKING_ACTIONS,
-  __resetTransitionSchema,
 } from '../src/services/booking/transitionExecutor';
 import { deriveCanonicalState } from '../src/services/booking/canonicalState';
 
@@ -78,7 +77,6 @@ const seed = (o: { status?: string; otp?: string | null; workerUid?: string | nu
 
 beforeEach(() => {
   reset();
-  __resetTransitionSchema();
   assigned.length = 0;
   assignFails = false;
 });
@@ -112,7 +110,6 @@ describe('the credential is REQUIRED, structurally', () => {
   it('an empty or whitespace code is not a credential', async () => {
     for (const otp of ['', '   ']) {
       reset();
-      __resetTransitionSchema();
       seed();
       const error = await transitionBooking({
         action: 'CUSTOMER_CONFIRM_OTP', bookingId: BOOKING,

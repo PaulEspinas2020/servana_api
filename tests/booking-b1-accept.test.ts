@@ -195,7 +195,6 @@ jest.mock('../src/db/dbQuery', () => ({
 
 import { acceptJob } from '../src/services/technicianService';
 import { BookingResponseConflict } from '../src/services/bookingResponseConflict';
-import { __resetTransitionSchema } from '../src/services/booking/transitionExecutor';
 
 const PROVIDER = 'provider-a';
 const CUSTOMER = 'customer-1';
@@ -221,7 +220,6 @@ const flush = () => new Promise((r) => setImmediate(r));
 
 beforeEach(() => {
   reset();
-  __resetTransitionSchema();
 });
 
 describe('the accept succeeds through the executor', () => {

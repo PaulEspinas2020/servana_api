@@ -44,7 +44,7 @@ import path from 'path';
 import { store, reset, flush } from './support/bookingDbFake';
 import { markEnRoute, markArrived } from '../src/services/technicianService';
 import { deriveCanonicalState } from '../src/services/booking/canonicalState';
-import { transitionBooking, __resetTransitionSchema } from '../src/services/booking/transitionExecutor';
+import { transitionBooking } from '../src/services/booking/transitionExecutor';
 
 const PROVIDER = 'provider-a';
 const BOOKING = 801;
@@ -63,7 +63,6 @@ const seed = (assignmentStatus = 'ACCEPTED', bookingStatus = 'WORKER_ASSIGNED') 
 
 beforeEach(() => {
   reset();
-  __resetTransitionSchema();
 });
 
 describe('CANONICAL WORKER STATE', () => {
@@ -381,7 +380,6 @@ describe('V1 / LEGACY ARRIVAL PARITY', () => {
     const viaLegacy = snapshotOf();
 
     reset();
-    __resetTransitionSchema();
     seed(from);
     await transitionBooking({
       action, bookingId: BOOKING, actorRole: 'assigned_provider', actorUid: PROVIDER,

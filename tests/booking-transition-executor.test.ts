@@ -250,7 +250,6 @@ import {
   getBookingTimeline,
   priorTerminalState,
   TransitionError,
-  __resetTransitionSchema,
   redactMetadata,
 } from '../src/services/booking/transitionExecutor';
 
@@ -270,7 +269,6 @@ const seedBooking = (opts: {
   payment?: { method: string; status: string } | null;
 } = {}) => {
   db.reset();
-  __resetTransitionSchema();
   db.bookings.set(1, {
     id: 1,
     status: opts.status ?? 'CONFIRMED',

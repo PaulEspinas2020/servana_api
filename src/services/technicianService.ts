@@ -1572,7 +1572,6 @@ export const acceptJob = async (
  * runs; the compare-and-swap here is what makes it safe against a double tap,
  * mirroring acceptJob/declineJob.
  */
-let cancellationColumnsReady: Promise<void> | null = null;
 
 /**
  * Lazily adds the cancellation record columns, like the arrival ones.
@@ -1581,22 +1580,11 @@ let cancellationColumnsReady: Promise<void> | null = null;
  * not be able to alter schema. Queued for a real migration alongside 027's
  * arrival columns.
  */
-const ensureCancellationColumns = (): Promise<void> => {
-  cancellationColumnsReady ??= dbQuery
-    .query(
-      `ALTER TABLE ${dbSchema}.booking_workers
-         ADD COLUMN IF NOT EXISTS cancelled_at             TIMESTAMPTZ,
-         ADD COLUMN IF NOT EXISTS cancellation_reason_code VARCHAR(60),
-         ADD COLUMN IF NOT EXISTS cancellation_note        TEXT`,
-      []
-    )
-    .then(() => undefined)
-    .catch((e: any) => {
-      cancellationColumnsReady = null;
-      throw e;
-    });
-  return cancellationColumnsReady;
-};
+// `ensureCancellationColumns` added booking_workers.{cancelled_at,
+// cancellation_reason_code, cancellation_note}. Migration 036 owns all three.
+//
+// Its own comment said it was "queued for a real migration alongside 027's
+// arrival columns". This is that migration.
 
 /**
  * ─── E1 · PROVIDER_CANCEL, on the canonical executor ─────────────────────────
@@ -1637,7 +1625,6 @@ export const cancelAcceptedJob = async (
   options: { correlationId?: string } = {},
 ) => {
   await ensureArrivalColumns();
-  await ensureCancellationColumns();
 
   try {
     await transitionBooking({
@@ -2806,23 +2793,13 @@ export const getWorkerDashboard = async (uid: string) => {
 // Worker Onboarding (PostgreSQL)
 // ---------------------------------------------------------------------------
 
-const ensureOnboardingTable = async () => {
-  await dbQuery.query(
-    `CREATE TABLE IF NOT EXISTS ${dbSchema}.worker_onboarding (
-       worker_uid      TEXT PRIMARY KEY,
-       status          TEXT NOT NULL DEFAULT 'pending',
-       current_step    TEXT NOT NULL DEFAULT 'personal_info',
-       completed_steps JSONB NOT NULL DEFAULT '[]',
-       step_data       JSONB NOT NULL DEFAULT '{}',
-       submitted_at    TIMESTAMPTZ,
-       updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-     )`,
-    []
-  );
-};
+// `ensureOnboardingTable` created `worker_onboarding` on every onboarding
+// read or write. Migration 036 owns it — this was the LAST gated deletion,
+// deliberately left behind when six sibling bootstraps in this same file
+// went, because production lacked the table and a sweep would have taken it
+// along with the rest.
 
 export const getWorkerOnboarding = async (uid: string) => {
-  await ensureOnboardingTable();
   const res = await dbQuery.query(
     `SELECT * FROM ${dbSchema}.worker_onboarding WHERE worker_uid = $1`,
     [uid]
@@ -2838,7 +2815,6 @@ export const saveWorkerOnboardingStep = async (
   stepKey: string,
   data: object
 ) => {
-  await ensureOnboardingTable();
   await dbQuery.query(
     `INSERT INTO ${dbSchema}.worker_onboarding (worker_uid, current_step, step_data, updated_at)
      VALUES ($1, $2, $3::jsonb, NOW())
@@ -2858,7 +2834,6 @@ export const saveWorkerOnboardingStep = async (
 };
 
 export const submitWorkerOnboarding = async (uid: string, payload: object) => {
-  await ensureOnboardingTable();
   await dbQuery.query(
     `INSERT INTO ${dbSchema}.worker_onboarding (worker_uid, status, current_step, submitted_at, step_data, updated_at)
      VALUES ($1, 'pending_review', 'submitted', NOW(), $2::jsonb, NOW())

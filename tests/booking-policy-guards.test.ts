@@ -28,7 +28,6 @@ import {
   TransitionError,
   BOOKING_GUARDS,
   BOOKING_ACTIONS,
-  __resetTransitionSchema,
 } from '../src/services/booking/transitionExecutor';
 import {
   PROVIDER_CANCEL_WINDOW_HOURS,
@@ -50,7 +49,6 @@ const seedAccepted = (scheduleIso: string | null) => {
 
 beforeEach(() => {
   reset();
-  __resetTransitionSchema();
 });
 
 describe('the rule is discoverable', () => {
@@ -193,7 +191,6 @@ describe('the transitions endpoint answers from the same guard', () => {
      */
     for (const hours of [-10.5, 0.5, 1.5, 47.5, 48.5, 49.5, 72.5, 500.5]) {
       reset();
-      __resetTransitionSchema();
       seedAccepted(hoursFromNow(hours));
 
       const advertised = (await getAvailableActions(BOOKING, PROVIDER, 'assigned_provider'))

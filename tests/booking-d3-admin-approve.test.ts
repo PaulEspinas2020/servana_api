@@ -31,7 +31,6 @@ import {
   transitionBooking,
   TransitionError,
   BOOKING_ACTIONS,
-  __resetTransitionSchema,
 } from '../src/services/booking/transitionExecutor';
 
 const ADMIN = 'admin-1';
@@ -65,7 +64,6 @@ const approve = (metadata: Record<string, unknown> = { reason: 'support settled'
 
 beforeEach(() => {
   reset();
-  __resetTransitionSchema();
 });
 
 describe('force completion, from the states legacy meaningfully supported', () => {

@@ -782,74 +782,19 @@ export interface TransitionInput {
 }
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
-
-let ensured: Promise<void> | null = null;
-
-/**
- * Timeline and idempotency tables.
- *
- * Memoised and AWAITED by the executor rather than fired at boot: `app.ts`
- * launches fourteen schema bootstraps without waiting for any of them, so a
- * table created that way is not guaranteed to exist when the first request
- * arrives. This is the same reasoning as `otpService`.
- */
-export async function ensureTransitionSchema(): Promise<void> {
-  if (!ensured) {
-    ensured = (async () => {
-      await dbQuery.query(
-        `CREATE TABLE IF NOT EXISTS ${s}.booking_transitions (
-           id            BIGSERIAL PRIMARY KEY,
-           booking_id    INTEGER     NOT NULL,
-           action        TEXT        NOT NULL,
-           from_state    TEXT        NOT NULL,
-           to_state      TEXT        NOT NULL,
-           actor_role    TEXT        NOT NULL,
-           actor_uid     TEXT,
-           provider_uid  TEXT,
-           reason        TEXT,
-           metadata      JSONB       NOT NULL DEFAULT '{}'::jsonb,
-           correlation_id TEXT,
-           /**
-            * Did the booking actually MOVE?
-            *
-            * False for an event-only action, where from_state and to_state are
-            * the same by design. Without it, two COMPLETED rows read as a
-            * booking that completed twice, and an analyst or a future query
-            * would be right to conclude that. The evidence says which happened.
-            */
-           state_changed BOOLEAN     NOT NULL DEFAULT TRUE,
-           occurred_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-         )`,
-        [],
-      );
-      await dbQuery.query(
-        `CREATE INDEX IF NOT EXISTS idx_booking_transitions_booking
-           ON ${s}.booking_transitions (booking_id, occurred_at)`,
-        [],
-      );
-      await dbQuery.query(
-        `CREATE TABLE IF NOT EXISTS ${s}.booking_transition_idempotency (
-           actor_uid       TEXT        NOT NULL,
-           booking_id      INTEGER     NOT NULL,
-           action          TEXT        NOT NULL,
-           idempotency_key TEXT        NOT NULL,
-           request_digest  TEXT        NOT NULL,
-           result          JSONB       NOT NULL,
-           created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-           PRIMARY KEY (actor_uid, booking_id, action, idempotency_key)
-         )`,
-        [],
-      );
-    })().catch((error) => {
-      ensured = null;
-      throw error;
-    });
-  }
-  return ensured;
-}
-
-/** Test seam. */
-export const __resetTransitionSchema = () => { ensured = null; };
+//
+// `ensureTransitionSchema` created `booking_transitions`, its index and
+// `booking_transition_idempotency` on the first transition of every process.
+// Migration 036 owns all three now — an identical definition, column for column.
+//
+// It was memoised and AWAITED rather than fired at boot, precisely because a
+// table created by an un-awaited bootstrap is not guaranteed to exist when the
+// first request arrives. That reasoning was right, and the answer to it is a
+// migration, not a better-timed CREATE.
+//
+// ORDERING: deploy.yml runs `migrations:apply` after build and BEFORE the PM2
+// restart, so 036 lands before any code that writes here is serving. Do not
+// deploy this by restarting PM2 by hand without running migrations.
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1893,7 +1838,6 @@ async function applyState(
  * that, with an allow-list of the legacy sites still being migrated.
  */
 export async function transitionBooking(input: TransitionInput): Promise<TransitionResult> {
-  await ensureTransitionSchema();
 
   const correlationId = input.correlationId ?? newCorrelationId();
   const spec = BOOKING_ACTIONS[input.action];
@@ -2486,7 +2430,6 @@ export async function getAvailableActions(
 }
 
 export async function getBookingTimeline(bookingId: number): Promise<TimelineEvent[]> {
-  await ensureTransitionSchema();
   const res = await dbQuery.query(
     `SELECT id, booking_id, action, from_state, to_state, actor_role,
             provider_uid, reason, correlation_id, occurred_at

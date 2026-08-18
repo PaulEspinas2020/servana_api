@@ -28,7 +28,6 @@ import {
   transitionBooking,
   TransitionError,
   BOOKING_ACTIONS,
-  __resetTransitionSchema,
 } from '../src/services/booking/transitionExecutor';
 import { deriveCanonicalState } from '../src/services/booking/canonicalState';
 
@@ -74,7 +73,6 @@ const activeRows = () => store.assignments.filter(
 
 beforeEach(() => {
   reset();
-  __resetTransitionSchema();
 });
 
 describe('SAME PROVIDER is an idempotent no-op', () => {

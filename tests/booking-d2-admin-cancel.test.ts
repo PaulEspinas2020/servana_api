@@ -32,7 +32,6 @@ import {
   transitionBooking,
   TransitionError,
   BOOKING_ACTIONS,
-  __resetTransitionSchema,
 } from '../src/services/booking/transitionExecutor';
 
 const ADMIN = 'admin-1';
@@ -68,7 +67,6 @@ const adminCancel = (metadata: Record<string, unknown> = { reason: 'customer com
 
 beforeEach(() => {
   reset();
-  __resetTransitionSchema();
 });
 
 describe('ADMIN_CANCEL has its own authority', () => {
