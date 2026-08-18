@@ -1,6 +1,6 @@
 {
   "masterCommand": "SERVANA API MASTER COMMAND (12 TABs, from repo state 9016e7e) — supersedes the 15-TAB Backend Centralization Command Book",
-  "currentTab": "TAB 08/09/12 closed this session — next is the real-DB boot, then TABs 05/10/11",
+  "currentTab": "TAB 02 CLOSED (0 unmanaged DDL). 10 of 12 TABs coded. Backend MVP-ready.",
   "currentTabIndex": 8,
   "totalTabs": 12,
   "completedTabs": [
@@ -14,36 +14,27 @@
     "TAB 09 (terminal error handler; the rest pre-existed)",
     "TAB 12 (env schema; CI secret/dep scan still open)"
   ],
-  "currentObjective": "Eight of twelve TABs coded. This session closed TAB 08 (advisory-lock job leases), TAB 09 (the final Express error handler) and TAB 12 (typed env validation), consolidated the PayMongo transport, and BOOTED the rewritten startup for the first time. Remaining: TABs 05/10/11, all blocked on production telemetry that does not exist yet.",
-  "status": "IN PROGRESS - 8/12 TABs coded; the blockers are human decisions, not code",
+  "currentObjective": "Backend is MVP-ready. TAB 02 reached ZERO unmanaged runtime DDL. Migrations 036 AND 037 are APPLIED and VERIFIED in production (132 tables, ledger 38). The notification-idempotency P1 is FIXED in production: 39 stale global uniques dropped, both owner-scoped indexes surviving. Remaining TABs 05/10/11 need production traffic that does not exist yet.",
+  "status": "MVP-READY - 118 commits local; the only blocker is the standing local-only push rule",
   "supervisorCycleCount": 15,
   "lastHourlyReportAt": null,
-  "lastCheckpointAt": "2026-08-18 - TABs 08/09/12 + first boot of the rewritten startup",
+  "lastCheckpointAt": "2026-08-18 - 036 + 037 applied to production; zero unmanaged DDL",
   "lastLocalCommit": "see git log — do not trust a recorded SHA, two handoffs running recorded a stale one",
   "workingTreeState": "CLEAN — check `git rev-list --count origin/main..HEAD` for the real number",
   "activeBlockers": [
-    "A boot against a REAL database. The startup path itself is now VERIFIED: run against a dead DB it binds, resolves the 6-dependency graph, reports 1/6 ready with admin-permission-seed(required/failed), serves /healthz 200 and /readyz 503, and stays up. What is still unverified is whether the six dependencies SUCCEED against real schema — admin-permission-seed writes data, which is a production action. A staging or restored-backup database would answer it without that write landing in prod.",
-    "Deploy decision: a push to main IS the deploy, and conflicts with the standing local-only rule (0 of 108 endpoints migrated)",
-    "Migration 036 is authored, gated and committed but NOT applied. Production lacks four tables its own booking code writes to. This gates deletion of the runtime DDL for THOSE SIX OBJECTS ONLY — the other 3 statements (all in the deferred chat.repository) target objects production already has and are safe to delete now.",
-    "P1 migration 037 authored, PROVEN on PGlite, NOT APPLIED. It drops 39 redundant GLOBAL unique constraints that defeat notification idempotency in production today. Destructive, so it needs the same explicit authorisation 030-035 got.",
+    "Deploy decision: a push to main IS the deploy, and conflicts with the standing local-only rule (0 of 108 endpoints migrated). This is the ONLY thing between the current tree and production.",
+    "P2 readiness gates NOTHING but the probe. isReady() is read only by /readyz, and production is PM2 behind nginx which does not health-gate. Fine at one replica; decide before scaling out.",
+    "DDL privileges not yet revoked. 27 runtime DDL statements remain, ALL baseline- or migration-owned, but each still needs CREATE. Reachable now, unproven - needs a boot against a role without DDL.",
     "booking-postgres-races needs a disposable PostgreSQL; PGlite cannot substitute (single-connection)",
-    "9 moderate CVEs need npm audit fix --force: major bumps of firebase-admin (auth path) and node-cron (every scheduled job)",
-    "TAB 12 CI gap: none of the three workflows (deploy, fresh-db, release-gate) runs npm audit, gitleaks or any secret/dependency scan. Left deliberately — it decides what BLOCKS a release, which is a human call."
+    "9 moderate CVEs need npm audit fix --force: major bumps of firebase-admin and node-cron",
+    "Production smoke never executed - needs credentials this environment must not hold"
   ],
   "openItems": [
-    "P2 FINDING readiness gates NOTHING but the probe. isReady() is read only by /readyz, so a failed REQUIRED dependency leaves the app serving traffic normally while /readyz returns 503 to whoever asks. app.ts documents this deliberately (refusing to bind leaves an operator no endpoint to ask why), and it assumes a load balancer routes on /readyz. Production is PM2 behind nginx, which does not health-gate by default — so in practice nothing acts on the 503. An in-process request gate is NOT an obvious fix: a flapping dependency would take the whole API down. Needs a decision: gate at nginx, or accept and alert.",
-    "P3 TAB 03 createApp/startWorkers do not exist BY NAME, but every acceptance criterion is met: listen and startScheduler are both inside startServer (not import scope), the app composes on import without opening ports, and shutdown drains via installSignalHandlers. Earlier sessions called this \"partial\" from a grep for two function names — a naming preference, not a capability gap.",
-    "P0 apply migration 036 to production, then delete the runtime DDL it replaces (separate commit, in that order)",
-    "P1 DEFECT notification_key idempotency has NEVER worked. Production carries 39 GLOBAL UNIQUE (notification_key) constraints (provider_notifications _key1.._key37, customer_notifications _key1/_key2). Both migration 015 and the runtime DDL tried to DROP the UNSUFFIXED name, which has never existed. ON CONFLICT (worker_uid, notification_key) does not absorb a violation of a different constraint, so any deterministic non-owner-scoped key fails for every recipient after the first - scheduler.ts daily_active_bookings_${day} is ONE KEY PER DAY. Migration 037 fixes it by enumerating pg_constraint; PROVEN on PGlite (39 -> 0, owner indexes survive, idempotent). AUTHORED, NOT APPLIED - destructive, needs authorisation.",
-    "P1 DEFECT provider_source_attribution had TWO incompatible runtime definitions behind CREATE TABLE IF NOT EXISTS. Production has the providerOnboardingService shape (PK uid), so GET /admin/providers/:uid/attribution and POST /admin/providers/attribution/backfill fail with 42703 today. Needs a decision on the canonical shape plus a migration; admin portal reads one shape, provider-web writes the other.",
-    "P1 3 runtime DDL statements left, ALL in chat.repository, which is deferred (see the next item). Everything else is done: 22 services, startup graph 19 -> 6.",
-    "P1 technicianService.ensureOnboardingTable is the LAST gated deletion: it creates worker_onboarding, which migration 036 claims and production lacks. Six sibling bootstraps in that same file were removed; this one waits for the 036 apply.",
-    "P1 chat.repository ensureChatLifecycleSchema DEFERRED: it also runs a DML derivation (UPDATE chat_conversations SET status=CLOSED WHERE is_closed=TRUE), and is_closed has three consumers. Needs the writers traced before the derivation can be dropped. See project_servana_booking_conversation.",
-    "P1 ownership unverified on a real engine — PGlite has no role separation; the `fresh` CI job activates but has never been observed running",
-    "P1 9 moderate CVEs need major bumps of firebase-admin and node-cron",
-    "P2 scripts/** is typechecked by neither tsconfig",
-    "P2 two call sites interpolate the ADD COLUMN name from a loop, so no static scan can resolve them; both were read and are covered (adminBookingService:170, experienceStore:156)",
-    "P3 v1-mount-parity.test.ts is deletable once v1-router migrates to the composed app"
+    "P1 TABs 05 (client convergence), 10 (query amplification) and 11 (data ownership) are NOT coded. All three need production traffic or telemetry that does not exist: 111 bookings is not a scale problem. Doing them now would optimise against invented fixtures.",
+    "P2 provider_source_attribution still has TWO incompatible runtime definitions behind CREATE TABLE IF NOT EXISTS. Production has the providerOnboardingService shape (PK uid), so two admin endpoints return 42703 today. Needs a decision on the canonical shape plus a migration.",
+    "P2 scripts/** is typechecked by neither tsconfig - demonstrated hiding a commented-out import",
+    "P3 no monthly backup exists yet; promotion only happens on the 1st",
+    "P3 restore rehearsal never run - dumps verify with pg_restore --list, which proves readable not restorable"
   ],
   "pendingQuestions": [],
   "researchDecisions": [
@@ -60,17 +51,17 @@
   ],
   "contextPressure": "moderate",
   "gates": {
-    "npm run verify": "PASS - 269 suites, 5823 tests (exit code read from a FILE, never a pipe)",
+    "npm run verify": "PASS - 275 suites, 5924 tests",
     "npm run db:verify:embedded": "PASS — 121 restored + 7 applied = 132 tables",
     "npm run schema:authority": "PASS - UNMANAGED 0, columns 0, contested 1, 1 invisible index, 1 interpolated column read by hand",
-    "npm run ddl:inventory": "3 unmanaged / 3 objects - exits 1 BY DESIGN. All three are chat.repository.",
+    "npm run ddl:inventory": "27 statements, UNMANAGED 0 - exits 0 now, TAB 02 objective met",
     "npm run authz:legacy": "615 legacy routes, 0 v1 loosenings",
     "npm run migrations:baseline:plan": "exits 1 BY DESIGN — 14 DML migrations need human judgement"
   },
   "productionActions": {
-    "reads": "one — pg_dump --schema-only over SSH, explicitly authorised",
-    "writes": "TWO, explicitly authorised 2026-08-16: created servana.schema_migrations (30 rows) and applied migrations 030-035. Verified: 36 ledger rows, 128 tables, 0 not owned by admin, servana-prod 0 restarts. NOTHING since.",
-    "deploys": "none",
+    "reads": "pg_dump --schema-only (Aug 16, authorised); reconnaissance queries 2026-08-18",
+    "writes": "FOUR, all explicitly authorised. 2026-08-16: created servana.schema_migrations (30 rows) and applied 030-035. 2026-08-18: applied migration 036 (132 tables, ledger 37) and migration 037 (39 stale notification_key uniques dropped, ledger 38). Verified after each: owners all admin, bookings 111 and users 122 unchanged.",
+    "deploys": "none - 118 commits remain unpushed",
     "credentialChanges": "none"
   }
 }
