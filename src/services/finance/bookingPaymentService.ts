@@ -49,7 +49,6 @@ import {
   type RefundTrigger,
 } from './financePolicy';
 import { createCheckoutSession } from '../paymentService';
-import { refundService } from '../refund.service';
 
 const s = db.schema;
 
@@ -328,10 +327,58 @@ export async function refundBookingPayment(input: {
     reversesProviderEarning: eligibility.reversesProviderEarning,
   };
 
-  // A customer opens a review. Money moves only on an admin decision, and the
-  // review row is what an admin then approves — so the customer path writes
-  // exactly one record and calls no processor.
-  if (input.actor === 'customer') {
+  /**
+   * EVERY caller of this function opens a review. Nothing here moves money.
+   *
+   * ## What this replaced, and why it had to go (TAB 08, F-11)
+   *
+   * This branch used to read `if (input.actor === 'customer')`, and an `admin`
+   * actor fell through to `refundService.forceRefund()` — a live PayMongo
+   * refund, issued inside the request.
+   *
+   * The only caller of this function is the v1 endpoint
+   * `POST /api/v1/bookings/:bookingId/refunds`, whose contract entry declares
+   * `auth: 'authenticated'` and NO permission. The actor is derived from
+   * `assertBookingAccess`, which answers `admin` for any role-1 user on ANY
+   * booking. So the complete path to moving money was:
+   *
+   *     any role-1 admin  →  one POST  →  money gone
+   *
+   * while the legacy admin surface demands four steps behind four named
+   * permissions — `refunds.review.open` (high), `refunds.approve` (CRITICAL),
+   * `refunds.reject`, `refunds.mark_processed` — with a `requires` chain
+   * expressing a modelled separation of duties.
+   *
+   * An admin deliberately denied `refunds.approve` could therefore issue a
+   * refund by calling the customer's endpoint. That is the same defect as F-01
+   * on the payout surface — a second, quieter path to a capability whose guard
+   * lives somewhere else — and it is live, because v1 is deployed and all 98
+   * probeable routes answer.
+   *
+   * ## Why the fix is not `requirePermission` on the v1 route
+   *
+   * Because the gap is not a missing guard, it is a missing WORKFLOW. A single
+   * permissioned refund call still collapses request, review, approval and
+   * processing into one actor and one moment, which is precisely the control
+   * the legacy design encodes. Adding a permission would have closed the
+   * privilege hole and quietly blessed the collapse.
+   *
+   * So the money path is REMOVED from here instead. An admin who calls this
+   * opens a review like anybody else, and the refund is completed through the
+   * reviewed, permissioned admin surface. That is strictly safer than a
+   * permission check and it is the direction the lifecycle has to go anyway.
+   *
+   * ## What this costs, stated plainly
+   *
+   * A v1 client cannot complete a refund in one call any more. Measured before
+   * changing it: this function has exactly ONE caller, the v1 handler; the
+   * admin portal issues refunds through `/api/admin/finance/refunds/*`; and the
+   * two mobile clients call this endpoint as customers, which is unchanged. So
+   * the capability removed is one with no known caller — but that is an
+   * argument from measurement, not from certainty, and the four client
+   * repositories are not on this machine (§4). Recorded as manual task 08.1.
+   */
+  if (input.actor === 'customer' || input.actor === 'admin') {
     const review = await openRefundReview({
       bookingId: input.bookingId,
       paymentId: finance.payment.paymentId,
@@ -350,26 +397,19 @@ export async function refundBookingPayment(input: {
     };
   }
 
-  // Admin. This moves money.
-  const result = await refundService.forceRefund(finance.payment.paymentId);
-
-  await recordLedgerEventBestEffort({
-    eventKey: `booking:${input.bookingId}:refund-issued:${finance.payment.paymentId}:${trigger}`,
-    type: 'PAYMENT_REFUNDED',
-    bookingId: input.bookingId,
-    paymentId: finance.payment.paymentId,
-    customerUid,
-    amount: eligibility.amount,
-    reasonCode: trigger,
-    detail: { issuedBy: input.actorUid, reason: input.reason ?? null },
-  });
-
-  return {
-    ...base,
-    outcome: result && (result as { pending?: boolean }).pending ? 'pending_processor' : 'issued',
-    reference: (result as { reference?: string } | undefined)?.reference ?? refundReference(input.bookingId),
-    refundReviewId: null,
-  };
+  /**
+   * Unreachable, and kept as a refusal rather than deleted.
+   *
+   * `evaluateRefundEligibility` already restricts which actors may initiate
+   * which trigger, so a provider never reaches here — but "already restricted
+   * somewhere else" is how the branch above came to move money without a
+   * permission in the first place. A refusal that names itself is cheaper than
+   * a comment claiming this cannot happen.
+   */
+  throw new BookingPaymentError(
+    'PAYMENT_ACTOR_NOT_PERMITTED',
+    'Refunds are completed through admin review, not issued directly.',
+  );
 }
 
 /**

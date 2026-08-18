@@ -12,7 +12,7 @@
 >
 > **Status legend:** `OPEN` · `DONE` · `SUPERSEDED`
 
-Last updated: 2026-08-18 (TAB 06)
+Last updated: 2026-08-18 (TAB 08)
 
 ---
 
@@ -86,6 +86,16 @@ Last updated: 2026-08-18 (TAB 06)
 | 06.1 | Probe the four new v1 admin booking routes on production after deploy: 401 unauthenticated, 200 authorized, 403 for an admin lacking the named permission | `PROD-ACCESS` | Three status codes captured per route |
 | 06.2 | Grant/confirm `bookings.view`, `bookings.assign_provider` and `bookings.reassign_provider` are held by the operators who use those screens, before the portal cuts over in TAB 07 | `PROD-ACCESS` | Grant list captured |
 | 06.3 | Build wave 2 (provider operations) and wave 3 (finance). Wave 3 is now unblocked by TAB 01 and additionally carries TAB 01's deferred `Deprecation`/`Sunset` headers for `/api/admin/disbursements/*` | `HUMAN-JUDGEMENT` | Waves specified, sized and scheduled |
+
+## TAB 08 — refund lifecycle
+
+| # | Task | Why blocked | Closes when |
+| --- | --- | --- | --- |
+| 08.1 | Prove no client relied on the v1 admin refund path completing in one call. Measured locally: `refundBookingPayment` has one caller, the portal uses the legacy finance surface, and mobile calls it as a customer — but §4 demands proof by READING the four client repos | `NO-REPO` | Four repos grepped for `/v1/bookings/*/refunds` |
+| 08.2 | **Build the refund review lifecycle.** The design is recorded in `docs/audits/TAB08_REFUND_LIFECYCLE.md` §4.1: five transitions, five permissions, approver ≠ requester in the executor, server-enforced `requires`, immutable audit per transition, idempotency keys | `HUMAN-JUDGEMENT` | Lifecycle built and mutation-verified; refunds migratable |
+| 08.3 | Decide the `trigger` mapping. Its seven values have no legacy equivalent — legacy `reason` is free text. Derive it (lossy) or require it only on new cases. Lossiness on a money record is a decision, not a default | `HUMAN-JUDGEMENT` | Decision recorded with its rationale |
+| 08.4 | Confirm no in-flight refund depended on the removed one-shot path at deploy time | `PROD-ACCESS` | Open refund reviews inspected before and after |
+| 08.5 | Re-rate F-11. On the evidence it is a live P0, not a P1: the bypass is reachable in production today | `HUMAN-JUDGEMENT` | Severity re-recorded in the findings register |
 
 ## TAB 16 — Certification & runbook
 
