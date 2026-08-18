@@ -352,6 +352,24 @@ import accountDeletionRoutes, { accountDeletionPageRouter } from "./routes/accou
 app.use("/api", cors(corsOptionsDelegate), accountDeletionRoutes);
 app.use(accountDeletionPageRouter);
 
+/**
+ * ─── The terminal error handler (TAB 09) ────────────────────────────────────
+ *
+ * MUST be the last app.use. Express selects a four-argument handler only from
+ * middleware registered AFTER the route that threw, so mounting this above any
+ * route would silently exclude that route from it.
+ *
+ * Without it, an error escaping a route reached Express's built-in handler,
+ * which replies with the error message and — outside production — the stack. A
+ * pg error message carries the SQL, table and constraint name, which is exactly
+ * what a 5xx must never expose.
+ *
+ * It is a safety net, not a policy change: it only runs where nothing has
+ * replied, so no existing response shape moves.
+ */
+import { terminalErrorHandler } from "./middleware/terminalErrorHandler";
+app.use(terminalErrorHandler);
+
 // Use an http.Server so Socket.IO can share the same port as Express.
 import { initChatSocket } from "./chat/chat.gateway";
 import { initProviderSocket } from "./provider.gateway";
