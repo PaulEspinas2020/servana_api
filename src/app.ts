@@ -134,7 +134,27 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 //
 // `tests/v1-parity-exemption.test.ts` pins this. It is the kind of guarantee
 // that survives exactly as long as nobody edits this list by hand.
-export const CANONICAL_CONTRACT_PREFIXES = ['/api/v1', '/api/admin/catalog', '/api/catalog'];
+//
+// `/healthz` and `/readyz` are exempt for a third reason, found by booting the
+// server rather than by reading it. They are OPERATIONAL PROBES, not client API,
+// and the parity middleware was rewriting them: every dependency in the
+// readiness payload came back carrying `serviceName`, `service_name`, `level2`
+// and `level_2`, all set to the dependency's name.
+//
+// `level2` is a catalog concept — a legacy Level-2 service label. On a readiness
+// probe it is meaningless, it inflates a payload a load balancer polls
+// constantly, and it actively misleads: an operator debugging an outage should
+// not find catalog vocabulary in a health response and wonder what it means.
+//
+// Safe to change: probes are consumed by their STATUS CODE, and these fields are
+// nonsense no client could have depended on.
+export const CANONICAL_CONTRACT_PREFIXES = [
+  '/api/v1',
+  '/api/admin/catalog',
+  '/api/catalog',
+  '/healthz',
+  '/readyz',
+];
 app.use((req: Request, res: Response, next: NextFunction) => {
     if (CANONICAL_CONTRACT_PREFIXES.some((p) => req.path.startsWith(p))) return next();
     return parityMiddleware(req, res, next);
