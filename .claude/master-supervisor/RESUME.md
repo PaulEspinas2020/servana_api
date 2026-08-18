@@ -13,7 +13,7 @@ Read this, then `MEMORY.md`, `state.json`, `DECISIONS.md`, and
 ## 1. Prove the baseline before changing anything
 
 ```
-npm run verify              expect PASS — 265 suites, 5769 tests
+npm run verify              expect PASS — 269 suites, 5823 tests
 npm run db:verify:embedded  expect PASS — 121 restored + 7 applied = 132 tables
 npm run schema:authority    expect UNMANAGED 0, MISSING 0, contested 1 / 0
                             unsatisfiable, 1 invisible index  (exits 0)
@@ -40,16 +40,60 @@ one that blocks.
 | --- | --- | --- |
 | 01 Establish the release gate | P0 | **Done** except the concurrency suite |
 | 02 Migrations the sole schema authority | P0 | **Rescoped and half-done — see §3** |
-| 03 Atomic startup lifecycle | P0 | Done except tests needing a real boot |
+| 03 Atomic startup lifecycle | P0 | **Done** — BOOTED and observed, see §2b |
 | 04 Centralize authorization policy | P0 | Rules derived, parity gated, audit wired |
 | 05 Converge clients onto v1 | P1 | Not started — 0 of 108 migrated |
 | 06 Booking transitions the only write path | P0 | Not started (largely done by the previous command's TAB 04) |
 | 07 Harden money movement | P0 | Not started |
-| 08 Schedulers safe under scale | P1 | Not started |
-| 09 Unify errors/logging/observability | P1 | Partly pre-existing |
+| 08 Schedulers safe under scale | P1 | **Done** — six jobs lease-protected |
+| 09 Unify errors/logging/observability | P1 | **Done** — terminal handler added; rest pre-existed |
 | 10 Remove query amplification | P1 | Not started |
 | 11 Data ownership / cross-store | P1 | Not started |
-| 12 Security + dependency hygiene | P1 | Credential removed from build; 0 high CVEs |
+| 12 Security + dependency hygiene | P1 | **Mostly** — env schema added; CI scan still absent |
+
+---
+
+## 2b. The startup was BOOTED — what that proved, and what it did not
+
+Run against a database that does not exist (every target a closed local port; the
+ECONNREFUSED address in the log proves which host it reached, so no production
+was contacted):
+
+```
+[env] degraded — unset: PAYMONGO_SECRET_KEY, MAILER_KEY, ...
+[scheduler] 6 cron jobs started (lease-protected).
+Magic is running on port 39217
+[lifecycle] 1/6 dependencies ready — degraded:
+  admin-permission-seed(required/failed), customer-review-schema(optional/failed), ...
+GET /healthz → 200 {"status":"alive"}
+GET /readyz  → 503 {"phase":"degraded","ready":false,"live":true,...}
+```
+
+PROVED: the graph resolves, a failed REQUIRED dependency leaves readiness false
+while liveness stays true, the process stays up and says why, `listen` and
+`startScheduler` both run inside `startServer` rather than at import.
+
+NOT PROVED: that the six dependencies SUCCEED against real schema.
+`admin-permission-seed` writes data, which is a production action. A staging or
+restored-backup database answers this without that write landing in production.
+
+⚠ **Readiness gates NOTHING but the probe.** `isReady()` is read only by
+`/readyz`, so a failed required dependency leaves the app serving traffic while
+the probe returns 503 to whoever asks. app.ts chose this deliberately — refusing
+to bind leaves an operator no endpoint to ask WHY — and it assumes a load
+balancer routes on `/readyz`. Production is PM2 behind nginx, which does not
+health-gate by default, so in practice nothing acts on the 503. An in-process
+request gate is NOT an obvious fix: a flapping dependency would take the whole
+API down. This needs a decision, not a patch.
+
+⚠ **Booting found a defect that reading did not.** Every dependency in `/readyz`
+came back carrying `serviceName`, `service_name`, `level2` and `level_2` — the
+legacy catalog parity middleware was rewriting operational probes, because
+`/healthz` and `/readyz` were missing from `CANONICAL_CONTRACT_PREFIXES`. Fixed,
+narrowly, with a test asserting legacy routes are STILL rewritten.
+
+**Reproduce it:** set DB_* / MONGO_* to a closed local port, NODE_ENV=development,
+then `node -r ts-node/register/transpile-only -e "require('./src/app.ts').startServer()"`.
 
 ---
 

@@ -1,30 +1,38 @@
 {
   "masterCommand": "SERVANA API MASTER COMMAND (12 TABs, from repo state 9016e7e) — supersedes the 15-TAB Backend Centralization Command Book",
-  "currentTab": "TAB 02 — Make migrations the sole schema authority",
-  "currentTabIndex": 2,
+  "currentTab": "TAB 08/09/12 closed this session — next is the real-DB boot, then TABs 05/10/11",
+  "currentTabIndex": 8,
   "totalTabs": 12,
   "completedTabs": [
     "TAB 01 (bar the concurrency suite)",
-    "TAB 03 (bar real-boot tests)",
+    "TAB 02 (deletion 148 -> 3; only chat.repository deferred)",
+    "TAB 03 (acceptance met; see the readiness-gating note in openItems)",
     "TAB 04 (rules + parity + audit)",
-    "TAB 12 (credential + high CVEs)"
+    "TAB 06 (0 raw booking-status writes outside the executor)",
+    "TAB 07 (ledger, policy, reconciliation, outbox, one PayMongo transport)",
+    "TAB 08 (six cron jobs lease-protected)",
+    "TAB 09 (terminal error handler; the rest pre-existed)",
+    "TAB 12 (env schema; CI secret/dep scan still open)"
   ],
-  "currentObjective": "TAB 02 rescoped 2026-08-17. Authoring gap CLOSED by 036. Deletion phase: 148 -> 3 statements, 106 -> 3 objects, startup graph 19 -> 6 deps (ONE required, and it seeds DATA). The only runtime DDL left is chat.repository, which is deferred.",
-  "status": "IN PROGRESS - TAB 02 deletion phase 148 -> 3; 98% done, remainder is the deferred chat.repository",
+  "currentObjective": "Eight of twelve TABs coded. This session closed TAB 08 (advisory-lock job leases), TAB 09 (the final Express error handler) and TAB 12 (typed env validation), consolidated the PayMongo transport, and BOOTED the rewritten startup for the first time. Remaining: TABs 05/10/11, all blocked on production telemetry that does not exist yet.",
+  "status": "IN PROGRESS - 8/12 TABs coded; the blockers are human decisions, not code",
   "supervisorCycleCount": 15,
   "lastHourlyReportAt": null,
-  "lastCheckpointAt": "2026-08-18 - TAB 02: 148 -> 3, migration 037 authored",
+  "lastCheckpointAt": "2026-08-18 - TABs 08/09/12 + first boot of the rewritten startup",
   "lastLocalCommit": "see git log — do not trust a recorded SHA, two handoffs running recorded a stale one",
   "workingTreeState": "CLEAN — check `git rev-list --count origin/main..HEAD` for the real number",
   "activeBlockers": [
-    "No real boot since app.ts startup was rewritten. It was 19 dependencies; TAB 02 has removed 13, so it is 6 - and only ONE is still `required` (admin-permission-seed, which seeds DATA not schema). The payment, identity and BOTH booking required entries are gone. Every removal is unverified against a running server.",
+    "A boot against a REAL database. The startup path itself is now VERIFIED: run against a dead DB it binds, resolves the 6-dependency graph, reports 1/6 ready with admin-permission-seed(required/failed), serves /healthz 200 and /readyz 503, and stays up. What is still unverified is whether the six dependencies SUCCEED against real schema — admin-permission-seed writes data, which is a production action. A staging or restored-backup database would answer it without that write landing in prod.",
     "Deploy decision: a push to main IS the deploy, and conflicts with the standing local-only rule (0 of 108 endpoints migrated)",
     "Migration 036 is authored, gated and committed but NOT applied. Production lacks four tables its own booking code writes to. This gates deletion of the runtime DDL for THOSE SIX OBJECTS ONLY — the other 3 statements (all in the deferred chat.repository) target objects production already has and are safe to delete now.",
     "P1 migration 037 authored, PROVEN on PGlite, NOT APPLIED. It drops 39 redundant GLOBAL unique constraints that defeat notification idempotency in production today. Destructive, so it needs the same explicit authorisation 030-035 got.",
     "booking-postgres-races needs a disposable PostgreSQL; PGlite cannot substitute (single-connection)",
-    "9 moderate CVEs need npm audit fix --force: major bumps of firebase-admin (auth path) and node-cron (every scheduled job)"
+    "9 moderate CVEs need npm audit fix --force: major bumps of firebase-admin (auth path) and node-cron (every scheduled job)",
+    "TAB 12 CI gap: none of the three workflows (deploy, fresh-db, release-gate) runs npm audit, gitleaks or any secret/dependency scan. Left deliberately — it decides what BLOCKS a release, which is a human call."
   ],
   "openItems": [
+    "P2 FINDING readiness gates NOTHING but the probe. isReady() is read only by /readyz, so a failed REQUIRED dependency leaves the app serving traffic normally while /readyz returns 503 to whoever asks. app.ts documents this deliberately (refusing to bind leaves an operator no endpoint to ask why), and it assumes a load balancer routes on /readyz. Production is PM2 behind nginx, which does not health-gate by default — so in practice nothing acts on the 503. An in-process request gate is NOT an obvious fix: a flapping dependency would take the whole API down. Needs a decision: gate at nginx, or accept and alert.",
+    "P3 TAB 03 createApp/startWorkers do not exist BY NAME, but every acceptance criterion is met: listen and startScheduler are both inside startServer (not import scope), the app composes on import without opening ports, and shutdown drains via installSignalHandlers. Earlier sessions called this \"partial\" from a grep for two function names — a naming preference, not a capability gap.",
     "P0 apply migration 036 to production, then delete the runtime DDL it replaces (separate commit, in that order)",
     "P1 DEFECT notification_key idempotency has NEVER worked. Production carries 39 GLOBAL UNIQUE (notification_key) constraints (provider_notifications _key1.._key37, customer_notifications _key1/_key2). Both migration 015 and the runtime DDL tried to DROP the UNSUFFIXED name, which has never existed. ON CONFLICT (worker_uid, notification_key) does not absorb a violation of a different constraint, so any deterministic non-owner-scoped key fails for every recipient after the first - scheduler.ts daily_active_bookings_${day} is ONE KEY PER DAY. Migration 037 fixes it by enumerating pg_constraint; PROVEN on PGlite (39 -> 0, owner indexes survive, idempotent). AUTHORED, NOT APPLIED - destructive, needs authorisation.",
     "P1 DEFECT provider_source_attribution had TWO incompatible runtime definitions behind CREATE TABLE IF NOT EXISTS. Production has the providerOnboardingService shape (PK uid), so GET /admin/providers/:uid/attribution and POST /admin/providers/attribution/backfill fail with 42703 today. Needs a decision on the canonical shape plus a migration; admin portal reads one shape, provider-web writes the other.",
@@ -45,11 +53,14 @@
     "pending count read back OUT of the database, not derived from the SQL that wrote it",
     "the baseline counts as a schema AUTHORITY, not just a test fixture — db:verify:embedded restores it and applies pending on top, so what it declares is reproducible without runtime DDL. This is what rescoped TAB 02.",
     "classification checked against the ENGINE (restore baseline into PGlite, ask PostgreSQL) rather than trusting the regex that produced it",
-    "two CREATE TABLE IF NOT EXISTS for one object is a race with a silent loser, not idempotence - gated by contestedObjects() in schema-authority; all 7 audited against the baseline, 0 unsatisfiable beyond the provider_source_attribution P1"
+    "two CREATE TABLE IF NOT EXISTS for one object is a race with a silent loser, not idempotence - gated by contestedObjects() in schema-authority; all 7 audited against the baseline, 0 unsatisfiable beyond the provider_source_attribution P1",
+    "advisory locks over a durable jobs table for scheduler leases — they need NO SCHEMA, and with migrations as the sole authority and 036/037 unapplied a jobs table could not run. Cost stated, not hidden: no durable run history, no dead-letter, no resumable cursors. recordOutcome is the seam to persist through later.",
+    "the terminal error handler only runs where NOTHING has replied, so it cannot reshape an existing response — that is what lets it satisfy TAB 09 without breaching its STOP condition against a breaking envelope.",
+    "env REQUIRED list confined to what production demonstrably already sets (DB_*, SCHEMA, SECRET). A fail-fast naming a variable prod does not set would crash the next boot and look like the startup work. Pinned by test so additions are an explicit claim."
   ],
   "contextPressure": "moderate",
   "gates": {
-    "npm run verify": "PASS - 265 suites, 5769 tests (exit code checked directly, not through a pipe)",
+    "npm run verify": "PASS - 269 suites, 5823 tests (exit code read from a FILE, never a pipe)",
     "npm run db:verify:embedded": "PASS — 121 restored + 7 applied = 132 tables",
     "npm run schema:authority": "PASS - UNMANAGED 0, columns 0, contested 1, 1 invisible index, 1 interpolated column read by hand",
     "npm run ddl:inventory": "3 unmanaged / 3 objects - exits 1 BY DESIGN. All three are chat.repository.",
