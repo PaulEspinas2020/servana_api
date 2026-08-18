@@ -26,7 +26,7 @@
  * API. Build the payload explicitly.
  */
 
-jest.mock('../src/middleware/firebaseApp', () => ({ firebaseAdmin: {} }));
+jest.mock('../src/middleware/firebaseApp', () => ({ getFirebaseAdmin: () => ({}) }));
 
 const createUser = jest.fn();
 jest.mock('firebase-admin/auth', () => ({

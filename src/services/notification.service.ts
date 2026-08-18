@@ -51,9 +51,9 @@ async function sendFcmPushToWorker(
   if (meta?.notificationKey) data.notificationKey = String(meta.notificationKey);
 
   const { getMessaging } = await import('firebase-admin/messaging');
-  const { firebaseAdmin } = await import('../middleware/firebaseApp');
+  const { getFirebaseAdmin } = await import('../middleware/firebaseApp');
   await Promise.allSettled(tokens.map((token: string) =>
-    getMessaging(firebaseAdmin).send({
+    getMessaging(getFirebaseAdmin()).send({
       token,
       notification: { title, body },
       data,
@@ -743,8 +743,8 @@ async function sendFcmPushToCustomer(
   if (!token) return;
 
   const { getMessaging } = await import('firebase-admin/messaging');
-  const { firebaseAdmin } = await import('../middleware/firebaseApp');
-  await getMessaging(firebaseAdmin).send({
+  const { getFirebaseAdmin } = await import('../middleware/firebaseApp');
+  await getMessaging(getFirebaseAdmin()).send({
     token,
     notification: { title, body },
     data: data ?? {},

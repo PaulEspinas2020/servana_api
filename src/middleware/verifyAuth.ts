@@ -1,10 +1,13 @@
 import { Request, Response, NextFunction } from "express";
-import { firebaseAdmin } from "../middleware/firebaseApp";
+import { getFirebaseAdmin } from "../middleware/firebaseApp";
 import { tempId } from "../config";
 import { getAuth as getAuthAdmin } from 'firebase-admin/auth';
 import { isRevoked } from "../services/tokenRevocation";
 
-const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
+// Lazy: resolving the Auth service at module scope made importing this file
+// require a live Admin credential. getAuth() memoises per app internally and
+// getFirebaseAdmin() memoises the app, so calling this per request is cheap.
+const defaultAuthAdmin = () => getAuthAdmin(getFirebaseAdmin());
 
 const validateFirebaseIdToken = async (req: Request, res: Response, next: NextFunction) => {
   if (!tempId) {
@@ -34,7 +37,7 @@ const validateFirebaseIdToken = async (req: Request, res: Response, next: NextFu
     }
 
     try {
-      const decodedIdToken = await defaultAuthAdmin.verifyIdToken(idToken);
+      const decodedIdToken = await defaultAuthAdmin().verifyIdToken(idToken);
 
       /**
        * Signature and expiry are not the whole question (Command 7 §20).

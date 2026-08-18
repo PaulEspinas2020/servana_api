@@ -10,7 +10,7 @@ const deleteUser = jest.fn();
 const updateUser = jest.fn();
 const createCustomToken = jest.fn().mockResolvedValue('CUSTOM');
 
-jest.mock('../src/middleware/firebaseApp', () => ({ firebaseAdmin: {} }));
+jest.mock('../src/middleware/firebaseApp', () => ({ getFirebaseAdmin: () => ({}) }));
 jest.mock('firebase-admin/auth', () => ({
   getAuth: () => ({ deleteUser, updateUser, createCustomToken }),
 }));

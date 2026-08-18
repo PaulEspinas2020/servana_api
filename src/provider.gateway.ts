@@ -1,14 +1,17 @@
 import { Server, Socket } from "socket.io";
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
 
-import { firebaseAdmin } from "./middleware/firebaseApp";
+import { getFirebaseAdmin } from "./middleware/firebaseApp";
 import { tempId, db } from "./config";
 import { setProviderIo, providerRoomKey } from "./provider.realtime";
 import * as repo from "./chat/chat.repository";
 import dbQuery from "./db/dbQuery";
 import { isProviderRole } from "./constants/providerRoles";
 
-const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
+// Lazy: resolving the Auth service at module scope made importing this file
+// require a live Admin credential. getAuth() memoises per app internally and
+// getFirebaseAdmin() memoises the app, so calling this per request is cheap.
+const defaultAuthAdmin = () => getAuthAdmin(getFirebaseAdmin());
 
 interface SocketActor {
   uid: string;
@@ -46,7 +49,7 @@ export const initProviderSocket = (io: Server): void => {
 
       if (!token) return next(new Error("Unauthorized"));
 
-      const decoded = await defaultAuthAdmin.verifyIdToken(token);
+      const decoded = await defaultAuthAdmin().verifyIdToken(token);
       const role = await repo.getUserRole(decoded.uid);
       if (!isProviderRole(role)) return next(new Error("Unauthorized"));
       (socket as any).actor = { uid: decoded.uid, role };

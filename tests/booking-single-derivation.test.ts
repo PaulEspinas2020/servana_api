@@ -23,7 +23,7 @@ jest.mock('../src/db/dbQuery', () => ({
   pool: { connect: jest.fn() },
 }));
 jest.mock('../src/db/mongodbQuery', () => ({ __esModule: true, default: {} }));
-jest.mock('../src/middleware/firebaseApp', () => ({ firebaseAdmin: {}, __esModule: true }));
+jest.mock('../src/middleware/firebaseApp', () => ({ getFirebaseAdmin: () => ({}), __esModule: true }));
 jest.mock('firebase-admin/auth', () => ({ getAuth: () => ({}) }));
 
 import fs from 'fs';

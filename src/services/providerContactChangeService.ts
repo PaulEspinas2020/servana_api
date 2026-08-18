@@ -3,7 +3,7 @@ import { createHash, randomInt } from 'crypto';
 import { getAuth } from 'firebase-admin/auth';
 import dbQuery, { pool } from '../db/dbQuery';
 import { db } from '../config';
-import { firebaseAdmin } from '../middleware/firebaseApp';
+import { getFirebaseAdmin } from '../middleware/firebaseApp';
 import { noteRevoked } from './tokenRevocation';
 import { sendContactChangeCode } from './providerContactChangeDelivery';
 
@@ -122,7 +122,7 @@ export async function confirmContactChange(providerUid: string, decoded: any, in
     );
     if (conflict.rowCount) throw Object.assign(new Error('That contact is unavailable'), { statusCode: 409, code: 'CONTACT_UNAVAILABLE' });
 
-    const auth = getAuth(firebaseAdmin);
+    const auth = getAuth(getFirebaseAdmin());
     const before = await auth.getUser(providerUid);
     try {
       if (row.contact_kind === 'email') {
