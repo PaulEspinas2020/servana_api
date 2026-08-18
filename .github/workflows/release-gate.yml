@@ -16,6 +16,14 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Callable, so `deploy.yml` can depend on this gate as a JOB (TAB 03, F-03).
+  #
+  # Two workflows on the same trigger run in parallel and can never express a
+  # dependency between them, which is how run 32119165094 (this gate, FAILURE)
+  # and run 32119165101 (the deploy, SUCCESS) both happened on d4b0150. The gate
+  # was red and the commit shipped. `workflow_call` is what lets the deploy say
+  # `needs: [release-gate]` and mean it.
+  workflow_call:
 
 jobs:
   gate:
@@ -56,7 +64,38 @@ jobs:
         run: npm run security:secrets
 
       - name: Release summary
+        id: summary
         run: npm run release:summary
+
+      # A gate must fail only for reasons that matter (TAB 03).
+      #
+      # `release:summary` runs late, so ANY earlier failure means the file was
+      # never written — and `if-no-files-found: error` then failed the upload
+      # too. The run's visible cause of death became "no artifact" rather than
+      # the drift or secret or test that actually stopped it. That is worse than
+      # cosmetic: a gate that fails for uninteresting reasons trains everyone to
+      # ignore it, and then it fails for a real reason and is ignored too.
+      #
+      # This writes a minimal summary naming the step that failed, so the
+      # artifact always exists and always says something true. `reports/` is
+      # gitignored, so the hermeticity check below is unaffected.
+      - name: Summary fallback, so the artifact is never the cause of failure
+        if: always()
+        run: |
+          mkdir -p reports
+          if [ ! -f reports/release-summary.json ]; then
+            cat > reports/release-summary.json <<JSON
+          {
+            "verdict": "BLOCKED",
+            "reason": "the gate failed before release:summary could run",
+            "note": "This file is a FALLBACK. The real cause is the first failed step in this run; read the log, not this verdict.",
+            "commit": "${GITHUB_SHA}",
+            "run": "${GITHUB_RUN_ID}",
+            "summaryStepOutcome": "${{ steps.summary.outcome }}"
+          }
+          JSON
+            echo "::warning::release:summary did not run; wrote a fallback summary."
+          fi
 
       - name: Retain the summary
         if: always()
@@ -64,6 +103,9 @@ jobs:
         with:
           name: release-summary
           path: reports/release-summary.json
+          # Stays `error`: the step above guarantees the file exists, so a
+          # missing artifact now means the fallback itself did not run, which is
+          # a real fault worth failing on.
           if-no-files-found: error
           retention-days: 30
 

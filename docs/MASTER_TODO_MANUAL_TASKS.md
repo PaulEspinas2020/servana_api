@@ -12,7 +12,7 @@
 >
 > **Status legend:** `OPEN` · `DONE` · `SUPERSEDED`
 
-Last updated: 2026-08-18 (TAB 01)
+Last updated: 2026-08-18 (TAB 03)
 
 ---
 
@@ -57,6 +57,9 @@ Last updated: 2026-08-18 (TAB 01)
 | 03.2 | Create the GitHub `production` environment with a required reviewer and bind the deploy job to it | `REMOTE-OP`, `HUMAN-JUDGEMENT` | Environment exists; a deployment record is produced |
 | 03.3 | Protect `main`: require the release gate as a status check, forbid force-push, require branch up to date | `REMOTE-OP` | Branch protection visible in repo settings |
 | 03.4 | Agree and document the break-glass path around the required reviewer **before** switching it on | `HUMAN-JUDGEMENT` | Break-glass procedure written into the TAB 16 runbook and acknowledged |
+| 03.5 | **Rehearse the automatic rollback on the production host.** It is written against the deploy shape `deploy.yml` describes and has never been executed. A rollback nobody has run is a hypothesis | `PROD-ACCESS` | One deliberate failed-probe deploy that restores the previous build and recovers `/healthz` |
+| 03.6 | Confirm `/home/github-runner/releases` is writable by the runner user and survives between runs, or the rollback snapshot silently does nothing | `PROD-ACCESS` | Directory exists after a deploy and contains `previous/` |
+| 03.7 | Confirm GitHub-hosted runners are available to this repo for the `release-gate` job (it runs `ubuntu-latest`; the deploy runs self-hosted) | `REMOTE-OP` | One green `release-gate` job in a run graph alongside `deploy` |
 
 ## TAB 04 — CI integrity
 

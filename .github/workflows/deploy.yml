@@ -6,9 +6,33 @@ on:
   workflow_dispatch:
 
 jobs:
+  # THE GATE, AS A JOB (TAB 03, F-03).
+  #
+  # `release-gate.yml` used to run as an independent workflow on the same
+  # trigger. Two workflows firing on one push run in parallel and cannot express
+  # a dependency, so on d4b0150 the gate FAILED (run 32119165094) and this
+  # deploy SUCCEEDED (run 32119165101) — the red gate shipped to production and
+  # nothing in the pipeline objected.
+  #
+  # Calling it as a job is what makes `needs:` below meaningful. A failed gate
+  # now leaves `deploy` SKIPPED rather than merely embarrassed.
+  release-gate:
+    uses: ./.github/workflows/release-gate.yml
+    secrets: inherit
+
   deploy:
+    # The whole point of this TAB. Without it the line above is decoration.
+    needs: [release-gate]
     runs-on: [self-hosted, Linux, x64]
     timeout-minutes: 12
+
+    # Binds the deploy to a named GitHub environment so each run produces a
+    # deployment record. The REQUIRED REVIEWER is configured in repository
+    # settings, not here — declaring the environment is the half that lives in
+    # the repo; approving it is the half that lives in GitHub. Until the
+    # reviewer is added this changes nothing about who can deploy, and that is
+    # stated rather than implied. See docs/MASTER_TODO_MANUAL_TASKS.md 03.2.
+    environment: production
 
     steps:
       - name: Fix workspace permissions
@@ -107,8 +131,43 @@ jobs:
       - name: Guard protected route contracts
         run: npm run guard:protected-contracts
 
+      # Rollback needs somewhere to roll back TO (TAB 03).
+      #
+      # `npm run build` overwrites dist/ in place, so the currently-running
+      # build has to be copied out before it is destroyed. Kept outside the
+      # workspace because `actions/checkout` may clean the workspace between
+      # runs, and a rollback artefact that the next checkout deletes is not a
+      # rollback artefact.
+      - name: Snapshot the running build, so a failed probe has something to restore
+        run: |
+          RELEASES=/home/github-runner/releases
+          sudo mkdir -p "$RELEASES"
+          sudo chown -R github-runner:github-runner "$RELEASES" 2>/dev/null || true
+          if [ -d dist ]; then
+            rm -rf "$RELEASES/previous"
+            cp -a dist "$RELEASES/previous"
+            echo "snapshotted the running build to $RELEASES/previous"
+          else
+            echo "::warning::no dist/ to snapshot — first deploy on this host, or the workspace was cleaned. Rollback will be unavailable for this run."
+          fi
+
       - name: Build
         run: npm run build
+
+      # Proves WHICH commit is running, without publishing it.
+      #
+      # The book asks the post-deploy step to assert the running commit. There is
+      # no /version endpoint and there should not be one: a build SHA on a public
+      # endpoint is free reconnaissance, and least-disclosure says do not add it
+      # merely to make CI's life easier. Stamping the SHA into the build itself
+      # answers the same question locally — the probe below reads this file from
+      # the very dist/ that PM2 is running.
+      - name: Stamp the build with its commit
+        run: |
+          printf '{"commit":"%s","ref":"%s","builtAt":"%s","run":"%s"}\n' \
+            "$GITHUB_SHA" "$GITHUB_REF" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$GITHUB_RUN_ID" \
+            > dist/BUILD_INFO.json
+          cat dist/BUILD_INFO.json
 
       # MOVED. This used to be the fifth step — it ran before Node was even
       # installed, so schema changes were applied to the production database
@@ -173,3 +232,119 @@ jobs:
 
       - name: Reload NGINX
         run: sudo systemctl reload nginx
+
+      # POST-DEPLOY VERIFICATION (TAB 03).
+      #
+      # A deploy that reports success while the process is crash-looping, or
+      # while the build serving traffic is not the one just shipped, is a deploy
+      # that lied. Every assertion here is read-only and local to the host —
+      # 127.0.0.1, never the public origin, so this probes the process rather
+      # than the CDN, the proxy, or DNS.
+      #
+      # The unknown-path assertion is the specific one worth keeping: production
+      # once answered 401 to EVERY path including nonexistent ones, which proved
+      # auth was running before routing and that the deployed build did not serve
+      # v1 at all. A 404 there is the cheapest possible proof that the router is
+      # the thing answering.
+      - name: Verify the deployed build actually serves
+        id: probe
+        run: |
+          set -u
+          PORT=$(grep -E '^PORT=' .env | head -1 | cut -d= -f2- | tr -d '"'"'"' \r' || true)
+          PORT=${PORT:-3000}
+          BASE="http://127.0.0.1:${PORT}"
+          echo "probing $BASE"
+
+          # PM2 has just restarted; give the process a bounded chance to bind
+          # rather than racing it and calling the race a failure.
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$BASE/healthz" || echo 000)
+            [ "$code" = "200" ] && break
+            echo "  attempt $i: /healthz -> $code"
+            sleep 3
+          done
+
+          fail=0
+          check () { # name expected url
+            actual=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$3" || echo 000)
+            if [ "$actual" = "$2" ]; then
+              echo "  OK   $1 -> $actual"
+            else
+              echo "::error::$1 expected $2, got $actual"
+              fail=1
+            fi
+          }
+
+          check "liveness"          200 "$BASE/healthz"
+          check "v1 is mounted"     200 "$BASE/api/v1/catalog"
+          check "v1 requires auth"  401 "$BASE/api/v1/bookings"
+          check "routing precedes auth" 404 "$BASE/zzz-nonexistent-path"
+
+          # The running build is the commit this run built.
+          DEPLOYED=$(node -e 'try{process.stdout.write(require("./dist/BUILD_INFO.json").commit)}catch(e){process.stdout.write("MISSING")}')
+          if [ "$DEPLOYED" != "$GITHUB_SHA" ]; then
+            echo "::error::the build serving traffic is $DEPLOYED, expected $GITHUB_SHA"
+            fail=1
+          else
+            echo "  OK   running commit -> $DEPLOYED"
+          fi
+
+          exit $fail
+
+      # AUTOMATIC ROLLBACK.
+      #
+      # Runs only when the probe failed, so a half-shipped release is restored
+      # rather than left serving. Deliberately re-runs the probe afterwards: a
+      # rollback nobody verified is a second unverified deploy.
+      #
+      # NOT YET REHEARSED ON THE HOST. It is written against the deploy shape
+      # this file describes and has never been executed, because this repository
+      # is worked on without production access. Rehearse it before relying on
+      # it — docs/MASTER_TODO_MANUAL_TASKS.md 03.5.
+      - name: Roll back to the previous build
+        if: failure() && steps.probe.outcome == 'failure'
+        run: |
+          RELEASES=/home/github-runner/releases
+          if [ ! -d "$RELEASES/previous" ]; then
+            echo "::error::post-deploy probe failed and there is NO previous build to restore."
+            echo "Production is running the new build and it did not answer. Intervene manually."
+            exit 1
+          fi
+
+          echo "::warning::post-deploy probe failed — restoring the previous build"
+          rm -rf dist
+          cp -a "$RELEASES/previous" dist
+
+          APP="$(pwd)/dist/app.js"
+          sudo /usr/bin/pm2 stop servana-prod 2>/dev/null || true
+          sudo /usr/bin/pm2 delete servana-prod 2>/dev/null || true
+          sudo /usr/bin/pm2 start "$APP" --name servana-prod
+          sudo /usr/bin/pm2 save --force
+
+          PORT=$(grep -E '^PORT=' .env | head -1 | cut -d= -f2- | tr -d '"'"'"' \r' || true)
+          PORT=${PORT:-3000}
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${PORT}/healthz" || echo 000)
+            [ "$code" = "200" ] && break
+            sleep 3
+          done
+          if [ "$code" != "200" ]; then
+            echo "::error::ROLLBACK DID NOT RECOVER. /healthz -> $code. Manual intervention required."
+            exit 1
+          fi
+          echo "::warning::rolled back successfully; production is serving the PREVIOUS build."
+
+          # The run still fails. A rollback is a recovered incident, not a
+          # successful deploy, and a green tick here would hide it.
+          exit 1
+
+      # The schema is NOT rolled back, and pretending otherwise would be worse
+      # than saying so. Migrations run before the restart and are additive by
+      # policy; the previous build tolerates the newer schema, which is the
+      # whole reason that ordering was chosen. A migration that is not
+      # backward-tolerable must not ship in the same deploy as code that needs
+      # it — that is a two-deploy change, and this file cannot enforce it.
+      - name: Note the rollback boundary
+        if: always()
+        run: echo "Rollback restores the BUILD only. Applied migrations stay applied — see docs/audits/TAB03_DEPLOY_GATING.md"
+
