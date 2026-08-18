@@ -34,15 +34,15 @@ installed.
 
 | | |
 | --- | --- |
-| Legacy mappings tracked | 115 |
-| In the retirement plan | 96 |
+| Legacy mappings tracked | 117 |
+| In the retirement plan | 98 |
 | `KEEP` (not a duplicate of anything) | 6 |
 | `ROLE_SPECIFIC` (different auth/action, same service) | 13 |
-| `ALIAS_TEMPORARILY` | 86 |
-| `CANONICALIZE` | 9 |
+| `ALIAS_TEMPORARILY` | 87 |
+| `CANONICALIZE` | 10 |
 | `RETIRE` | 1 |
 | **Retirable today** | **0** |
-| Blocked | 96 |
+| Blocked | 98 |
 
 Nothing is retirable today, and the reason is the same for all of them: no client has migrated, because the v1 namespace is not deployed. The schedule is the order things become retirable, not a queue of pending deletions.
 
@@ -90,10 +90,12 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `GET /api/catalog/services` | ALIAS_TEMPORARILY | `catalog.services.list` | Customer Mobile, Customer Web have not migrated | 90d |
 | `GET /api/catalog/services/:serviceId` | ALIAS_TEMPORARILY | `catalog.services.get` | Customer Mobile, Customer Web have not migrated | 90d |
 | `GET /api/catalog/summary` | ALIAS_TEMPORARILY | `catalog.summary` | Customer Mobile, Customer Web have not migrated | 90d |
+| `POST /api/chat/attachments/upload` | CANONICALIZE | `conversations.attachments.create` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 90d |
 | `GET /api/chat/conversations` | ALIAS_TEMPORARILY | `conversations.list` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `GET /api/chat/conversations/:id` | ALIAS_TEMPORARILY | `conversations.get` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `GET /api/chat/conversations/:id/messages` | ALIAS_TEMPORARILY | `conversations.messages.list` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `POST /api/chat/conversations/:id/messages` | ALIAS_TEMPORARILY | `conversations.messages.create` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
+| `POST /api/chat/conversations/:id/messages/:msgId/report` | ALIAS_TEMPORARILY | `conversations.messages.report` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/chat/conversations/:id/read` | ALIAS_TEMPORARILY | `conversations.read` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `POST /api/provider/bookings/:bookingId/cancel` | ALIAS_TEMPORARILY | `provider.jobs.cancel` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.list` | Provider Mobile, Provider Web have not migrated | 90d |

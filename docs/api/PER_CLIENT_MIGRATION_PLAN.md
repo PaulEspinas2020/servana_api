@@ -14,7 +14,7 @@
 > [`CROSS_CLIENT_MIGRATION_PLAN.md`](CROSS_CLIENT_MIGRATION_PLAN.md), which is
 > hand-written because an argument is not derivable. This is what each client
 > actually has to change, and it is generated because a hand-maintained list of
-> 96 endpoints across five clients is stale the day after it is written.
+> 98 endpoints across five clients is stale the day after it is written.
 
 ## How to read this
 
@@ -34,17 +34,18 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 34 |
+| Capabilities that apply | 35 |
 | Already on canonical | 0 |
 | Still on a legacy route | 13 |
 | Partially migrated | 1 |
-| No equivalent called today | 20 |
+| No equivalent called today | 21 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
 | Additional work | planned | `GET /api/additional/booking/:bookingId`, `POST /api/additional/request/:userId` | `POST /api/v1/bookings/:bookingId/additional-work`, `GET /api/v1/bookings/:bookingId/additional-work` |
 | Admin ledger reconciliation | legacy | `GET /api/admin/finance/reconciliation/exceptions` | `GET /api/v1/admin/finance/reconciliation` |
 | Advance the read pointer | legacy | `POST /api/chat/conversations/:id/read` | `POST /api/v1/conversations/:conversationId/read` |
+| Attach a file to a conversation | planned | `POST /api/chat/attachments/upload` | `POST /api/v1/conversations/:conversationId/attachments` |
 | Booking codes (OTP) | planned | `POST /api/:bookingId/resend-otp`, `POST /api/:id/confirm-otp` | `POST /api/v1/bookings/:bookingId/otp/request`, `POST /api/v1/bookings/:bookingId/otp/verify` |
 | Disputes | ⚠ mixed | `POST /api/admin/bookings/:id/escalate` | `POST /api/v1/bookings/:bookingId/disputes`, `GET /api/v1/bookings/:bookingId/disputes` |
 | How many unread I have | planned | `GET /api/user/notifications/unread-count` | `GET /api/v1/notifications/unread-count` |
@@ -84,17 +85,18 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 37 |
+| Capabilities that apply | 39 |
 | Already on canonical | 0 |
 | Still on a legacy route | 25 |
 | Partially migrated | 1 |
-| No equivalent called today | 11 |
+| No equivalent called today | 13 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
 | A provider's own job queue | legacy | `GET /api/worker/job-cards`, `GET /api/worker/job-cards/:bookingId`, `GET /api/workers/:workerId/job-cards` | `GET /api/v1/provider/jobs`, `GET /api/v1/provider/jobs/:bookingId` |
 | Additional work | legacy | `GET /api/additional/booking/:bookingId`, `POST /api/additional/request/:userId` | `POST /api/v1/bookings/:bookingId/additional-work`, `GET /api/v1/bookings/:bookingId/additional-work` |
 | Advance the read pointer | legacy | `POST /api/chat/conversations/:id/read` | `POST /api/v1/conversations/:conversationId/read` |
+| Attach a file to a conversation | planned | `POST /api/chat/attachments/upload` | `POST /api/v1/conversations/:conversationId/attachments` |
 | Booking codes (OTP) | planned | `POST /api/:bookingId/resend-otp`, `POST /api/:id/confirm-otp` | `POST /api/v1/bookings/:bookingId/otp/request`, `POST /api/v1/bookings/:bookingId/otp/verify` |
 | Cancellation | legacy | `POST /api/bookings/:id/cancel`, `POST /api/provider/bookings/:bookingId/cancel` | `POST /api/v1/bookings/:bookingId/cancel`, `POST /api/v1/provider/jobs/:bookingId/cancel` |
 | Dismiss one notification | legacy | `DELETE /api/provider/notifications/:key` | `DELETE /api/v1/notifications/:key` |
@@ -126,6 +128,7 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Recover an account and verify a contact | ⚠ mixed | `GET /api/auth/resendverification`, `POST /api/auth/forgot-password`, `POST /api/auth/resend-email-otp`, `POST /api/auth/reset-password`, `POST /api/auth/verify-email-otp` | `POST /api/v1/auth/forgot-password`, `POST /api/v1/auth/reset-password`, `POST /api/v1/auth/verify-email`, `POST /api/v1/auth/resend-verification`, `POST /api/v1/auth/verify-mobile` |
 | Register and release this device for push | legacy | `DELETE /api/provider/fcm-token`, `DELETE /api/user/fcm-token`, `POST /api/provider/fcm-token`, `POST /api/user/fcm-token` | `POST /api/v1/me/devices`, `DELETE /api/v1/me/devices` |
 | Register, sign in, and end a session | legacy | `POST /api/auth/admin-signin`, `POST /api/auth/firebase-login`, `POST /api/auth/logout`, `POST /api/auth/provider/register`, `POST /api/auth/refresh`, `POST /api/auth/signin`, `POST /api/auth/signup` | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` |
+| Report a message to moderation | planned | `POST /api/chat/conversations/:id/messages/:msgId/report` | `POST /api/v1/conversations/:conversationId/messages/:messageId/report` |
 | Send a message | legacy | `POST /api/chat/conversations/:id/messages` | `POST /api/v1/conversations/:conversationId/messages` |
 | Tracking | planned | `GET /api/:id/tracking`, `GET /api/booking/:bookingId/provider-location` | `GET /api/v1/bookings/:bookingId/tracking` |
 | What is left before my account is usable | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/completion` |
@@ -137,17 +140,18 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 44 |
+| Capabilities that apply | 46 |
 | Already on canonical | 0 |
 | Still on a legacy route | 17 |
 | Partially migrated | 4 |
-| No equivalent called today | 23 |
+| No equivalent called today | 25 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
 | A provider's rating summary | planned | `GET /api/providers/:providerUid/rating` | `GET /api/v1/reviews/providers/:providerUid/rating` |
 | Additional work | planned | `GET /api/additional/booking/:bookingId`, `POST /api/additional/request/:userId` | `POST /api/v1/bookings/:bookingId/additional-work`, `GET /api/v1/bookings/:bookingId/additional-work` |
 | Advance the read pointer | legacy | `POST /api/chat/conversations/:id/read` | `POST /api/v1/conversations/:conversationId/read` |
+| Attach a file to a conversation | planned | `POST /api/chat/attachments/upload` | `POST /api/v1/conversations/:conversationId/attachments` |
 | Booking codes (OTP) | planned | `POST /api/:bookingId/resend-otp`, `POST /api/:id/confirm-otp` | `POST /api/v1/bookings/:bookingId/otp/request`, `POST /api/v1/bookings/:bookingId/otp/verify` |
 | Browse the service catalog | planned | `GET /api/:serviceId/options-with-addons`, `GET /api/catalog`, `GET /api/catalog/services`, `GET /api/catalog/services/:serviceId`, `GET /api/catalog/summary`, `GET /api/services/:serviceId/level2`, `GET /api/services/:serviceId/options-with-addons`, `GET /api/services/full` | `GET /api/v1/catalog`, `GET /api/v1/catalog/summary`, `GET /api/v1/catalog/categories`, `GET /api/v1/catalog/categories/:categoryId`, `GET /api/v1/catalog/categories/:categoryId/subcategories`, `GET /api/v1/catalog/subcategories/:subcategoryId`, `GET /api/v1/catalog/subcategories/:subcategoryId/services`, `GET /api/v1/catalog/services`, `GET /api/v1/catalog/services/:serviceId` |
 | Cancellation | legacy | `POST /api/bookings/:id/cancel`, `POST /api/provider/bookings/:bookingId/cancel` | `POST /api/v1/bookings/:bookingId/cancel`, `POST /api/v1/provider/jobs/:bookingId/cancel` |
@@ -180,6 +184,7 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Refund a booking payment | planned | `POST /api/admin/finance/refunds` | `POST /api/v1/bookings/:bookingId/refunds` |
 | Register and release this device for push | planned | `DELETE /api/provider/fcm-token`, `DELETE /api/user/fcm-token`, `POST /api/provider/fcm-token`, `POST /api/user/fcm-token` | `POST /api/v1/me/devices`, `DELETE /api/v1/me/devices` |
 | Register, sign in, and end a session | ⚠ mixed | `POST /api/auth/admin-signin`, `POST /api/auth/firebase-login`, `POST /api/auth/logout`, `POST /api/auth/provider/register`, `POST /api/auth/refresh`, `POST /api/auth/signin`, `POST /api/auth/signup` | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` |
+| Report a message to moderation | planned | `POST /api/chat/conversations/:id/messages/:msgId/report` | `POST /api/v1/conversations/:conversationId/messages/:messageId/report` |
 | Reschedule | planned | `POST /api/admin/bookings/:id/reschedule` | `POST /api/v1/bookings/:bookingId/reschedule` |
 | Review a completed booking | legacy | `POST /api/bookings/:bookingId/reviews` | `POST /api/v1/bookings/:bookingId/review` |
 | Search services | planned | `GET /api/services/full` | `GET /api/v1/search`, `GET /api/v1/catalog/search` |
@@ -197,17 +202,18 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 38 |
+| Capabilities that apply | 40 |
 | Already on canonical | 0 |
 | Still on a legacy route | 22 |
 | Partially migrated | 4 |
-| No equivalent called today | 12 |
+| No equivalent called today | 14 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
 | A provider's own job queue | ⚠ mixed | `GET /api/worker/job-cards`, `GET /api/worker/job-cards/:bookingId`, `GET /api/workers/:workerId/job-cards` | `GET /api/v1/provider/jobs`, `GET /api/v1/provider/jobs/:bookingId` |
 | Additional work | planned | `GET /api/additional/booking/:bookingId`, `POST /api/additional/request/:userId` | `POST /api/v1/bookings/:bookingId/additional-work`, `GET /api/v1/bookings/:bookingId/additional-work` |
 | Advance the read pointer | legacy | `POST /api/chat/conversations/:id/read` | `POST /api/v1/conversations/:conversationId/read` |
+| Attach a file to a conversation | planned | `POST /api/chat/attachments/upload` | `POST /api/v1/conversations/:conversationId/attachments` |
 | Booking codes (OTP) | planned | `POST /api/:bookingId/resend-otp`, `POST /api/:id/confirm-otp` | `POST /api/v1/bookings/:bookingId/otp/request`, `POST /api/v1/bookings/:bookingId/otp/verify` |
 | Browse the service catalog | legacy | `GET /api/:serviceId/options-with-addons`, `GET /api/catalog`, `GET /api/catalog/services`, `GET /api/catalog/services/:serviceId`, `GET /api/catalog/summary`, `GET /api/services/:serviceId/level2`, `GET /api/services/:serviceId/options-with-addons`, `GET /api/services/full` | `GET /api/v1/catalog`, `GET /api/v1/catalog/summary`, `GET /api/v1/catalog/categories`, `GET /api/v1/catalog/categories/:categoryId`, `GET /api/v1/catalog/categories/:categoryId/subcategories`, `GET /api/v1/catalog/subcategories/:subcategoryId`, `GET /api/v1/catalog/subcategories/:subcategoryId/services`, `GET /api/v1/catalog/services`, `GET /api/v1/catalog/services/:serviceId` |
 | Cancellation | legacy | `POST /api/bookings/:id/cancel`, `POST /api/provider/bookings/:bookingId/cancel` | `POST /api/v1/bookings/:bookingId/cancel`, `POST /api/v1/provider/jobs/:bookingId/cancel` |
@@ -240,6 +246,7 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Recover an account and verify a contact | ⚠ mixed | `GET /api/auth/resendverification`, `POST /api/auth/forgot-password`, `POST /api/auth/resend-email-otp`, `POST /api/auth/reset-password`, `POST /api/auth/verify-email-otp` | `POST /api/v1/auth/forgot-password`, `POST /api/v1/auth/reset-password`, `POST /api/v1/auth/verify-email`, `POST /api/v1/auth/resend-verification`, `POST /api/v1/auth/verify-mobile` |
 | Register and release this device for push | legacy | `DELETE /api/provider/fcm-token`, `DELETE /api/user/fcm-token`, `POST /api/provider/fcm-token`, `POST /api/user/fcm-token` | `POST /api/v1/me/devices`, `DELETE /api/v1/me/devices` |
 | Register, sign in, and end a session | legacy | `POST /api/auth/admin-signin`, `POST /api/auth/firebase-login`, `POST /api/auth/logout`, `POST /api/auth/provider/register`, `POST /api/auth/refresh`, `POST /api/auth/signin`, `POST /api/auth/signup` | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` |
+| Report a message to moderation | planned | `POST /api/chat/conversations/:id/messages/:msgId/report` | `POST /api/v1/conversations/:conversationId/messages/:messageId/report` |
 | Send a message | legacy | `POST /api/chat/conversations/:id/messages` | `POST /api/v1/conversations/:conversationId/messages` |
 | Tracking | planned | `GET /api/:id/tracking`, `GET /api/booking/:bookingId/provider-location` | `GET /api/v1/bookings/:bookingId/tracking` |
 | What is left before my account is usable | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/completion` |
@@ -251,17 +258,18 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 44 |
+| Capabilities that apply | 46 |
 | Already on canonical | 0 |
 | Still on a legacy route | 20 |
 | Partially migrated | 5 |
-| No equivalent called today | 19 |
+| No equivalent called today | 21 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
 | A provider's rating summary | planned | `GET /api/providers/:providerUid/rating` | `GET /api/v1/reviews/providers/:providerUid/rating` |
 | Additional work | planned | `GET /api/additional/booking/:bookingId`, `POST /api/additional/request/:userId` | `POST /api/v1/bookings/:bookingId/additional-work`, `GET /api/v1/bookings/:bookingId/additional-work` |
 | Advance the read pointer | legacy | `POST /api/chat/conversations/:id/read` | `POST /api/v1/conversations/:conversationId/read` |
+| Attach a file to a conversation | planned | `POST /api/chat/attachments/upload` | `POST /api/v1/conversations/:conversationId/attachments` |
 | Booking codes (OTP) | legacy | `POST /api/:bookingId/resend-otp`, `POST /api/:id/confirm-otp` | `POST /api/v1/bookings/:bookingId/otp/request`, `POST /api/v1/bookings/:bookingId/otp/verify` |
 | Browse the service catalog | ⚠ mixed | `GET /api/:serviceId/options-with-addons`, `GET /api/catalog`, `GET /api/catalog/services`, `GET /api/catalog/services/:serviceId`, `GET /api/catalog/summary`, `GET /api/services/:serviceId/level2`, `GET /api/services/:serviceId/options-with-addons`, `GET /api/services/full` | `GET /api/v1/catalog`, `GET /api/v1/catalog/summary`, `GET /api/v1/catalog/categories`, `GET /api/v1/catalog/categories/:categoryId`, `GET /api/v1/catalog/categories/:categoryId/subcategories`, `GET /api/v1/catalog/subcategories/:subcategoryId`, `GET /api/v1/catalog/subcategories/:subcategoryId/services`, `GET /api/v1/catalog/services`, `GET /api/v1/catalog/services/:serviceId` |
 | Cancellation | legacy | `POST /api/bookings/:id/cancel`, `POST /api/provider/bookings/:bookingId/cancel` | `POST /api/v1/bookings/:bookingId/cancel`, `POST /api/v1/provider/jobs/:bookingId/cancel` |
@@ -294,6 +302,7 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Refund a booking payment | planned | `POST /api/admin/finance/refunds` | `POST /api/v1/bookings/:bookingId/refunds` |
 | Register and release this device for push | legacy | `DELETE /api/provider/fcm-token`, `DELETE /api/user/fcm-token`, `POST /api/provider/fcm-token`, `POST /api/user/fcm-token` | `POST /api/v1/me/devices`, `DELETE /api/v1/me/devices` |
 | Register, sign in, and end a session | legacy | `POST /api/auth/admin-signin`, `POST /api/auth/firebase-login`, `POST /api/auth/logout`, `POST /api/auth/provider/register`, `POST /api/auth/refresh`, `POST /api/auth/signin`, `POST /api/auth/signup` | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` |
+| Report a message to moderation | planned | `POST /api/chat/conversations/:id/messages/:msgId/report` | `POST /api/v1/conversations/:conversationId/messages/:messageId/report` |
 | Reschedule | planned | `POST /api/admin/bookings/:id/reschedule` | `POST /api/v1/bookings/:bookingId/reschedule` |
 | Review a completed booking | legacy | `POST /api/bookings/:bookingId/reviews` | `POST /api/v1/bookings/:bookingId/review` |
 | Search services | ⚠ mixed | `GET /api/services/full` | `GET /api/v1/search`, `GET /api/v1/catalog/search` |

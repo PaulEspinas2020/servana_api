@@ -882,6 +882,44 @@ export const MESSAGING_CAPABILITIES: readonly MessagingCapability[] = Object.fre
       'same idempotency, validation and attachment rules as anyone else\'s.',
   },
   {
+    key: 'attach',
+    title: 'Attach a file to a conversation',
+    contractIds: ['conversations.attachments.create'],
+    domainModule: 'chat/chat.service.uploadAttachment',
+    surfaces: Object.freeze([
+      'customerMobile',
+      'customerWeb',
+      'providerMobile',
+      'providerWeb',
+      'admin',
+    ] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split, and the conversation is named by the PATH rather than the body. That ' +
+      'is the difference that matters: the legacy route took it as an optional body field ' +
+      'and ran the access check only when the caller supplied one, so omitting it stored a ' +
+      'file and returned a URL without any conversation being consulted. The allowlist and ' +
+      'the size ceiling are checked by file SIGNATURE, so a renamed executable is refused on ' +
+      'its contents rather than on its declared type.',
+  },
+  {
+    key: 'report',
+    title: 'Report a message to moderation',
+    contractIds: ['conversations.messages.report'],
+    domainModule: 'chat/chat.service.reportMessage',
+    surfaces: Object.freeze([
+      'customerMobile',
+      'customerWeb',
+      'providerMobile',
+      'providerWeb',
+    ] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split among the four participant surfaces. Admin is deliberately absent: ' +
+      'staff act on reports through the admin communications routes, which are permissioned ' +
+      'and audited, and an admin filing a participant report would enter the same queue they ' +
+      'resolve. The reporter is the token subject, so no request can file one as somebody ' +
+      'else.',
+  },
+  {
     key: 'markRead',
     title: 'Advance the read pointer',
     contractIds: ['conversations.read'],

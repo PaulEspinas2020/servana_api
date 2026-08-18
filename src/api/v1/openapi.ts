@@ -772,6 +772,12 @@ export const SCHEMAS: Record<string, unknown> = {
       allowed: { type: 'boolean' },
       changed: { type: 'boolean' },
       marked: { type: 'boolean' },
+      supported: {
+        type: 'boolean',
+        description:
+          'False when the notification store this caller reads has no such capability at ' +
+          'all - distinct from `allowed`, which is a per-row policy the sender set.',
+      },
       unreadCount: {
         type: 'integer',
         description:
@@ -779,6 +785,51 @@ export const SCHEMAS: Record<string, unknown> = {
           'decrement a number it inferred.',
       },
     },
+  },
+
+  ChatAttachmentUpload: {
+    type: 'object',
+    required: ['file', 'name'],
+    description:
+      'A data URI and a filename. The conversation is named by the PATH, not by the body - ' +
+      'on the legacy route it was an optional body field and omitting it skipped the access ' +
+      'check entirely.',
+    properties: {
+      file: { type: 'string', description: 'data: URI. Validated by signature, not by its declared type.' },
+      name: { type: 'string', description: 'Sanitised before storage; never used as the storage key.' },
+    },
+  },
+
+  MessageReportRequest: {
+    type: 'object',
+    required: ['category'],
+    properties: {
+      category: {
+        type: 'string',
+        description: 'Lower snake_case, 2-40 chars. A free-form category would be an unqueryable moderation queue.',
+      },
+      description: { type: 'string', description: 'Optional. 1000 characters maximum.' },
+    },
+  },
+
+  ChatAttachment: {
+    type: 'object',
+    description:
+      'A stored chat attachment. `attachmentId` and `previewUrl` are what a subsequent ' +
+      'send references; the file is validated by signature, not by its declared type.',
+    properties: {
+      attachmentId: { type: 'string' },
+      previewUrl: { type: 'string' },
+      fileName: { type: 'string', description: 'Sanitised. Never the raw filename as supplied.' },
+      mimeType: { type: 'string' },
+      sizeBytes: { type: 'integer' },
+    },
+  },
+
+  MessageReport: {
+    type: 'object',
+    description: 'The receipt for a message reported to moderation.',
+    properties: { reportId: { type: 'string' } },
   },
 
   NotificationPreferencePatch: {

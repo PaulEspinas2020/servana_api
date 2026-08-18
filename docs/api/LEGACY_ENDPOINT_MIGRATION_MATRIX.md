@@ -7,11 +7,11 @@ Every route the app mounts outside `/api/v1`: **520**.
 
 | Disposition | Count | Meaning |
 |---|---:|---|
-| `ALIAS_TEMPORARILY` | 81 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
-| `CANONICALIZE` | 8 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
+| `ALIAS_TEMPORARILY` | 82 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
+| `CANONICALIZE` | 9 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
 | `ROLE_SPECIFIC` | 13 | Legitimately separate: different auth, action or payload — same domain service. |
 | `RETIRE` | 1 | No caller and no successor. Delete once telemetry confirms zero traffic. |
-| `KEEP` | 417 | Not a duplicate of anything canonical. Untouched by this command. |
+| `KEEP` | 415 | Not a duplicate of anything canonical. Untouched by this command. |
 
 ## Retirement criteria
 
@@ -27,7 +27,7 @@ build knows how to call.
 
 Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 
-## ALIAS_TEMPORARILY (81)
+## ALIAS_TEMPORARILY (82)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
@@ -79,6 +79,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `GET` | `/api/chat/conversations/:id/messages` | `/api/v1/conversations/:conversationId/messages` | The live transcript read, now a narrower projection of the SAME page reader — same authorization, same read floor, same builder. Its cursor parameter is called `before`; the canonical one is `cursor`, and both mean the same message id. |
 | `POST` | `/api/chat/conversations/:id/messages` | `/api/v1/conversations/:conversationId/messages` | The live send for all four apps. IDENTICAL domain call — this entry is a second URL onto one write, not a second write path. |
 | `POST` | `/api/chat/conversations/:id/read` | `/api/v1/conversations/:conversationId/read` | The live read-pointer call, which answers `{ success: true }` and nothing else. The canonical one returns the resulting unread count, so a client stops having to guess what its badge should now say. |
+| `POST` | `/api/chat/conversations/:id/messages/:msgId/report` | `/api/v1/conversations/:conversationId/messages/:messageId/report` | IDENTICAL domain call. This entry is a second URL onto one write, in the resource shape the rest of the conversations domain already uses. |
 | `GET` | `/api/provider/profile` | `/api/v1/provider/profile` | The live provider profile, built inline in a controller with a hand-written column list. Safe only for as long as nobody adds a column; the canonical route emits the fields the policy says this seat may read. |
 | `POST` | `/api/provider/public-profile-revisions` | `/api/v1/provider/profile` | The live revision submit. IDENTICAL domain call - this is a second URL onto one workflow. |
 | `GET` | `/api/provider/documents` | `/api/v1/provider/documents` | The live document list. Same `worker_requirements` model - the command is explicit that provider_documents must not be invented, and it does not exist. |
@@ -113,13 +114,14 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `GET` | `/api/providers/:providerUid/reviews` | `/api/v1/reviews/providers/:providerUid` | Same service. The legacy form does not clamp limit/offset; v1 does (BE-10). |
 | `GET` | `/api/providers/:providerUid/rating` | `/api/v1/reviews/providers/:providerUid/rating` | Same service. Kept because it sits beside the reviews list that a future customer client may already be calling; retiring one without the other would be half a change. |
 
-## CANONICALIZE (8)
+## CANONICALIZE (9)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
 | `GET` | `/api/services/full` | `/api/v1/catalog` | The legacy LEVEL-2/LEVEL-3 projection the customer app reads today. Cannot be retired until ServanaClient migrates: it is the only catalog either Flutter app has ever consumed. |
 | `GET` | `/api/services/:serviceId/level2` | `/api/v1/catalog/categories/:categoryId/subcategories` | The legacy equivalent, and NOT a rename. Its `:serviceId` is a service_families.id and it returns DISTINCT level_2 STRINGS with no ids at all. This route takes a catalog_categories.id and returns identified Subcategories. Different input, different output, different table. |
 | `GET` | `/api/services/:serviceId/options-with-addons` | `/api/v1/catalog/subcategories/:subcategoryId/services` | The legacy shape. Its `:serviceId` is a service_families.id and it returns level_2 / level_3 option groups, not Services. ServanaWorker calls the un-prefixed twin instead, which is the only catalog route without the /services/ prefix its neighbours use. |
+| `POST` | `/api/chat/attachments/upload` | `/api/v1/conversations/:conversationId/attachments` | The legacy route takes the conversation as an OPTIONAL body field and checks access only when it is present, so omitting it stored a file and returned a URL with no conversation consulted. This route carries the id in its path, so the check cannot be declined. Same validation, same storage call — `chat.service.uploadAttachment` is now the one implementation and the legacy controller delegates to it. |
 | `DELETE` | `/api/provider/notifications/:key` | `/api/v1/notifications/:key` | The provider inbox had list, read, read-all and dismiss; v1 took the first three and left dismiss behind, so every provider client kept one legacy call for one verb. The legacy route is provider-only and reaches provider_notifications directly; this one resolves the store from the caller, so a CUSTOMER can dismiss for the first time. |
 | `GET` | `/api/admin/bookings` | `/api/v1/admin/bookings` | The admin portal is the only caller and deploys from git on every push, so it is the cheapest client to migrate — but it is also the only one whose list carries permission-scoped columns, so the DTO needs the permission model resolved first. |
 | `GET` | `/api/admin/bookings/:id/assignment-candidates` | `/api/v1/admin/bookings/:bookingId/assignment-candidates` | Live, and the only caller is the admin portal. Already returns the canonical pool plus its diagnostics; the diagnostics are a sibling key so the array under `data` stays exactly what the portal parses today. |
@@ -150,7 +152,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 |---|---|---|---|
 | `GET` | `/api/workers/:uid/earnings-history` | `/api/v1/provider/earnings/transactions` | Takes the provider uid from the URL and has no auth, so it answers for anybody. No located caller in any of the five clients. Carried over from the planned placeholder this entry replaces; delete once telemetry confirms zero traffic. |
 
-## KEEP (417)
+## KEEP (415)
 
 Mounted, not superseded, not a duplicate. Listed so the inventory is complete and so a
 later domain command starts from a route list rather than from a grep.
@@ -209,8 +211,6 @@ later domain command starts from a route list rather than from a grep.
 | `PATCH` | `/api/chat/conversations/:id/messages/:msgId` | `src/chat/chat.routes.ts:20` |
 | `DELETE` | `/api/chat/conversations/:id/messages/:msgId` | `src/chat/chat.routes.ts:21` |
 | `POST` | `/api/chat/conversations/:id/close` | `src/chat/chat.routes.ts:25` |
-| `POST` | `/api/chat/conversations/:id/messages/:msgId/report` | `src/chat/chat.routes.ts:28` |
-| `POST` | `/api/chat/attachments/upload` | `src/chat/chat.routes.ts:31` |
 | `GET` | `/api/admin/disbursements` | `src/routes/disbursement.routes.ts:9` |
 | `GET` | `/api/admin/disbursements/booking/:bookingId` | `src/routes/disbursement.routes.ts:12` |
 | `POST` | `/api/admin/disbursements/:id/retry` | `src/routes/disbursement.routes.ts:15` |

@@ -7164,6 +7164,321 @@
         "description": "Nothing in the body names a sender. `sender_uid` is written from the actor the handler built out of the verified token, and there is no path, query or body parameter that can name another one."
       }
     },
+    "/api/v1/conversations/{conversationId}/attachments": {
+      "post": {
+        "operationId": "conversations.attachments.create",
+        "summary": "Stores one attachment for a conversation the caller may write to.",
+        "tags": [
+          "conversations"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "chat/chat.service.uploadAttachment",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/chat/attachments/upload",
+            "disposition": "CANONICALIZE"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "planned"
+        },
+        "x-observability-owner": "messaging",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conversationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "chat_conversations.id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatAttachmentUpload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ChatAttachment"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CONVERSATION_ACCESS_DENIED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONVERSATION_NOT_WRITABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "MESSAGE_ATTACHMENT_REJECTED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "The MIME allowlist and the 10 MB ceiling are checked by SIGNATURE, not by the declared content type, and the stored filename is sanitised rather than echoed."
+      }
+    },
+    "/api/v1/conversations/{conversationId}/messages/{messageId}/report": {
+      "post": {
+        "operationId": "conversations.messages.report",
+        "summary": "Reports one message in this conversation to moderation.",
+        "tags": [
+          "conversations"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "chat/chat.service.reportMessage",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/chat/conversations/:id/messages/:msgId/report",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "messaging",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conversationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "chat_conversations.id"
+          },
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "chat_messages.id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageReportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MessageReport"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CONVERSATION_ACCESS_DENIED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "MESSAGE_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "MESSAGE_INVALID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "The reporter is the token subject. Nothing in the path or body can name a different one, which is what stops a report being filed as somebody else."
+      }
+    },
     "/api/v1/conversations/{conversationId}/read": {
       "post": {
         "operationId": "conversations.read",
@@ -13004,9 +13319,78 @@
           "marked": {
             "type": "boolean"
           },
+          "supported": {
+            "type": "boolean",
+            "description": "False when the notification store this caller reads has no such capability at all - distinct from `allowed`, which is a per-row policy the sender set."
+          },
           "unreadCount": {
             "type": "integer",
             "description": "The count AFTER the mutation. Returned so a client never has to guess its badge, or decrement a number it inferred."
+          }
+        }
+      },
+      "ChatAttachmentUpload": {
+        "type": "object",
+        "required": [
+          "file",
+          "name"
+        ],
+        "description": "A data URI and a filename. The conversation is named by the PATH, not by the body - on the legacy route it was an optional body field and omitting it skipped the access check entirely.",
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "data: URI. Validated by signature, not by its declared type."
+          },
+          "name": {
+            "type": "string",
+            "description": "Sanitised before storage; never used as the storage key."
+          }
+        }
+      },
+      "MessageReportRequest": {
+        "type": "object",
+        "required": [
+          "category"
+        ],
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "Lower snake_case, 2-40 chars. A free-form category would be an unqueryable moderation queue."
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional. 1000 characters maximum."
+          }
+        }
+      },
+      "ChatAttachment": {
+        "type": "object",
+        "description": "A stored chat attachment. `attachmentId` and `previewUrl` are what a subsequent send references; the file is validated by signature, not by its declared type.",
+        "properties": {
+          "attachmentId": {
+            "type": "string"
+          },
+          "previewUrl": {
+            "type": "string"
+          },
+          "fileName": {
+            "type": "string",
+            "description": "Sanitised. Never the raw filename as supplied."
+          },
+          "mimeType": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer"
+          }
+        }
+      },
+      "MessageReport": {
+        "type": "object",
+        "description": "The receipt for a message reported to moderation.",
+        "properties": {
+          "reportId": {
+            "type": "string"
           }
         }
       },
@@ -16145,6 +16529,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 96,
-  "x-total-count": 100
+  "x-implemented-count": 98,
+  "x-total-count": 102
 }

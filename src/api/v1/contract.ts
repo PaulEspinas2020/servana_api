@@ -2330,6 +2330,87 @@ export const V1_CONTRACT: ContractEntry[] = [
       'can name another one.',
   },
   {
+    id: 'conversations.attachments.create',
+    domain: 'conversations',
+    method: 'post',
+    path: '/conversations/:conversationId/attachments',
+    summary: 'Stores one attachment for a conversation the caller may write to.',
+    auth: 'authenticated',
+    idempotent: false,
+    replayGuard:
+      'None, and none is claimed: a repeat stores a SECOND object under a fresh uuid key. ' +
+      'That is wasted storage, not damage — an attachment is inert until a message ' +
+      'references it, and the send that does reference it carries the idempotency. Bounding ' +
+      'it is the upload rate limit and the 10 MB ceiling, both enforced before any write.',
+    requestSchema: 'ChatAttachmentUpload',
+    responseSchema: 'ChatAttachment',
+    errors: [
+      'VALIDATION_FAILED', 'CONVERSATION_ACCESS_DENIED', 'CONVERSATION_NOT_WRITABLE',
+      'MESSAGE_ATTACHMENT_REJECTED', 'RATE_LIMITED',
+    ],
+    params: [{ name: 'conversationId', type: 'integer', description: 'chat_conversations.id' }],
+    status: 'implemented',
+    domainService: 'chat/chat.service.uploadAttachment',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/chat/attachments/upload',
+        disposition: 'CANONICALIZE',
+        note:
+          'The legacy route takes the conversation as an OPTIONAL body field and checks access ' +
+          'only when it is present, so omitting it stored a file and returned a URL with no ' +
+          'conversation consulted. This route carries the id in its path, so the check cannot ' +
+          'be declined. Same validation, same storage call — `chat.service.uploadAttachment` ' +
+          'is now the one implementation and the legacy controller delegates to it.',
+      },
+    ],
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    observability: 'messaging',
+    notes:
+      'The MIME allowlist and the 10 MB ceiling are checked by SIGNATURE, not by the declared ' +
+      'content type, and the stored filename is sanitised rather than echoed.',
+  },
+  {
+    id: 'conversations.messages.report',
+    domain: 'conversations',
+    method: 'post',
+    path: '/conversations/:conversationId/messages/:messageId/report',
+    summary: 'Reports one message in this conversation to moderation.',
+    auth: 'authenticated',
+    idempotent: false,
+    replayGuard:
+      'None. A second report by the same reporter files a second row, which is a moderation ' +
+      'queue concern rather than a correctness one — the alternative, silently swallowing a ' +
+      'repeat, tells someone reporting an escalating exchange that nothing happened.',
+    requestSchema: 'MessageReportRequest',
+    responseSchema: 'MessageReport',
+    errors: [
+      'VALIDATION_FAILED', 'CONVERSATION_ACCESS_DENIED', 'MESSAGE_NOT_FOUND',
+      'MESSAGE_INVALID', 'RATE_LIMITED',
+    ],
+    params: [
+      { name: 'conversationId', type: 'integer', description: 'chat_conversations.id' },
+      { name: 'messageId', type: 'integer', description: 'chat_messages.id' },
+    ],
+    status: 'implemented',
+    domainService: 'chat/chat.service.reportMessage',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/chat/conversations/:id/messages/:msgId/report',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'IDENTICAL domain call. This entry is a second URL onto one write, in the resource ' +
+          'shape the rest of the conversations domain already uses.',
+      },
+    ],
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'messaging',
+    notes:
+      'The reporter is the token subject. Nothing in the path or body can name a different ' +
+      'one, which is what stops a report being filed as somebody else.',
+  },
+  {
     id: 'conversations.read',
     domain: 'conversations',
     method: 'post',

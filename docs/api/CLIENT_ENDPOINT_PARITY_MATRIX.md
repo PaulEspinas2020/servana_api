@@ -18,11 +18,11 @@
 
 | | |
 | --- | --- |
-| Capabilities | 55 |
-| Canonical endpoints mounted | 96 |
+| Capabilities | 57 |
+| Canonical endpoints mounted | 98 |
 | Canonical endpoints planned | 4 |
-| Legacy mappings tracked | 115 |
-| Converged (one route family) | 49 |
+| Legacy mappings tracked | 117 |
+| Converged (one route family) | 51 |
 | Role-split over ONE service | 4 |
 | Single-surface | 2 |
 | **Divergent (forked truth)** | **0** |
@@ -109,10 +109,12 @@ direction of whoever wrote it.
 | Refund a booking payment | SHARED | planned | planned | — | — | legacy |
 | The composed home surface | SHARED | planned | planned | — | — | — |
 | Which sections exist and what owns each | SHARED | planned | planned | — | — | planned |
+| Attach a file to a conversation | SHARED | planned | planned | planned | planned | planned |
 | Read one conversation and its participants | SHARED | legacy | legacy | legacy | legacy | legacy |
 | List my conversations with unread counts | SHARED | legacy | legacy | legacy | legacy | legacy |
 | Advance the read pointer | SHARED | legacy | legacy | legacy | legacy | legacy |
 | Open (or resolve) a booking conversation | SHARED | legacy | legacy | legacy | legacy | legacy |
+| Report a message to moderation | SHARED | planned | planned | planned | planned | — |
 | Send a message | SHARED | legacy | legacy | legacy | legacy | legacy |
 | Page through a conversation transcript | SHARED | legacy | legacy | legacy | legacy | legacy |
 | Raise a support case about a completed booking | SHARED | planned | planned | — | — | — |
@@ -856,6 +858,20 @@ Legacy still aliased for this capability:
 
 No role split. The registry is metadata about the page, not content: it says which section types exist, what owns each and how long each may be cached. A client uses it to render unknown sections safely; an admin uses it to see what home is made of without reading the source.
 
+### Attach a file to a conversation
+
+- key: `messagingPolicy:attach` · declared in `services/messaging/messagingPolicy`
+- verdict: **SHARED** · domain service: `chat/chat`
+- route families: `/conversations`
+
+Canonical:
+  - `POST /api/v1/conversations/:conversationId/attachments`
+
+Legacy still aliased for this capability:
+  - `POST /api/chat/attachments/upload`
+
+No role split, and the conversation is named by the PATH rather than the body. That is the difference that matters: the legacy route took it as an optional body field and ran the access check only when the caller supplied one, so omitting it stored a file and returned a URL without any conversation being consulted. The allowlist and the size ceiling are checked by file SIGNATURE, so a renamed executable is refused on its contents rather than on its declared type.
+
 ### Read one conversation and its participants
 
 - key: `messagingPolicy:conversationDetail` · declared in `services/messaging/messagingPolicy`
@@ -911,6 +927,20 @@ Legacy still aliased for this capability:
   - `GET /api/bookings/:bookingId/conversation`
 
 No role split. One endpoint, idempotent: it returns the booking's existing conversation or opens it. Who may open one is a policy decision — `mayOpenConversation` — not a second endpoint, so a customer and an admin run the same code and differ only in what the policy allows.
+
+### Report a message to moderation
+
+- key: `messagingPolicy:report` · declared in `services/messaging/messagingPolicy`
+- verdict: **SHARED** · domain service: `chat/chat`
+- route families: `/conversations`
+
+Canonical:
+  - `POST /api/v1/conversations/:conversationId/messages/:messageId/report`
+
+Legacy still aliased for this capability:
+  - `POST /api/chat/conversations/:id/messages/:msgId/report`
+
+No role split among the four participant surfaces. Admin is deliberately absent: staff act on reports through the admin communications routes, which are permissioned and audited, and an admin filing a participant report would enter the same queue they resolve. The reporter is the token subject, so no request can file one as somebody else.
 
 ### Send a message
 

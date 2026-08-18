@@ -1,4 +1,7 @@
 import * as repo from "./chat.repository";
+import { randomUUID } from "crypto";
+import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
+import { validateDataUri, AllowedUploadMime } from "../helpers/fileSignature";
 import { emitToConversation, evictUserFromConversation } from "./chat.realtime";
 import { toCamel } from "../helpers/idGenerator";
 import { notifyAdminsSafely } from '../services/adminNotificationService';
@@ -1082,6 +1085,97 @@ export const markRead = async (
 // ---- Small error helper (carries an HTTP status) ---------------------------
 
 // ---- Message reports -------------------------------------------------------
+
+/**
+ * The chat attachment allowlist and ceiling.
+ *
+ * Lived in `chat.controller` as two module-private constants, so the only way
+ * for a second entry point to honour them was to re-declare them. Exported here
+ * because that is now the point: the v1 route and the legacy route must not be
+ * able to disagree about what a chat attachment may be.
+ */
+export const ALLOWED_CHAT_MIMES: readonly AllowedUploadMime[] = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/pdf",
+];
+
+export const MAX_CHAT_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+export interface AttachmentUploadResult {
+  attachmentId: string;
+  previewUrl: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+/**
+ * Validate, store and describe one chat attachment.
+ *
+ * ## Why this moved out of the controller
+ *
+ * Every byte of this was inline in `chat.controller.uploadAttachment`, which
+ * meant the v1 endpoint had two options: call the legacy controller, or copy
+ * the validation. A copy of a MIME allowlist and a size ceiling is the shape of
+ * duplication that drifts silently and is only discovered by the file that gets
+ * through.
+ *
+ * ## The access check is no longer optional
+ *
+ * The legacy handler checks conversation access only `if (rawConversationId
+ * !== undefined)` — the caller decides whether to be checked. Omitting the
+ * field skipped the check entirely and still returned a stored file and a URL.
+ * Here `conversationId` is a required argument, so the check always runs, and
+ * the v1 route carries it in the PATH where it cannot be left out.
+ *
+ * Legacy keeps its optional parameter and its exact behaviour: this function
+ * takes `conversationId: number | null` and the legacy controller passes null
+ * when the client omitted it. Same code, same answer, and the tightening is
+ * bound to the new route rather than applied retroactively to shipped clients.
+ */
+export const uploadAttachment = async (
+  actor: ChatActor,
+  conversationId: number | null,
+  input: { file: unknown; name: unknown },
+): Promise<AttachmentUploadResult> => {
+  const { file, name } = input;
+  if (!file || !name) {
+    throw httpError(400, "file (data URI) and name are required", 'ATTACHMENT_REJECTED');
+  }
+
+  const validation = validateDataUri(file, {
+    allowed: ALLOWED_CHAT_MIMES,
+    maxBytes: MAX_CHAT_ATTACHMENT_BYTES,
+  });
+  if (!validation.ok) {
+    throw httpError(422, validation.message, 'ATTACHMENT_REJECTED');
+  }
+
+  if (conversationId !== null) {
+    const { access } = await resolveAccessForConversation(actor, conversationId);
+    if (!access.allowed || !access.canSend) {
+      throw httpError(403, 'Cannot upload to this conversation', 'CONVERSATION_ACCESS_DENIED');
+    }
+  }
+
+  const sanitizedName =
+    String(name).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100) || 'attachment';
+  const storageKey = `${actor.uid}_${randomUUID()}`;
+  // `file` is `unknown` at the boundary and `validateDataUri` above has already
+  // proven it is a well-formed data URI of an allowed type and size. Narrowing
+  // here rather than widening the uploader's parameter keeps that proof local.
+  const previewUrl = await uploadFileToStorage("chat-attachments", storageKey, String(file));
+
+  return {
+    attachmentId: storageKey,
+    previewUrl,
+    fileName: sanitizedName,
+    mimeType: validation.mime,
+    sizeBytes: validation.bytes,
+  };
+};
 
 export const reportMessage = async (
   actor: ChatActor,

@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**96 implemented** · **4 planned** · 100 total.
+**98 implemented** · **4 planned** · 102 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -1011,6 +1011,8 @@ The section registry: what the page is made of and what owns each part.
 | `GET` | `/api/v1/conversations/:conversationId` | **live** | any signed-in | — | `Conversation` | yes | messaging |
 | `GET` | `/api/v1/conversations/:conversationId/messages` | **live** | any signed-in | — | `MessagePage` | yes | messaging |
 | `POST` | `/api/v1/conversations/:conversationId/messages` | **live** | any signed-in | `SendMessageRequest` | `Message` | no | messaging |
+| `POST` | `/api/v1/conversations/:conversationId/attachments` | **live** | any signed-in | `ChatAttachmentUpload` | `ChatAttachment` | no | messaging |
+| `POST` | `/api/v1/conversations/:conversationId/messages/:messageId/report` | **live** | any signed-in | `MessageReportRequest` | `MessageReport` | no | messaging |
 | `POST` | `/api/v1/conversations/:conversationId/read` | **live** | any signed-in | `MarkReadRequest` | `ConversationReadState` | yes | messaging |
 
 ### `POST /api/v1/conversations`
@@ -1080,6 +1082,32 @@ Sends a message. The sender is the authenticated caller.
 - **Legacy it replaces**
   - `POST /api/chat/conversations/:id/messages` — **ALIAS_TEMPORARILY** — The live send for all four apps. IDENTICAL domain call — this entry is a second URL onto one write, not a second write path.
   - `POST /api/admin/communications/conversations/:id/messages` — **ROLE_SPECIFIC** — The admin send. Permissioned and audited, and it already delegates to `chat.service.sendMessage`, so an admin message obeys the same idempotency, validation and attachment rules as anyone else's.
+
+### `POST /api/v1/conversations/:conversationId/attachments`
+
+Stores one attachment for a conversation the caller may write to.
+
+> The MIME allowlist and the 10 MB ceiling are checked by SIGNATURE, not by the declared content type, and the stored filename is sanitised rather than echoed.
+
+- **Domain service** — `chat/chat.service.uploadAttachment`
+- **Error codes** — `CONVERSATION_ACCESS_DENIED`, `CONVERSATION_NOT_WRITABLE`, `INTERNAL`, `MESSAGE_ATTACHMENT_REJECTED`, `RATE_LIMITED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `conversationId` (integer) chat_conversations.id
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin ·
+- **Legacy it replaces**
+  - `POST /api/chat/attachments/upload` — **CANONICALIZE** — The legacy route takes the conversation as an OPTIONAL body field and checks access only when it is present, so omitting it stored a file and returned a URL with no conversation consulted. This route carries the id in its path, so the check cannot be declined. Same validation, same storage call — `chat.service.uploadAttachment` is now the one implementation and the legacy controller delegates to it.
+
+### `POST /api/v1/conversations/:conversationId/messages/:messageId/report`
+
+Reports one message in this conversation to moderation.
+
+> The reporter is the token subject. Nothing in the path or body can name a different one, which is what stops a report being filed as somebody else.
+
+- **Domain service** — `chat/chat.service.reportMessage`
+- **Error codes** — `CONVERSATION_ACCESS_DENIED`, `INTERNAL`, `MESSAGE_INVALID`, `MESSAGE_NOT_FOUND`, `RATE_LIMITED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `conversationId` (integer) chat_conversations.id; `messageId` (integer) chat_messages.id
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/chat/conversations/:id/messages/:msgId/report` — **ALIAS_TEMPORARILY** — IDENTICAL domain call. This entry is a second URL onto one write, in the resource shape the rest of the conversations domain already uses.
 
 ### `POST /api/v1/conversations/:conversationId/read`
 
@@ -1470,6 +1498,8 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `GET /api/v1/conversations/:conversationId` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
 | `GET /api/v1/conversations/:conversationId/messages` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
 | `POST /api/v1/conversations/:conversationId/messages` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
+| `POST /api/v1/conversations/:conversationId/attachments` | · | · | · | · | · |
+| `POST /api/v1/conversations/:conversationId/messages/:messageId/report` | · | · | · | · | — |
 | `POST /api/v1/conversations/:conversationId/read` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
 | `POST /api/v1/bookings/:bookingId/cancel` | ⏳ | ⏳ | — | — | — |
 | `GET /api/v1/bookings/:bookingId/transitions` | · | · | · | · | · |

@@ -59,9 +59,9 @@ though they are the reason the canonical namespace exists.
 The surface as it stands:
 
 <!-- BEGIN GENERATED: v1-surface -->
-- **96 canonical endpoints live**, each driven end to end by `tests/v1-router.test.ts`.
+- **98 canonical endpoints live**, each driven end to end by `tests/v1-router.test.ts`.
 - **4 planned**, documented and not mounted — see §11 of [`API_V1_CONTRACT.md`](API_V1_CONTRACT.md).
-- **86 legacy aliases** counted by telemetry, derived from the contract.
+- **87 legacy aliases** counted by telemetry, derived from the contract.
 - **520 routes** mounted outside `/api/v1`, every one classified in the matrix.
 <!-- END GENERATED: v1-surface -->
 

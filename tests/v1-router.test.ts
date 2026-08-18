@@ -522,6 +522,11 @@ jest.mock('../src/services/messaging/messagingService', () => {
     markRead: jest.fn(async (_actor: any, id: number, lastReadMessageId: number) => ({
       conversationId: id, lastReadMessageId, unreadCount: 0, isParticipant: true,
     })),
+    uploadAttachment: jest.fn(async () => ({
+      attachmentId: 'uid-under-test_0000', previewUrl: 'https://example.test/a.png',
+      fileName: 'shot.png', mimeType: 'image/png', sizeBytes: 68,
+    })),
+    reportMessage: jest.fn(async () => ({ reportId: '5' })),
   };
 });
 
@@ -890,6 +895,14 @@ describe('every implemented contract entry is reachable at its declared path', (
     'conversations.messages.create': () =>
       call('POST', '/api/v1/conversations/11/messages', {
         body: { body: 'hi', clientMsgId: 'client-message-id-0001' },
+      }),
+    'conversations.attachments.create': () =>
+      call('POST', '/api/v1/conversations/7/attachments', {
+        body: { file: 'data:image/png;base64,iVBORw0KGgo=', name: 'shot.png' },
+      }),
+    'conversations.messages.report': () =>
+      call('POST', '/api/v1/conversations/7/messages/11/report', {
+        body: { category: 'harassment' },
       }),
     'conversations.read': () =>
       call('POST', '/api/v1/conversations/11/read', { body: { lastReadMessageId: 42 } }),

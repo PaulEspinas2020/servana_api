@@ -288,6 +288,8 @@ the conversation it describes.
 | `GET /api/v1/conversations/:conversationId` | authenticated | yes | `services/messaging/messagingService.getConversation` |
 | `GET /api/v1/conversations/:conversationId/messages` | authenticated | yes | `services/messaging/messagingService.listMessages` |
 | `POST /api/v1/conversations/:conversationId/messages` | authenticated | no | `chat/chat.service.sendMessage` |
+| `POST /api/v1/conversations/:conversationId/attachments` | authenticated | no | `chat/chat.service.uploadAttachment` |
+| `POST /api/v1/conversations/:conversationId/messages/:messageId/report` | authenticated | no | `chat/chat.service.reportMessage` |
 | `POST /api/v1/conversations/:conversationId/read` | authenticated | yes | `services/messaging/messagingService.markRead` |
 
 ### Legacy routes still mounted
@@ -307,6 +309,8 @@ be documented as superseded if it is also being measured.
 | `GET /api/admin/communications/conversations/:id/messages` | ROLE_SPECIFIC | `conversations.messages.list` | The permissioned admin transcript. It reads the whole thread by design — the audit trail is the point — where this route applies the caller's own read floor. |
 | `POST /api/chat/conversations/:id/messages` | ALIAS_TEMPORARILY | `conversations.messages.create` | The live send for all four apps. IDENTICAL domain call — this entry is a second URL onto one write, not a second write path. |
 | `POST /api/admin/communications/conversations/:id/messages` | ROLE_SPECIFIC | `conversations.messages.create` | The admin send. Permissioned and audited, and it already delegates to `chat.service.sendMessage`, so an admin message obeys the same idempotency, validation and attachment rules as anyone else's. |
+| `POST /api/chat/attachments/upload` | CANONICALIZE | `conversations.attachments.create` | The legacy route takes the conversation as an OPTIONAL body field and checks access only when it is present, so omitting it stored a file and returned a URL with no conversation consulted. This route carries the id in its path, so the check cannot be declined. Same validation, same storage call — `chat.service.uploadAttachment` is now the one implementation and the legacy controller delegates to it. |
+| `POST /api/chat/conversations/:id/messages/:msgId/report` | ALIAS_TEMPORARILY | `conversations.messages.report` | IDENTICAL domain call. This entry is a second URL onto one write, in the resource shape the rest of the conversations domain already uses. |
 | `POST /api/chat/conversations/:id/read` | ALIAS_TEMPORARILY | `conversations.read` | The live read-pointer call, which answers `{ success: true }` and nothing else. The canonical one returns the resulting unread count, so a client stops having to guess what its badge should now say. |
 
 ## 10. Cross-platform caller matrix
@@ -323,6 +327,8 @@ be documented as superseded if it is also being measured.
 | Read one conversation and its participants | legacy | legacy | legacy | legacy | legacy |
 | Page through a conversation transcript | legacy | legacy | legacy | legacy | legacy |
 | Send a message | legacy | legacy | legacy | legacy | legacy |
+| Attach a file to a conversation | planned | planned | planned | planned | planned |
+| Report a message to moderation | planned | planned | planned | planned | — |
 | Advance the read pointer | legacy | legacy | legacy | legacy | legacy |
 
 No client is `migrated` yet: the platform application repositories are out of scope until the
@@ -351,6 +357,14 @@ No role split. The read FLOOR differs by seat — a provider reads from their ow
 **Send a message** (`chat/chat.service.sendMessage`)
 
 No role split, and three transports on one write: the canonical REST endpoint, the legacy REST route and the `message:send` socket event all call the same function. The admin portal's send goes through it too, so an admin message is subject to the same idempotency, validation and attachment rules as anyone else's.
+
+**Attach a file to a conversation** (`chat/chat.service.uploadAttachment`)
+
+No role split, and the conversation is named by the PATH rather than the body. That is the difference that matters: the legacy route took it as an optional body field and ran the access check only when the caller supplied one, so omitting it stored a file and returned a URL without any conversation being consulted. The allowlist and the size ceiling are checked by file SIGNATURE, so a renamed executable is refused on its contents rather than on its declared type.
+
+**Report a message to moderation** (`chat/chat.service.reportMessage`)
+
+No role split among the four participant surfaces. Admin is deliberately absent: staff act on reports through the admin communications routes, which are permissioned and audited, and an admin filing a participant report would enter the same queue they resolve. The reporter is the token subject, so no request can file one as somebody else.
 
 **Advance the read pointer** (`services/messaging/messagingService`)
 

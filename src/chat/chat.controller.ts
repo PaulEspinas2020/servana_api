@@ -175,37 +175,28 @@ export const uploadAttachment = async (req: any, res: Response) => {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
     const { file, name, conversationId: rawConversationId } = req.body ?? {};
-    if (!file || !name) {
-      return res.status(400).json({ success: false, message: "file (data URI) and name are required" });
-    }
-    const validation = validateDataUri(file, {
-      allowed: ALLOWED_CHAT_MIMES,
-      maxBytes: MAX_CHAT_ATTACHMENT_BYTES,
-    });
-    if (!validation.ok) {
-      return res.status(422).json({
-        success: false,
-        code: validation.code,
-        message: validation.message,
-      });
-    }
-    if (rawConversationId !== undefined && rawConversationId !== null) {
-      const actor = await getActor(req);
-      const conversationId = positiveId(rawConversationId, 'conversation id');
-      const { access } = await chatService.resolveAccessForConversation(actor, conversationId);
-      if (!access.allowed || !access.canSend) throw chatService.httpError(403, 'Cannot upload to this conversation');
-    }
-    const sanitizedName = String(name).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100) || 'attachment';
-    const storageKey = `${uid}_${randomUUID()}`;
-    const previewUrl = await uploadFileToStorage("chat-attachments", storageKey, file);
-    return res.status(201).json({
-      success: true,
-      attachmentId: storageKey,
-      previewUrl,
-      fileName: sanitizedName,
-      mimeType: validation.mime,
-      sizeBytes: validation.bytes,
-    });
+
+    // The validation, storage and naming now live in `chat.service`, so the v1
+    // route and this one cannot disagree about what a chat attachment may be.
+    // The response below is unchanged, byte for byte — four shipped clients
+    // read it.
+    //
+    // `conversationId` stays OPTIONAL here on purpose. Omitting it skips the
+    // access check, which is a hole; it is closed on the v1 route, which takes
+    // the id in its path and cannot be called without one. Closing it here
+    // instead would refuse uploads from installed builds that never sent it.
+    const conversationId =
+      rawConversationId !== undefined && rawConversationId !== null
+        ? positiveId(rawConversationId, 'conversation id')
+        : null;
+
+    const result = await chatService.uploadAttachment(
+      await getActor(req),
+      conversationId,
+      { file, name },
+    );
+
+    return res.status(201).json({ success: true, ...result });
   } catch (e: any) {
     return handle(res, e);
   }

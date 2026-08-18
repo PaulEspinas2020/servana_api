@@ -255,6 +255,52 @@ export const handlers: V1Handlers = {
    * learn what the badge should say will render a stale one in the meantime, and
    * every client solves that locally by decrementing a number it guessed.
    */
+  /**
+   * Store an attachment for this conversation.
+   *
+   * The conversation is named by the PATH, which is the whole point. On the
+   * legacy route it was an optional body field and the access check ran only
+   * when the caller supplied it — so a caller who omitted it uploaded a file to
+   * Servana's storage and got a URL back without any conversation being
+   * consulted. Here there is no request shape that can decline to be checked.
+   */
+  'conversations.attachments.create': async (req: Request, res: Response) => {
+    try {
+      const conversationId = positiveInt(req.params.conversationId, 'conversationId');
+      const actor = await actorOf(req);
+      const body = bodyOf(req);
+      const attachment = await messaging.uploadAttachment(actor, conversationId, {
+        file: body.file,
+        name: body.name,
+      });
+      return created(res, req, attachment);
+    } catch (error) {
+      return sendCaught(res, req, 'conversations.attachments.create', asApiError(error));
+    }
+  },
+
+  /**
+   * Report one message to moderation.
+   *
+   * The reporter is the token subject and is never read from the body: a report
+   * that could name its own author is a way to file one against someone else.
+   */
+  'conversations.messages.report': async (req: Request, res: Response) => {
+    try {
+      const conversationId = positiveInt(req.params.conversationId, 'conversationId');
+      const messageId = positiveInt(req.params.messageId, 'messageId');
+      const actor = await actorOf(req);
+      const body = bodyOf(req);
+      const report = await messaging.reportMessage(actor, conversationId, messageId, {
+        category: body.category,
+        description: body.description,
+      });
+      return created(res, req, report);
+    } catch (error) {
+      return sendCaught(res, req, 'conversations.messages.report', asApiError(error));
+    }
+  },
+
   'conversations.read': async (req: Request, res: Response) => {
     try {
       const conversationId = positiveInt(req.params.conversationId, 'conversationId');

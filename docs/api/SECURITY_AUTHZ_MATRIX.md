@@ -15,13 +15,13 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 96 |
+| Mounted endpoints | 98 |
 | `public` | 20 |
-| `authenticated` | 56 |
+| `authenticated` | 58 |
 | `provider` | 19 |
 | `admin` | 1 |
-| Object-scoped | 36 |
-| Object-scoped WITH an ownership rule | 36 |
+| Object-scoped | 38 |
+| Object-scoped WITH an ownership rule | 38 |
 | **Unguarded** | **0** |
 
 ## 2. Role access, by declared mode
@@ -165,11 +165,13 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `catalog.subcategories.get` | GET /catalog/subcategories/:subcategoryId | `public` | ● ● ● ● | — |
 | `catalog.subcategories.services` | GET /catalog/subcategories/:subcategoryId/services | `public` | ● ● ● ● | — |
 | `catalog.summary` | GET /catalog/summary | `public` | ● ● ● ● | — |
+| `conversations.attachments.create` | POST /conversations/:conversationId/attachments | `authenticated` | · ● ● ● | ✔ conversationId |
 | `conversations.create` | POST /conversations | `authenticated` | · ● ● ● | — |
 | `conversations.get` | GET /conversations/:conversationId | `authenticated` | · ● ● ● | ✔ conversationId |
 | `conversations.list` | GET /conversations | `authenticated` | · ● ● ● | — |
 | `conversations.messages.create` | POST /conversations/:conversationId/messages | `authenticated` | · ● ● ● | ✔ conversationId |
 | `conversations.messages.list` | GET /conversations/:conversationId/messages | `authenticated` | · ● ● ● | ✔ conversationId |
+| `conversations.messages.report` | POST /conversations/:conversationId/messages/:messageId/report | `authenticated` | · ● ● ● | ✔ conversationId |
 | `conversations.read` | POST /conversations/:conversationId/read | `authenticated` | · ● ● ● | ✔ conversationId |
 | `customer.addresses.create` | POST /customer/addresses | `authenticated` | · ● ● ● | — |
 | `customer.addresses.delete` | DELETE /customer/addresses/:addressId | `authenticated` | · ● ● ● | ✔ addressId |
@@ -242,8 +244,8 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-51 of 96 endpoints are probeable; the other
-45 are writes and are never probed, because a POST to
+51 of 98 endpoints are probeable; the other
+47 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.
 

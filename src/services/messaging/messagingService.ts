@@ -362,6 +362,50 @@ export const sendMessage = async (
   return toMessageDto(view);
 };
 
+// ─── Attachments and moderation ───────────────────────────────────────────────
+
+export type AttachmentDto = chat.AttachmentUploadResult;
+
+/**
+ * Store one attachment for a conversation the caller may write to.
+ *
+ * `conversationId` is REQUIRED here, unlike the legacy path where it was an
+ * optional body field and omitting it skipped the access check altogether. The
+ * v1 route carries it in the URL, so there is no request shape that can ask to
+ * be unchecked.
+ */
+export const uploadAttachment = async (
+  actor: MessagingActor,
+  conversationId: number,
+  input: { file: unknown; name: unknown },
+): Promise<AttachmentDto> => chat.uploadAttachment(actor, conversationId, input);
+
+export interface MessageReportDto {
+  reportId: string;
+}
+
+/**
+ * Report one message to moderation.
+ *
+ * Thin on purpose: `chat.reportMessage` already checks participation, that the
+ * message belongs to THIS conversation, that it is not a system message, and
+ * the category and description formats. Re-checking any of that here would be
+ * a second policy that can disagree with the first.
+ */
+export const reportMessage = async (
+  actor: MessagingActor,
+  conversationId: number,
+  messageId: number,
+  input: { category: unknown; description?: unknown },
+): Promise<MessageReportDto> =>
+  chat.reportMessage(
+    actor,
+    conversationId,
+    messageId,
+    typeof input.category === 'string' ? input.category : '',
+    typeof input.description === 'string' ? input.description : '',
+  );
+
 // ─── Read state ───────────────────────────────────────────────────────────────
 
 export interface ReadStateDto {
