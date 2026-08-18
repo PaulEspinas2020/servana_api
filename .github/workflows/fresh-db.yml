@@ -82,8 +82,17 @@ jobs:
   fresh:
     name: zero-to-current on a real engine
     runs-on: ubuntu-latest
-    # Only meaningful once a baseline exists; until then `static` is the gate.
-    if: hashFiles('scripts/baseline/000-baseline.sql') != ''
+    # NO job-level `if:` here. This job carried
+    #   if: hashFiles('scripts/baseline/000-baseline.sql') != ''
+    # from 8282e46 until 2026-08-19, and it made the whole FILE invalid: every
+    # run since it was added failed in 0s with zero jobs created and the run
+    # named after its own file path, which is what a workflow that never parsed
+    # looks like. hashFiles() needs a checked-out workspace, so it cannot be
+    # evaluated while the job graph is still being built. Six consecutive red
+    # runs, and not one of the three jobs below ever executed once.
+    #
+    # The guard is obsolete anyway: scripts/baseline/000-baseline.sql is tracked
+    # and present, so the condition it encoded is now permanently true.
     services:
       postgres:
         image: postgres:16
