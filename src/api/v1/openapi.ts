@@ -1974,6 +1974,53 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  ProviderTimeOff: {
+    type: 'object',
+    description:
+      'One period, as STORED. bookingConflicts is present on creation: time off does NOT ' +
+      'cancel accepted work, and a response silent about that would leave a provider ' +
+      'assuming it had.',
+    properties: {
+      id: { type: 'string' },
+      startDate: { type: 'string', format: 'date' },
+      endDate: { type: 'string', format: 'date' },
+      allDay: { type: 'boolean' },
+      startTime: { type: ['string', 'null'] },
+      endTime: { type: ['string', 'null'] },
+      reason: { type: 'string' },
+      note: { type: ['string', 'null'] },
+      createdAt: { type: ['string', 'null'], format: 'date-time' },
+      bookingConflicts: { type: 'array', items: { type: 'object', additionalProperties: true } },
+      conflictNotice: { type: ['string', 'null'] },
+    },
+  },
+
+  ProviderTimeOffList: {
+    type: 'object',
+    properties: {
+      timeOff: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    },
+  },
+
+  ProviderTimeOffRequest: {
+    type: 'object',
+    required: ['startDate', 'endDate', 'reason'],
+    properties: {
+      startDate: { type: 'string', format: 'date' },
+      endDate: { type: 'string', format: 'date' },
+      reason: { type: 'string' },
+      allDay: { type: 'boolean' },
+      startTime: { type: ['string', 'null'], description: 'Partial-day. Persisted, not echoed.' },
+      endTime: { type: ['string', 'null'] },
+      note: { type: ['string', 'null'] },
+    },
+  },
+
+  ProviderTimeOffMutation: {
+    type: 'object',
+    properties: { cancelled: { type: 'boolean' } },
+  },
+
   ProviderDocumentTypeCatalog: {
     type: 'object',
     description: 'Static policy: what may be submitted and which are required.',

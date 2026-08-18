@@ -59,9 +59,9 @@ though they are the reason the canonical namespace exists.
 The surface as it stands:
 
 <!-- BEGIN GENERATED: v1-surface -->
-- **102 canonical endpoints live**, each driven end to end by `tests/v1-router.test.ts`.
+- **105 canonical endpoints live**, each driven end to end by `tests/v1-router.test.ts`.
 - **4 planned**, documented and not mounted — see §11 of [`API_V1_CONTRACT.md`](API_V1_CONTRACT.md).
-- **91 legacy aliases** counted by telemetry, derived from the contract.
+- **94 legacy aliases** counted by telemetry, derived from the contract.
 - **520 routes** mounted outside `/api/v1`, every one classified in the matrix.
 <!-- END GENERATED: v1-surface -->
 
@@ -121,7 +121,7 @@ shows `admin=` counts.
 The cheapest real migration, and the one that proves the contract under load.
 
 <!-- BEGIN GENERATED: v1-moves:providerWeb -->
-**49** canonical capabilities are live that this client still reaches by a legacy route.
+**52** canonical capabilities are live that this client still reaches by a legacy route.
 
 | Move to (canonical) | Legacy routes it supersedes |
 |---|---|
@@ -147,6 +147,9 @@ The cheapest real migration, and the one that proves the contract under load.
 | `DELETE /api/v1/provider/documents/:documentId` | `DELETE /api/provider/documents/:documentId` |
 | `GET /api/v1/provider/availability` | `GET /api/worker/availability` |
 | `PATCH /api/v1/provider/availability` | `PUT /api/worker/availability` |
+| `GET /api/v1/provider/time-off` | `GET /api/worker/time-off` |
+| `POST /api/v1/provider/time-off` | `POST /api/worker/time-off` |
+| `DELETE /api/v1/provider/time-off/:timeOffId` | `DELETE /api/worker/time-off/:id` |
 | `GET /api/v1/settings/notification-preferences` | `GET /api/provider/notification-preferences`<br>`GET /api/workers/:uid/notification-preferences` |
 | `PUT /api/v1/settings/notification-preferences` | `PUT /api/provider/notification-preferences`<br>`PUT /api/workers/:uid/notification-preferences` |
 | `POST /api/v1/auth/register` | `POST /api/auth/signup`<br>`POST /api/auth/provider/register` |

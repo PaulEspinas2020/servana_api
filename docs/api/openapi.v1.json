@@ -4213,6 +4213,320 @@
         "description": "Idempotent because it REPLACES the week rather than appending to it: the same body twice reaches the same schedule. `expectedVersion` is what stops two devices silently overwriting each other."
       }
     },
+    "/api/v1/provider/time-off": {
+      "get": {
+        "operationId": "provider.timeOff.list",
+        "summary": "The ACTIVE time-off periods belonging to the caller.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerAvailabilityEngine.listTimeOff",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/worker/time-off",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderTimeOffList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "provider.timeOff.create",
+        "summary": "Books time off, and reports the confirmed bookings it collides with.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerAvailabilityEngine.createTimeOff",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/worker/time-off",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderTimeOffRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderTimeOff"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "The response reports what was STORED, never the request. A response assembled from the body agrees with the client by construction, which is how the partial-day defect survived: the portal sent startTime/endTime, nothing persisted them, and the reply said allDay."
+      }
+    },
+    "/api/v1/provider/time-off/{timeOffId}": {
+      "delete": {
+        "operationId": "provider.timeOff.cancel",
+        "summary": "Cancels one time-off period.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerAvailabilityEngine.cancelTimeOff",
+        "x-legacy": [
+          {
+            "method": "DELETE",
+            "path": "/api/worker/time-off/:id",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "legacy",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "timeOffId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "provider_time_off.id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderTimeOffMutation"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "A malformed id answers 404, the same as one belonging to another provider - a 422 for the first would let a caller enumerate which periods exist."
+      }
+    },
     "/api/v1/provider/services": {
       "get": {
         "operationId": "provider.services.list",
@@ -16237,6 +16551,130 @@
           }
         }
       },
+      "ProviderTimeOff": {
+        "type": "object",
+        "description": "One period, as STORED. bookingConflicts is present on creation: time off does NOT cancel accepted work, and a response silent about that would leave a provider assuming it had.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "endDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "allDay": {
+            "type": "boolean"
+          },
+          "startTime": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "endTime": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "bookingConflicts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "conflictNotice": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProviderTimeOffList": {
+        "type": "object",
+        "properties": {
+          "timeOff": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "ProviderTimeOffRequest": {
+        "type": "object",
+        "required": [
+          "startDate",
+          "endDate",
+          "reason"
+        ],
+        "properties": {
+          "startDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "endDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "allDay": {
+            "type": "boolean"
+          },
+          "startTime": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Partial-day. Persisted, not echoed."
+          },
+          "endTime": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProviderTimeOffMutation": {
+        "type": "object",
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          }
+        }
+      },
       "ProviderDocumentTypeCatalog": {
         "type": "object",
         "description": "Static policy: what may be submitted and which are required.",
@@ -17120,6 +17558,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 102,
-  "x-total-count": 106
+  "x-implemented-count": 105,
+  "x-total-count": 109
 }

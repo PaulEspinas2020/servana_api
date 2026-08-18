@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**102 implemented** · **4 planned** · 106 total.
+**105 implemented** · **4 planned** · 109 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -492,6 +492,9 @@ Releases this device, or every device for the account.
 | `DELETE` | `/api/v1/provider/documents/:documentId` | **live** | provider (role 2/4) | — | `ProviderDocumentMutation` | yes | account |
 | `GET` | `/api/v1/provider/availability` | **live** | provider (role 2/4) | — | `ProviderAvailability` | yes | account |
 | `PATCH` | `/api/v1/provider/availability` | **live** | provider (role 2/4) | `ProviderAvailabilityPatch` | `ProviderAvailability` | yes | account |
+| `GET` | `/api/v1/provider/time-off` | **live** | provider (role 2/4) | — | `ProviderTimeOffList` | yes | account |
+| `POST` | `/api/v1/provider/time-off` | **live** | provider (role 2/4) | `ProviderTimeOffRequest` | `ProviderTimeOff` | no | account |
+| `DELETE` | `/api/v1/provider/time-off/:timeOffId` | **live** | provider (role 2/4) | — | `ProviderTimeOffMutation` | yes | account |
 | `GET` | `/api/v1/provider/services` | **live** | provider (role 2/4) | — | `ProviderServiceList` | yes | account |
 
 ### `PATCH /api/v1/me`
@@ -753,6 +756,41 @@ Replaces the weekly availability. Optimistic concurrency on version.
 - **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
 - **Legacy it replaces**
   - `PUT /api/worker/availability` — **ALIAS_TEMPORARILY** — The live write. IDENTICAL engine call, including its expectedVersion check.
+
+### `GET /api/v1/provider/time-off`
+
+The ACTIVE time-off periods belonging to the caller.
+
+- **Domain service** — `services/providerAvailabilityEngine.listTimeOff`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `GET /api/worker/time-off` — **ALIAS_TEMPORARILY** — Same engine, same active-only filter. A cancelled period is history rather than a commitment and appears in neither.
+
+### `POST /api/v1/provider/time-off`
+
+Books time off, and reports the confirmed bookings it collides with.
+
+> The response reports what was STORED, never the request. A response assembled from the body agrees with the client by construction, which is how the partial-day defect survived: the portal sent startTime/endTime, nothing persisted them, and the reply said allDay.
+
+- **Domain service** — `services/providerAvailabilityEngine.createTimeOff`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `POST /api/worker/time-off` — **ALIAS_TEMPORARILY** — IDENTICAL engine call, and it carries the same bookingConflicts and conflictNotice. Time off is created even when it overlaps confirmed work - a provider who is ill must be able to record it - but the work is still theirs, and a response that did not say so would leave them assuming leave cancels their jobs.
+
+### `DELETE /api/v1/provider/time-off/:timeOffId`
+
+Cancels one time-off period.
+
+> A malformed id answers 404, the same as one belonging to another provider - a 422 for the first would let a caller enumerate which periods exist.
+
+- **Domain service** — `services/providerAvailabilityEngine.cancelTimeOff`
+- **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Path params** — `timeOffId` (integer) provider_time_off.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Legacy it replaces**
+  - `DELETE /api/worker/time-off/:id` — **ALIAS_TEMPORARILY** — IDENTICAL engine call. Cancels rather than deletes; the row survives as history.
 
 ### `GET /api/v1/provider/services`
 
@@ -1522,6 +1560,9 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `DELETE /api/v1/provider/documents/:documentId` | — | — | · | ⏳ | — |
 | `GET /api/v1/provider/availability` | — | — | ⏳ | ⏳ | — |
 | `PATCH /api/v1/provider/availability` | — | — | ⏳ | ⏳ | — |
+| `GET /api/v1/provider/time-off` | — | — | · | ⏳ | — |
+| `POST /api/v1/provider/time-off` | — | — | · | ⏳ | — |
+| `DELETE /api/v1/provider/time-off/:timeOffId` | — | — | · | ⏳ | — |
 | `GET /api/v1/provider/services` | — | — | · | · | — |
 | `GET /api/v1/reviews/providers/:providerUid` | · | · | — | — | — |
 | `GET /api/v1/reviews/providers/:providerUid/rating` | · | · | — | — | — |

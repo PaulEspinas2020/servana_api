@@ -304,6 +304,9 @@ see.
 | `DELETE /api/v1/provider/documents/:documentId` | provider | yes | `services/providerProfileComplianceService.deleteDocument` |
 | `GET /api/v1/provider/availability` | provider | yes | `services/providerAvailabilityEngine.getAvailabilityProfile` |
 | `PATCH /api/v1/provider/availability` | provider | yes | `services/providerAvailabilityEngine.saveWeeklySchedule` |
+| `GET /api/v1/provider/time-off` | provider | yes | `services/providerAvailabilityEngine.listTimeOff` |
+| `POST /api/v1/provider/time-off` | provider | no | `services/providerAvailabilityEngine.createTimeOff` |
+| `DELETE /api/v1/provider/time-off/:timeOffId` | provider | yes | `services/providerAvailabilityEngine.cancelTimeOff` |
 | `GET /api/v1/provider/services` | provider | yes | `services/account/providerProfileService.listServices` |
 
 ### Legacy routes still mounted
@@ -334,6 +337,9 @@ route can only be documented as superseded if it is also being measured.
 | `DELETE /api/provider/documents/:documentId` | ALIAS_TEMPORARILY | `provider.documents.delete` | IDENTICAL domain call, and it re-evaluates online eligibility for the same reason the upload does: withdrawing a requirement can make a provider ineligible, and skipping it would leave someone online against a document they just removed. |
 | `GET /api/worker/availability` | ALIAS_TEMPORARILY | `provider.availability.get` | The live provider availability read. Same engine; the legacy shape bridges it to a web schedule. |
 | `PUT /api/worker/availability` | ALIAS_TEMPORARILY | `provider.availability.patch` | The live write. IDENTICAL engine call, including its expectedVersion check. |
+| `GET /api/worker/time-off` | ALIAS_TEMPORARILY | `provider.timeOff.list` | Same engine, same active-only filter. A cancelled period is history rather than a commitment and appears in neither. |
+| `POST /api/worker/time-off` | ALIAS_TEMPORARILY | `provider.timeOff.create` | IDENTICAL engine call, and it carries the same bookingConflicts and conflictNotice. Time off is created even when it overlaps confirmed work - a provider who is ill must be able to record it - but the work is still theirs, and a response that did not say so would leave them assuming leave cancels their jobs. |
+| `DELETE /api/worker/time-off/:id` | ALIAS_TEMPORARILY | `provider.timeOff.cancel` | IDENTICAL engine call. Cancels rather than deletes; the row survives as history. |
 | `GET /api/worker/services-overview` | ALIAS_TEMPORARILY | `provider.services.list` | The live provider services screen. Same `employee_services` qualification; the canonical entry projects it keyed on services.id with the active flag matching actually selects on. |
 | `GET /api/worker/service-applications` | KEEP | `provider.services.list` | NOT a duplicate. An application is the REQUEST to be approved for a service and carries its own lifecycle; this entry is the resulting qualification. A provider can have a pending application and no qualification, which is exactly the state the two endpoints exist to tell apart. |
 
@@ -353,7 +359,7 @@ route can only be documented as superseded if it is also being measured.
 | Manage my saved addresses | legacy | legacy | — | — | — |
 | Read and change my provider profile | — | — | legacy | legacy | planned |
 | Submit, read, preview and withdraw my documents | — | — | legacy | legacy | — |
-| Read and change my availability | — | — | legacy | legacy | — |
+| Read and change my availability, and book time off | — | — | legacy | legacy | — |
 | Read the services I am approved for | — | — | planned | planned | — |
 | What is left before my account is usable | planned | planned | planned | planned | — |
 
@@ -392,7 +398,7 @@ Role-specific by DATA and by WORKFLOW. A provider profile field is classified, a
 
 Provider-only, and it must stay that way. The projection carries review STATE and never a document URL or storage path; the preview endpoint mints a short-lived signed URL after re-authorizing, which is a different operation with a different audit trail. The write half arrived on 2026-08-18: the LIST was canonical while submit, preview and withdraw were still legacy, which is the most lopsided shape a capability can have - a provider could read their onboarding state over v1 and not act on it. Submit and withdraw both re-evaluate online eligibility, because the last outstanding requirement is what gates going online in either direction.
 
-**Read and change my availability** (`services/providerAvailabilityEngine`)
+**Read and change my availability, and book time off** (`services/providerAvailabilityEngine`)
 
 No role split. The canonical route reads and writes the SAME engine matching consumes, which is the release gate: a provider editing one source while matching reads another is a provider who is unbookable for reasons nobody can see.
 

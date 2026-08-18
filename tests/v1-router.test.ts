@@ -711,6 +711,17 @@ jest.mock('../src/services/providerAvailabilityEngine', () => ({
     timezone: 'Asia/Manila', weeklySchedule: [], version: 1, updatedAt: null,
   }),
   saveWeeklySchedule: jest.fn().mockResolvedValue({ updatedAt: null, version: 2 }),
+  listTimeOff: jest.fn().mockResolvedValue([
+    { id: 3, status: 'active', startDate: '2026-09-01', endDate: '2026-09-02',
+      allDay: true, startTime: null, endTime: null, reason: 'sick', note: null,
+      createdAt: null },
+  ]),
+  createTimeOff: jest.fn().mockResolvedValue({
+    id: 3, startDate: '2026-09-01', endDate: '2026-09-02', allDay: true,
+    startTime: null, endTime: null, reason: 'sick', note: null, createdAt: null,
+    bookingConflicts: [],
+  }),
+  cancelTimeOff: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../src/services/account/profileCompletionService', () => ({
   getCompletion: jest.fn().mockResolvedValue({
@@ -982,6 +993,15 @@ describe('every implemented contract entry is reachable at its declared path', (
     'provider.availability.get': () => call('GET', '/api/v1/provider/availability', { role: 'provider' }),
     'provider.availability.patch': () =>
       call('PATCH', '/api/v1/provider/availability', { role: 'provider', body: { slots: [] } }),
+    'provider.timeOff.list': () =>
+      call('GET', '/api/v1/provider/time-off', { role: 'provider' }),
+    'provider.timeOff.create': () =>
+      call('POST', '/api/v1/provider/time-off', {
+        role: 'provider',
+        body: { startDate: '2026-09-01', endDate: '2026-09-02', reason: 'sick' },
+      }),
+    'provider.timeOff.cancel': () =>
+      call('DELETE', '/api/v1/provider/time-off/3', { role: 'provider' }),
     'provider.services.list': () => call('GET', '/api/v1/provider/services', { role: 'provider' }),
 
     // -- TAB 11 home composition --

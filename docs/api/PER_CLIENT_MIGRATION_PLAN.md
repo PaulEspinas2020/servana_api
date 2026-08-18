@@ -14,7 +14,7 @@
 > [`CROSS_CLIENT_MIGRATION_PLAN.md`](CROSS_CLIENT_MIGRATION_PLAN.md), which is
 > hand-written because an argument is not derivable. This is what each client
 > actually has to change, and it is generated because a hand-maintained list of
-> 102 endpoints across five clients is stale the day after it is written.
+> 105 endpoints across five clients is stale the day after it is written.
 
 ## How to read this
 
@@ -114,7 +114,7 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Read a booking | planned | `GET /api/:id`, `GET /api/:id/timeline`, `GET /api/users/:userId/bookings` | `GET /api/v1/bookings`, `GET /api/v1/bookings/:bookingId`, `GET /api/v1/bookings/:bookingId/timeline`, `GET /api/v1/bookings/:bookingId/transitions` |
 | Read a booking's payment and price breakdown | planned | _no legacy equivalent — this is new_ | `GET /api/v1/bookings/:bookingId/payment` |
 | Read and change my account record | legacy | `GET /api/auth/me`, `PUT /api/user/updateprofile` | `GET /api/v1/me`, `PATCH /api/v1/me` |
-| Read and change my availability | legacy | `GET /api/worker/availability`, `PUT /api/worker/availability` | `GET /api/v1/provider/availability`, `PATCH /api/v1/provider/availability` |
+| Read and change my availability, and book time off | legacy | `DELETE /api/worker/time-off/:id`, `GET /api/worker/availability`, `GET /api/worker/time-off`, `POST /api/worker/time-off`, `PUT /api/worker/availability` | `GET /api/v1/provider/availability`, `PATCH /api/v1/provider/availability`, `DELETE /api/v1/provider/time-off/:timeOffId`, `POST /api/v1/provider/time-off`, `GET /api/v1/provider/time-off` |
 | Read and change my notification preferences | legacy | `GET /api/provider/notification-preferences`, `GET /api/workers/:uid/notification-preferences`, `PUT /api/provider/notification-preferences`, `PUT /api/workers/:uid/notification-preferences` | `GET /api/v1/me/notification-preferences`, `PATCH /api/v1/me/notification-preferences`, `GET /api/v1/settings/notification-preferences`, `PUT /api/v1/settings/notification-preferences` |
 | Read and change my provider profile | legacy | `GET /api/provider/profile`, `POST /api/provider/public-profile-revisions` | `GET /api/v1/provider/profile`, `PATCH /api/v1/provider/profile` |
 | Read and change my settings | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/settings`, `PATCH /api/v1/me/settings` |
@@ -204,8 +204,8 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | --- | --- |
 | Capabilities that apply | 40 |
 | Already on canonical | 0 |
-| Still on a legacy route | 21 |
-| Partially migrated | 5 |
+| Still on a legacy route | 20 |
+| Partially migrated | 6 |
 | No equivalent called today | 14 |
 
 | Capability | Today | Calls now | Move to |
@@ -232,7 +232,7 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Read a booking | ⚠ mixed | `GET /api/:id`, `GET /api/:id/timeline`, `GET /api/users/:userId/bookings` | `GET /api/v1/bookings`, `GET /api/v1/bookings/:bookingId`, `GET /api/v1/bookings/:bookingId/timeline`, `GET /api/v1/bookings/:bookingId/transitions` |
 | Read a booking's payment and price breakdown | planned | _no legacy equivalent — this is new_ | `GET /api/v1/bookings/:bookingId/payment` |
 | Read and change my account record | ⚠ mixed | `GET /api/auth/me`, `PUT /api/user/updateprofile` | `GET /api/v1/me`, `PATCH /api/v1/me` |
-| Read and change my availability | legacy | `GET /api/worker/availability`, `PUT /api/worker/availability` | `GET /api/v1/provider/availability`, `PATCH /api/v1/provider/availability` |
+| Read and change my availability, and book time off | ⚠ mixed | `DELETE /api/worker/time-off/:id`, `GET /api/worker/availability`, `GET /api/worker/time-off`, `POST /api/worker/time-off`, `PUT /api/worker/availability` | `GET /api/v1/provider/availability`, `PATCH /api/v1/provider/availability`, `DELETE /api/v1/provider/time-off/:timeOffId`, `POST /api/v1/provider/time-off`, `GET /api/v1/provider/time-off` |
 | Read and change my notification preferences | legacy | `GET /api/provider/notification-preferences`, `GET /api/workers/:uid/notification-preferences`, `PUT /api/provider/notification-preferences`, `PUT /api/workers/:uid/notification-preferences` | `GET /api/v1/me/notification-preferences`, `PATCH /api/v1/me/notification-preferences`, `GET /api/v1/settings/notification-preferences`, `PUT /api/v1/settings/notification-preferences` |
 | Read and change my provider profile | legacy | `GET /api/provider/profile`, `POST /api/provider/public-profile-revisions` | `GET /api/v1/provider/profile`, `PATCH /api/v1/provider/profile` |
 | Read and change my settings | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/settings`, `PATCH /api/v1/me/settings` |

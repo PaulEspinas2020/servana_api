@@ -15,10 +15,10 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 102 |
+| Mounted endpoints | 105 |
 | `public` | 20 |
 | `authenticated` | 58 |
-| `provider` | 23 |
+| `provider` | 26 |
 | `admin` | 1 |
 | Object-scoped | 40 |
 | Object-scoped WITH an ownership rule | 40 |
@@ -220,6 +220,9 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `provider.profile.patch` | PATCH /provider/profile | `provider` | · · ● · | — |
 | `provider.publicProfile.get` | GET /providers/:providerUid/profile | `authenticated` | · ● ● ● | — |
 | `provider.services.list` | GET /provider/services | `provider` | · · ● · | — |
+| `provider.timeOff.cancel` | DELETE /provider/time-off/:timeOffId | `provider` | · · ● · | — |
+| `provider.timeOff.create` | POST /provider/time-off | `provider` | · · ● · | — |
+| `provider.timeOff.list` | GET /provider/time-off | `provider` | · · ● · | — |
 | `reviews.provider.list` | GET /reviews/providers/:providerUid | `public` | ● ● ● ● | — |
 | `reviews.provider.rating` | GET /reviews/providers/:providerUid/rating | `public` | ● ● ● ● | — |
 | `search.query` | GET /search | `public` | ● ● ● ● | — |
@@ -248,8 +251,8 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-53 of 102 endpoints are probeable; the other
-49 are writes and are never probed, because a POST to
+54 of 105 endpoints are probeable; the other
+51 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.
 

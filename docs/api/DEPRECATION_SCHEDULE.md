@@ -34,15 +34,15 @@ installed.
 
 | | |
 | --- | --- |
-| Legacy mappings tracked | 121 |
-| In the retirement plan | 102 |
+| Legacy mappings tracked | 124 |
+| In the retirement plan | 105 |
 | `KEEP` (not a duplicate of anything) | 6 |
 | `ROLE_SPECIFIC` (different auth/action, same service) | 13 |
-| `ALIAS_TEMPORARILY` | 91 |
+| `ALIAS_TEMPORARILY` | 94 |
 | `CANONICALIZE` | 10 |
 | `RETIRE` | 1 |
 | **Retirable today** | **0** |
-| Blocked | 102 |
+| Blocked | 105 |
 
 Nothing is retirable today, and the reason is the same for all of them: no client has migrated, because the v1 namespace is not deployed. The schedule is the order things become retirable, not a queue of pending deletions.
 
@@ -148,6 +148,9 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `GET /api/worker/job-cards` | ALIAS_TEMPORARILY | `provider.jobs.list` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/worker/job-cards/:bookingId` | ALIAS_TEMPORARILY | `provider.jobs.get` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/worker/services-overview` | ALIAS_TEMPORARILY | `provider.services.list` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/worker/time-off` | ALIAS_TEMPORARILY | `provider.timeOff.list` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/worker/time-off` | ALIAS_TEMPORARILY | `provider.timeOff.create` | Provider Mobile, Provider Web have not migrated | 90d |
+| `DELETE /api/worker/time-off/:id` | ALIAS_TEMPORARILY | `provider.timeOff.cancel` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/workers/:uid/earnings-history` | RETIRE | `provider.earnings.transactions` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/workers/:uid/notification-preferences` | ALIAS_TEMPORARILY | `settings.notificationPreferences.get` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
 | `PUT /api/workers/:uid/notification-preferences` | ALIAS_TEMPORARILY | `settings.notificationPreferences.put` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |

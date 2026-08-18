@@ -1352,6 +1352,96 @@ export const V1_CONTRACT: ContractEntry[] = [
       'overwriting each other.',
   },
   {
+    id: 'provider.timeOff.list',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/time-off',
+    summary: 'The ACTIVE time-off periods belonging to the caller.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderTimeOffList',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerAvailabilityEngine.listTimeOff',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/worker/time-off',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same engine, same active-only filter. A cancelled period is history rather than a ' +
+          'commitment and appears in neither.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'account',
+  },
+  {
+    id: 'provider.timeOff.create',
+    domain: 'account',
+    method: 'post',
+    path: '/provider/time-off',
+    summary: 'Books time off, and reports the confirmed bookings it collides with.',
+    auth: 'provider',
+    idempotent: false,
+    replayGuard:
+      'None, and the honest reason is that the engine offers none. A repeat creates a second ' +
+      'overlapping period, which is visible and cancellable - and harmless next to the ' +
+      'alternative, which is refusing a provider who is ill because their first attempt ' +
+      'timed out.',
+    requestSchema: 'ProviderTimeOffRequest',
+    responseSchema: 'ProviderTimeOff',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/providerAvailabilityEngine.createTimeOff',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/worker/time-off',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'IDENTICAL engine call, and it carries the same bookingConflicts and conflictNotice. ' +
+          'Time off is created even when it overlaps confirmed work - a provider who is ill ' +
+          'must be able to record it - but the work is still theirs, and a response that did ' +
+          'not say so would leave them assuming leave cancels their jobs.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'The response reports what was STORED, never the request. A response assembled from the ' +
+      'body agrees with the client by construction, which is how the partial-day defect ' +
+      'survived: the portal sent startTime/endTime, nothing persisted them, and the reply ' +
+      'said allDay.',
+  },
+  {
+    id: 'provider.timeOff.cancel',
+    domain: 'account',
+    method: 'delete',
+    path: '/provider/time-off/:timeOffId',
+    summary: 'Cancels one time-off period.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderTimeOffMutation',
+    errors: ['NOT_FOUND'],
+    params: [{ name: 'timeOffId', type: 'integer', description: 'provider_time_off.id' }],
+    status: 'implemented',
+    domainService: 'services/providerAvailabilityEngine.cancelTimeOff',
+    legacy: [
+      {
+        method: 'delete',
+        path: '/api/worker/time-off/:id',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'IDENTICAL engine call. Cancels rather than deletes; the row survives as history.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'A malformed id answers 404, the same as one belonging to another provider - a 422 for ' +
+      'the first would let a caller enumerate which periods exist.',
+  },
+  {
     id: 'provider.services.list',
     domain: 'account',
     method: 'get',

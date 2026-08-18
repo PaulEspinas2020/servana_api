@@ -96,6 +96,26 @@ const documentIdOf = (req: Request): number => {
   return id;
 };
 
+/**
+ * One time-off period, projected from what was STORED.
+ *
+ * Deliberately not built from the request: a response assembled out of the body
+ * agrees with the client by construction, and that is precisely how the
+ * partial-day defect survived — the portal sent `startTime`/`endTime`, nothing
+ * persisted them, and the reply cheerfully said `allDay`.
+ */
+const timeOffDto = (t: any) => ({
+  id: String(t.id),
+  startDate: t.startDate,
+  endDate: t.endDate,
+  allDay: t.allDay,
+  startTime: t.startTime,
+  endTime: t.endTime,
+  reason: t.reason ?? 'other',
+  note: t.note,
+  createdAt: t.createdAt,
+});
+
 export const handlers: V1Handlers = {
   /**
    * Change the account record.
@@ -438,6 +458,99 @@ export const handlers: V1Handlers = {
       return ok(res, req, { ...await providerProfile.getAvailability(uid), ...result });
     } catch (error) {
       return sendCaught(res, req, 'provider.availability.patch', asApiError(error));
+    }
+  },
+
+  /** Active time off only. A cancelled period is history, not a commitment. */
+  'provider.timeOff.list': async (req: Request, res: Response) => {
+    try {
+      const engine = await import('../../../services/providerAvailabilityEngine');
+      const all = await engine.listTimeOff(uidOf(req));
+      return ok(res, req, {
+        timeOff: all.filter((t) => t.status === 'active').map(timeOffDto),
+      });
+    } catch (error) {
+      return sendCaught(res, req, 'provider.timeOff.list', asApiError(error));
+    }
+  },
+
+  /**
+   * Book time off, and say what it collides with.
+   *
+   * ## The conflict notice is the endpoint, not decoration
+   *
+   * Time off is created even when it overlaps confirmed bookings — a provider
+   * who is ill must be able to say so, and refusing would leave them with no
+   * way to record it. But the work is still assigned to them. The legacy
+   * handler returns `bookingConflicts` and a sentence saying so in as many
+   * words, because the alternative is a provider who assumes leave cancels
+   * their jobs and simply does not turn up.
+   *
+   * Carried verbatim. A v1 endpoint that stored the period and returned a bare
+   * 201 would be strictly worse than the route it replaces.
+   *
+   * ## And the partial-day fields are passed on
+   *
+   * They were destructured and then dropped once already (C22 §17): the web
+   * portal shipped a partial-day form the whole time, a provider asking for two
+   * hours off lost the entire day, and the response told them it was all-day
+   * because it echoed the REQUEST. This reports what was STORED, for the same
+   * reason — a response built from the request agrees with the client by
+   * construction, which is exactly how that defect stayed invisible.
+   */
+  'provider.timeOff.create': async (req: Request, res: Response) => {
+    try {
+      const uid = uidOf(req);
+      const body = bodyOf(req);
+
+      if (!body.startDate || !body.endDate || !body.reason) {
+        throw ApiError.validation('startDate, endDate and reason are required.');
+      }
+
+      const engine = await import('../../../services/providerAvailabilityEngine');
+      const record = await engine.createTimeOff(
+        uid,
+        {
+          startDate: body.startDate,
+          endDate: body.endDate,
+          reason: body.reason,
+          allDay: body.allDay,
+          startTime: body.startTime,
+          endTime: body.endTime,
+          note: body.note,
+        } as never,
+        uid,
+      );
+
+      const conflicts = record.bookingConflicts ?? [];
+      return created(res, req, {
+        ...timeOffDto(record),
+        bookingConflicts: conflicts,
+        conflictNotice:
+          conflicts.length > 0
+            ? 'Your time off is saved, but these bookings are still assigned to ' +
+              'you. Creating time off does not cancel accepted work — open each ' +
+              'booking to cancel or request a reschedule.'
+            : null,
+      });
+    } catch (error) {
+      return sendCaught(res, req, 'provider.timeOff.create', asApiError(error));
+    }
+  },
+
+  /** Cancel one period. A malformed id is a 404, never a 422. */
+  'provider.timeOff.cancel': async (req: Request, res: Response) => {
+    try {
+      const uid = uidOf(req);
+      const id = Number(req.params.timeOffId);
+      if (!Number.isInteger(id) || id <= 0) {
+        throw new ApiError('NOT_FOUND', 'Time-off period not found.');
+      }
+      const engine = await import('../../../services/providerAvailabilityEngine');
+      await engine.cancelTimeOff(uid, id, uid);
+      return ok(res, req, { cancelled: true });
+    } catch (error) {
+      return sendCaught(res, req, 'provider.timeOff.cancel', asApiError(error));
     }
   },
 

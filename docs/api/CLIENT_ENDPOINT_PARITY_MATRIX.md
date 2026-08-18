@@ -19,9 +19,9 @@
 | | |
 | --- | --- |
 | Capabilities | 57 |
-| Canonical endpoints mounted | 102 |
+| Canonical endpoints mounted | 105 |
 | Canonical endpoints planned | 4 |
-| Legacy mappings tracked | 121 |
+| Legacy mappings tracked | 124 |
 | Converged (one route family) | 51 |
 | Role-split over ONE service | 4 |
 | Single-surface | 2 |
@@ -69,7 +69,7 @@ direction of whoever wrote it.
 | What is left before my account is usable | SHARED | planned | planned | planned | planned | — |
 | Read and change my customer profile | SHARED | legacy | legacy | — | — | planned |
 | Read and change my account record | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | legacy | planned |
-| Read and change my availability | SHARED | — | — | legacy | legacy | — |
+| Read and change my availability, and book time off | SHARED | — | — | ⚠ mixed | legacy | — |
 | Submit, read, preview and withdraw my documents | SHARED | — | — | ⚠ mixed | legacy | — |
 | Read and change my provider profile | SHARED | — | — | legacy | legacy | planned |
 | Read the services I am approved for | SHARED | — | — | planned | planned | — |
@@ -217,7 +217,7 @@ Legacy still aliased for this capability:
 
 No role split. One identity record for every account, and the ROLE-specific data is deliberately not here — `/me` carries a pointer to which extensions exist, not their contents. A `/me` that carried the provider compliance state would be fetched by every screen, used by almost none, and cached everywhere.
 
-### Read and change my availability
+### Read and change my availability, and book time off
 
 - key: `accountPolicy:providerAvailability` · declared in `services/account/accountPolicy`
 - verdict: **SHARED** · domain service: `services/providerAvailabilityEngine`
@@ -226,9 +226,15 @@ No role split. One identity record for every account, and the ROLE-specific data
 Canonical:
   - `GET /api/v1/provider/availability`
   - `PATCH /api/v1/provider/availability`
+  - `DELETE /api/v1/provider/time-off/:timeOffId`
+  - `POST /api/v1/provider/time-off`
+  - `GET /api/v1/provider/time-off`
 
 Legacy still aliased for this capability:
+  - `DELETE /api/worker/time-off/:id`
   - `GET /api/worker/availability`
+  - `GET /api/worker/time-off`
+  - `POST /api/worker/time-off`
   - `PUT /api/worker/availability`
 
 No role split. The canonical route reads and writes the SAME engine matching consumes, which is the release gate: a provider editing one source while matching reads another is a provider who is unbookable for reasons nobody can see.

@@ -810,8 +810,18 @@ export const ACCOUNT_CAPABILITIES: readonly AccountCapability[] = Object.freeze(
   },
   {
     key: 'providerAvailability',
-    title: 'Read and change my availability',
-    contractIds: ['provider.availability.get', 'provider.availability.patch'],
+    title: 'Read and change my availability, and book time off',
+    // Time off belongs here rather than in a capability of its own: it writes
+    // to the same engine the weekly schedule does, and matching consumes the
+    // combined answer. Two capabilities over one engine is how a schedule and
+    // an absence come to disagree about whether someone is bookable.
+    contractIds: [
+      'provider.availability.get',
+      'provider.availability.patch',
+      'provider.timeOff.cancel',
+      'provider.timeOff.create',
+      'provider.timeOff.list',
+    ],
     domainModule: 'services/providerAvailabilityEngine',
     surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
     roleSplitRationale:
