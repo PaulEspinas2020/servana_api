@@ -1,4 +1,5 @@
 import { firebaseAdmin } from "../middleware/firebaseApp";
+import { lazyValue } from "../middleware/lazyValue";
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
 import {
     getAuth,
@@ -21,7 +22,9 @@ import { toActionCodeSettings } from "../constants/platformContinueUrls";
 
 const dbSchema = dbConfig.schema;
 
-const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
+// Deferred: `getAuthAdmin` resolves the credential eagerly, which made
+// importing this module — and so the composed app — require a live key.
+const defaultAuthAdmin = lazyValue(() => getAuthAdmin(firebaseAdmin));
 
 /**
  * role must be "2" (provider) or "3" (customer/client).

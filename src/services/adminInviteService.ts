@@ -1,4 +1,5 @@
 import { firebaseAdmin } from "../middleware/firebaseApp";
+import { lazyValue } from "../middleware/lazyValue";
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
 import dbQuery from "../db/dbQuery";
 import { db } from "../config";
@@ -7,7 +8,9 @@ import { normalizeEmail } from "../helpers/phoneIdentifier";
 import { createAdminUser } from "./adminPermissionService";
 
 const s = db.schema;
-const auth = getAuthAdmin(firebaseAdmin);
+// Deferred: `getAuthAdmin` resolves the credential eagerly, which made
+// importing this module — and so the composed app — require a live key.
+const auth = lazyValue(() => getAuthAdmin(firebaseAdmin));
 
 /**
  * Where the invitation link returns the invitee after they set a password.

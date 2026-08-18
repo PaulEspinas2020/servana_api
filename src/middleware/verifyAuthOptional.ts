@@ -1,9 +1,12 @@
 import { Request, Response, NextFunction } from "express";
 import { firebaseAdmin } from "./firebaseApp";
+import { lazyValue } from "./lazyValue";
 import { tempId } from "../config";
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
 
-const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
+// Deferred: `getAuthAdmin` resolves the credential eagerly, which made
+// importing this module — and so the composed app — require a live key.
+const defaultAuthAdmin = lazyValue(() => getAuthAdmin(firebaseAdmin));
 
 /**
  * Soft auth middleware: if an Authorization header or __session cookie is present,

@@ -2,13 +2,16 @@ import { Server, Socket } from "socket.io";
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
 
 import { firebaseAdmin } from "./middleware/firebaseApp";
+import { lazyValue } from "./middleware/lazyValue";
 import { tempId, db } from "./config";
 import { setProviderIo, providerRoomKey } from "./provider.realtime";
 import * as repo from "./chat/chat.repository";
 import dbQuery from "./db/dbQuery";
 import { isProviderRole } from "./constants/providerRoles";
 
-const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
+// Deferred: `getAuthAdmin` resolves the credential eagerly, which made
+// importing this module — and so the composed app — require a live key.
+const defaultAuthAdmin = lazyValue(() => getAuthAdmin(firebaseAdmin));
 
 interface SocketActor {
   uid: string;

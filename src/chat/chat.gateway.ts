@@ -3,6 +3,7 @@ import { Server, Socket } from "socket.io";
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
 
 import { firebaseAdmin } from "../middleware/firebaseApp";
+import { lazyValue } from "../middleware/lazyValue";
 import { tempId } from "../config";
 import { setIo, roomName } from "./chat.realtime";
 import * as chatService from "./chat.service";
@@ -14,7 +15,9 @@ import {
 } from "../services/messaging/messagingTelemetry";
 import { withRealtimeEnvelope } from "../services/messaging/conversationDto";
 
-const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
+// Deferred: `getAuthAdmin` resolves the credential eagerly, which made
+// importing this module — and so the composed app — require a live key.
+const defaultAuthAdmin = lazyValue(() => getAuthAdmin(firebaseAdmin));
 
 /**
  * Initialize Socket.IO on the /chat namespace.

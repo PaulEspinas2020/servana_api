@@ -1,10 +1,13 @@
 import { Request, Response, NextFunction } from "express";
 import { firebaseAdmin } from "../middleware/firebaseApp";
+import { lazyValue } from "./lazyValue";
 import { tempId } from "../config";
 import { getAuth as getAuthAdmin } from 'firebase-admin/auth';
 import { isRevoked } from "../services/tokenRevocation";
 
-const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
+// Deferred: `getAuthAdmin` resolves the credential eagerly, which made
+// importing this module — and so the composed app — require a live key.
+const defaultAuthAdmin = lazyValue(() => getAuthAdmin(firebaseAdmin));
 
 const validateFirebaseIdToken = async (req: Request, res: Response, next: NextFunction) => {
   if (!tempId) {
