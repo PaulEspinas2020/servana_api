@@ -9,6 +9,10 @@ import {
   recordLedgerEventBestEffort,
 } from './finance/financeLedger';
 import { LEDGER_INTEGRITY_CHECKS } from './finance/financeReconciliationService';
+import {
+  processPendingDisbursements,
+  type DuePayoutRunSummary,
+} from './disbursement.service';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -742,6 +746,93 @@ export async function releasePayoutHold(
     source: 'admin_portal',
     metadata: { bookingId: res.rows[0].booking_id },
   });
+}
+
+/**
+ * The due-payout batch, run by an admin on demand — with a name and a record.
+ *
+ * ## Why this exists (TAB 01, F-01)
+ *
+ * `POST /api/admin/disbursements/trigger` called
+ * `disbursementService.processPendingDisbursements()` behind
+ * `verifyAuth + verifyRoles([1])` and nothing else. It releases every payout
+ * that is due. No named permission was consulted and no audit record was
+ * written, so the single most consequential money action on the platform was
+ * also the only one that left nothing behind naming who did it.
+ *
+ * The sharpest part is that the control had already been designed. The
+ * permission catalogue has carried
+ *
+ *   payouts.trigger_due_run — "Trigger Due Payout Run",
+ *   action_type 'system', risk_level 'critical', is_dangerous: true
+ *
+ * since it was written. No route ever asked for it. Somebody identified this
+ * capability as dangerous, named it, flagged it, and the route that performs it
+ * never consulted the flag — which is why F-01 is a bypass rather than an
+ * absence, and why the fix is to connect an existing control rather than to
+ * invent one.
+ *
+ * ## Why it lives here and not in disbursement.service.ts
+ *
+ * `adminFinanceService` is the canonical ADMIN money surface: permissioned,
+ * audited, and the one the portal calls. `disbursement.service` owns the
+ * mechanics and is shared with the hourly cron, which has no admin actor to
+ * name. Putting the audit here keeps one actor-bearing entry point without
+ * making the scheduler pretend to be a person.
+ */
+export async function runDuePayoutBatch(
+  adminUid: string,
+  adminName: string | null,
+  requestId: string | null
+): Promise<DuePayoutRunSummary> {
+  let summary: DuePayoutRunSummary;
+
+  try {
+    summary = await processPendingDisbursements();
+  } catch (err) {
+    /**
+     * A failed run is audited too.
+     *
+     * An audit trail that records only the runs that worked answers "who moved
+     * money" and cannot answer "who tried". For a batch that walks every due
+     * payout, a half-completed run is exactly the event an investigation needs
+     * to find, so the attempt is recorded before the error is re-raised.
+     */
+    auditFire({
+      action: 'finance_payout_due_run_triggered',
+      actionCategory: 'payment',
+      outcome: 'failure',
+      actorUid: adminUid,
+      actorType: 'admin',
+      actorDisplayName: adminName,
+      entityType: 'disbursement',
+      entityId: 'due-run',
+      requestId,
+      source: 'admin_portal',
+      metadata: { error: err instanceof Error ? err.message : String(err) },
+    });
+    throw err;
+  }
+
+  auditFire({
+    action: 'finance_payout_due_run_triggered',
+    actionCategory: 'payment',
+    outcome: 'success',
+    actorUid: adminUid,
+    actorType: 'admin',
+    actorDisplayName: adminName,
+    entityType: 'disbursement',
+    entityId: 'due-run',
+    requestId,
+    source: 'admin_portal',
+    metadata: {
+      selected: summary.selected,
+      attempted: summary.attempted,
+      threw: summary.threw,
+    },
+  });
+
+  return summary;
 }
 
 export async function retryPayout(

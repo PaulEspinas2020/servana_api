@@ -179,6 +179,22 @@ that only checked for 401 is what let this ship. It caught a real bug in the
 wrapper's first draft: swallowing the inner middleware's returned promise hung
 `tests/authz-matrix-behaviour.test.ts`, which drives the chain directly.
 
+Mutation-tested, with the mutation confirmed present in source before the run:
+removing `v1AuthEnvelope` from the `authenticated` branch of `authChain` made
+exactly that assertion fail, and only that one — the `provider` and `admin`
+branches were left wrapped and stayed green, which is the discrimination a
+single-branch mutation is supposed to show.
+
+```
+MUTATION APPLIED: v1AuthEnvelope removed from the authenticated chain
+mutation confirmed present in source
+  ● a tokenless v1 request is refused in the v1 envelope › authenticated: 401 carrying error.code and error.requestId
+Tests: 1 failed, 3 passed, 4 total
+```
+
+`src/api/v1/register.ts` was restored to its committed state and verified
+byte-identical to HEAD afterwards.
+
 ---
 
 ## 6. Acceptance criteria
