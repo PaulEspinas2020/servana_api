@@ -229,7 +229,16 @@ describe('the job registry', () => {
   const { SCHEDULED_JOBS } = require('../src/scheduler');
 
   it('declares every cron job with a lease identity', () => {
-    expect(SCHEDULED_JOBS.length).toBe(6);
+    /**
+     * Seven since TAB 09 added `support-sla-sweep`.
+     *
+     * The number is declared rather than derived on purpose: a scheduled job is
+     * a thing that runs on production without anybody asking it to, so adding
+     * one has to appear in a diff. Raising this is the expected case; a DROP is
+     * the one to stop and think about, because a job silently leaving the
+     * registry is a control that stops running with nothing to show for it.
+     */
+    expect(SCHEDULED_JOBS.length).toBe(7);
     for (const job of SCHEDULED_JOBS) {
       expect(typeof job.name).toBe('string');
       expect(job.name.length).toBeGreaterThan(0);

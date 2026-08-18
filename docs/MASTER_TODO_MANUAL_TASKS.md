@@ -12,7 +12,7 @@
 >
 > **Status legend:** `OPEN` · `DONE` · `SUPERSEDED`
 
-Last updated: 2026-08-18 (TAB 08)
+Last updated: 2026-08-18 (TAB 09)
 
 ---
 
@@ -96,6 +96,16 @@ Last updated: 2026-08-18 (TAB 08)
 | 08.3 | Decide the `trigger` mapping. Its seven values have no legacy equivalent — legacy `reason` is free text. Derive it (lossy) or require it only on new cases. Lossiness on a money record is a decision, not a default | `HUMAN-JUDGEMENT` | Decision recorded with its rationale |
 | 08.4 | Confirm no in-flight refund depended on the removed one-shot path at deploy time | `PROD-ACCESS` | Open refund reviews inspected before and after |
 | 08.5 | Re-rate F-11. On the evidence it is a live P0, not a P1: the bypass is reachable in production today | `HUMAN-JUDGEMENT` | Severity re-recorded in the findings register |
+
+## TAB 09 — admin surface coverage
+
+| # | Task | Why blocked | Closes when |
+| --- | --- | --- | --- |
+| 09.1 | Build the support-case workflow UI: state transitions with reason capture, appeal decisions, and attachment preview using the same signed-URL treatment provider documents get | `NO-REPO` | Three screens shipped; the three routes have callers |
+| 09.2 | Confirm every `RETIRE` and `CONVERGE` with legacy telemetry showing observed silence. "Unreachable from the portal" is not "deletable" — the portal is one of six consumers | `PROD-ACCESS` | A full business week of per-endpoint counts |
+| 09.3 | Extend `smoke:admin` with the portal-side half of the coverage assertion: every portal call resolves to a live route | `NO-REPO` | Assertion runs in CI and has been seen red |
+| 09.4 | Execute the CONVERGE deletions once 09.2 confirms silence — `/admin/workers/:uid/archive` (weaker door than `/admin/users/:uid/archive`), `/admin/provider/reconciliation`, and the four disbursement routes | `PROD-ACCESS`, `HUMAN-JUDGEMENT` | Surfaces removed behind deprecation headers and a sunset window |
+| 09.5 | Surface `eligibility-preview` and `evaluate-booking` inside the assignment flow, or retire them. They are decision-support calls with no decision screen | `NO-REPO` | Either wired into the assignment view or retired with telemetry |
 
 ## TAB 16 — Certification & runbook
 
