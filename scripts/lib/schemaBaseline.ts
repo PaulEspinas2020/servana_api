@@ -58,7 +58,7 @@ import {
   type SchemaCatalog,
 } from './schemaModel';
 import { APPROVED_OWNER_ROLES } from './migrationSafety';
-
+
 import { migrationChecksum } from './migrationChecksum';
 export const MIGRATIONS_DIR = path.resolve(__dirname, '..', 'migrations');
 export const BASELINE_DIR = path.resolve(__dirname, '..', 'baseline');
