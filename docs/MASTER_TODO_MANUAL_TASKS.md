@@ -12,7 +12,7 @@
 >
 > **Status legend:** `OPEN` · `DONE` · `SUPERSEDED`
 
-Last updated: 2026-08-18 (TAB 14)
+Last updated: 2026-08-18 (TAB 16 — terminal)
 
 ---
 
@@ -154,6 +154,9 @@ Last updated: 2026-08-18 (TAB 14)
 | # | Task | Why blocked | Closes when |
 | --- | --- | --- | --- |
 | 16.1 | Verify database backups actually **restore** — a backup nobody has restored is a hypothesis. Record RPO/RTO and last successful restore date | `PROD-ACCESS` | A restore completed and dated |
+| 16.6 | **DO THIS FIRST.** Close TAB 02: the portal serves no CSP and no `X-Frame-Options` on any real page — declared under `for = "/*.html"`, which never matches a SPA navigation. A live P0 on the surface that approves refunds and releases payouts, and it is hours of work | `NO-REPO` | `curl -I` on `/` and a deep link both return CSP, `frame-ancestors 'none'` and `X-Frame-Options` |
+| 16.7 | Get `servana_adminportal` onto a machine with this book. Four TABs are unexecutable without it (02, 07, 12, 15) and eight more are half-done | `NO-REPO` | Repo present; `npm ci && npm run verify:release` green from a clean clone |
+| 16.8 | Re-run the certification once 16.6 and 16.7 are done. The verdict is NOT_CERTIFIED and cannot change while four launch-gate rows have no evidence of any kind | `HUMAN-JUDGEMENT` | Every launch-gate row green, or explicitly accepted with a named owner |
 | 16.2 | Verify the IAM deletion of the two Firebase Admin keys still in git history. They were rotated; the deletion is **unverified** | `PROD-ACCESS`, `NO-CRED` | IAM confirms the old keys no longer exist |
 | 16.3 | Document which of the **two env files on the production host** is authoritative for which variable — `pm2 env` does not show them, and this has caused a P0 before | `PROD-ACCESS` | Environment inventory written into the runbook |
 | 16.4 | Provision `ADMIN_API_BASE_URL` and a scoped, rotatable CI admin identity (a real Firebase identity, **not** a super admin) for `smoke:contracts` | `NO-CRED` | `smoke:contracts` executes rather than reporting `NOT_AVAILABLE` |

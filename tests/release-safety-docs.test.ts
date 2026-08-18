@@ -300,12 +300,16 @@ describe('the checklist is runnable', () => {
     expect(alert!.severity).toBe('P0');
     expect(alert!.metric).toBe('public_path_auth_failures_total');
 
-    // Absolute, not a baseline comparison. These are the words that would mean
-    // it can go quiet while the invariant is still violated.
-    expect(alert!.condition.toLowerCase()).toContain('any occurrence');
-    for (const relative of ['median', 'baseline', '× the', 'compared to']) {
-      expect(alert!.condition.toLowerCase()).not.toContain(relative.toLowerCase());
-    }
+    // Structural, not keyword-hunting. The first draft of this assertion forbade
+    // the word "baseline" anywhere in the condition and failed on a condition
+    // that says it is NOT relative to a baseline — a substring test where an
+    // exact one was meant, which is the very hazard this repository has been
+    // bitten by before.
+    //
+    // So: the rule must LEAD with the absolute clause, and must carry no numeric
+    // threshold. A rate condition cannot satisfy both.
+    expect(alert!.condition.trim()).toMatch(/^ANY occurrence\b/);
+    expect(alert!.condition).not.toMatch(/>\s*\d/);
 
     // The playbook must not send the responder to credentials, which is where
     // an auth-shaped alert naturally points and where the answer was not.
