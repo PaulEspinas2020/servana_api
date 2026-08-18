@@ -2,120 +2,84 @@
 
 Compact recovery state. Not a transcript.
 
-## Master Command
+**Rewritten 2026-08-18 at TAB 00.** The previous contents described the 15-TAB
+Backend Centralization book, on a Windows machine, with a local PostgreSQL 16 on
+`PATH`. All three are wrong now. Reconciled rather than appended to, because a
+memory file read as current is more dangerous than no memory file.
 
-**Servana Backend Centralization Command Book** — 15 standalone, priority-ordered
-TABs. Primary goal: Customer Mobile, Customer Web, Provider Mobile, Provider Web
-and Admin call the *same canonical endpoints* over *one domain service /
-state machine*; role-specific routes only where authz/actions/payload genuinely
-differ.
+## Master Command — current
 
-Hard constraints carried into every TAB:
+**SERVANA · MASTER COMMAND · V1 — Admin Portal → Backend Production Launch.**
+17 TABs (00–16), measured 2026-08-18 against the running production system.
+Supersedes the 12-TAB Backend Centralization book and the 15-TAB book before it.
 
-- Providers are a protected live production dependency — do not break them.
-- Catalog V2 is certified: `catalog_categories → catalog_subcategories → services`;
-  `services.id` is the canonical Service identity.
-- `service_families` is legacy coarse provenance — never the bookable identity.
-- Shared changes must be additive/backward-compatible until every client migrates.
-- No global field-rewriting middleware on canonical v1 routes — explicit DTOs.
-- Never claim a test passed unless it was executed.
+Execution order: **00 is a hard gate** → 01–05 launch-blocking, parallelisable →
+06–08 integration core, strictly sequential → 09–15 hardening, parallelisable →
+16 certifies, terminal.
 
-## Repository
+Authority page: **`docs/LAUNCH_BASELINE.md`**. Manual queue:
+**`docs/MASTER_TODO_MANUAL_TASKS.md`**. Live state: **`state.json`** beside this
+file.
 
-`C:\Users\paulg\OneDrive\Desktop\servana_api-main` — Node + TypeScript + Express 5
-+ Postgres (`pg`), Socket.IO, Firebase Admin, Jest/ts-jest.
+## The one fact that reframes everything
+
+The blocker every prior session recorded — *deploy failed on a JS-heap OOM,
+production still runs `2e03a4b`, production mounts no `/api/v1`* — **is gone.**
+Production runs `d4b0150`; 98 of 98 probeable v1 routes answer; an unknown path
+404s, so routing precedes auth.
+
+What replaced it is smaller and sharper: **the v1 surface has 1 admin-authenticated
+route out of 105.** v1 was built for the client apps. The admin portal cannot
+migrate onto a surface that does not model its domain. The integration gap is a
+*missing domain*, not a deploy. TAB 06 builds it; TAB 07 cuts the portal over.
+
+## Repository & environment — corrected
+
+`/Users/user/servana_api` on **macOS**. Node v24.19.0, npm 11.17.0.
+
+**Absent and load-bearing:** `gh`, `psql`, `actionlint`, `.env`,
+`servana-serviceAccountKey.json`, **`servana_adminportal`**, and all four client
+repos. PGlite is the only database engine reachable. Production access is **not
+authorised** for this session.
 
 Critical paths:
 
 ```
-src/api/v1/contract.ts          ONE contract array — all 95 v1 endpoints
-src/api/v1/register.ts          route composition; the only v1 mount point
-src/api/v1/convergence.ts       federated capability registry + convergence verdicts
-src/services/booking/           transitionExecutor (ONE executor) + eligibilityPipeline
-scripts/migrations/             36 migrations, 001..035
-scripts/baseline/000-baseline.sql   CAPTURED production schema — 120 tables
-scripts/lib/schemaModel.ts      static DDL replay (was under-reporting; widened)
-scripts/lib/embeddedEngine.ts   EXECUTED replay on PostgreSQL 18 via PGlite
-scripts/lib/schemaBaseline.ts   gap / requirements / semantics / ledger / caches
+src/api/v1/contract.ts              ONE contract array — every v1 endpoint
+src/api/v1/register.ts              the only v1 mount point; throws on an
+                                    implemented entry with no handler
+src/routes/disbursement.routes.ts   ← TAB 01: FOUR routes, no requirePermission
+src/routes/adminFinance.routes.ts   ← the same capability, correctly guarded
+src/services/booking/               transitionExecutor — ONE executor
+scripts/migrations/                 38 files, 001..037
+scripts/baseline/000-baseline.sql   CAPTURED production schema — 121 tables
+scripts/jest-heap-guard.js          the permanent heap bound (TAB 01 of the
+                                    provider-web book); peak 1101.7/4288 MB
 ```
 
-Gates — **all three green**:
+## Gates — all green on this machine, 2026-08-18
 
-- `npm run verify` — typecheck + typecheck:tests + guard + 10 doc-drift + test:ci.
-  **PASS exit 0 — 251 suites, 5656 tests.**
-- `npm run db:verify` — static fresh-DB gate. **PASS exit 0.**
-- `npm run db:verify:embedded` — executed fresh-DB gate. **PASS exit 0.**
+- `npm run verify` — **PASS exit 0, 276 suites, 5935 tests, 0 failures.**
+  (The book expects 265/~5769; the book's figure is stale, not the run.)
+- `npm run db:verify:embedded` — **PASS, 132 tables** (121 restored + 8 applied).
+- `npm run schema:authority` — **PASS exit 0, UNMANAGED 0.**
 
-## Environment — corrected
-
-**PostgreSQL 16.14 IS installed locally** (`C:\Program Files\PostgreSQL\16\bin`,
-service `postgresql-x64-16` listening on 5432). It is simply not on `PATH`. An
-earlier session — and this one, initially — recorded "no engine reachable"; that
-was a misread probe and it is wrong.
-
-Production: Linode `192.46.224.126`, SSH alias `servana` (root, key in
-`~/.ssh/config`). App at
-`/home/github-runner/actions-runner/_work/servana_api/servana_api`. DB is
-`localhost:5432`, database `servana`, user `admin`. The **repo's local `.env` has
-EMPTY `DB_HOST`/`DB_USER`/`DB_DATABASE`** — no production credentials live here.
-
-## TAB status — all 15 certified
-
-| TAB | Subject | Verdict |
-| --- | --- | --- |
-| 01–14 | (as certified by prior sessions) | CERTIFIED_WITH_NONBLOCKING_GAPS |
-| 15 | Database baseline / fresh DB | **CERTIFIED_WITH_NONBLOCKING_GAPS** |
-
-## TAB 15 — what this session established
-
-Three corrections, each found by checking rather than trusting:
-
-1. **The static model was under-reporting.** It recorded a table only when an
-   `ALTER TABLE` named it, so DML-only dependencies were invisible. The chain
-   dies on **001**, not 009 — 001 seeds by reading `servana.service_option_meta`
-   and `servana.bookings`. 11 reported → 18 real. `db:verify:embedded` now fails
-   the build if the model reports less than the engine proves (engine ⊆ model).
-2. **"No engine reachable" was false** — see Environment above.
-3. **The baseline destabilised the test suite**, and the reflex "known flake"
-   explanation was wrong. Verified by stashing: 251/251 clean without it,
-   intermittent with it. Cause: 11 un-cached re-parses of a 235 KB baseline
-   raised heap enough that `catalog-banner`'s regex over a 5.6 MB data URI threw
-   `RangeError` instead of its size error. Fixed by caching in `schemaBaseline.ts`.
-
-**The gap is closed.** `pg_dump --schema-only --no-owner --no-privileges` was
-streamed over SSH under explicit user authorisation (read-only; nothing written
-on the server, no credential moved). Sanitised: 0 rows, 0 owners, 0 grants, 0
-forbidden patterns. The gate restores it into PostgreSQL 18 and proves **121
-tables, 0 pending migrations**.
-
-**Key architecture point:** the baseline IS the current schema, so the chain is
-NOT replayed on top of it — 12 of 36 migrations are *spent* and fail (001–008
-read `services.category`, removed by Catalog V2). Instead the version is marked
-in `servana.schema_migrations` (`ledgerAtBaselineSql()`), Flyway-baseline style.
-
-## Open items — highest first
-
-- **P0 Production has NO `schema_migrations` ledger.** It has never existed;
-  `deploy.yml` never invokes the runner, so migrations were applied by hand.
-  `npm run migrations:apply` against production today would find all 36 pending
-  and fail on 001. Marking it is a **production write** and was NOT done.
-- **P1 A 4 MB+ banner upload can throw `RangeError` instead of a clean 400** —
-  `/^data:([^;,]+);base64,(.+)$/` over a multi-MB string. Real, product-side,
-  deliberately not fixed here (outside TAB 15).
-- **P1 Ownership unverified on a real engine** — PGlite has no role separation;
-  the `fresh` CI job now activates but has not been observed running.
-- **P2 `scripts/**` is typechecked by neither tsconfig.**
+Not runnable here: `db:verify` (non-embedded), `gh run list`, every production
+probe. All queued in the manual register.
 
 ## Git / working tree
 
-Branch `main`. Local commits this session:
+Branch `main`. `HEAD` = `0aaf89f`. `origin/main` = `d4b0150`. **2 commits ahead,
+working tree CLEAN.** Nothing pushed. Nothing deployed. No production read or
+write this session.
 
-```
-917569a  supervisor: repair MEMORY.md
-bad3c49  supervisor: TAB 15 checkpoint after the engine correction
-5db9263  tab15: execute the migration chain on a real PostgreSQL — the model was wrong
-8282e46  centralization: TABs 06-15 — booking experiences through fresh-DB gap
-36ca152  (inherited)
-```
+## Standing constraints
 
-Nothing pushed. Nothing deployed. One authorised production READ.
+- A push to `main` **IS** the production deploy — self-hosted runner, migrations,
+  PM2 restart, no staging hop. Local-only until an explicit, reaffirmed
+  per-occasion go. Prior authorisation does not carry forward.
+- §4 Additive Compatibility: additive-ness is proven by **reading** the five
+  other consumer repositories, never by reasoning. Those repos are absent, so
+  every such proof is currently a manual task, not an assumed pass.
+- Never claim a test passed unless it was executed.
+- Reading source is never sufficient evidence in this book.
