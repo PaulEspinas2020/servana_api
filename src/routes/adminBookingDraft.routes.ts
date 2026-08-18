@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import verifyAuth from '../middleware/verifyAuth';
 import verifyRoles from '../middleware/verifyRoles';
+import { adminRateLimit } from '../middleware/adminRateLimit';
 import { requirePermission } from '../middleware/requirePermission';
 import * as ctrl from '../controllers/adminBookingDraftController';
 
 const router = Router();
-const adminOnly = [verifyAuth, verifyRoles([1])];
+const adminOnly = [verifyAuth, verifyRoles([1]), adminRateLimit];
 
 // Drafts are gated behind bookings.create — same permission as the wizard
 router.post(

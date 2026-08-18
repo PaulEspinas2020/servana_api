@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import verifyAuth from '../middleware/verifyAuth';
 import verifyRoles from '../middleware/verifyRoles';
+import { adminRateLimit } from '../middleware/adminRateLimit';
 import { requirePermission } from '../middleware/requirePermission';
 import * as ctrl from '../controllers/adminAuditController';
 
 const router = Router();
-const adminOnly = [verifyAuth, verifyRoles([1])];
+const adminOnly = [verifyAuth, verifyRoles([1]), adminRateLimit];
 
 // Global audit log list
 router.get('/admin/audit-logs',                              ...adminOnly, requirePermission('audit_logs.view'), ctrl.listAuditLogs);

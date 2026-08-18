@@ -42,6 +42,21 @@ const corsOptionsDelegate = function (req: any, callback: any) {
 const port = process.env.PORT;
 app.disable("x-powered-by");
 app.set("trust proxy", 1); // trust first hop (Nginx on same server) only — prevents IP spoofing
+
+/**
+ * Security headers, BEFORE the CORS delegate (TAB 05, F-06).
+ *
+ * The order is load-bearing, not stylistic. `corsOptionsDelegate` answers a
+ * request from an origin that is not on the whitelist by disabling CORS for it —
+ * the request is still served, it is the browser that refuses to hand the
+ * response to the page. Mounting helmet after CORS would leave those responses,
+ * and every error response produced before the CORS layer, without HSTS or
+ * `nosniff`. The headers that matter most on a refused request are the ones
+ * that say how to treat the bytes anyway.
+ */
+import { apiSecurityHeaders } from "./middleware/securityHeaders";
+app.use(apiSecurityHeaders);
+
 app.use(cors(corsOptionsDelegate))
 app.use(cookieParser());
 
