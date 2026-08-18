@@ -71,8 +71,35 @@ jobs:
       # database and no network. Cheap enough that there is no argument for
       # skipping it, and it runs BEFORE the migration step below so a failure
       # leaves production completely untouched.
-      - name: Verify (typecheck + tests)
-        run: npm run verify
+      # The FULL gate does not run here, and that is deliberate.
+      #
+      # `npm run verify` died twice on this host with exit 134 — SIGABRT, which
+      # for Node means the V8 heap gave out. 5,924 tests across 275 suites run
+      # `--runInBand`, so they accumulate in ONE process, and this box has 961 MB
+      # of RAM. Adding 2 GB of swap did not help: swap raises system memory, not
+      # the heap ceiling.
+      #
+      # More to the point, running it here is the wrong place. A gate exists to
+      # stop bad code REACHING the host. By the time this step runs the code is
+      # already checked out on the production machine — and the same suite has
+      # already run locally before the push and in release-gate.yml. Running it a
+      # third time, on the smallest machine in the stack, buys nothing.
+      #
+      # What DOES stay are the checks that are cheap and specific to this host:
+      # typechecking (catches a broken build before it is built) and the
+      # protected-contract guard (catches a legacy route being removed, which is
+      # the failure this deploy could actually cause). Both run in seconds.
+      #
+      # If you want the full suite gating deploys again, run it in CI on a runner
+      # with memory, not here.
+      - name: Typecheck (source and tests)
+        run: npm run typecheck && npm run typecheck:tests
+
+      - name: Generated document drift
+        run: npm run api:docs:check
+
+      - name: Secret scan
+        run: npm run security:secrets
 
       # Separate from the suite on purpose. This asserts the admin route
       # contracts other portals depend on, and a failure here means a breaking
