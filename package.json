@@ -62,7 +62,8 @@
     "baseline:plan": "ts-node scripts/capture-schema-baseline.ts --plan",
     "baseline:capture": "ts-node -r dotenv/config scripts/capture-schema-baseline.ts",
     "security:secrets": "ts-node scripts/scan-secrets.ts",
-    "security:deps": "npm audit --omit=dev --audit-level=high"
+    "security:deps": "npm audit --omit=dev --audit-level=high",
+    "v1:mounted": "ts-node scripts/verify-v1-mounted.ts"
   },
   "keywords": [],
   "author": "Cla H.",
