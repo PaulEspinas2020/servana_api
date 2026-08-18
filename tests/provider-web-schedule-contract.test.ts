@@ -15,7 +15,12 @@ describe('provider web schedule boundary', () => {
     expect(save).toContain('schedule.length === WEB_ALL_DAYS.length');
     expect(save).toContain('new Set(submittedDays).size === WEB_ALL_DAYS.length');
     expect(save).toContain('WEB_ALL_DAYS.every(day => submittedDays.includes(day))');
-    expect(save.indexOf('hasCanonicalWeek')).toBeLessThan(save.indexOf('bridgeToEngineSlots(schedule)'));
+    // Matches the CALL, not its argument list. This asserted
+    // `bridgeToEngineSlots(schedule)` and broke when TAB 06 added a second
+    // argument to carry mobile capacity forward — the ordering it exists to
+    // check was never in question. A source-text assertion should pin the
+    // narrowest thing that expresses its intent.
+    expect(save.indexOf('hasCanonicalWeek')).toBeLessThan(save.indexOf('bridgeToEngineSlots('));
   });
 
   it('requires explicit enabled and slots fields instead of silently dropping malformed days', () => {
