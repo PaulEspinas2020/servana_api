@@ -1,3 +1,6 @@
+-- SERVANA:DESTRUCTIVE — drops 39 unique constraints. The runner refuses this
+-- unless SERVANA_APPLY_DESTRUCTIVE names it, so a routine deploy cannot apply
+-- it by side effect. Requires an approved backup and change window.
 -- 037 · Drop the redundant GLOBAL unique constraints on notification_key (TAB 02)
 --
 -- ── The defect ───────────────────────────────────────────────────────────────

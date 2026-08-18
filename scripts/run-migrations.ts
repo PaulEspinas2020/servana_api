@@ -3,7 +3,12 @@ import fs from 'fs';
 import path from 'path';
 import { pool } from '../src/db/dbQuery';
 import { db } from '../src/config';
-import { stripTransactionControl } from './lib/migrationSafety';
+import {
+  stripTransactionControl,
+  declaresDestructive,
+  destructiveAuthorised,
+  DESTRUCTIVE_ACK_VAR,
+} from './lib/migrationSafety';
 
 const apply = process.argv.includes('--apply');
 const migrationsDir = path.resolve(__dirname, 'migrations');
@@ -43,6 +48,28 @@ async function main() {
     }
     console.log(JSON.stringify({ mode: apply ? 'apply' : 'plan', target: `${host}/${database}`, applied: ledger.size, pending: pending.map((x) => x.name) }, null, 2));
     if (!apply) return;
+
+    /**
+     * A migration that declares itself destructive is refused unless this
+     * deploy named it. Checked for ALL pending migrations before any of them
+     * runs, so an unauthorised one cannot be discovered halfway through a batch
+     * with earlier migrations already committed.
+     */
+    const unauthorised = pending.filter(
+      (m) => declaresDestructive(m.sql) && !destructiveAuthorised(m.name),
+    );
+    if (unauthorised.length) {
+      const names = unauthorised.map((m) => m.name).join(', ');
+      throw new Error(
+        'Refusing to apply destructive migration(s) without authorisation: ' +
+          names +
+          '. Set ' +
+          DESTRUCTIVE_ACK_VAR +
+          ' to the migration name(s), comma-separated, after an approved backup ' +
+          'and change window.',
+      );
+    }
+
     for (const migration of pending) {
       await client.query('BEGIN');
       try {

@@ -92,58 +92,49 @@ jobs:
       # Its position is now load-bearing: after verify and build, before the
       # restart. A failing test touches nothing; a failing migration stops
       # short of the restart, so the old code keeps serving.
+      # Applied by the repository's own runner, not by a bash loop.
+      #
+      # The loop this replaces kept its own ledger: `.done` marker FILES under
+      # /home/github-runner/migrations-done. `servana.schema_migrations` was
+      # created in the database in August and records what has actually been
+      # applied. Two ledgers for one question is one too many, and they had
+      # already diverged — 030-035 were applied by hand through the table, so
+      # the runner host has no markers for them and the loop would have re-run
+      # all six.
+      #
+      # scripts/run-migrations.ts is what TAB 02 asks for and the loop was not:
+      #   - pg_advisory_lock('servana-controlled-migrations') so two deploys
+      #     cannot migrate concurrently
+      #   - sha256 per migration, refusing to proceed if an APPLIED migration's
+      #     content has changed since
+      #   - one transaction per migration, with the ledger insert inside it, so
+      #     a failure cannot leave a migration applied but unrecorded
+      #   - servana.schema_migrations as the single source of truth
+      #
+      # It also refuses any migration marked SERVANA:DESTRUCTIVE unless
+      # SERVANA_APPLY_DESTRUCTIVE names it. 037 drops 39 constraints; without
+      # that guard this step would have applied it on the next push, with nobody
+      # having decided to.
+      #
+      # Position is unchanged and still load-bearing: after verify and build,
+      # before the restart. A failing test touches nothing; a failing migration
+      # stops short of the restart, so the old code keeps serving.
+      - name: Plan pending DB migrations
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        # Printed before anything is applied, so the deploy log records what was
+        # about to change even when the apply step then fails.
+        run: npm run migrations:plan
+
       - name: Run pending DB migrations
         env:
-          PGPASSWORD: ${{ secrets.DB_PASSWORD }}
-        run: |
-          # Every migration, in filename order, each run at most once.
-          #
-          # This step used to name each file individually and stopped at 006, so
-          # 007-017 were never applied by any deploy. The name said "pending"
-          # while the body ran a fixed list, which is why nobody noticed: 009
-          # half-applied by hand left provider_certifications missing, and
-          # GET /provider/documents queried a table that did not exist. The
-          # portal calls it with silent:true, so the 500 rendered as an empty
-          # screen rather than an error.
-          #
-          # The ledger is unchanged — the same .done marker files the hardcoded
-          # blocks used — so migrations already recorded as applied stay applied.
-          DONE_DIR="/home/github-runner/migrations-done"
-          mkdir -p "$DONE_DIR"
-
-          # 001 was superseded by 002 — mark done so it never runs again.
-          touch "$DONE_DIR/001-massage-services.done"
-
-          # 002-008 are catalog SEED migrations and are already applied in
-          # production. 007 in particular DELETEs from service_options before
-          # re-inserting, which would issue new option IDs — and the mobile apps
-          # reference those IDs (§63). They are marked done rather than re-run.
-          for seed in 002-massage-specific-services 003-nail-services                       004-hair-barber-services 005-beauty-services                       006-beauty-catalog-description 007-aircon-cleaning-services                       008-aircon-installation-repair-services; do
-            touch "$DONE_DIR/$seed.done"
-          done
-
-          FAILED=0
-          for FILE in $(ls ./scripts/migrations/*.sql | sort); do
-            NAME=$(basename "$FILE" .sql)
-            DONE_FILE="$DONE_DIR/$NAME.done"
-            if [ -f "$DONE_FILE" ]; then
-              echo "skip    $NAME (already applied)"
-              continue
-            fi
-            echo "running $NAME..."
-            # ON_ERROR_STOP so a failing statement fails the step instead of
-            # leaving a half-applied schema that reads as success.
-            if psql -h 127.0.0.1 -U admin -d servana -v ON_ERROR_STOP=1 -f "$FILE"; then
-              touch "$DONE_FILE"
-              echo "OK      $NAME"
-            else
-              echo "::error::migration $NAME failed"
-              FAILED=1
-              break
-            fi
-          done
-
-          exit $FAILED
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          # Name a migration here ONLY for a deploy that intends it, with a
+          # backup taken. Leaving it set permanently would authorise every
+          # future destructive migration too, which is the accident the guard
+          # exists to prevent.
+          SERVANA_APPLY_DESTRUCTIVE: ${{ vars.SERVANA_APPLY_DESTRUCTIVE }}
+        run: npm run migrations:apply
 
       - name: Restart PM2
         run: |

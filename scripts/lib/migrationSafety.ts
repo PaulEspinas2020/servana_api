@@ -173,10 +173,54 @@ export type Severity = 'BLOCKING' | 'ADVISORY';
 
 export interface MigrationFinding {
   file: string;
-  rule: 'transaction-control' | 'object-ownership' | 'filename';
+  rule: 'transaction-control' | 'object-ownership' | 'filename' | 'destructive';
   severity: Severity;
   detail: string;
 }
+
+/**
+ * The marker a migration uses to declare that it destroys something.
+ *
+ * Deliberately explicit rather than inferred. A scanner guessing from SQL would
+ * be wrong in both directions: `DROP TRIGGER ... ` immediately recreated (031)
+ * is not destructive, and a `DELETE FROM` hidden inside an `EXECUTE format(...)`
+ * string — which is exactly how 037 drops its constraints — cannot be seen by
+ * pattern-matching at all. The author knows; the scanner does not.
+ */
+export const DESTRUCTIVE_MARKER = 'SERVANA:DESTRUCTIVE';
+
+/**
+ * Whether a migration declares itself destructive.
+ *
+ * Read from a comment, so it survives `stripTransactionControl` and needs no
+ * separate manifest that could drift from the file it describes.
+ */
+export const declaresDestructive = (sql: string): boolean => sql.includes(DESTRUCTIVE_MARKER);
+
+/**
+ * The env var that authorises ONE destructive migration by name.
+ *
+ * Per-migration on purpose. A blanket "allow destructive" flag set once in a CI
+ * environment would silently authorise every future destructive migration too,
+ * which is the accident this exists to prevent — not the one it would create.
+ */
+export const DESTRUCTIVE_ACK_VAR = 'SERVANA_APPLY_DESTRUCTIVE';
+
+/**
+ * Whether `name` is authorised to run destructively.
+ *
+ * The value is a comma-separated list of migration names, so a deploy that
+ * genuinely intends two of them can say so without a blanket flag.
+ */
+export const destructiveAuthorised = (
+  name: string,
+  raw: string | undefined = process.env[DESTRUCTIVE_ACK_VAR],
+): boolean =>
+  String(raw ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .includes(name);
 
 export const migrationNumber = (fileName: string): number | null => {
   const match = /^(\d{3})-/.exec(fileName);
@@ -213,6 +257,17 @@ export const scanMigration = (fileName: string, sql: string): MigrationFinding[]
       detail:
         `line ${finding.line}: ${finding.statement} — the deploy wrapper owns the transaction. ` +
         'Stripped before execution; new migrations should omit it.',
+    });
+  }
+
+  if (declaresDestructive(sql)) {
+    findings.push({
+      file: fileName,
+      rule: 'destructive',
+      severity: 'ADVISORY',
+      detail:
+        `declares ${DESTRUCTIVE_MARKER} — the runner will refuse it unless ` +
+        `${DESTRUCTIVE_ACK_VAR} names it.`,
     });
   }
 
