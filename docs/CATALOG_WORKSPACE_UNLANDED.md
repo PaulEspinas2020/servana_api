@@ -1,65 +1,77 @@
-# Admin catalog workspace — unlanded work on `feat/catalog-workspace`
+# Admin catalog workspace — `feat/catalog-workspace` vs `main`
 
-**Decision (2026-08-19): do NOT merge this branch. Treat it as a specification and
-reimplement against Catalog V2. The branch is kept, not deleted.**
+**Corrected 2026-08-19. An earlier version of this file claimed the admin catalog
+workspace had never landed. That was wrong.** It was written after grepping `main`
+for the branch's exact function names, finding none, and concluding the feature was
+absent. Every one of them exists on `main` under a different name.
 
-## What exists
+| Spec name on the branch  | Name on `main`           |
+|--------------------------|--------------------------|
+| `getAdminCatalogOverview`| `getCatalogOverview`     |
+| `createMapping`          | `createOfferingMapping`  |
+| `archiveMapping`         | `archiveOfferingMapping` |
+| `runPublishPreview`      | `getPublishPreview`      |
+| `publishOffering`        | `publishOffering`        |
+| `getAuditTrail`          | `getCatalogAuditTrail`   |
 
-Branch `feat/catalog-workspace`, tip `1fda14a`, two commits:
+`main` also has `updateOfferingMapping`, which the branch never had. The decision not
+to merge still stands — see the schema section below — but the reason is not that the
+work is missing.
 
-| Commit | Contents |
-|---|---|
-| `30fb364` | `feat(catalog): add overview, mappings CRUD, publish flow, audit trail` |
-| `1fda14a` | `test(catalog): add integration test spec for admin catalog workspace` — 206 lines |
+The branch's test file is worth one clarification too: **all 25 of its assertions are
+`expect(true).toBe(true)`.** It is a specification written in the shape of a test file,
+not a suite. Nothing regressed when it was left unmerged, because it never tested
+anything.
 
-It adds three service functions and a test suite covering them:
+## Why the branch still must not be merged
 
-- `getAdminCatalogOverview` — offering list, status and `mobileProtected` filters,
-  nested mapping rows with `specificServiceCount`
-- `createMapping` — including "reactivates an archived mapping instead of
-  duplicating" and refusal on an archived offering
-- `archiveMapping`
-
-**None of the three exists anywhere on `main`**, and no `main` test references them.
-This is unlanded feature work, not a superseded duplicate — which is why the branch
-was kept when two genuinely superseded branches (`fix/deploy-eaddrinuse` `f7d417d`,
-`codex/backup-pre-sync-20260807` `c4a5a60`) were deleted the same day.
-
-## Why merging it is the wrong move
-
-The branch point is `89b33ec`, **2026-07-10**. Every Catalog V2 migration landed
-**2026-08-11**, a month later:
-
-    020-catalog-v2-expand            021-catalog-v2-backfill
-    023-catalog-v2-service-families-view
-    024-catalog-v2-canonical-rename  025-catalog-v2-services-sequence
-
-`024` is the problem. It does not add tables, it **renames and swaps** them:
+Branch point `89b33ec`, 2026-07-10. Every Catalog V2 migration landed 2026-08-11, and
+`024-catalog-v2-canonical-rename` **swaps two tables**:
 
     ALTER TABLE servana.services         RENAME TO catalog_services;
     ALTER TABLE servana.service_families RENAME TO services;
 
-The branch's service is written against `service_id`, `service_options`,
-`service_option_meta` and `service_family_name` with their **pre-swap** meaning. A
-merge would therefore produce code that uses the same identifiers to mean the
-opposite table. That compiles, runs, returns 200 and reads the wrong rows — the
-failure mode with no symptom until someone reconciles the data by hand.
+The branch's code uses `service_id`, `service_options` and `service_family_name` with
+their pre-swap meaning, so merging it produces code using the same identifiers for the
+opposite table — it would compile, run, return 200 and read the wrong rows.
+`git merge-tree` also conflicts in both catalog files.
 
-`git merge-tree main feat/catalog-workspace` also reports content conflicts in
-`src/controllers/providerCatalogController.ts` and
-`src/services/providerCatalogService.ts`, so there is no mechanical resolution
-available either. Hand-resolving a conflict in a service whose underlying tables
-were swapped underneath it is not a merge, it is a rewrite with extra steps.
+Both branches are now on the remote (`origin/feat/catalog-workspace`,
+`origin/feat/admin-integration`), so nothing depends on one laptop.
 
-## What to do instead
+## Behavioural divergences between the spec and `main`
 
-Reimplement the three functions against the V2 schema, and port `1fda14a`'s test
-spec — that test is the most valuable thing on the branch, because it states the
-intended behaviour independently of the schema it was written for. Note in
-particular the two cases that are easy to miss: reactivating an archived mapping
-rather than inserting a duplicate, and refusing a mapping on an archived offering.
+These are open questions for a product decision, not defects. `main` is the shipped
+behaviour; the spec is what the branch author intended.
 
-Recover the originals with:
+| Spec says | `main` does |
+|---|---|
+| `createMapping` throws when the offering is archived | no status check at all — only that the offering exists |
+| `createMapping` throws when the mapping is already active | `ON CONFLICT DO UPDATE` silently succeeds |
+| `archiveMapping` refuses to archive the **last active mapping on a published offering** | no such guard; a live offering can be left with none |
+| publish preview **blocks** when a mapping has no priced specific services | emits a **warning**, and never checks price at all |
+| publish preview warns when `providerWebVisible` is false | no such warning |
+| `publishOffering` throws `code: 'PUBLISH_BLOCKED'` | throws `code: 'VALIDATION'` |
 
-    git show 1fda14a:tests/admin-catalog.test.ts
-    git show 30fb364:src/services/providerCatalogService.ts
+The third row is the one worth attention: it is a data-integrity guard, not a
+preference. Everything else is a judgement call about strictness.
+
+## Defects found during this audit, and fixed
+
+Independent of the spec, in code that had already shipped:
+
+1. **`getCatalogAuditTrail` ordered by `created_at` alone.** Audit rows written in one
+   transaction share a timestamp, so their relative order was undefined — and the query
+   pages with `LIMIT`/`OFFSET`, so a row could appear on two pages or on neither. Now
+   `ORDER BY ae.created_at DESC, ae.id DESC`.
+2. **The same query ended in `.catch(() => ({ rows: [] }))`.** A failed read reported
+   "no audit events". An audit trail that cannot distinguish *nothing happened* from
+   *I could not look* is worse than one that errors. The catch is gone.
+
+Both are covered by `tests/catalog-audit-trail.test.ts`, which was mutation-tested:
+reverting either fix fails exactly the test written for it.
+
+## Recovering the branch work
+
+    git show 1fda14a:tests/admin-catalog.test.ts               # the spec
+    git show 30fb364:src/services/providerCatalogService.ts    # the branch implementation
