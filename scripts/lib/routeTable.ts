@@ -211,6 +211,26 @@ export function parseMountOrder(appTsPath = path.join(REPO_ROOT, 'src', 'app.ts'
   let order = 0;
 
   while ((um = useRe.exec(src)) !== null) {
+    /**
+     * A COMMENTED-OUT mount is not a mount.
+     *
+     * Measured 2026-08-19: commenting out `app.use("/api", cors(...), providerRoutes)`
+     * left this table reporting all 39 `/worker/` routes as mounted, and every
+     * consumer believed it — the protected-contract guard, the orphan ratchet,
+     * the authorization inventory and the API docs generator are all built on
+     * this function. Deleting the same line correctly dropped 628 routes to 493.
+     *
+     * Commenting a router out is the ordinary way a router gets disabled, so
+     * the one edit most likely to remove a route was the one edit this table
+     * could not see.
+     *
+     * Line comments only. A mount inside a block comment would need brace
+     * tracking, and claiming more precision than the check has is how the
+     * previous version of the protected-contract guard came to be believed.
+     */
+    const lineStart = src.lastIndexOf('\n', um.index) + 1;
+    if (/^\s*\/\//.test(src.slice(lineStart, um.index + 1))) continue;
+
     const close = matchingParen(src, useRe.lastIndex);
     const args = splitTopLevelArgs(src.slice(useRe.lastIndex, close));
     if (!args.length) continue;

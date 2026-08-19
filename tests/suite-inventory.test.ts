@@ -104,6 +104,34 @@ describe('the suite inventory is pinned', () => {
     expect(files.length).toBeGreaterThanOrEqual(MINIMUM_SUITE_COUNT);
   });
 
+  /**
+   * The FROZEN INVENTORY — the half of this guard that actually catches a loss.
+   *
+   * Measured 2026-08-19: deleting an entire suite file left every assertion in
+   * this describe GREEN. The floor above is 300 and the tree holds 304, so a
+   * deletion is absorbed by headroom. The comment on MINIMUM_SUITE_COUNT claims
+   * "a deletion ... goes red against a floor exactly as it did against a pin";
+   * that is true only in the instant the count sits exactly on the floor, which
+   * is never, because the floor is raised deliberately and rarely.
+   *
+   * Names fix it without reintroducing the shared-counter collision that made
+   * the exact pin unworkable for two writers. ADDING a suite touches nothing
+   * here — a new name simply is not in the list. REMOVING one is red until the
+   * name is deleted from the JSON, which is the reviewable line in the diff
+   * that the exact pin was there to produce.
+   *
+   * Renaming is a delete plus an add, and reads correctly as such.
+   */
+  it('every suite that was frozen still exists', () => {
+    const frozen = JSON.parse(
+      fs.readFileSync(path.join(TESTS, 'suite-inventory.frozen.json'), 'utf8'),
+    ) as string[];
+    // Guard the guard: an empty or unreadable list must not pass vacuously.
+    expect(frozen.length).toBeGreaterThan(100);
+    const gone = frozen.filter((name) => !files.includes(name));
+    expect(gone).toEqual([]);
+  });
+
   it('finds suites at all (positive fixture)', () => {
     // A broken pattern would report zero and pass a `<=` style check forever.
     expect(files.length).toBeGreaterThan(100);

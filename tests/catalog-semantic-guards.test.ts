@@ -199,6 +199,23 @@ describe('semantic guard: catalog migrations stay deployment-safe', () => {
     expect(offending).toEqual([]);
   });
 
+  /**
+   * The CREATE matcher below is the whole gate. If it stops matching — an object
+   * kind it does not name, a rename, a formatting change — every migration takes
+   * the early return and eleven tests pass having asserted nothing.
+   *
+   * Measured 2026-08-19 via a per-test assertion census: 9 of these 11 already
+   * make ZERO assertions, because 9 of the 11 catalog migrations create no
+   * objects. That is correct, and it is also exactly the state a broken matcher
+   * produces. This test is what tells the two apart.
+   */
+  const migrationsCreatingObjects = (): string[] =>
+    catalogMigrations.filter((name) => /CREATE (TABLE|VIEW|SEQUENCE)/i.test(migration(name)));
+
+  it('the ownership rule is still reached by at least one migration', () => {
+    expect(migrationsCreatingObjects()).not.toEqual([]);
+  });
+
   it.each(catalogMigrations)('%s sets ownership on every object it creates', (name) => {
     // Objects created as postgres broke the deploy with "permission denied".
     const sql = migration(name);

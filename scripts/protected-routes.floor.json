@@ -1,0 +1,10 @@
+{
+  "worker": 39,
+  "workers": 19,
+  "booking": 2,
+  "bookings": 29,
+  "addressSuggestions": 1,
+  "addressDetails": 1,
+  "auth": 25,
+  "admin": 255
+}

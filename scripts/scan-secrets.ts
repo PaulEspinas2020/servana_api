@@ -182,13 +182,25 @@ export const scanText = (file: string, text: string): Finding[] => {
       if (!rule.pattern.test(lines[i])) continue;
 
       /**
-       * A private-key HEADER and its placeholder body are usually the same
-       * line in JSON (`"-----BEGIN...\nREPLACE_ME\n-----END..."`) but separate
-       * lines in a PEM file. Both are checked, so a template is recognised
-       * either way — and a two-line window is narrow enough that a real key
-       * sitting beside an unrelated `<placeholder>` is still reported.
+       * A private-key HEADER and its placeholder body are usually the same line
+       * in JSON (`"-----BEGIN...\nREPLACE_ME\n-----END..."`) but separate lines
+       * in a PEM file, so that rule — and only that rule — has to read across
+       * lines to recognise a template.
+       *
+       * Every other rule matches a self-contained credential on ONE line, and
+       * widening the placeholder test to its neighbours does not make it more
+       * careful, it makes it deaf. Measured 2026-08-19: a real remote-database
+       * URL was SUPPRESSED because the line above it happened to contain the
+       * word EXAMPLE, and again because the line below held `<your-key-here>`.
+       * The comment this replaces asserted the opposite — that "a real key
+       * sitting beside an unrelated placeholder is still reported" — and a
+       * template line sitting directly above the real value it is a template
+       * FOR is the ordinary shape of a config file, not a contrived one.
        */
-      const neighbourhood = lines.slice(Math.max(0, i - 1), i + 3).join('\n');
+      const spansLines = rule.name === 'private-key-block' || rule.name === 'firebase-service-account';
+      const neighbourhood = spansLines
+        ? lines.slice(Math.max(0, i - 1), i + 3).join('\n')
+        : lines[i];
       if (looksLikePlaceholder(neighbourhood)) continue;
 
       findings.push({ file, line: i + 1, rule: rule.name, why: rule.why });
