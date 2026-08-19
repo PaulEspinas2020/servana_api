@@ -131,6 +131,14 @@ jobs:
         run: |
           psql -h localhost -U postgres -d servana_fresh -v ON_ERROR_STOP=1 <<'SQL'
             CREATE ROLE admin LOGIN PASSWORD 'ci-not-a-secret';
+            -- CREATE on the DATABASE, not just the schema. The baseline opens with
+            --   CREATE SCHEMA IF NOT EXISTS servana;
+            --   CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA public;
+            -- and both are database-level operations, so granting only ON SCHEMA
+            -- left the runtime role unable to run its own baseline. That is what
+            -- made this job fail with "permission denied for database
+            -- servana_fresh" on the first run it was ever able to attempt.
+            GRANT CREATE ON DATABASE servana_fresh TO admin;
             CREATE SCHEMA servana AUTHORIZATION admin;
             GRANT ALL ON SCHEMA servana TO admin;
           SQL
