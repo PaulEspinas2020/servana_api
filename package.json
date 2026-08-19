@@ -22,7 +22,7 @@
     "api:docs:check": "ts-node scripts/generate-api-docs.ts --check",
     "booking:docs": "ts-node scripts/generate-booking-docs.ts",
     "booking:docs:check": "ts-node scripts/generate-booking-docs.ts --check",
-    "_comment:ops": "Operational scripts. -r dotenv/config is REQUIRED, not decoration: src/config.ts loads '../.env', which resolves correctly for dist/app.js but points one directory above the app for anything run from the repo root — so DB_PASSWORD is undefined and pg fails with 'SASL: client password must be a string'. Preloading dotenv reads ./.env from the CWD instead.",
+    "_comment:ops": "Operational scripts. -r dotenv/config is REQUIRED, not decoration: src/config.ts loads '../.env', which resolves correctly for dist/app.js but points one directory above the app for anything run from the repo root \u2014 so DB_PASSWORD is undefined and pg fails with 'SASL: client password must be a string'. Preloading dotenv reads ./.env from the CWD instead.",
     "audit:identifiers": "ts-node -r dotenv/config scripts/audit-identifier-conflicts.ts",
     "backfill:identifiers": "ts-node -r dotenv/config scripts/backfill-normalized-identifiers.ts",
     "backfill:documents": "ts-node -r dotenv/config scripts/backfill-document-private-storage.ts",
@@ -67,7 +67,8 @@
     "baseline:capture": "ts-node -r dotenv/config scripts/capture-schema-baseline.ts",
     "security:secrets": "ts-node scripts/scan-secrets.ts",
     "security:deps": "npm audit --omit=dev --audit-level=high",
-    "v1:mounted": "ts-node scripts/verify-v1-mounted.ts"
+    "v1:mounted": "ts-node scripts/verify-v1-mounted.ts",
+    "db:skew": "ts-node scripts/verify-schema-code-skew.ts"
   },
   "keywords": [],
   "author": "Cla H.",
