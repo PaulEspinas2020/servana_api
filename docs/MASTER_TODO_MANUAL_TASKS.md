@@ -162,6 +162,15 @@ Last updated: 2026-08-18 (TAB 16 — terminal)
 | 16.4 | Provision `ADMIN_API_BASE_URL` and a scoped, rotatable CI admin identity (a real Firebase identity, **not** a super admin) for `smoke:contracts` | `NO-CRED` | `smoke:contracts` executes rather than reporting `NOT_AVAILABLE` |
 | 16.5 | Give the explicit, reaffirmed go for any deploy. A push to `main` IS the deploy and prior authorisation does not carry forward | `HUMAN-JUDGEMENT` | Explicit per-occasion authorisation recorded |
 
+## V2 TAB 08 — refund lifecycle
+
+| # | Task | Why blocked | Closes when |
+| --- | --- | --- | --- |
+| V8.1 | **Announce a behaviour change before the next release.** An admin who OPENS a refund review can no longer approve it — a second admin must. Previously one person could run open → approve → mark-processed alone, because `refunds.approve` *requires* `refunds.review.open`, so the permission closure guaranteed every approver was also a requester. The rule is now a predicate in the write itself, not a hidden button | `HUMAN-JUDGEMENT` | Finance operators told, and a second admin holds `refunds.approve` |
+| V8.2 | Decide whether `REFUND_ALLOW_SELF_APPROVAL` should exist in production at all. Default is enforced; the flag lifts the control and every approval taken under it is audited with `selfApprovalAllowedByConfig`. It exists so a refusal nobody anticipated cannot strand a customer's refund out of hours — a redeploy is not an incident response | `HUMAN-JUDGEMENT` | Either the variable is deliberately unset in production, or its use is owned and monitored |
+| V8.3 | Grant `refunds.mark_failed` to whoever resolves failed refunds. Without it the new terminal is unreachable, and an approved refund the processor rejected still blocks every retry for that booking | `PROD-ACCESS` | At least one non-super-admin holds it |
+| V8.4 | Probe the new canonical route on production after a deploy: 401 unauthenticated, 403 under-permissioned, 200 authorized — `POST /api/v1/admin/refunds/:refundId/mark-failed`. TAB 08's acceptance asks for this per wave and it cannot be done from here | `PROD-ACCESS` | Three probes recorded |
+
 ---
 
 ## Closed
