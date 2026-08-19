@@ -142,8 +142,23 @@ admin.
 **First action: establish which commit is actually serving**, then decide.
 
 `GET /api/v1/health` returns the build provenance `deploy.yml` stamps — commit,
-ref, built-at, run. If it 404s, the running build predates that endpoint, which
-is itself the answer: production is older than you think.
+ref, built-at, run. Three answers, three meanings:
+
+* **404** — the running build predates the endpoint. Production is older than
+  you think, and that is the answer.
+* **200 with `available: false`** — the app is newer than the endpoint but
+  `dist/BUILD_INFO.json` is missing, which means **it was built by hand on the
+  host rather than by `deploy.yml`**. The stamp is written by the workflow, so a
+  manual `git pull && npm run build && pm2 restart` produces exactly this.
+  Measured on 2026-08-19 after the 502 recovery: the running build was newer
+  than any deploy that had run, and the commit serving production could not be
+  identified from outside at all.
+* **200 with a commit** — believe it, and compare it to `origin/main`.
+
+The middle case is worth naming because it is the one that looks like a working
+endpoint. A hand-built deploy is invisible to the mechanism built to identify
+deploys, so the question "what is serving?" becomes unanswerable at exactly the
+moment somebody is most likely to ask it.
 
 ### The portal is blank, or a screen renders nothing
 
@@ -189,8 +204,15 @@ produced three different answers to that question, and they need different fixes
 | --- | --- | --- |
 | Catalog 500s | `/readyz` said it, for a day | Something must *read* it — `deploy:verify` now does |
 | Refresh 502 | None. `API_KEY` was in no list | Declare every variable — `tests/env-schema-completeness.test.ts` |
-| Full 502 | Unknown at time of writing | Uptime monitoring on both origins (V12.7) |
+| Full 502 | None. Nothing watched either origin | Uptime monitoring on both origins (V12.7) |
 
-The third row is honest rather than empty: at the time of writing this document,
-the cause of the 502 was not established, and pretending otherwise would make
-this table a work of fiction on its first day.
+**Resolution, recorded the same day.** Service returned at ~14:0x UTC via a
+manual restart on the host with a corrected environment — `/readyz` came back
+`phase=ready`, catalog reads returned 200, and a bogus refresh token got a 401
+instead of a 502, so `DB_PASSWORD` and `API_KEY` were both set in the same pass.
+No deploy ran; the Actions run list still ends at 09:33 UTC.
+
+**The cause of the 502 itself was never established**, and this table says so
+rather than inventing one. What is known is that no release was involved, and
+that nothing was watching either origin — so the outage was found by a person
+looking, which is the part uptime monitoring fixes regardless of the cause.
