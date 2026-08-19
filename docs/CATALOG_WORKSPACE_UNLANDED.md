@@ -39,22 +39,18 @@ opposite table — it would compile, run, return 200 and read the wrong rows.
 Both branches are now on the remote (`origin/feat/catalog-workspace`,
 `origin/feat/admin-integration`), so nothing depends on one laptop.
 
-## Behavioural divergences between the spec and `main`
+## Behavioural divergences between the spec and `main` — resolved 2026-08-19
 
-These are open questions for a product decision, not defects. `main` is the shipped
-behaviour; the spec is what the branch author intended.
-
-| Spec says | `main` does |
+| Spec says | Decision |
 |---|---|
-| `createMapping` throws when the offering is archived | no status check at all — only that the offering exists |
-| `createMapping` throws when the mapping is already active | `ON CONFLICT DO UPDATE` silently succeeds |
-| `archiveMapping` refuses to archive the **last active mapping on a published offering** | no such guard; a live offering can be left with none |
-| publish preview **blocks** when a mapping has no priced specific services | emits a **warning**, and never checks price at all |
-| publish preview warns when `providerWebVisible` is false | no such warning |
-| `publishOffering` throws `code: 'PUBLISH_BLOCKED'` | throws `code: 'VALIDATION'` |
+| `archiveMapping` refuses to archive the **last active mapping on a published offering** | **IMPLEMENTED.** This was the one integrity rule, not a preference — a live offering could be left showing providers nothing. Guarded in `archiveOfferingMapping`, scoped to published offerings and to mappings that are currently active, so drafts and repeat-archives are unaffected. |
+| publish preview **blocks** when a mapping has no priced specific services | **PARTIALLY — as a warning, not a blocker.** The spec was right that a row count hid the real state: a mapping whose services all sit at null or zero `base_price` is as unusable as an empty one, so the preview now counts priced services and says so. It does **not** block, because refusing publishes that succeed today is a behaviour change for the admin portal rather than an additive one. |
+| publish preview warns when `providerWebVisible` is false | **IMPLEMENTED.** Publishing an invisible offering is an easy mistake: it goes `status='active'` and still appears nowhere, because `getOfferingsForProvider` filters on `provider_web_visible`. |
+| `createMapping` throws when the offering is archived | **DECLINED for now.** `getPublishPreview` already blocks publishing an archived offering, so the damaging path is closed; refusing the mapping as well is strictness with no live failure behind it. |
+| `createMapping` throws when the mapping is already active | **DECLINED.** `ON CONFLICT DO UPDATE` makes the call idempotent, which is the better property for an admin action that may be retried. Throwing would turn a harmless repeat into an error. |
+| `publishOffering` throws `code: 'PUBLISH_BLOCKED'` | **DECLINED — deliberately.** Nothing consumes `PUBLISH_BLOCKED`; it appears nowhere outside this document. Changing the code that clients already branch on would be a breaking contract change in exchange for nothing, against the additive-only rule for this backend. `VALIDATION` stays. |
 
-The third row is the one worth attention: it is a data-integrity guard, not a
-preference. Everything else is a judgement call about strictness.
+All of the above are covered by `tests/catalog-publish-integrity.test.ts`, mutation-tested: disabling the guard fails exactly its two tests, and disabling both new warnings fails exactly three.
 
 ## Defects found during this audit, and fixed
 
@@ -71,7 +67,31 @@ Independent of the spec, in code that had already shipped:
 Both are covered by `tests/catalog-audit-trail.test.ts`, which was mutation-tested:
 reverting either fix fails exactly the test written for it.
 
-## Recovering the branch work
+## Status of the branch: KEEP, as the specification
 
-    git show 1fda14a:tests/admin-catalog.test.ts               # the spec
-    git show 30fb364:src/services/providerCatalogService.ts    # the branch implementation
+`feat/catalog-workspace` is **not to be deleted**. Its implementation is superseded and
+must never be merged, but its test file is the only written statement of what the admin
+catalog workspace is supposed to guarantee, and three of those statements turned into
+real changes on `main` this week. It is kept as the spec, on `origin`.
+
+    git show 1fda14a:tests/admin-catalog.test.ts               # the spec — keep this
+    git show 30fb364:src/services/providerCatalogService.ts    # superseded implementation
+
+## `feat/admin-integration` — fully superseded, checked by capability
+
+Assessed the same way, and this time by route rather than by function name:
+
+| Branch route | Equivalent on `main` |
+|---|---|
+| `GET /admin/workers` | `GET /admin/providers` |
+| `GET /admin/workers/:uid` | `GET /admin/providers/:uid` |
+| `PATCH /admin/workers/:uid/account-status` | `PATCH /admin/providers/:uid/account-status` |
+| `GET /admin/workers/:uid/service-applications` | `GET /admin/providers/:uid/service-applications` |
+| `GET /admin/service-applications` | `GET /admin/providers/service-applications` |
+| `PATCH /admin/service-applications/:id/approve` | `PATCH /admin/providers/service-applications/:id/approve` |
+| `PATCH /admin/service-applications/:id/reject` | `PATCH /admin/providers/service-applications/:id/reject` |
+
+Every capability landed under `provider` naming, and `main` adds
+`PATCH /admin/providers/service-applications/:id/flag-action-required`, which the branch
+never had. `npm run guard:protected-contracts` asserts `/admin/providers` stays mounted.
+Nothing on that branch is needed.
