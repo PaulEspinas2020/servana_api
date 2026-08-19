@@ -16,7 +16,7 @@
 const generateEmailVerificationLink = jest.fn();
 const generatePasswordResetLink = jest.fn();
 
-jest.mock('../src/middleware/firebaseApp', () => ({ firebaseAdmin: {} }));
+jest.mock('../src/middleware/firebaseApp', () => ({ getFirebaseAdmin: () => ({}) }));
 jest.mock('firebase-admin/auth', () => ({
     getAuth: () => ({ generateEmailVerificationLink, generatePasswordResetLink }),
 }));

@@ -3,7 +3,7 @@ const getUser = jest.fn();
 jest.mock("firebase-admin/auth", () => ({
   getAuth: () => ({ getUser }),
 }));
-jest.mock("../src/middleware/firebaseApp", () => ({ firebaseAdmin: {} }));
+jest.mock("../src/middleware/firebaseApp", () => ({ getFirebaseAdmin: () => ({}) }));
 
 import {
   isRevoked,

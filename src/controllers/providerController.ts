@@ -1570,7 +1570,7 @@ export const deleteWorkerProfilePhoto = async (req: Request, res: Response) => {
         const match = photoUrl.match(/\/o\/([^?]+)/);
         if (match) {
           const filePath = decodeURIComponent(match[1]);
-          const bucket = (await import('../middleware/firebaseApp')).firebaseAdmin.storage().bucket();
+          const bucket = (await import('../middleware/firebaseApp')).getFirebaseAdmin().storage().bucket();
           await bucket.file(filePath).delete().catch(() => {/* file may not exist */});
         }
       } catch {

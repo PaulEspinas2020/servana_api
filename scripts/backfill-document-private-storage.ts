@@ -147,8 +147,8 @@ async function main() {
     return;
   }
 
-  const { firebaseAdmin } = await import("../src/middleware/firebaseApp");
-  const bucket = firebaseAdmin.storage().bucket(configuredBucket);
+  const { getFirebaseAdmin } = await import("../src/middleware/firebaseApp");
+  const bucket = getFirebaseAdmin().storage().bucket(configuredBucket);
   const { uploadPrivateFileToStorage } = await import("../src/helpers/firebaseStorageUploader");
 
   const migrated: Array<{ id: number; storagePath: string }> = [];

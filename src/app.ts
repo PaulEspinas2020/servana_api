@@ -1,4 +1,5 @@
 import express, { NextFunction, Request, Response } from "express";
+import { assertFirebaseAdminCredentials } from './middleware/firebaseApp';
 import http from "http";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -476,6 +477,18 @@ assertContinueUrlsAreUsable();
  * the real one. It can now.
  */
 export const startServer = async (): Promise<void> => {
+  // Firebase credentials are validated HERE, not at import.
+  //
+  // firebaseApp.ts defers Admin SDK initialisation so that COMPOSING the app
+  // needs no secret — four suites could not require('../src/app') otherwise.
+  // STARTING it is a different matter: a missing key must stop the boot with
+  // instructions, not surface later as a 500 on every authenticated request.
+  //
+  // This deliberately is not a STARTUP_DEPENDENCIES entry. listen() below runs
+  // even when dependencies report unhealthy, so a degraded entry would let the
+  // server accept traffic it cannot authenticate.
+  assertFirebaseAdminCredentials();
+
   const results = await initializeDependencies(STARTUP_DEPENDENCIES);
   const unhealthy = results.filter((r) => r.state !== 'ready');
 

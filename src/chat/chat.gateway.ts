@@ -2,7 +2,7 @@ import { Server as HttpServer } from "http";
 import { Server, Socket } from "socket.io";
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
 
-import { firebaseAdmin } from "../middleware/firebaseApp";
+import { getFirebaseAdmin } from "../middleware/firebaseApp";
 import { tempId } from "../config";
 import { setIo, roomName } from "./chat.realtime";
 import * as chatService from "./chat.service";
@@ -14,7 +14,10 @@ import {
 } from "../services/messaging/messagingTelemetry";
 import { withRealtimeEnvelope } from "../services/messaging/conversationDto";
 
-const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
+// Lazy: resolving the Auth service at module scope made importing this file
+// require a live Admin credential. getAuth() memoises per app internally and
+// getFirebaseAdmin() memoises the app, so calling this per request is cheap.
+const defaultAuthAdmin = () => getAuthAdmin(getFirebaseAdmin());
 
 /**
  * Initialize Socket.IO on the /chat namespace.
@@ -66,7 +69,7 @@ export const initChatSocket = (httpServer: HttpServer) => {
 
       if (!token) return next(new Error("Unauthorized"));
 
-      const decoded = await defaultAuthAdmin.verifyIdToken(token);
+      const decoded = await defaultAuthAdmin().verifyIdToken(token);
       const role = (await repo.getUserRole(decoded.uid)) ?? 3;
       (socket as any).actor = { uid: decoded.uid, role };
       return next();

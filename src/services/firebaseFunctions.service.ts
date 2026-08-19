@@ -1,4 +1,4 @@
-import { firebaseAdmin } from "../middleware/firebaseApp";
+import { getFirebaseAdmin } from "../middleware/firebaseApp";
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
 import {
     getAuth,
@@ -21,7 +21,10 @@ import { toActionCodeSettings } from "../constants/platformContinueUrls";
 
 const dbSchema = dbConfig.schema;
 
-const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
+// Lazy: resolving the Auth service at module scope made importing this file
+// require a live Admin credential. getAuth() memoises per app internally and
+// getFirebaseAdmin() memoises the app, so calling this per request is cheap.
+const defaultAuthAdmin = () => getAuthAdmin(getFirebaseAdmin());
 
 /**
  * role must be "2" (provider) or "3" (customer/client).
@@ -38,8 +41,8 @@ const firebaseAuthLogin = async (idToken: string, role: string = "2") => {
   // checkRevoked=true: reject tokens that were revoked server-side after logout.
   // Required for session-restore safety — revokeTokenInFirebase() is called on logout,
   // so a page-reload with a cached-but-revoked token must not re-establish the session.
-  const decoded = await defaultAuthAdmin.verifyIdToken(idToken, /* checkRevoked */ true);
-  const firebaseUser = await defaultAuthAdmin.getUser(decoded.uid);
+  const decoded = await defaultAuthAdmin().verifyIdToken(idToken, /* checkRevoked */ true);
+  const firebaseUser = await defaultAuthAdmin().getUser(decoded.uid);
 
   // Derive name from Firebase displayName when available (set during registration).
   // upsertFirebaseUser only overwrites DB name when the provided value is non-empty,
@@ -203,13 +206,13 @@ const firebaseProviderRegister = async (
   // A registration token is a credential just like a login token. Checking
   // revocation here prevents a signed-out/revoked Firebase session from being
   // replayed to create or rewrite the local provider profile.
-  const decoded = await defaultAuthAdmin.verifyIdToken(idToken, /* checkRevoked */ true);
-  const firebaseUser = await defaultAuthAdmin.getUser(decoded.uid);
+  const decoded = await defaultAuthAdmin().verifyIdToken(idToken, /* checkRevoked */ true);
+  const firebaseUser = await defaultAuthAdmin().getUser(decoded.uid);
 
   // Persist the name on the Firebase user record so firebase-login picks it up on next sign-in.
   const displayName = `${firstName.trim()} ${lastName.trim()}`.trim();
   if (displayName) {
-    await defaultAuthAdmin.updateUser(firebaseUser.uid, { displayName }).catch(() => {
+    await defaultAuthAdmin().updateUser(firebaseUser.uid, { displayName }).catch(() => {
       // Non-fatal — DB name is the source of truth for the web portal.
     });
   }
@@ -284,8 +287,8 @@ export class CustomerLinkCollisionError extends Error {
 const customerFirebaseLogin = async (idToken: string) => {
   if (!idToken) { throw new Error("Missing Firebase ID token"); }
 
-  const decoded = await defaultAuthAdmin.verifyIdToken(idToken);
-  const firebaseUser = await defaultAuthAdmin.getUser(decoded.uid);
+  const decoded = await defaultAuthAdmin().verifyIdToken(idToken);
+  const firebaseUser = await defaultAuthAdmin().getUser(decoded.uid);
 
   /**
    * Do not let a second account be created for somebody who already has one.
@@ -392,7 +395,7 @@ const customerFirebaseLogin = async (idToken: string) => {
 };
 
 const checkUserIfExistInFirebase = async (email: string) => {
-    return defaultAuthAdmin
+    return defaultAuthAdmin()
         .getUserByEmail(email)
         .then((user) => {
             return user;
@@ -463,7 +466,7 @@ const registerNewUserInFirebase = async (user: any) => {
     // optional field actually optional.
     if (phoneNumber) payload.phoneNumber = phoneNumber;
 
-    return defaultAuthAdmin
+    return defaultAuthAdmin()
         .createUser(payload)
         .then(async (userData) => {
             return userData;
@@ -486,7 +489,7 @@ const registerNewUserInFirebase = async (user: any) => {
  */
 const sendEmailVerificationFirebase = async (email: string, continueUrl?: string) => {
     try {
-        const link = await defaultAuthAdmin.generateEmailVerificationLink(
+        const link = await defaultAuthAdmin().generateEmailVerificationLink(
             email,
             toActionCodeSettings(continueUrl),
         );
@@ -498,7 +501,7 @@ const sendEmailVerificationFirebase = async (email: string, continueUrl?: string
 };
 
 const revokeTokenInFirebase = async (uid: string) => {
-    await defaultAuthAdmin.revokeRefreshTokens(uid);
+    await defaultAuthAdmin().revokeRefreshTokens(uid);
     // Drop this uid's cached revocation reading so the very next request sees
     // the new one. Without it, the process that just performed the revocation
     // would keep honouring its own stale cache for another minute — the one
@@ -540,7 +543,7 @@ const signInUserAndGetTokeninFirebase = async (email: string, password: string) 
 
 const getFirebaseUserByEmail = async (email: string) => {
     try {
-        return await defaultAuthAdmin.getUserByEmail(email);
+        return await defaultAuthAdmin().getUserByEmail(email);
     } catch (error: any) {
         if (error.code === "auth/user-not-found") {
             return null;
@@ -550,21 +553,21 @@ const getFirebaseUserByEmail = async (email: string) => {
 };
 
 const updateFirebaseEmailVerified = async (uid: string, emailVerified: boolean) => {
-    return await defaultAuthAdmin.updateUser(uid, {
+    return await defaultAuthAdmin().updateUser(uid, {
         emailVerified,
     });
 };
 
 const deleteFirebaseUser = async (uid: string) => {
-    return await defaultAuthAdmin.deleteUser(uid);
+    return await defaultAuthAdmin().deleteUser(uid);
 };
 
 const generatePasswordResetLink = async (email: string, continueUrl?: string): Promise<string> => {
-    return defaultAuthAdmin.generatePasswordResetLink(email, toActionCodeSettings(continueUrl));
+    return defaultAuthAdmin().generatePasswordResetLink(email, toActionCodeSettings(continueUrl));
 };
 
 const updateFirebasePassword = async (uid: string, newPassword: string): Promise<void> => {
-    await defaultAuthAdmin.updateUser(uid, { password: newPassword });
+    await defaultAuthAdmin().updateUser(uid, { password: newPassword });
 };
 
 /**
@@ -580,7 +583,7 @@ const resetPasswordWithCode = async (oobCode: string, newPassword: string): Prom
 };
 
 const getFirebaseUserByUid = async (uid: string) => {
-    return await defaultAuthAdmin.getUser(uid);
+    return await defaultAuthAdmin().getUser(uid);
 };
 
 /**
@@ -593,7 +596,7 @@ const getFirebaseUserByUid = async (uid: string) => {
  * paying for a live answer from Firebase is obviously worth it.
  */
 const verifyIdTokenStrict = async (idToken: string) => {
-    return await defaultAuthAdmin.verifyIdToken(idToken, /* checkRevoked */ true);
+    return await defaultAuthAdmin().verifyIdToken(idToken, /* checkRevoked */ true);
 };
 
 export {

@@ -1,7 +1,7 @@
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
-import { firebaseAdmin } from "../middleware/firebaseApp";
+import { getFirebaseAdmin } from "../middleware/firebaseApp";
 
-const auth = () => getAuthAdmin(firebaseAdmin);
+const auth = () => getAuthAdmin(getFirebaseAdmin());
 
 /**
  * Rejects ID tokens issued before a revocation.

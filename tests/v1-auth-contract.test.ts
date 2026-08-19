@@ -14,7 +14,7 @@ jest.mock('../src/db/dbQuery', () => ({
   default: { query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }) },
   pool: { connect: jest.fn() },
 }));
-jest.mock('../src/middleware/firebaseApp', () => ({ firebaseAdmin: {}, __esModule: true }));
+jest.mock('../src/middleware/firebaseApp', () => ({ getFirebaseAdmin: () => ({}), __esModule: true }));
 jest.mock('firebase-admin/auth', () => ({ getAuth: () => ({}) }));
 
 const loggedInUser = jest.fn();

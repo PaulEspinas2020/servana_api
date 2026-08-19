@@ -1951,10 +1951,14 @@ export const getCatalogAuditTrail = async (filter: {
             ae.before_json, ae.after_json, ae.reason, ae.request_id, ae.created_at
      FROM ${dbSchema}.admin_audit_events ae
      WHERE ${conditions.join(' AND ')}
-     ORDER BY ae.created_at DESC
+     -- id DESC is a tiebreaker, not decoration. created_at alone is not a total
+     -- order: audit rows written in one transaction share a timestamp, so their
+     -- relative order is undefined, and LIMIT/OFFSET paging over an undefined
+     -- order can show a row twice or skip it entirely between pages.
+     ORDER BY ae.created_at DESC, ae.id DESC
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
-  ).catch(() => ({ rows: [] as any[] }));
+  );
 
   return res.rows.map((r: any) => ({
     id: Number(r.id),

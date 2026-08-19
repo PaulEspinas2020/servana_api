@@ -39,13 +39,13 @@
  */
 
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
-import { firebaseAdmin } from "../middleware/firebaseApp";
+import { getFirebaseAdmin } from "../middleware/firebaseApp";
 import dbQuery from "../db/dbQuery";
 import { db } from "../config";
 import { toE164PhMobile } from "../helpers/phoneIdentifier";
 
 const s = db.schema;
-const auth = () => getAuthAdmin(firebaseAdmin);
+const auth = () => getAuthAdmin(getFirebaseAdmin());
 
 export type MergeOutcome =
   | { merged: true; canonicalUid: string; customToken: string }

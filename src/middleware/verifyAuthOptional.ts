@@ -1,9 +1,12 @@
 import { Request, Response, NextFunction } from "express";
-import { firebaseAdmin } from "./firebaseApp";
+import { getFirebaseAdmin } from "./firebaseApp";
 import { tempId } from "../config";
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
 
-const defaultAuthAdmin = getAuthAdmin(firebaseAdmin);
+// Lazy: resolving the Auth service at module scope made importing this file
+// require a live Admin credential. getAuth() memoises per app internally and
+// getFirebaseAdmin() memoises the app, so calling this per request is cheap.
+const defaultAuthAdmin = () => getAuthAdmin(getFirebaseAdmin());
 
 /**
  * Soft auth middleware: if an Authorization header or __session cookie is present,
@@ -34,7 +37,7 @@ const verifyAuthOptional = async (req: Request, _res: Response, next: NextFuncti
   if (!idToken) return next();
 
   try {
-    const decoded = await defaultAuthAdmin.verifyIdToken(idToken);
+    const decoded = await defaultAuthAdmin().verifyIdToken(idToken);
     req.user = decoded;
   } catch {
     // Invalid / expired token — treat as unauthenticated (don't reject)
