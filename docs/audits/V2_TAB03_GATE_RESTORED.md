@@ -1,4 +1,13 @@
-# V2 TAB 03 — the gate, re-scoped and restored
+# V2 TAB 03 — the gate, re-scoped, restored, and re-suspended
+
+> **SUPERSEDED IN PART, 2026-08-19.** §6 asked the owner two questions. They
+> answered directly — *"WE RAN OUT OF CREDIT ACTIONS SO DON'T PUSH WITH CI FROM
+> NOW ON"* — so the wiring is **suspended again** and the automatic triggers are
+> removed. The analysis below is left intact rather than rewritten, because the
+> useful part is not its conclusion but its shape: a public fact about GitHub's
+> pricing cannot settle a private fact about an account's state, and this record
+> treated the two as the same kind of claim. The owner reads the billing page;
+> the API does not.
 
 > **P0.** Implemented 2026-08-19 against `servana_api` at `932aedc`.
 > Closes F-03 — but **not** by the route the book prescribed.

@@ -39,17 +39,18 @@ jobs:
   # RESTORE BOTH LINES TOGETHER, and only once Actions credit exists. The other
   # half is the `workflow_call:` trigger kept in release-gate.yml for this.
   #
-  # RESTORED 2026-08-19 (V2 TAB 03). servana_api is a PUBLIC repository, and
-  # GitHub's billing documentation states that standard GitHub-hosted runners are
-  # free in public repositories. `ubuntu-latest` is a standard runner, so the
-  # gate costs this repo nothing and cannot be starved by credit consumed
-  # elsewhere in the account. Full evidence chain in release-gate.yml.
-  release-gate:
-    uses: ./.github/workflows/release-gate.yml
-    secrets: inherit
+  # RE-SUSPENDED 2026-08-19 on the owner's direct confirmation that the account
+  # is out of Actions credit. `release-gate.yml` is `runs-on: ubuntu-latest`, so
+  # calling it here queues a GitHub-hosted job that will not start, and the
+  # `needs:` below would then leave `deploy` SKIPPED — i.e. no production deploy
+  # at all. RESTORE BOTH LINES TOGETHER, and only once credit exists.
+  #
+  # release-gate:
+  #   uses: ./.github/workflows/release-gate.yml
+  #   secrets: inherit
 
   deploy:
-    needs: [release-gate]
+    # needs: [release-gate]   <- restore with the job above, not on its own.
     runs-on: [self-hosted, Linux, x64]
     timeout-minutes: 12
 

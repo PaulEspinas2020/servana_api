@@ -72,12 +72,17 @@ const gate = readWorkflow('release-gate.yml');
 const deployJobs = jobsOf(deploy);
 
 describe('the reader sees the workflows at all (positive fixture)', () => {
-  it('finds both jobs in deploy.yml', () => {
-    // Two jobs again since the gate was restored (V2 TAB 03). The reader must
-    // still not count a COMMENTED job — that is the property this fixture pins,
-    // and the reason it is not just `.size`. It was verified against the
-    // suspended state, where the same reader correctly reported one.
-    expect([...deployJobs.keys()].sort()).toEqual(['deploy', 'release-gate']);
+  it('finds the deploy job in deploy.yml', () => {
+    // One job: the `release-gate` job is commented out while the account is out
+    // of Actions credit. The reader must not count a commented job — that is
+    // the property this fixture pins, and it is why this is not just `.size`.
+    //
+    // Worth knowing: this reader has now been validated in BOTH directions.
+    // It reported two jobs when the wiring was briefly restored and reports one
+    // now that it is commented again. A parser that counted commented jobs
+    // would have been wrong in exactly one of those states, and right by
+    // accident in the other.
+    expect([...deployJobs.keys()].sort()).toEqual(['deploy']);
   });
 
   it('parses an inline needs list', () => {
@@ -99,43 +104,56 @@ describe('the deploy cannot run ahead of its gate', () => {
   });
 
   /**
-   * RESTORED (V2 TAB 03), and the reason is measured rather than preferred.
+   * SUSPENDED, on the owner's direct confirmation — and this flip-flopped, which
+   * is worth recording rather than tidying away.
    *
-   * The wiring was suspended on the premise that this repo's Actions credit was
-   * exhausted. `servana_api` is a PUBLIC repository, and GitHub's billing
-   * documentation states that standard GitHub-hosted runners are free in public
-   * repositories. `ubuntu-latest` is a standard runner, so these jobs cost this
-   * repository nothing and cannot be starved by credit consumed elsewhere in
-   * the account.
+   * V2 TAB 03 restored this wiring on the argument that `servana_api` is a
+   * public repository and GitHub's billing documentation states standard
+   * GitHub-hosted runners are free in public repositories. That argument is
+   * accurate and it was still the wrong conclusion, because the owner can read
+   * the account's actual Actions state and the public API cannot:
    *
-   * Self-hosting the gate was the other candidate and was rejected on evidence:
-   * the self-hosted runner is the production host at 961 MB of RAM, where
-   * `npm run verify` has already died twice with exit 134 against a measured
-   * ~1.1 GB peak — and a gate exists to stop bad code REACHING the host, which
-   * a gate running on the host cannot do.
+   *   Owner, 2026-08-19: "WE RAN OUT OF CREDIT ACTIONS SO DON'T PUSH WITH CI
+   *   FROM NOW ON."
+   *
+   * A documentation argument does not outrank somebody reading their own
+   * billing page. The lesson is narrower than "defer to authority": a public
+   * fact about pricing cannot settle a private fact about an account's state,
+   * and the two were being treated as the same kind of claim.
    */
-  it('the gate is wired as a job again, not left as a comment', () => {
-    const gateJob = deployJobs.get('release-gate');
-    expect(gateJob).toBeDefined();
-    expect(gateJob).toMatch(/uses:\s*\.\/\.github\/workflows\/release-gate\.yml/);
-  });
-
-  it('the deploy job DEPENDS on it — the whole point of the TAB', () => {
-    expect(needsOf(deployJobs.get('deploy') ?? '')).toContain('release-gate');
-  });
-
-  it('the gate runs automatically, not only when somebody remembers', () => {
-    // workflow_dispatch alone is a gate nobody runs. `push` is what makes it a
-    // gate rather than a report; `workflow_call` is what lets deploy need it.
-    expect(gate).toMatch(/^\s*push:\s*$/m);
+  it('the Actions wiring is SUSPENDED, not deleted, so it can be switched back on', () => {
+    // Both halves must survive as comments. Deleting them turns a reversible
+    // suspension into a silent architecture change, and the next person has to
+    // rediscover that the deploy was ever gated at all.
+    expect(deploy).toMatch(/#\s*release-gate:/);
+    expect(deploy).toMatch(/#\s*uses:\s*\.\/\.github\/workflows\/release-gate\.yml/);
+    expect(deploy).toMatch(/#\s*needs:\s*\[release-gate\]/);
+    // The far end must stay callable, or restoring the above is a no-op.
     expect(gate).toMatch(/^\s*workflow_call:\s*$/m);
   });
 
-  it('the evidence for restoring it is recorded in the file, not just in a commit', () => {
-    // A future reader finding an owner decision reversed deserves the reason in
-    // the same place as the change.
-    expect(gate).toMatch(/PUBLIC repository/);
-    expect(gate).toMatch(/standard GitHub-hosted runners is free/);
+  it('the deploy job is NOT gated by an Actions job that cannot run', () => {
+    // A `needs:` on a GitHub-hosted job with no credit does not delay the
+    // deploy, it cancels it. If this fails, the wiring came back before the
+    // credit did.
+    expect(needsOf(deployJobs.get('deploy') ?? '')).toEqual([]);
+  });
+
+  it('NO workflow consumes GitHub-hosted minutes on a push to main', () => {
+    // The operative rule now: pushing must not start a billed run. deploy.yml
+    // is self-hosted and therefore free; every ubuntu-latest workflow must be
+    // manual-only. This asserts the property rather than the file list, so a
+    // NEW ubuntu-latest workflow with a push trigger fails here.
+    const dir = path.join(__dirname, '..', '.github', 'workflows');
+    const offenders: string[] = [];
+    for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.yml'))) {
+      const text = fs.readFileSync(path.join(dir, file), 'utf8');
+      const head = text.slice(0, text.indexOf('jobs:'));
+      const pushTriggered = /^\s{2}push:\s*$/m.test(head);
+      const hosted = /^\s*runs-on:\s*ubuntu-latest\s*$/m.test(text);
+      if (pushTriggered && hosted) offenders.push(file);
+    }
+    expect(offenders).toEqual([]);
   });
 
   it('the gate that replaced it is real, runs verify, and runs it on main', () => {
