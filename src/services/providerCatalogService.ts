@@ -1845,6 +1845,44 @@ export const archiveOfferingMapping = async (
   mappingId: number,
   adminUid: string
 ): Promise<any> => {
+  /**
+   * A published offering may not be left with zero active mappings.
+   *
+   * `getPublishPreview` already refuses to publish an offering that has no
+   * active mapping, but nothing stopped the last one being archived AFTER
+   * publication — so the invariant held at the publish gate and nowhere else.
+   * An offering in that state stays status='active' and shows providers an
+   * empty catalog entry, which is the failure the publish blocker exists to
+   * prevent.
+   *
+   * Scoped deliberately:
+   *  - only when the offering is published (`status = 'active'`). A draft has
+   *    no providers reading it, and the spec this came from explicitly allows
+   *    emptying a draft.
+   *  - only when the mapping being archived is currently active. Archiving an
+   *    already-archived mapping changes nothing and must stay idempotent.
+   */
+  const guard = await dbQuery.query(
+    `SELECT m.is_active,
+            o.status,
+            (SELECT COUNT(*)
+               FROM ${dbSchema}.provider_catalog_offering_mappings sib
+              WHERE sib.offering_id = m.offering_id
+                AND sib.is_active = true) AS active_sibling_count
+       FROM ${dbSchema}.provider_catalog_offering_mappings m
+       JOIN ${dbSchema}.provider_catalog_offerings o ON o.id = m.offering_id
+      WHERE m.id = $1`,
+    [mappingId]
+  );
+  if (guard.rows.length === 0) throw new Error('Mapping not found');
+  const g = guard.rows[0];
+  if (g.is_active === true && g.status === 'active' && Number(g.active_sibling_count) <= 1) {
+    throw Object.assign(
+      new Error('Cannot archive the last active mapping on a published offering. Archive the offering instead, or add another mapping first.'),
+      { code: 'VALIDATION' }
+    );
+  }
+
   const res = await dbQuery.query(
     `UPDATE ${dbSchema}.provider_catalog_offering_mappings SET
        is_active = false, updated_at = NOW()
@@ -1865,7 +1903,7 @@ export const getPublishPreview = async (offeringId: number): Promise<{
   warnings: string[];
 }> => {
   const offering = await dbQuery.query(
-    `SELECT id, name, status, is_builtin FROM ${dbSchema}.provider_catalog_offerings WHERE id = $1`,
+    `SELECT id, name, status, is_builtin, provider_web_visible FROM ${dbSchema}.provider_catalog_offerings WHERE id = $1`,
     [offeringId]
   );
   if (offering.rows.length === 0) throw new Error('Offering not found');
@@ -1881,7 +1919,8 @@ export const getPublishPreview = async (offeringId: number): Promise<{
   // Check active mappings
   const mappings = await dbQuery.query(
     `SELECT m.id, m.service_id, m.level_2,
-            COUNT(so.id) AS ss_count
+            COUNT(so.id) AS ss_count,
+            COUNT(so.id) FILTER (WHERE so.base_price IS NOT NULL AND so.base_price > 0) AS priced_count
      FROM ${dbSchema}.provider_catalog_offering_mappings m
      LEFT JOIN ${dbSchema}.service_options so
        ON so.service_id = m.service_id AND so.level_2 = m.level_2
@@ -1897,8 +1936,21 @@ export const getPublishPreview = async (offeringId: number): Promise<{
     for (const m of mappings.rows) {
       if (Number(m.ss_count) === 0) {
         warnings.push(`Mapping "${m.level_2}" has no active specific services — it will appear empty to providers.`);
+      } else if (Number(m.priced_count) === 0) {
+        // Counting rows was not enough. A mapping whose specific services all
+        // sit at a null or zero base_price is exactly as unusable to a provider
+        // as one with no services at all, and the row count hid that.
+        warnings.push(`Mapping "${m.level_2}" has ${m.ss_count} active specific service(s) but none has a price — providers cannot quote from it.`);
       }
     }
+  }
+
+  // Published-but-invisible is a real and easy mistake: the offering goes
+  // status='active' and still appears nowhere, because the provider web portal
+  // filters on provider_web_visible (see getOfferingsForProvider). A warning,
+  // not a blocker — hiding an offering deliberately is legitimate.
+  if (o.provider_web_visible === false) {
+    warnings.push('This offering is not visible on the provider web portal (providerWebVisible is off), so publishing will not surface it there.');
   }
 
   return {
