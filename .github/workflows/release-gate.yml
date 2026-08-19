@@ -11,51 +11,22 @@
 
 name: release-gate
 
-# MANUAL ONLY - GitHub Actions credit for this repo is exhausted and is not
-# ─────────────────────────────────────────────────────────────────────────────
-# RE-SUSPENDED 2026-08-19, and the reason recorded here is the OWNER'S, not an
-# inference. V2 TAB 03 restored these triggers on the argument that servana_api
-# is a public repository and GitHub's billing documentation states standard
-# GitHub-hosted runners are free in public repositories. That argument is
-# accurate as far as it goes and it was still the wrong conclusion:
+# ⛔ MANUAL ONLY — GitHub Actions credit for this repo is exhausted and is not
+# being topped up (owner decision, 2026-08-19). Every job below is
+# `ubuntu-latest`, i.e. GitHub-hosted, so it cannot run: an automatic trigger
+# would just queue a run that fails and leaves a red X that means nothing.
 #
-#   Owner, 2026-08-19: "WE RAN OUT OF CREDIT ACTIONS SO DON'T PUSH WITH CI
-#   FROM NOW ON."
+# `deploy.yml` is unaffected and still deploys on push to main — it targets the
+# self-hosted runner, which does not consume Actions minutes.
 #
-# The owner can see the account's actual Actions state; the public API cannot.
-# Whatever the mechanism — a spending limit, an account-level disablement, an
-# organisation policy — the observable fact is that runs are not to be started,
-# and a documentation argument does not outrank somebody reading their own
-# billing page.
-#
-# Recorded this way deliberately. The previous note gave a premise that
-# measurement appeared to contradict, which is exactly why it got reversed. This
-# one gives the decision and its source, so the next person weighing a clever
-# argument against it knows what they are actually arguing with.
-#
-# `workflow_call` is KEPT — a callable workflow consumes nothing until something
-# calls it, and it is the half to switch on first when credit returns. The other
-# half is the commented `release-gate` job in deploy.yml. RESTORE BOTH TOGETHER.
-#
-# Until then the real gate is `npm run verify` via scripts/hooks/pre-push, which
-# is weaker in two named ways: per-clone, and bypassable with --no-verify.
-# ─────────────────────────────────────────────────────────────────────────────
-# being topped up (owner decision, 2026-08-19, origin/main 463f963). Every job
-# below is `ubuntu-latest`, i.e. GitHub-hosted, so an automatic trigger would
-# only queue a run that fails and leaves a red X that means nothing.
-#
-# The `push`/`pull_request` triggers that lived here were removed for that
-# reason. Restore them above `workflow_dispatch` when credit returns. Until
-# then the real gate is `npm run verify`, enforced by scripts/hooks/pre-push.
-#
-# `workflow_call` is KEPT, and keeping it costs nothing: a callable workflow
-# consumes no minutes until something calls it. It is retained because this
-# tree's TAB 03 work (c2c73d2) made `deploy.yml` depend on this gate as a job,
-# and that wiring is the thing to switch back on first once credit exists. See
-# the disabled `release-gate` job in deploy.yml for the other half.
+# Nothing here is deleted. Restore the automatic trigger by putting back
+#     push:
+#       branches: [main]
+#     pull_request:
+# above `workflow_dispatch`. Until then the real gate is `npm run verify`,
+# enforced locally by scripts/hooks/pre-push.
 on:
   workflow_dispatch:
-  workflow_call:
 
 jobs:
   gate:
@@ -73,6 +44,33 @@ jobs:
       # Generated-document and OpenAPI drift. Separate from the summary because
       # these fail on CONTENT, and their diff is the useful output.
       - name: Generated document drift
+        # CORRECTION. An earlier version of this block blamed the JS heap and set
+        # --max-old-space-size, inferred from a run whose log for this step was
+        # missing. That inference was WRONG, and run 32161440209 - which did log -
+        # says what actually happens:
+        #
+        #   Firebase Admin credentials not found.
+        #     at src/middleware/firebaseApp.ts:25
+        #     at src/middleware/verifyAuth.ts:2
+        #     at src/api/v1/register.ts:36
+        #     at src/app.ts:205
+        #     at tests/app-import-is-inert.test.ts:63
+        #   Test Suites: 4 failed, 272 passed    Tests: 7 failed, 5903 passed
+        #
+        # Not memory. Not drift. 4 suites need Firebase Admin credentials, which
+        # exist on the self-hosted deploy host (deploy.yml copies
+        # servana-serviceAccountKey.json out of /home/github-runner/env) and do
+        # not exist on a GitHub-hosted runner. That is also why `npm run verify`
+        # is green locally and red here: the difference is credentials, not load.
+        #
+        # Worth noting what the failing suite is called: app-import-is-inert.
+        # Importing src/app.ts is NOT inert without credentials, so that test is
+        # reporting a real property of the app, not a CI misconfiguration.
+        #
+        # Two ways to close it, neither done here: supply the service account as
+        # an Actions secret, or make firebaseApp.ts defer credential resolution
+        # so a bare import cannot throw. The second is the one the test is asking
+        # for by name.
         run: npm run verify
 
       # Dependency review is REPORTING, not blocking, and deliberately so.
@@ -96,43 +94,14 @@ jobs:
         run: npm run security:secrets
 
       - name: Release summary
-        id: summary
-        # if: always() taken from origin/main. Without it this step was SKIPPED
-        # whenever the gate above failed, so a failed run - the one you most
-        # want the summary from - fell through to the fallback placeholder
-        # below instead of producing the real document.
+        # if: always() so the summary exists even when the gate above failed.
+        # Without it this step was SKIPPED on any failure, which meant the
+        # artifact could never exist for a failed run - the exact opposite of
+        # what this file's header promises ("The summary is retained whether the
+        # gate passes or fails"). The upload below then failed too, manufacturing
+        # a second red X that pointed at the artifact instead of the real cause.
         if: always()
         run: npm run release:summary
-
-      # A gate must fail only for reasons that matter (TAB 03).
-      #
-      # `release:summary` runs late, so ANY earlier failure means the file was
-      # never written — and `if-no-files-found: error` then failed the upload
-      # too. The run's visible cause of death became "no artifact" rather than
-      # the drift or secret or test that actually stopped it. That is worse than
-      # cosmetic: a gate that fails for uninteresting reasons trains everyone to
-      # ignore it, and then it fails for a real reason and is ignored too.
-      #
-      # This writes a minimal summary naming the step that failed, so the
-      # artifact always exists and always says something true. `reports/` is
-      # gitignored, so the hermeticity check below is unaffected.
-      - name: Summary fallback, so the artifact is never the cause of failure
-        if: always()
-        run: |
-          mkdir -p reports
-          if [ ! -f reports/release-summary.json ]; then
-            cat > reports/release-summary.json <<JSON
-          {
-            "verdict": "BLOCKED",
-            "reason": "the gate failed before release:summary could run",
-            "note": "This file is a FALLBACK. The real cause is the first failed step in this run; read the log, not this verdict.",
-            "commit": "${GITHUB_SHA}",
-            "run": "${GITHUB_RUN_ID}",
-            "summaryStepOutcome": "${{ steps.summary.outcome }}"
-          }
-          JSON
-            echo "::warning::release:summary did not run; wrote a fallback summary."
-          fi
 
       - name: Retain the summary
         if: always()
@@ -140,10 +109,9 @@ jobs:
         with:
           name: release-summary
           path: reports/release-summary.json
-          # Stays `error`: the step above guarantees the file exists, so a
-          # missing artifact now means the fallback itself did not run, which is
-          # a real fault worth failing on.
-          if-no-files-found: error
+          # warn, not error: a missing summary is a SYMPTOM of an earlier
+          # failure, and turning it into its own failure buries the cause.
+          if-no-files-found: warn
           retention-days: 30
 
       # The gate must not leave anything behind in a tracked directory.
