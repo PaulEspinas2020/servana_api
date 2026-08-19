@@ -1,3 +1,8 @@
+// MUST be the first import: dotenv.config() below runs after every import
+// has already executed, so anything reading process.env at module scope
+// would see an unpopulated environment. See src/env/loadEnv.ts.
+import "./env/loadEnv";
+
 import express, { NextFunction, Request, Response } from "express";
 import { assertFirebaseAdminCredentials } from './middleware/firebaseApp';
 import http from "http";

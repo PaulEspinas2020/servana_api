@@ -1,6 +1,16 @@
-import dotenv from "dotenv";
+// MUST be first: 53 modules import this one, and the database credentials
+// below are captured at module scope. Anything that reads process.env before
+// this line reads an environment .env has not contributed to yet.
+import "./env/loadEnv";
 import { validateEnv } from "./env/envSchema";
-if (!process.env.NODE_ENV) dotenv.config({ path: "../.env" });
+
+// The line that used to sit here was:
+//     if (!process.env.NODE_ENV) dotenv.config({ path: "../.env" });
+// It never ran in production, because NODE_ENV is always set there — and its
+// path resolved against the process CWD rather than the source tree, so it
+// pointed at the wrong file on the one occasion it could have fired. The
+// result was that .env had never supplied the database credentials in
+// production at all. See src/env/loadEnv.ts.
 
 // General
 export const isProduction = process.env.NODE_ENV == "production";
