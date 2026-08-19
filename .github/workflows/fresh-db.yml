@@ -90,6 +90,33 @@ jobs:
       - name: Execute the chain against PostgreSQL 18 (PGlite)
         run: npm run db:verify:embedded
 
+  # ── KNOWN RED, and for a true reason (2026-08-19) ────────────────────────────
+  #
+  # This job now reaches its real assertion and fails there:
+  #
+  #     applied 000-baseline.sql
+  #     applied 000-ledger.sql
+  #     migrations still pending: 8
+  #       030-booking-experiences.sql .. 037-notification-key-drop-global-uniques.sql
+  #
+  # That is the gate working. verify-fresh-db.ts asserts that after the baseline
+  # and its ledger, a deploy onto the fresh database "would do nothing" — zero
+  # pending. Eight are pending because scripts/baseline/000-baseline.sql was last
+  # captured 2026-08-16 12:18 while 037 landed 2026-08-18.
+  #
+  # DO NOT "fix" this by applying the pending migrations here. runLive documents
+  # why in full: the baseline IS the current schema, so replaying the chain on
+  # top replays spent history — 001-008 read services.category, which Catalog V2
+  # removed — and would fail for reasons that say nothing about reproducibility.
+  # Applying them would also destroy the very property being proved.
+  #
+  # The remedy is to re-capture the baseline:
+  #
+  #     npm run baseline:capture      # needs DB_* pointing at a database that
+  #                                   # already has 030-037 applied; production does
+  #
+  # then confirm locally with `npm run db:verify:embedded`, which runs PostgreSQL
+  # in-process and needs no container and no Actions minutes.
   fresh:
     name: zero-to-current on a real engine
     runs-on: ubuntu-latest

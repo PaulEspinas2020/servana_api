@@ -163,6 +163,23 @@ jobs:
           SERVANA_APPLY_DESTRUCTIVE: ${{ vars.SERVANA_APPLY_DESTRUCTIVE }}
         run: npm run migrations:apply
 
+      # Deliberately stop/delete/start rather than `pm2 reload`, which was
+      # considered on 2026-08-19 and rejected on measurement:
+      #
+      #  - `pm2 reload` is only zero-downtime in CLUSTER mode. There is no
+      #    ecosystem config here and the app is started with plain args, so it
+      #    runs in fork mode, where reload degrades to a restart and the gap
+      #    remains. It would buy nothing.
+      #  - Moving to cluster mode would run startScheduler() (src/app.ts) in
+      #    every instance, and src/scheduler.ts has no single-instance guard —
+      #    no NODE_APP_INSTANCE check, no advisory lock, no leader election. Two
+      #    instances means every cron tick fires twice, which is far worse than
+      #    the short 502 window this sequence costs.
+      #  - The delete step is load-bearing: it exists because a previous deploy
+      #    left an EADDRINUSE crash loop.
+      #
+      # Closing the 502 window properly means guarding the scheduler first, then
+      # cluster mode. Until then this sequence is the correct trade.
       - name: Restart PM2
         run: |
           APP="$(pwd)/dist/app.js"
