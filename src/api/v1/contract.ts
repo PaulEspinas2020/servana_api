@@ -3492,6 +3492,63 @@ export const V1_CONTRACT: ContractEntry[] = [
       'varies by caller.',
   },
   {
+    id: 'admin.refunds.markFailed',
+    domain: 'admin-finance',
+    method: 'post',
+    path: '/admin/refunds/:refundId/mark-failed',
+    summary: 'Record that an approved refund did not go through.',
+    auth: 'admin',
+    /**
+     * The same named permission the legacy twin demands.
+     *
+     * `auth: 'admin'` proves role 1 and nothing more. Its `requires` chain is
+     * `refunds.mark_failed -> refunds.approve -> refunds.review.open`, which is
+     * also why the approver-is-not-the-requester rule cannot be a permission:
+     * the closure GUARANTEES that everybody who can approve can also request.
+     * That rule lives in the executor, as a predicate in the write.
+     */
+    permission: 'refunds.mark_failed',
+    idempotent: false,
+    replayGuard:
+      'The state predicate, in the write itself: the UPDATE matches only ' +
+      '`status = \'approved\'`, so a replay finds the row already `failed` and ' +
+      'affects nothing. That is a stronger bound than an idempotency key here, ' +
+      'because it also refuses a SECOND operator submitting a different reason ' +
+      'for the same refund minutes later — which a per-client key would happily ' +
+      'let through as a distinct request. No payments row is written on this ' +
+      'path, so a replay cannot move money even in principle.',
+    requestSchema: 'RefundFailureRequest',
+    responseSchema: 'RefundTransitionResult',
+    errors: ['PERMISSION_REQUIRED', 'VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [{ name: 'refundId', type: 'integer', description: 'finance_refund_reviews.id' }],
+    status: 'implemented',
+    domainService: 'services/adminFinanceService.markRefundFailed',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/admin/finance/refunds/:refundId/mark-failed',
+        disposition: 'CANONICALIZE',
+        note:
+          'Mounted in the same change as this entry rather than inherited. The transition ' +
+          'did not exist before — an approved refund the processor refused had no terminal, ' +
+          'so it stayed `approved` and BLOCKED every retry for that booking, because ' +
+          'openRefundReview refuses a second review while one is requested or approved. ' +
+          'Both surfaces call the same executor; neither carries a copy of the rule.',
+      },
+    ],
+    callers: {
+      customerMobile: 'n/a',
+      customerWeb: 'n/a',
+      providerMobile: 'n/a',
+      providerWeb: 'n/a',
+      admin: 'legacy',
+    },
+    observability: 'admin-finance',
+    notes:
+      'Distinct from reject: rejected means a human decided against the refund, failed means ' +
+      'everyone agreed and the money did not move. Only the second is worth retrying.',
+  },
+  {
     id: 'admin.bookings.list',
     domain: 'admin-bookings',
     method: 'get',

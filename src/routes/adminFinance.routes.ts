@@ -40,6 +40,7 @@ router.get( '/admin/finance/refunds/:refundId',                ...adminOnly, req
 router.post('/admin/finance/refunds/:refundId/approve',        ...adminOnly, requirePermission('refunds.approve'), ctrl.approveRefund);
 router.post('/admin/finance/refunds/:refundId/reject',         ...adminOnly, requirePermission('refunds.reject'), ctrl.rejectRefund);
 router.post('/admin/finance/refunds/:refundId/mark-processed', ...adminOnly, requirePermission('refunds.mark_processed'), ctrl.markRefundProcessed);
+router.post('/admin/finance/refunds/:refundId/mark-failed',    ...adminOnly, requirePermission('refunds.mark_failed'),    ctrl.markRefundFailed);
 
 // ── Reconciliation ────────────────────────────────────────────────────────────
 router.post('/admin/finance/reconciliation/run',                               ...adminOnly, requirePermission('reconciliation.run'), ctrl.runReconciliation);

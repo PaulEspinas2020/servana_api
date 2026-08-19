@@ -327,6 +327,25 @@ jest.mock('../src/services/finance/providerEarningsService', () => {
  * leave the wiring untested, which is the only thing this file can actually
  * prove.
  */
+/**
+ * The refund executor, faked to a bare success.
+ *
+ * This suite tests ROUTING: does the path reach the handler, is the declared
+ * auth mode actually mounted, does the envelope come back in the v1 shape. The
+ * executor's own rules — the approved-only state guard, the missing-versus-
+ * wrong-status distinction, the audit — are proven against a real PostgreSQL in
+ * `npm run refunds:segregation` and against a fake engine in
+ * `tests/refund-segregation-of-duties.test.ts`.
+ *
+ * Left unmocked it reached the blanket dbQuery fake, got zero rows and answered
+ * 404, which is the executor behaving correctly and this suite asking the wrong
+ * question.
+ */
+jest.mock('../src/services/adminFinanceService', () => ({
+  __esModule: true,
+  markRefundFailed: async () => undefined,
+}));
+
 jest.mock('../src/services/adminBookingService', () => ({
   __esModule: true,
   isBookingState: (s: string) => ['PENDING', 'ASSIGNED', 'COMPLETED'].includes(s),
@@ -1007,6 +1026,13 @@ describe('every implemented contract entry is reachable at its declared path', (
       call('POST', '/api/v1/admin/bookings/7/reassign', {
         role: 'admin', permission: 'bookings.reassign_provider',
         body: { toProviderUid: 'provider-under-test', reason: 'operator override' },
+      }),
+
+    // -- refund lifecycle --
+    'admin.refunds.markFailed': () =>
+      call('POST', '/api/v1/admin/refunds/7/mark-failed', {
+        role: 'admin', permission: 'refunds.mark_failed',
+        body: { failureReason: 'gcash wallet closed' },
       }),
 
     // -- TAB 08 messaging --

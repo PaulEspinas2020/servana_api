@@ -59,10 +59,10 @@ though they are the reason the canonical namespace exists.
 The surface as it stands:
 
 <!-- BEGIN GENERATED: v1-surface -->
-- **110 canonical endpoints live**, each driven end to end by `tests/v1-router.test.ts`.
+- **111 canonical endpoints live**, each driven end to end by `tests/v1-router.test.ts`.
 - **0 planned**, documented and not mounted — see §11 of [`API_V1_CONTRACT.md`](API_V1_CONTRACT.md).
 - **94 legacy aliases** counted by telemetry, derived from the contract.
-- **517 routes** mounted outside `/api/v1`, every one classified in the matrix.
+- **518 routes** mounted outside `/api/v1`, every one classified in the matrix.
 <!-- END GENERATED: v1-surface -->
 
 Each phase below opens with a generated table of what that client can move
@@ -78,7 +78,7 @@ set today — its surface is `/api/admin/*`, which this command classifies
 `CANONICALIZE` and leaves to the admin-bookings domain command.
 
 <!-- BEGIN GENERATED: v1-moves:admin -->
-**19** canonical capabilities are live that this client still reaches by a legacy route.
+**20** canonical capabilities are live that this client still reaches by a legacy route.
 
 | Move to (canonical) | Legacy routes it supersedes |
 |---|---|
@@ -95,6 +95,7 @@ set today — its surface is `/api/admin/*`, which this command classifies
 | `POST /api/v1/conversations/:conversationId/read` | `POST /api/chat/conversations/:id/read` |
 | `POST /api/v1/bookings/:bookingId/reschedule` | `POST /api/admin/bookings/:id/reschedule` |
 | `POST /api/v1/bookings/:bookingId/disputes` | `POST /api/admin/bookings/:id/escalate` |
+| `POST /api/v1/admin/refunds/:refundId/mark-failed` | `POST /api/admin/finance/refunds/:refundId/mark-failed` |
 | `GET /api/v1/admin/bookings` | `GET /api/admin/bookings` |
 | `GET /api/v1/admin/bookings/:bookingId/assignment-candidates` | `GET /api/admin/bookings/:id/assignment-candidates` |
 | `POST /api/v1/admin/bookings/:bookingId/assign` | `POST /api/admin/bookings/:id/assign` |

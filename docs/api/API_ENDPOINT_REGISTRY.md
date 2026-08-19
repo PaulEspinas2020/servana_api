@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**110 implemented** · **0 planned** · 110 total.
+**111 implemented** · **0 planned** · 111 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -1370,6 +1370,25 @@ The disputes on this booking. Investigation notes are never projected.
 - **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web ✅ · Admin ·
 - **Legacy it replaces** — none; new capability.
 
+## admin-finance
+
+| Method | Path | Status | Auth | Request | Response | Idem | Owner |
+|---|---|---|---|---|---|---|---|
+| `POST` | `/api/v1/admin/refunds/:refundId/mark-failed` | **live** | admin (role 1) | `RefundFailureRequest` | `RefundTransitionResult` | no | admin-finance |
+
+### `POST /api/v1/admin/refunds/:refundId/mark-failed`
+
+Record that an approved refund did not go through.
+
+> Distinct from reject: rejected means a human decided against the refund, failed means everyone agreed and the money did not move. Only the second is worth retrying.
+
+- **Domain service** — `services/adminFinanceService.markRefundFailed`
+- **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PERMISSION_REQUIRED`, `ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `refundId` (integer) finance_refund_reviews.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile — · Prov Web — · Admin ⏳
+- **Legacy it replaces**
+  - `POST /api/admin/finance/refunds/:refundId/mark-failed` — **CANONICALIZE** — Mounted in the same change as this entry rather than inherited. The transition did not exist before — an approved refund the processor refused had no terminal, so it stayed `approved` and BLOCKED every retry for that booking, because openRefundReview refuses a second review while one is requested or approved. Both surfaces call the same executor; neither carries a copy of the rule.
+
 ## admin-bookings
 
 | Method | Path | Status | Auth | Request | Response | Idem | Owner |
@@ -1635,6 +1654,7 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `GET /api/v1/bookings/:bookingId/additional-work` | · | · | · | ⏳ | · |
 | `POST /api/v1/bookings/:bookingId/disputes` | · | · | · | ✅ | ⏳ |
 | `GET /api/v1/bookings/:bookingId/disputes` | · | · | · | ✅ | · |
+| `POST /api/v1/admin/refunds/:refundId/mark-failed` | — | — | — | — | ⏳ |
 | `GET /api/v1/admin/bookings` | — | — | — | — | ⏳ |
 | `GET /api/v1/admin/bookings/:bookingId/assignment-candidates` | — | — | — | — | ⏳ |
 | `POST /api/v1/admin/bookings/:bookingId/assign` | — | — | — | — | ⏳ |

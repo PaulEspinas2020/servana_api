@@ -14,7 +14,7 @@
 > [`CROSS_CLIENT_MIGRATION_PLAN.md`](CROSS_CLIENT_MIGRATION_PLAN.md), which is
 > hand-written because an argument is not derivable. This is what each client
 > actually has to change, and it is generated because a hand-maintained list of
-> 110 endpoints across five clients is stale the day after it is written.
+> 111 endpoints across five clients is stale the day after it is written.
 
 ## How to read this
 
@@ -34,9 +34,9 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 35 |
+| Capabilities that apply | 36 |
 | Already on canonical | 0 |
-| Still on a legacy route | 13 |
+| Still on a legacy route | 14 |
 | Partially migrated | 1 |
 | No equivalent called today | 21 |
 
@@ -73,6 +73,7 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Refund a booking payment | legacy | `POST /api/admin/finance/refunds` | `POST /api/v1/bookings/:bookingId/refunds` |
 | Register, sign in, and end a session | legacy | `POST /api/auth/admin-signin`, `POST /api/auth/firebase-login`, `POST /api/auth/logout`, `POST /api/auth/provider/register`, `POST /api/auth/refresh`, `POST /api/auth/signin`, `POST /api/auth/signup` | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` |
 | Reschedule | legacy | `POST /api/admin/bookings/:id/reschedule` | `POST /api/v1/bookings/:bookingId/reschedule` |
+| Resolve a refund review | legacy | `POST /api/admin/finance/refunds/:refundId/mark-failed` | `POST /api/v1/admin/refunds/:refundId/mark-failed` |
 | Send a message | legacy | `POST /api/chat/conversations/:id/messages` | `POST /api/v1/conversations/:conversationId/messages` |
 | Start or resume a booking payment | planned | `POST /api/:bookingId/paymongo/create` | `POST /api/v1/bookings/:bookingId/payment-intents` |
 | Tracking | planned | `GET /api/:id/tracking`, `GET /api/booking/:bookingId/provider-location` | `GET /api/v1/bookings/:bookingId/tracking` |

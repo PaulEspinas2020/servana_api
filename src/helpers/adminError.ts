@@ -65,6 +65,19 @@ export function adminNotFound(res: Response, entity: string): Response {
   return adminError(res, 404, 'NOT_FOUND', `${entity} not found`);
 }
 
+/**
+ * A refusal on policy grounds, not on identity grounds.
+ *
+ * 403, not 401: the caller is authenticated and holds the permission. What they
+ * may not do is this particular act on this particular object — approving a
+ * refund they themselves requested, for instance. Reporting that as 500 would
+ * file a working control as an outage, and reporting it as 400 would invite a
+ * retry with different arguments.
+ */
+export function adminForbidden(res: Response, message: string): Response {
+  return adminError(res, 403, 'FORBIDDEN', message);
+}
+
 export function adminConflict(res: Response, message: string): Response {
   return adminError(res, 409, 'CONFLICT', message);
 }

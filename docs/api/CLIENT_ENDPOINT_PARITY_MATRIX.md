@@ -18,17 +18,17 @@
 
 | | |
 | --- | --- |
-| Capabilities | 58 |
-| Canonical endpoints mounted | 110 |
+| Capabilities | 59 |
+| Canonical endpoints mounted | 111 |
 | Canonical endpoints planned | 0 |
-| Legacy mappings tracked | 124 |
+| Legacy mappings tracked | 125 |
 | Converged (one route family) | 52 |
 | Role-split over ONE service | 4 |
-| Single-surface | 2 |
+| Single-surface | 3 |
 | **Divergent (forked truth)** | **0** |
 | Broken (names a missing endpoint) | 0 |
 | Surface × capability cells on canonical | 23 |
-| Surface × capability cells still legacy | 94 |
+| Surface × capability cells still legacy | 95 |
 
 **0 divergent capabilities.** Every capability whose
 endpoints span more than one route family names exactly one domain service — the
@@ -84,6 +84,7 @@ direction of whoever wrote it.
 | Read the support cases I raised on a booking | SHARED | planned | planned | — | — | — |
 | A provider's own job queue | SHARED | — | — | ⚠ mixed | **migrated** | — |
 | Read a provider's public profile | SHARED | planned | planned | — | — | planned |
+| Resolve a refund review | SINGLE_SURFACE | — | — | — | — | legacy |
 | Read the reschedule history of a booking | SHARED | planned | planned | planned | **migrated** | planned |
 | Register and release this device for push | SHARED | legacy | planned | legacy | **migrated** | — |
 | Dismiss one notification | SHARED | planned | planned | planned | **migrated** | — |
@@ -542,6 +543,20 @@ Legacy still aliased for this capability:
   - none
 
 No role split. One public projection, and the disclosure rules are the provider disclosure policy — not a per-caller decision made at the route.
+
+### Resolve a refund review
+
+- key: `core:refundLifecycle` · declared in `api/v1/convergence (core)`
+- verdict: **SINGLE_SURFACE** · domain service: `services/adminFinanceService`
+- route families: `/admin`
+
+Canonical:
+  - `POST /api/v1/admin/refunds/:refundId/mark-failed`
+
+Legacy still aliased for this capability:
+  - `POST /api/admin/finance/refunds/:refundId/mark-failed`
+
+Genuinely operator-only, and deliberately narrow for now. A customer requests a refund through the booking surface; deciding one is an operator action behind role 1 and a named permission. Only the `failed` terminal is canonical so far: the rest of the lifecycle (open, approve, reject, mark-processed) stays legacy until the disbursement surface is unified, because canonicalising a refund before its payout twin would fix the duplicate rather than remove it. `failed` came first because it did not exist at all — an approved refund the processor rejected had no terminal, so it stayed `approved` and blocked every retry for that booking.
 
 ### Read the reschedule history of a booking
 

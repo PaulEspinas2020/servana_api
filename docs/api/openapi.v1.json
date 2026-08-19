@@ -11094,6 +11094,149 @@
         "description": "`reason`, `assigned_team` and `actor_uid` are withheld from every caller: free text one party typed about another, internal routing, and a person. Only `openedByYou` varies by caller."
       }
     },
+    "/api/v1/admin/refunds/{refundId}/mark-failed": {
+      "post": {
+        "operationId": "admin.refunds.markFailed",
+        "summary": "Record that an approved refund did not go through.",
+        "tags": [
+          "admin-finance"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/adminFinanceService.markRefundFailed",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/admin/finance/refunds/:refundId/mark-failed",
+            "disposition": "CANONICALIZE"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "legacy"
+        },
+        "x-observability-owner": "admin-finance",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "refundId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "finance_refund_reviews.id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefundFailureRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RefundTransitionResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PERMISSION_REQUIRED | ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Distinct from reject: rejected means a human decided against the refund, failed means everyone agreed and the money did not move. Only the second is worth retrying."
+      }
+    },
     "/api/v1/admin/bookings": {
       "get": {
         "operationId": "admin.bookings.list",
@@ -17602,6 +17745,41 @@
         "type": "object",
         "description": "PLANNED — providerUid and a REQUIRED reason; the override is audited."
       },
+      "RefundFailureRequest": {
+        "type": "object",
+        "required": [
+          "failureReason"
+        ],
+        "description": "Why the approved refund did not go through. Required: \"failed\" with no explanation leaves the next operator unable to tell a retriable processor timeout from a closed account.",
+        "properties": {
+          "failureReason": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Recorded verbatim on the review."
+          }
+        }
+      },
+      "RefundTransitionResult": {
+        "type": "object",
+        "required": [
+          "refundId",
+          "status"
+        ],
+        "description": "The transition that was applied. Deliberately not the whole review — a caller that needs the record reads it back, rather than this becoming a second and subtly different source for it.",
+        "properties": {
+          "refundId": {
+            "type": "integer",
+            "description": "finance_refund_reviews.id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "failed"
+            ],
+            "description": "The terminal reached."
+          }
+        }
+      },
       "AdminBookingActionResult": {
         "type": "object",
         "description": "PLANNED — the canonical booking projection after the transition."
@@ -17614,6 +17792,9 @@
     },
     {
       "name": "admin-bookings"
+    },
+    {
+      "name": "admin-finance"
     },
     {
       "name": "auth"
@@ -17659,6 +17840,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 110,
-  "x-total-count": 110
+  "x-implemented-count": 111,
+  "x-total-count": 111
 }

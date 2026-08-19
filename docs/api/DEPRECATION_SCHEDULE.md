@@ -34,15 +34,15 @@ installed.
 
 | | |
 | --- | --- |
-| Legacy mappings tracked | 124 |
-| In the retirement plan | 105 |
+| Legacy mappings tracked | 125 |
+| In the retirement plan | 106 |
 | `KEEP` (not a duplicate of anything) | 6 |
 | `ROLE_SPECIFIC` (different auth/action, same service) | 13 |
 | `ALIAS_TEMPORARILY` | 94 |
-| `CANONICALIZE` | 10 |
+| `CANONICALIZE` | 11 |
 | `RETIRE` | 1 |
 | **Retirable today** | **0** |
-| Blocked | 105 |
+| Blocked | 106 |
 
 Nothing is retirable today, and the reason is the same for all of them: no client has migrated, because the v1 namespace is not deployed. The schedule is the order things become retirable, not a queue of pending deletions.
 
@@ -67,6 +67,7 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `POST /api/admin/bookings/:id/reschedule` | ALIAS_TEMPORARILY | `bookings.reschedule` | Customer Mobile, Customer Web, Admin Web have not migrated | 90d |
 | `GET /api/admin/finance/reconciliation/exceptions` | ALIAS_TEMPORARILY | `admin.finance.reconciliation` | Admin Web has not migrated | 14d |
 | `POST /api/admin/finance/refunds` | ALIAS_TEMPORARILY | `bookings.refunds.create` | Customer Mobile, Customer Web, Admin Web have not migrated | 90d |
+| `POST /api/admin/finance/refunds/:refundId/mark-failed` | CANONICALIZE | `admin.refunds.markFailed` | Admin Web has not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 14d |
 | `POST /api/auth/admin-signin` | ALIAS_TEMPORARILY | `auth.login` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `POST /api/auth/firebase-login` | ALIAS_TEMPORARILY | `auth.login` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `POST /api/auth/forgot-password` | ALIAS_TEMPORARILY | `auth.forgotPassword` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |

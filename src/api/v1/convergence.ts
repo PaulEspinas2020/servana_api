@@ -280,6 +280,23 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       '`bookingTransitions` above, over the shared state machine.',
   },
   {
+    key: 'refundLifecycle',
+    title: 'Resolve a refund review',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['admin.refunds.markFailed'],
+    domainModule: 'services/adminFinanceService',
+    surfaces: Object.freeze(['admin'] as ClientSurface[]),
+    roleSplitRationale:
+      'Genuinely operator-only, and deliberately narrow for now. A customer requests a ' +
+      'refund through the booking surface; deciding one is an operator action behind role 1 ' +
+      'and a named permission. Only the `failed` terminal is canonical so far: the rest of ' +
+      'the lifecycle (open, approve, reject, mark-processed) stays legacy until the ' +
+      'disbursement surface is unified, because canonicalising a refund before its payout ' +
+      'twin would fix the duplicate rather than remove it. `failed` came first because it ' +
+      'did not exist at all — an approved refund the processor rejected had no terminal, so ' +
+      'it stayed `approved` and blocked every retry for that booking.',
+  },
+  {
     key: 'providerPublicProfile',
     title: "Read a provider's public profile",
     source: 'api/v1/convergence (core)',

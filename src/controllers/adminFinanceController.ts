@@ -4,6 +4,7 @@ import {
   adminNotFound,
   adminBadRequest,
   adminConflict,
+  adminForbidden,
   adminValidationError,
 } from '../helpers/adminError';
 import * as svc from '../services/adminFinanceService';
@@ -37,6 +38,11 @@ function handleSvcError(res: Response, err: unknown): Response {
   const e = err as any;
   if (e?.code === 'NOT_FOUND')      return adminNotFound(res, e.message);
   if (e?.code === 'CONFLICT')       return adminConflict(res, e.message);
+  // A policy refusal from the domain service. Without this line it fell through
+  // to adminServerError, and a working segregation-of-duties control would have
+  // been reported to the operator — and to any dashboard watching 5xx — as a
+  // crash.
+  if (e?.code === 'FORBIDDEN')      return adminForbidden(res, e.message);
   if (e?.code === 'BUSINESS_RULE')  return adminBadRequest(res, e.message);
   return adminServerError(res, err);
 }
@@ -337,6 +343,28 @@ export async function markRefundProcessed(req: Request, res: Response): Promise<
     if (!refundReference?.trim()) { adminValidationError(res, 'refundReference is required'); return; }
     const { uid, name } = actorFrom(req);
     await svc.markRefundProcessed(refundId, refundReference.trim(), uid, name, rid(req));
+    res.json({ status: 'success', data: { refundId } });
+  } catch (err) {
+    handleSvcError(res, err);
+  }
+}
+
+/**
+ * Record that an approved refund did not go through.
+ *
+ * The reason is required rather than optional. "Failed" with no explanation
+ * leaves the next operator unable to tell a retriable processor timeout from a
+ * closed account, and this row is the only place that distinction is written
+ * down.
+ */
+export async function markRefundFailed(req: Request, res: Response): Promise<void> {
+  try {
+    const refundId = Number(req.params.refundId);
+    if (!isPositiveId(refundId)) { adminBadRequest(res, 'Invalid refund ID'); return; }
+    const { failureReason } = req.body;
+    if (!failureReason?.trim()) { adminValidationError(res, 'failureReason is required'); return; }
+    const { uid, name } = actorFrom(req);
+    await svc.markRefundFailed(refundId, failureReason.trim(), uid, name, rid(req));
     res.json({ status: 'success', data: { refundId } });
   } catch (err) {
     handleSvcError(res, err);

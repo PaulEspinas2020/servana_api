@@ -2444,6 +2444,23 @@ export const SCHEMAS: Record<string, unknown> = {
   },
   AdminAssignRequest: { type: 'object', description: 'PLANNED — providerUid and an optional reason.' },
   AdminReassignRequest: { type: 'object', description: 'PLANNED — providerUid and a REQUIRED reason; the override is audited.' },
+  RefundFailureRequest: {
+    type: 'object',
+    required: ['failureReason'],
+    description: 'Why the approved refund did not go through. Required: "failed" with no explanation leaves the next operator unable to tell a retriable processor timeout from a closed account.',
+    properties: {
+      failureReason: { type: 'string', minLength: 1, description: 'Recorded verbatim on the review.' },
+    },
+  },
+  RefundTransitionResult: {
+    type: 'object',
+    required: ['refundId', 'status'],
+    description: 'The transition that was applied. Deliberately not the whole review — a caller that needs the record reads it back, rather than this becoming a second and subtly different source for it.',
+    properties: {
+      refundId: { type: 'integer', description: 'finance_refund_reviews.id' },
+      status: { type: 'string', enum: ['failed'], description: 'The terminal reached.' },
+    },
+  },
   AdminBookingActionResult: { type: 'object', description: 'PLANNED — the canonical booking projection after the transition.' },
 };
 
