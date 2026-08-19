@@ -17,10 +17,24 @@
 # because no other branch deploys and a two-minute wait would just train someone
 # to reach for --no-verify.
 #
-# This cannot check what only a GitHub-hosted runner could: `npm run verify` here
-# passes with credentials present, and 4 suites fail without them. That gap is
-# tests/app-import-is-inert.test.ts and it is a real property of the app, not a
-# CI artefact. Do not read a green hook as proof those 4 suites pass clean.
+# That caveat is now OUT OF DATE, and the correction matters because this hook is
+# currently the only gate.
+#
+# It used to read: `npm run verify` here passes with credentials present, and 4
+# suites fail without them, so do not read a green hook as proof those suites
+# pass clean. That was true, and the cause was `middleware/firebaseApp.ts`
+# resolving the Firebase Admin credential at MODULE LOAD — so importing the
+# composed app required a live production key, and any checkout without one
+# failed app-import-is-inert, authz-matrix-behaviour, health-probe-parity and
+# v1-composed-app.
+#
+# fca1ed1 made that resolution lazy. Verified 2026-08-19 with no
+# servana-serviceAccountKey.json on disk and FIREBASE_SERVICE_ACCOUNT_JSON
+# unset: all four suites pass, 32 tests.
+#
+# So a green hook now IS proof, and that is the whole point — with GitHub-hosted
+# CI unavailable, a gate nobody trusts is a gate people reach past with
+# --no-verify.
 
 set -e
 
