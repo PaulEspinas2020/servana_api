@@ -27,6 +27,7 @@
  * here and nowhere else.
  */
 import fs from "fs";
+import os from "os";
 import path from "path";
 
 const root = path.resolve(__dirname, "..");
@@ -76,14 +77,19 @@ describe("the environment is loaded before anything reads it", () => {
     process.env[key] = "from-the-process";
 
     const dotenv = require("dotenv") as typeof import("dotenv");
-    const tmp = path.join(root, ".env.load-order-probe");
+    // os.tmpdir(), never the repo: the release-gate hermeticity test asserts
+    // that no test writes into a tracked directory, and it is right to.
+    const tmp = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "servana-env-probe-")),
+      ".env.probe",
+    );
     fs.writeFileSync(tmp, `${key}=from-the-file\n`);
 
     try {
       dotenv.config({ path: tmp });
       expect(process.env[key]).toBe("from-the-process");
     } finally {
-      fs.unlinkSync(tmp);
+      fs.rmSync(path.dirname(tmp), { recursive: true, force: true });
       delete process.env[key];
     }
   });

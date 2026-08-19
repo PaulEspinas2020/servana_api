@@ -61,6 +61,7 @@
  * `scripts/lib/routeTable.ts`.
  */
 
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -199,9 +200,26 @@ describe('the deploy cannot run ahead of its gate', () => {
 
   it('the gate that replaced it is real, runs verify, and runs it on main', () => {
     const hook = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'hooks', 'pre-push'), 'utf8');
-    // Executable, or git silently ignores it and reports nothing.
-    // eslint-disable-next-line no-bitwise
-    expect(fs.statSync(path.join(__dirname, '..', 'scripts', 'hooks', 'pre-push')).mode & 0o111).not.toBe(0);
+    /*
+     * Executable, or git silently ignores it and reports nothing.
+     *
+     * Asserted against git's INDEX rather than the filesystem. NTFS does not
+     * carry a POSIX exec bit, so `statSync().mode & 0o111` is 0 on Windows for
+     * a file git considers executable — this assertion could never pass on a
+     * Windows dev machine, while passing on Linux. With CI switched off, that
+     * machine IS the gate, and a gate that cannot run where it is run is not a
+     * gate.
+     *
+     * The index mode is also the more truthful thing to assert: 100755 is what
+     * travels with the repository and what makes the hook executable when it
+     * is checked out on the machine that runs it.
+     */
+    const indexEntry = execFileSync(
+      'git',
+      ['ls-files', '-s', 'scripts/hooks/pre-push'],
+      { cwd: path.join(__dirname, '..'), encoding: 'utf8' },
+    );
+    expect(indexEntry.startsWith('100755')).toBe(true);
     expect(hook).toMatch(/npm run verify/);
     expect(hook).toMatch(/refs\/heads\/main/);
     // verify, not verify:quick, on the branch that deploys. A quick check on
