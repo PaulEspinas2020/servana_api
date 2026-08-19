@@ -220,6 +220,23 @@ searched-and-found-nothing. It catches a leak the 36 existing redaction tests
 cannot: those test the redactor, so a value copied onto the line without passing
 through it is invisible to them.
 
+## V2 TAB 13 — recovery
+
+| # | Task | Why blocked | Closes when |
+| --- | --- | --- | --- |
+| V13.1 | **Restore a backup into a scratch database.** A backup nobody has restored is a hypothesis. Count rows against production, record RPO, RTO and the date, then repeat on a schedule — a restore proven once a year ago proves the procedure of a year ago | `PROD-ACCESS`, `NO-CRED` | A dated restore with RPO/RTO recorded |
+| V13.2 | **Rehearse the deploy rollback against the real host.** It is written and has never run. Deliberately fail a post-deploy probe and watch the previous build come back. `scripts/post-deploy-readiness.sh` exists and is one line from being wired in | `PROD-ACCESS` | A rehearsed rollback, dated |
+| V13.3 | **Verify the two rotated Firebase Admin keys are actually gone from IAM.** They remain in git history; they were rotated; the deletion is unverified. Then set a rotation schedule, including the CI identity | `NO-CRED` | IAM confirms the old keys do not exist |
+| V13.4 | **Document which of the two env files on the production host is authoritative for which variable.** `pm2 env` does not show them, and this has already caused a P0 — twice now, counting `API_KEY` | `PROD-ACCESS` | Inventory written into the runbook |
+| V13.5 | **Get Provider Mobile and Customer Web onto a machine with this book.** The impact register is complete for two consumers and empty for two, and the rule is that additivity is proven by reading, never by reasoning | `NO-REPO` | Both read; register completed |
+
+**Done here:** the incident-response runbook
+([INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md)) and the cross-platform impact
+register ([CROSS_PLATFORM_IMPACT.md](CROSS_PLATFORM_IMPACT.md)), the latter
+covering the two consumers that turned out to BE on this machine —
+`ServanaClientAPP` and `servana_service-provider` at `/Users/user/ServanaWorkerWeb`,
+which an earlier note had recorded as absent.
+
 ---
 
 ## Closed
