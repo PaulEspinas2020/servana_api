@@ -187,6 +187,44 @@ export const buildLogLine = (
  * sampling — the count must be complete even when the lines are not, or the
  * error rate is computed against a denominator that was thinned.
  */
+/**
+ * Route templates the v1 contract declares `auth: 'public'`.
+ *
+ * ## Why this is measured HERE and not in the auth chain
+ *
+ * A contract-public entry has NO auth middleware — `authChain` returns an empty
+ * array for it — so it cannot answer 401 from its own chain. The failure this
+ * counts is the one that actually happened: on 2026-08-18 production answered
+ * 401 to every path including ones that do not exist, because authentication
+ * was running BEFORE routing. In that state the v1 router is never reached, so
+ * anything instrumented inside it counts nothing.
+ *
+ * This hook runs on `res.finish` and is mounted above everything, so it sees the
+ * final status whichever layer produced it. That is the only vantage point from
+ * which "a public path was refused" is observable at all.
+ *
+ * Built lazily and once: the contract is a module-scope constant, and importing
+ * it eagerly here would put the whole v1 contract on the critical path of the
+ * logger.
+ */
+let publicRoutes: Set<string> | null = null;
+
+/** `:bookingId` and `:id` are the same shape; `routeTemplate` and the contract disagree on the name. */
+const shapeOf = (route: string): string => route.replace(/:[A-Za-z0-9_]+/g, ':x');
+
+const isContractPublic = (route: string): boolean => {
+  if (!publicRoutes) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+    const { V1_CONTRACT, V1_PREFIX } = require('../api/v1/contract');
+    publicRoutes = new Set(
+      V1_CONTRACT
+        .filter((e: { auth: string; status: string }) => e.auth === 'public' && e.status === 'implemented')
+        .map((e: { path: string }) => shapeOf(`${V1_PREFIX}${e.path}`)),
+    );
+  }
+  return publicRoutes.has(shapeOf(route));
+};
+
 export const requestLogMiddleware = (req: Request, res: Response, next: NextFunction) => {
   const startedAt = process.hrtime.bigint();
 
@@ -210,6 +248,23 @@ export const requestLogMiddleware = (req: Request, res: Response, next: NextFunc
         namespace: line.namespace,
       });
       if (line.status === 401 || line.status === 403) {
+        /**
+         * An INVARIANT, not a rate. A contract-public entry refusing an
+         * anonymous caller means the request never reached the router that
+         * would have allowed it, so the correct count is zero and
+         * `public-path-auth-failure` pages on ANY occurrence.
+         *
+         * Labelled by route and namespace only: the caller is anonymous by
+         * definition, so there is no client or uid to group by, and the
+         * cardinality rule in `observabilityPolicy` would refuse an unbounded
+         * label anyway.
+         */
+        if (isContractPublic(line.route)) {
+          incr('public_path_auth_failures_total', {
+            route: line.route,
+            namespace: line.namespace,
+          });
+        }
         incr('auth_failures_total', {
           reason: line.status === 401 ? 'unauthenticated' : 'forbidden',
           route: line.route,
