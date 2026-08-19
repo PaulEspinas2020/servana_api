@@ -201,6 +201,25 @@ Last updated: 2026-08-18 (TAB 16 — terminal)
 | V11.4 | Keyboard-only and screen-reader passes on the four critical workflows: assign a provider, approve a document, process a payout, resolve a support case. Focus order, visible focus, escape from every modal, table semantics, error association, status announcements | `NO-REPO`, `HUMAN-JUDGEMENT` | Documented pass per workflow with findings closed |
 | V11.5 | Verify contrast in BOTH themes. The portal has dark variants throughout and contrast regressions hide there because nobody reviews in dark mode. Note that `:root[data-theme="dark"]` is currently inert — nothing in the app sets the attribute — so the dark path today is the OS preference alone | `NO-REPO` | AA verified light and dark |
 
+## V2 TAB 12 — observability
+
+| # | Task | Why blocked | Closes when |
+| --- | --- | --- | --- |
+| V12.1 | **Ship logs to something that aggregates and can alert.** Everything upstream exists — structured JSON lines, request id, actor, route, status, latency, outcome, a deny-by-default redaction allow-list — and nothing consumes any of it. Declaring a metric is the precondition for observability, not observability | `NO-CRED`, `PROD-ACCESS` | Lines queryable in an aggregator, retention agreed |
+| V12.2 | **Surface the request id to the operator.** The portal already CAPTURES it — `https-status-interceptor` puts `x-request-id` on `error.adminRequestId` and `normalizeAdminApiError` reads it — but nothing displays it. Only the audit-log detail shows a request id, and that comes from the audit record, not from an error. A correlation key nobody can quote is not usable in a support conversation | `NO-REPO` (needs a browser to place it without noise) | An operator can read and copy the id from a failed action |
+| V12.3 | **Prove correlation end to end** — trigger a portal error, take the surfaced id, find the matching server line. The book is explicit that the demonstration IS the acceptance criterion, not the plumbing. Needs V12.1 and V12.2, and a deployed backend | `PROD-ACCESS` | One id traced from browser to log line, recorded |
+| V12.4 | Define and measure SLOs **before** launch: admin API availability, p95 on dashboard and bookings list, error rate on money mutations. Agree an error budget and what breaching it means | `HUMAN-JUDGEMENT`, `PROD-ACCESS` | SLOs dashboarded with a named owner each |
+| V12.5 | Alert on symptoms an operator notices: auth failure rate, 5xx rate, payout failure rate, and a spike in 404s on `/api/v1` — the signature of a portal deployed against a backend that has not shipped, which has happened here. `contract_mismatch_total` already emits it, labelled by namespace and client. Its first action must read **deploy or roll back**, not "find the broken route" | `NO-CRED` | Four alerts, each with a named owner |
+| V12.6 | Dashboard the legacy-versus-v1 traffic split — it is the instrument that says when a legacy route is safe to retire, which TAB 09's contract phase depends on | `NO-CRED` | Split visible per endpoint over time |
+| V12.7 | External uptime monitoring on both origins, including a check that TAB 05's security headers are still present. A header that silently stops being sent looks like nothing at all | `NO-CRED` | Both origins monitored, header check included |
+
+**Done here:** log sampling (criterion 4). `tests/log-sampling-no-secrets.test.ts`
+drives real requests carrying secrets through the actual `buildLogLine` and
+searches the emitted text, with a positive control so a clean result means
+searched-and-found-nothing. It catches a leak the 36 existing redaction tests
+cannot: those test the redactor, so a value copied onto the line without passing
+through it is invisible to them.
+
 ---
 
 ## Closed
