@@ -78,7 +78,7 @@ export const ensureDeviceTokenSchema = async (): Promise<void> => {
 export const validDeviceToken = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;
   const token = value.trim();
-  return token.length >= 10 && token.length <= 4096 && !/[\s\x00-]/.test(token)
+  return token.length >= 10 && token.length <= 4096 && !/[\s\x00-\x1f\x7f]/.test(token)
     ? token
     : null;
 };

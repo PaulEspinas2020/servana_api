@@ -117,7 +117,7 @@ export function normalizeEmail(raw: unknown): string | null {
 
   // Reject anything with whitespace or control characters inside — those are
   // paste accidents and homograph attempts, not addresses.
-  if (/[\s\x00--​-‏﻿]/.test(trimmed)) return null;
+  if (/[\s\x00-\x1f\x7f-\u009f\u200b-\u200f\ufeff]/.test(trimmed)) return null;
 
   const at = trimmed.lastIndexOf("@");
   if (at <= 0 || at === trimmed.length - 1) return null;
