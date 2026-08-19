@@ -37,6 +37,7 @@ import {
   capabilityLoosenings,
   resolvedChain,
   requiresActiveProvider,
+  permissionsOf,
 } from '../scripts/legacy-authz-inventory';
 import { buildMountedRoutes } from '../scripts/lib/routeTable';
 
@@ -188,5 +189,40 @@ describe('legacy → v1 authorization parity', () => {
     // alone could never separate them.
     expect(authOf(guarded)).toBe('provider');
     expect(authOf(plain)).toBe('provider');
+  });
+
+  /**
+   * The FIFTH dimension, and it was never compared. `ContractEntry.permission`
+   * exists and `register.ts` refuses to start if an admin entry declares none —
+   * but nothing checked it against the legacy route being superseded.
+   * `auth: 'admin'` proves role 1 and nothing else, while the legacy admin
+   * routes gate on a NAMED permission too.
+   *
+   * When added, it reported three: reschedule, escalate and refunds. All three
+   * are object-scoped successors where `assertBookingAccess` / `actorFor`
+   * decides against the BOOKING, so demanding an admin permission would refuse a
+   * customer their own booking — the same exemption the role ladder already
+   * carries. The exemption is not a loophole: `4335378` shows the standard, which
+   * is to REMOVE a capability from v1 rather than permission it when merging the
+   * surfaces would collapse a separation of duties.
+   */
+  it('reads a named admin permission out of a chain (positive AND negative)', () => {
+    const guarded = {
+      handlers: ['verifyAuth', 'verifyRoles([1])', "requirePermission('bookings.reschedule')", 'ctrl.x'],
+      file: 'src/routes/adminBooking.routes.ts',
+    } as never;
+    const plain = {
+      handlers: ['verifyAuth', 'verifyRoles([1])', 'ctrl.x'],
+      file: 'src/routes/adminBooking.routes.ts',
+    } as never;
+
+    expect(permissionsOf(guarded)).toEqual(['bookings.reschedule']);
+    // Without the negative fixture a matcher returning a permission for every
+    // admin chain would make the dimension unfailable in the other direction.
+    expect(permissionsOf(plain)).toEqual([]);
+    // Both read as `admin` on the ladder, which is why the ladder alone could
+    // never separate them.
+    expect(authOf(guarded)).toBe('admin');
+    expect(authOf(plain)).toBe('admin');
   });
 });

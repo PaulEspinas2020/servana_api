@@ -315,6 +315,29 @@ const CAPABILITY_CALL = /\brequireCapability\s*\(\s*["'`]([A-Za-z0-9_]+)["'`]/g;
  */
 const ACTIVE_PROVIDER_CALL = /\brequireActiveProvider\b/;
 /** Read as its OWN dimension. It is not equivalent to any capability — see below. */
+/**
+ * Named admin permissions the legacy chain demands.
+ *
+ * The FIFTH dimension, and it was never compared. `ContractEntry.permission`
+ * exists — `register.ts` builds admin permission middleware from it and refuses
+ * to start if an `auth: 'admin'` entry declares none — but nothing checked it
+ * against the legacy route being superseded. `auth: 'admin'` proves role 1 and
+ * nothing else, while the legacy admin routes gate on a NAMED permission as
+ * well, so a v1 successor that dropped one would be a quieter route to the same
+ * data and every existing check would have reported parity.
+ *
+ * Same failure shape as the capability blindness: the ladder reads roles, the
+ * chain carries more than roles, and what it carries has no word in the
+ * comparison.
+ */
+const PERMISSION_CALL = /\brequirePermission\s*\(\s*["'`]([A-Za-z0-9_.]+)["'`]/g;
+
+export const permissionsOf = (route: MountedRoute): string[] => {
+  const found = new Set<string>();
+  for (const match of resolvedChain(route).matchAll(PERMISSION_CALL)) found.add(match[1]);
+  return [...found].sort();
+};
+
 export const requiresActiveProvider = (route: MountedRoute): boolean =>
   ACTIVE_PROVIDER_CALL.test(resolvedChain(route));
 
@@ -363,11 +386,40 @@ export const capabilityLoosenings = (): CapabilityLoosening[] => {
       const declaredActive = (entry as { activeProvider?: true }).activeProvider === true;
       const activeDropped = legacyActive && !declaredActive;
 
-      if (!legacyCapabilities.length && !activeDropped) continue;
+      /**
+       * The fifth dimension. `auth: 'admin'` proves role 1 and nothing else,
+       * and the legacy admin routes gate on a NAMED permission as well.
+       *
+       * Exempt when the successor is OBJECT-SCOPED, on the same reasoning the
+       * role ladder is exempted a few lines below: `bookings.reschedule`,
+       * `bookings.disputes.open` and `bookings.refunds.create` are single
+       * endpoints serving a customer and an admin, and the decision is made by
+       * `assertBookingAccess` / `actorFor` against the BOOKING rather than by a
+       * role or a permission. Demanding an admin permission there would refuse
+       * a customer their own booking.
+       *
+       * That exemption is not a loophole, and `4335378` is why: where merging
+       * the surfaces would collapse a separation of duties, this repository
+       * REMOVES the capability from v1 rather than permissioning it. The refund
+       * endpoint no longer refunds — every actor opens a review, and refunds
+       * complete through the reviewed, permissioned admin surface. Declaring a
+       * permission there would have "closed the privilege hole and quietly
+       * blessed the collapse".
+       */
+      const legacyPermissions = permissionsOf(route);
+      const declaredPermission = (entry as { permission?: string }).permission ?? null;
+      const permissionExempt = OBJECT_SCOPED_IDS.has(entry.id)
+        || entry.path.startsWith('/me/') || entry.path === '/me';
+      const permissionsDropped = permissionExempt
+        ? []
+        : legacyPermissions.filter((p) => p !== declaredPermission);
+
+      if (!legacyCapabilities.length && !activeDropped && !permissionsDropped.length) continue;
 
       const declared = (entry as { capability?: string }).capability ?? null;
       const dropped = legacyCapabilities.filter((c) => c !== declared);
       if (activeDropped) dropped.push('requireActiveProvider');
+      for (const p of permissionsDropped) dropped.push(`requirePermission(${p})`);
       if (!dropped.length) continue;
 
       found.push({
