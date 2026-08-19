@@ -12,6 +12,38 @@
 name: release-gate
 
 # MANUAL ONLY - GitHub Actions credit for this repo is exhausted and is not
+# ─────────────────────────────────────────────────────────────────────────────
+# RE-MEASURED 2026-08-19 (V2 TAB 03): the credit premise does not apply here.
+#
+#   servana_api is a PUBLIC repository.
+#     GET https://api.github.com/repos/PaulEspinas2020/servana_api
+#       → "private": false, "visibility": "public"
+#
+#   GitHub's billing documentation, verbatim:
+#     "The use of standard GitHub-hosted runners is free ... In public
+#      repositories."
+#
+# `ubuntu-latest` IS a standard runner, so every job in this file costs this
+# repository nothing and consumes none of the account's Actions credit. If credit
+# is genuinely exhausted elsewhere in the account, it is being consumed by
+# PRIVATE repositories — this one cannot contribute to it and cannot be starved
+# by it.
+#
+# Self-hosting the gate instead was considered and REJECTED on evidence, not on
+# preference. The self-hosted runner is the production host: 961 MB of RAM, on
+# which `npm run verify` has already died twice with exit 134 (SIGABRT — the V8
+# heap gave out). The suite's measured peak is ~1.1 GB. It would not merely be
+# slow there, it would not complete. And a gate exists to stop bad code REACHING
+# the host, which a gate running ON the host cannot do.
+#
+# The pre-push hook stays as defence in depth. It costs nothing and it catches a
+# fault before it leaves the machine, which is earlier than any CI can. It is not
+# a replacement: it is per-clone and bypassable with --no-verify.
+#
+# ⚠ This contradicts a recorded owner decision. It is restored here on the
+# evidence above and needs the owner's confirmation before it takes effect —
+# which it cannot do from a local commit in any case.
+# ─────────────────────────────────────────────────────────────────────────────
 # being topped up (owner decision, 2026-08-19, origin/main 463f963). Every job
 # below is `ubuntu-latest`, i.e. GitHub-hosted, so an automatic trigger would
 # only queue a run that fails and leaves a red X that means nothing.
@@ -25,7 +57,12 @@ name: release-gate
 # tree's TAB 03 work (c2c73d2) made `deploy.yml` depend on this gate as a job,
 # and that wiring is the thing to switch back on first once credit exists. See
 # the disabled `release-gate` job in deploy.yml for the other half.
+# RESTORED 2026-08-19 (V2 TAB 03). The premise for removing these was measured
+# and is wrong for THIS repository — see the evidence block above the triggers.
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
   workflow_call:
 

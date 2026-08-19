@@ -157,6 +157,37 @@ export interface ContractEntry {
    */
   capability?: keyof Capabilities;
   /**
+   * The caller must additionally survive `middleware/requireActiveProvider`.
+   *
+   * ## Why this is not a capability
+   *
+   * The first version of this fix declared `capability: 'canAcceptJobs'` on the
+   * job actions, reasoning that it was the capability the legacy chain enforced.
+   * It is not, and the difference denies real providers.
+   *
+   *   `requireActiveProvider` reads ONE column, `user_credentials.account_status`,
+   *   and is deliberately permissive: a null, undefined or blank status calls
+   *   `next()`, because "it means nothing was ever written, and yesterday that
+   *   account worked". Only an explicitly blocked status refuses.
+   *
+   *   `canAcceptJobs` is `fullyActive && complianceCurrent`, where `fullyActive`
+   *   is `activation === 'ACTIVE' && operational === 'ACTIVE'`. A provider whose
+   *   status column is blank, or who is mid-activation, or who has zero active
+   *   services — `operational === 'NO_ACTIVE_SERVICE'` — fails that and passes
+   *   the middleware.
+   *
+   * So the capability is STRICTER than the route it was meant to restore, and
+   * this TAB puts widening the model out of scope: the fix declares parity with
+   * the legacy chain, not a new policy. Silently adding an enforcement point is
+   * the same class of error as silently removing one, and this one would refuse
+   * providers their work.
+   *
+   * The fix is to call the production predicate rather than reassemble it.
+   * `register.ts` appends the real `requireActiveProvider`, so there is one
+   * definition of "may this provider work" and it cannot drift from itself.
+   */
+  activeProvider?: true;
+  /**
    * `true` when a repeat of the identical request produces the identical
    * end state. GETs are idempotent by definition; a mutation must say so
    * explicitly.
@@ -2812,7 +2843,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/accept',
     summary: 'Accepts the assignment.',
     auth: 'provider',
-    capability: 'canAcceptJobs',
+    activeProvider: true,
     idempotent: false,
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
@@ -2849,7 +2880,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/decline',
     summary: 'Declines the assignment, returning the booking to the pool.',
     auth: 'provider',
-    capability: 'canAcceptJobs',
+    activeProvider: true,
     idempotent: false,
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
@@ -2886,7 +2917,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/en-route',
     summary: 'Marks the provider on the way.',
     auth: 'provider',
-    capability: 'canAcceptJobs',
+    activeProvider: true,
     idempotent: false,
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
@@ -2923,7 +2954,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/arrived',
     summary: 'Marks the provider at the address.',
     auth: 'provider',
-    capability: 'canAcceptJobs',
+    activeProvider: true,
     idempotent: false,
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
@@ -2960,7 +2991,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/start',
     summary: 'Starts the job. Requires the customer worker code.',
     auth: 'provider',
-    capability: 'canAcceptJobs',
+    activeProvider: true,
     idempotent: false,
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
@@ -3001,7 +3032,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/complete',
     summary: 'Completes the job.',
     auth: 'provider',
-    capability: 'canAcceptJobs',
+    activeProvider: true,
     idempotent: false,
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
@@ -3038,7 +3069,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/cancel',
     summary: 'Cancels a job the provider had already accepted, subject to the notice policy.',
     auth: 'provider',
-    capability: 'canAcceptJobs',
+    activeProvider: true,
     idempotent: false,
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the repeat ' +
@@ -3309,7 +3340,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/bookings/:bookingId/additional-work',
     summary: 'Raises a change order against the booking, as a child request awaiting approval.',
     auth: 'provider',
-    capability: 'canAcceptJobs',
+    activeProvider: true,
     idempotent: false,
     replayGuard:
       'The write requires an IN_PROGRESS assignment row held under FOR UPDATE, ' +

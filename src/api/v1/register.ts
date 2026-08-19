@@ -37,6 +37,7 @@ import verifyAuth from '../../middleware/verifyAuth';
 import verifyRoles from '../../middleware/verifyRoles';
 import requireProviderRole from '../../middleware/requireProviderRole';
 import requireCapability from '../../middleware/requireCapability';
+import requireActiveProvider from '../../middleware/requireActiveProvider';
 import { ContractEntry, IMPLEMENTED, V1_CONTRACT, HttpMethod } from './contract';
 import { fail } from './envelope';
 import { V1ErrorCode } from './errors';
@@ -200,10 +201,18 @@ export const v1AuthEnvelope = (inner: RequestHandler): RequestHandler =>
  * before the role check would answer a non-provider with a capability denial
  * rather than a role one, which are different screens for the caller.
  */
-const capabilityChain = (entry: ContractEntry): RequestHandler[] =>
-  entry.capability
+const capabilityChain = (entry: ContractEntry): RequestHandler[] => [
+  ...(entry.capability
     ? [v1AuthEnvelope(requireCapability(entry.capability) as RequestHandler)]
-    : [];
+    : []),
+  // The REAL middleware, not a capability standing in for it. `requireActiveProvider`
+  // reads `account_status` alone and treats a blank one as working; every capability
+  // that looks equivalent is derived from the fuller account-state machine and refuses
+  // providers this middleware admits. One definition, called rather than rebuilt.
+  ...(entry.activeProvider
+    ? [v1AuthEnvelope(requireActiveProvider as RequestHandler)]
+    : []),
+];
 
 export const authChain = (entry: ContractEntry): RequestHandler[] => {
   const capability = capabilityChain(entry);
