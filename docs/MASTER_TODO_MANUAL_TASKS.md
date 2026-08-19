@@ -190,6 +190,16 @@ Last updated: 2026-08-18 (TAB 16 — terminal)
 | V10.4 | **Merge and soak `angular-20-upgrade`.** Owner decision on 2026-08-19 was to hold the framework change back from the TAB 06-09 deploy so a failure stays attributable. The branch is complete and verified from a clean clone — 1592 tests, production build, zero advisories — and clears 9 high advisories once it lands | `HUMAN-JUDGEMENT` | Branch merged to `main` with a commit carrying NO `[skip ci]`, then a week of operator use with no framework-attributable defect |
 | V10.5 | **`[skip ci]` suppresses Netlify too.** It was adopted to protect exhausted GitHub Actions credit and silently blocked every portal deploy from `0ae89ab` (10:55) onward. On `servana_api` the marker is the brake on a production deploy and belongs there; on the portal it blocks a deploy that is usually wanted. Decide the convention per repo rather than per habit | `HUMAN-JUDGEMENT` | A stated rule for each repository, written down |
 
+## V2 TAB 11 — accessibility
+
+| # | Task | Why blocked | Closes when |
+| --- | --- | --- | --- |
+| V11.1 | **No drawer or dialog in the portal closes on Escape.** Not a keyboard trap — every one checked has a close button reachable by Tab — but Escape is the expected behaviour for `role="dialog"` and its absence is uniform. Not guessed at from source because focus RESTORATION after Escape (returning focus to whatever opened the dialog) is the half that cannot be verified without pressing the key | `NO-REPO` (needs a browser) | Escape closes every drawer and focus returns to the trigger |
+| V11.2 | Fix the last 3 keyboard gaps. Two are overlays that CONTAIN their dialog rather than sitting behind it, so they cannot be marked aria-hidden — that would hide the dialog. Restructuring them and verifying focus does not escape needs a browser | `NO-REPO` | `KEYBOARD_BASELINE` reaches 0 |
+| V11.3 | Run axe over every route and fix all violations. A static scan cannot see computed contrast, focus ORDER, whether a live region announces, or anything that exists only once a component renders — automation catches about a third even then | `NO-REPO` | `npx @axe-core/cli https://admin.servana.com.ph --exit` clean |
+| V11.4 | Keyboard-only and screen-reader passes on the four critical workflows: assign a provider, approve a document, process a payout, resolve a support case. Focus order, visible focus, escape from every modal, table semantics, error association, status announcements | `NO-REPO`, `HUMAN-JUDGEMENT` | Documented pass per workflow with findings closed |
+| V11.5 | Verify contrast in BOTH themes. The portal has dark variants throughout and contrast regressions hide there because nobody reviews in dark mode. Note that `:root[data-theme="dark"]` is currently inert — nothing in the app sets the attribute — so the dark path today is the OS preference alone | `NO-REPO` | AA verified light and dark |
+
 ---
 
 ## Closed
