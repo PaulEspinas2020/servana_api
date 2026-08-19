@@ -277,6 +277,27 @@ export const V1_CONTRACT: ContractEntry[] = [
     observability: 'catalog',
   },
   {
+    id: 'health.build',
+    domain: 'health',
+    method: 'get',
+    path: '/health',
+    summary: 'The commit this build was made from. Public, and carries nothing else.',
+    auth: 'public',
+    idempotent: true,
+    responseSchema: 'BuildInfo',
+    errors: [],
+    status: 'implemented',
+    domainService: 'api/v1/domains/health.readBuildInfo',
+    legacy: [],
+    callers: { ...ALL_PLANNED, customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'n/a', providerWeb: 'n/a', admin: 'n/a' },
+    observability: 'platform',
+    notes:
+      'Reads dist/BUILD_INFO.json, which deploy.yml stamps on every deploy. It answers '
+      + 'the one question a deploy cannot otherwise be asked from outside: which commit '
+      + 'is actually serving. A deploy whose migration step fails stops short of the PM2 '
+      + 'restart, so the old code keeps serving and nothing outward says so.',
+  },
+  {
     id: 'catalog.summary',
     domain: 'catalog',
     method: 'get',

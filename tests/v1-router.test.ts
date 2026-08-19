@@ -879,6 +879,7 @@ describe('every implemented contract entry is reachable at its declared path', (
    */
   const CASES: Record<string, () => Promise<Call>> = {
     'catalog.browse': () => call('GET', '/api/v1/catalog', { auth: false }),
+    'health.build': () => call('GET', '/api/v1/health', { auth: false }),
     'catalog.summary': () => call('GET', '/api/v1/catalog/summary', { auth: false }),
     'catalog.services.list': () => call('GET', '/api/v1/catalog/services', { auth: false }),
     'catalog.services.get': () => call('GET', '/api/v1/catalog/services/15', { auth: false }),

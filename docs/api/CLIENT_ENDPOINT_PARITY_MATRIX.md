@@ -18,11 +18,11 @@
 
 | | |
 | --- | --- |
-| Capabilities | 57 |
-| Canonical endpoints mounted | 109 |
+| Capabilities | 58 |
+| Canonical endpoints mounted | 110 |
 | Canonical endpoints planned | 0 |
 | Legacy mappings tracked | 124 |
-| Converged (one route family) | 51 |
+| Converged (one route family) | 52 |
 | Role-split over ONE service | 4 |
 | Single-surface | 2 |
 | **Divergent (forked truth)** | **0** |
@@ -78,6 +78,7 @@ direction of whoever wrote it.
 | Read booking-code state | SHARED | planned | planned | planned | **migrated** | planned |
 | Read a booking | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | planned | planned |
 | Move a booking through its state machine | ROLE_SPLIT_SHARED_SERVICE | — | — | legacy | ⚠ mixed | legacy |
+| Ask which commit is serving | SHARED | — | — | — | — | — |
 | Browse the service catalog | SHARED | ⚠ mixed | planned | legacy | — | — |
 | Search services | ROLE_SPLIT_SHARED_SERVICE | ⚠ mixed | planned | — | — | — |
 | Read the support cases I raised on a booking | SHARED | planned | planned | — | — | — |
@@ -438,6 +439,20 @@ Legacy still aliased for this capability:
   - `PUT /api/worker/bookings/:bookingId/start`
 
 ROLE-SPLIT, and deliberately so — but over ONE state machine. Eight endpoints across the /provider and /admin families all call `transitionExecutor.transitionBooking` with a different actor verb. The split is real because the AUTHORIZATION differs (a provider may accept a job assigned to them; an admin may assign one to somebody else) and because the actions are different verbs, not one verb behind two doors. What must never differ is the machine, and `convergenceOf` proves it does not by comparing the declared service. The customer side of the same machine is `experiencePolicy:cancel`, which spans /bookings and /provider over the same executor.
+
+### Ask which commit is serving
+
+- key: `core:buildProvenance` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `api/v1/domains/health`
+- route families: `/health`
+
+Canonical:
+  - `GET /api/v1/health`
+
+Legacy still aliased for this capability:
+  - none
+
+No role split, and no role at all. The endpoint is public because a provenance check that needs a credential can only be run by somebody who already has one, which is the situation it exists to fix — a deploy whose migration step fails stops short of the PM2 restart, so the old code keeps serving and nothing outward says so. Every surface reads the same four fields from the same stamp; there is no projection to differ on.
 
 ### Browse the service catalog
 

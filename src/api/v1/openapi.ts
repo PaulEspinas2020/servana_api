@@ -59,6 +59,22 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  BuildInfo: {
+    type: 'object',
+    description:
+      'Build provenance. Four fields and nothing else — no environment, no dependency '
+      + 'liveness, no internal versions. `available` is false when no stamp was found, '
+      + 'which happens on a first deploy or a cleaned workspace; the other fields are '
+      + 'then null and the response is still 200, because absence is an answer.',
+    required: ['commit', 'ref', 'builtAt', 'run', 'available'],
+    properties: {
+      commit: { type: ['string', 'null'] },
+      ref: { type: ['string', 'null'] },
+      builtAt: { type: ['string', 'null'] },
+      run: { type: ['string', 'null'] },
+      available: { type: 'boolean' },
+    },
+  },
   CatalogSummary: {
     type: 'object',
     properties: {

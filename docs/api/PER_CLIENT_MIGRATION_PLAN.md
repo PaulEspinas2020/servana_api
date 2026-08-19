@@ -14,7 +14,7 @@
 > [`CROSS_CLIENT_MIGRATION_PLAN.md`](CROSS_CLIENT_MIGRATION_PLAN.md), which is
 > hand-written because an argument is not derivable. This is what each client
 > actually has to change, and it is generated because a hand-maintained list of
-> 109 endpoints across five clients is stale the day after it is written.
+> 110 endpoints across five clients is stale the day after it is written.
 
 ## How to read this
 

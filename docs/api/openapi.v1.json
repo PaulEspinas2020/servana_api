@@ -88,6 +88,68 @@
         }
       }
     },
+    "/api/v1/health": {
+      "get": {
+        "operationId": "health.build",
+        "summary": "The commit this build was made from. Public, and carries nothing else.",
+        "tags": [
+          "health"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "api/v1/domains/health.readBuildInfo",
+        "x-legacy": [],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "platform",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BuildInfo"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Reads dist/BUILD_INFO.json, which deploy.yml stamps on every deploy. It answers the one question a deploy cannot otherwise be asked from outside: which commit is actually serving. A deploy whose migration step fails stops short of the PM2 restart, so the old code keeps serving and nothing outward says so."
+      }
+    },
     "/api/v1/catalog/summary": {
       "get": {
         "operationId": "catalog.summary",
@@ -12602,6 +12664,46 @@
           }
         }
       },
+      "BuildInfo": {
+        "type": "object",
+        "description": "Build provenance. Four fields and nothing else — no environment, no dependency liveness, no internal versions. `available` is false when no stamp was found, which happens on a first deploy or a cleaned workspace; the other fields are then null and the response is still 200, because absence is an answer.",
+        "required": [
+          "commit",
+          "ref",
+          "builtAt",
+          "run",
+          "available"
+        ],
+        "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "builtAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "available": {
+            "type": "boolean"
+          }
+        }
+      },
       "CatalogSummary": {
         "type": "object",
         "properties": {
@@ -17532,6 +17634,9 @@
       "name": "finance"
     },
     {
+      "name": "health"
+    },
+    {
       "name": "home"
     },
     {
@@ -17554,6 +17659,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 109,
-  "x-total-count": 109
+  "x-implemented-count": 110,
+  "x-total-count": 110
 }

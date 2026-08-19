@@ -204,6 +204,20 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'function, which is what stops them ranking differently.',
   },
   {
+    key: 'buildProvenance',
+    title: 'Ask which commit is serving',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['health.build'],
+    domainModule: 'api/v1/domains/health.readBuildInfo',
+    surfaces: CLIENT_SURFACES,
+    roleSplitRationale:
+      'No role split, and no role at all. The endpoint is public because a provenance check ' +
+      'that needs a credential can only be run by somebody who already has one, which is the ' +
+      'situation it exists to fix — a deploy whose migration step fails stops short of the PM2 ' +
+      'restart, so the old code keeps serving and nothing outward says so. Every surface reads ' +
+      'the same four fields from the same stamp; there is no projection to differ on.',
+  },
+  {
     key: 'bookingRead',
     title: 'Read a booking',
     source: 'api/v1/convergence (core)',

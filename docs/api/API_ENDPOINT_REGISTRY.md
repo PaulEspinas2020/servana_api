@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**109 implemented** · **0 planned** · 109 total.
+**110 implemented** · **0 planned** · 110 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -140,6 +140,23 @@ The Services of one Subcategory.
 - **Legacy it replaces**
   - `GET /api/services/:serviceId/options-with-addons` — **CANONICALIZE** — The legacy shape. Its `:serviceId` is a service_families.id and it returns level_2 / level_3 option groups, not Services. ServanaWorker calls the un-prefixed twin instead, which is the only catalog route without the /services/ prefix its neighbours use.
   - `GET /api/:serviceId/options-with-addons` — **ALIAS_TEMPORARILY** — The original un-prefixed form, and what ServanaWorker calls in production. It cannot be retired until that app moves; the customer app followed the convention instead of the exception and 404d for months as a result.
+
+## health
+
+| Method | Path | Status | Auth | Request | Response | Idem | Owner |
+|---|---|---|---|---|---|---|---|
+| `GET` | `/api/v1/health` | **live** | public | — | `BuildInfo` | yes | platform |
+
+### `GET /api/v1/health`
+
+The commit this build was made from. Public, and carries nothing else.
+
+> Reads dist/BUILD_INFO.json, which deploy.yml stamps on every deploy. It answers the one question a deploy cannot otherwise be asked from outside: which commit is actually serving. A deploy whose migration step fails stops short of the PM2 restart, so the old code keeps serving and nothing outward says so.
+
+- **Domain service** — `api/v1/domains/health.readBuildInfo`
+- **Error codes** — `INTERNAL`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile — · Prov Web — · Admin —
+- **Legacy it replaces** — none; new capability.
 
 ## identity
 
@@ -1520,6 +1537,7 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | Endpoint | Cust Mobile | Cust Web | Prov Mobile | Prov Web | Admin |
 |---|---|---|---|---|---|
 | `GET /api/v1/catalog` | · | · | — | — | — |
+| `GET /api/v1/health` | — | — | — | — | — |
 | `GET /api/v1/catalog/summary` | · | · | — | — | — |
 | `GET /api/v1/catalog/services` | · | · | — | — | — |
 | `GET /api/v1/catalog/services/:serviceId` | · | · | — | — | — |
