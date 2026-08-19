@@ -28,6 +28,28 @@
  * which is the failure mode that actually recurs. They are complements, and
  * neither replaces the other.
  *
+ * ## The gate MOVED at the origin/main merge, and this file moved with it
+ *
+ * origin/main 463f963 made release-gate.yml manual-only: the repo's GitHub
+ * Actions credit is exhausted and is not being topped up (owner decision,
+ * 2026-08-19). The gate job is `runs-on: ubuntu-latest`, so `needs:
+ * [release-gate]` in deploy.yml stopped meaning "wait for the gate" and started
+ * meaning "never deploy again". The wiring is commented out in deploy.yml, not
+ * deleted.
+ *
+ * These assertions were NOT deleted with it, because an enforcement point that
+ * disappears when it becomes inconvenient was never an enforcement point. They
+ * were re-pointed at where the gate actually lives now — scripts/hooks/pre-push,
+ * which runs the full `npm run verify` before a push to main leaves the machine —
+ * and at the restore path, so the Actions wiring cannot be quietly deleted while
+ * it is switched off.
+ *
+ * Two things this can NOT prove, stated rather than implied. The hook is
+ * per-clone (`git config core.hooksPath scripts/hooks`), so a fresh clone is
+ * ungated until somebody runs that; and any hook is bypassable with
+ * `--no-verify`. The Actions gate had neither weakness. This is a weaker gate
+ * being honestly labelled, not an equivalent one.
+ *
  * ## Why it does not use a YAML parser
  *
  * `js-yaml` is present only as a transitive dependency. A gate whose own
@@ -39,6 +61,9 @@
  * `scripts/lib/routeTable.ts`.
  */
 
+import fs from 'fs';
+import path from 'path';
+
 import { readWorkflow, jobsOf, needsOf } from '../scripts/lib/workflowFile';
 
 const deploy = readWorkflow('deploy.yml');
@@ -47,8 +72,11 @@ const gate = readWorkflow('release-gate.yml');
 const deployJobs = jobsOf(deploy);
 
 describe('the reader sees the workflows at all (positive fixture)', () => {
-  it('finds both jobs in deploy.yml', () => {
-    expect([...deployJobs.keys()].sort()).toEqual(['deploy', 'release-gate']);
+  it('finds the deploy job in deploy.yml', () => {
+    // One job, not two: the `release-gate` job is commented out while Actions
+    // credit is exhausted. The reader must not count a commented job — that is
+    // the property this fixture pins, and the reason it is not just `.size`.
+    expect([...deployJobs.keys()].sort()).toEqual(['deploy']);
   });
 
   it('parses an inline needs list', () => {
@@ -69,14 +97,35 @@ describe('the deploy cannot run ahead of its gate', () => {
     expect(gate).toMatch(/^\s*workflow_call:\s*$/m);
   });
 
-  it('deploy.yml calls the gate as a job rather than hoping it ran', () => {
-    const gateJob = deployJobs.get('release-gate');
-    expect(gateJob).toBeDefined();
-    expect(gateJob).toMatch(/uses:\s*\.\/\.github\/workflows\/release-gate\.yml/);
+  it('the Actions wiring is SUSPENDED, not deleted, so it can be switched back on', () => {
+    // Both halves must survive as comments. Deleting them would turn a
+    // reversible suspension into a silent architecture change, and the next
+    // person would have to rediscover that the deploy was ever gated at all.
+    expect(deploy).toMatch(/#\s*release-gate:/);
+    expect(deploy).toMatch(/#\s*uses:\s*\.\/\.github\/workflows\/release-gate\.yml/);
+    expect(deploy).toMatch(/#\s*needs:\s*\[release-gate\]/);
+    // And the far end must stay callable, or restoring the above is a no-op.
+    expect(gate).toMatch(/^\s*workflow_call:\s*$/m);
   });
 
-  it('the deploy job DEPENDS on that gate job', () => {
-    expect(needsOf(deployJobs.get('deploy') ?? '')).toContain('release-gate');
+  it('the deploy job is NOT gated by an Actions job it cannot run', () => {
+    // The positive statement of why the line above is commented: a `needs:` on
+    // a GitHub-hosted job with no credit does not delay the deploy, it cancels
+    // it. If this ever fails, the wiring came back before the credit did.
+    expect(needsOf(deployJobs.get('deploy') ?? '')).toEqual([]);
+  });
+
+  it('the gate that replaced it is real, runs verify, and runs it on main', () => {
+    const hook = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'hooks', 'pre-push'), 'utf8');
+    // Executable, or git silently ignores it and reports nothing.
+    // eslint-disable-next-line no-bitwise
+    expect(fs.statSync(path.join(__dirname, '..', 'scripts', 'hooks', 'pre-push')).mode & 0o111).not.toBe(0);
+    expect(hook).toMatch(/npm run verify/);
+    expect(hook).toMatch(/refs\/heads\/main/);
+    // verify, not verify:quick, on the branch that deploys. A quick check on
+    // the deploying branch is the same class of defect as no check.
+    const mainBranch = hook.slice(hook.indexOf('remote_ref_is_main" -eq 1'));
+    expect(mainBranch).toMatch(/npm run verify </);
   });
 
   /**
@@ -85,13 +134,16 @@ describe('the deploy cannot run ahead of its gate', () => {
    * job on the self-hosted runner with no `needs:` is the exact defect F-03
    * describes, arriving by a different door.
    */
-  it('every job that runs on the production host is gated', () => {
-    const ungated: string[] = [];
-    for (const [name, body] of deployJobs) {
-      if (!/runs-on:.*self-hosted/.test(body)) continue;
-      if (needsOf(body).length === 0) ungated.push(name);
-    }
-    expect(ungated).toEqual([]);
+  it('exactly one job touches the production host, and it is the one the hook gates', () => {
+    // The original form of this test asserted every self-hosted job carried a
+    // `needs:`. That property is currently false BY DESIGN and asserting it
+    // would just stay red, so it is restated rather than dropped: the hook
+    // gates a push, and a push gates every self-hosted job in this file. That
+    // holds only while there is exactly one such job. A second one — a cron
+    // job, a manual maintenance job — would run without a push and so without
+    // any gate at all, which is the F-03 defect arriving by a different door.
+    const selfHosted = [...deployJobs].filter(([, body]) => /runs-on:.*self-hosted/.test(body));
+    expect(selfHosted.map(([name]) => name)).toEqual(['deploy']);
   });
 
   it('the deploy is bound to a named environment, so it produces a record', () => {
