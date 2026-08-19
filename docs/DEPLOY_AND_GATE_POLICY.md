@@ -12,6 +12,35 @@ defect but where and how the pipeline ran.
 
 ---
 
+## Push straight to `main`. No pull requests.
+
+**Standing rule, decided 2026-08-19. This is not a preference.**
+
+Work lands by committing locally and pushing `main`. There is no PR step, no
+review branch, and no merge queue. A change is ready when `npm run verify` is
+green and it is pushed — and on `main` the `pre-push` hook runs that for you,
+so the gate is not optional.
+
+Feature branches are for work in progress, never for landing. A branch left to
+age stops being a change to `main` and becomes a re-implementation against code
+that has moved on. This repository is the proof: `feat/admin-dedup-hardening`
+and `feat/catalog-workspace` sit ~600 commits behind, and `main` has since
+rewritten the very files they touch 4-14 times over —
+
+| File | `main` since the branch point | branch adds |
+| --- | --- | --- |
+| `adminProviderController.ts` | 725+/93- | 51+/4- |
+| `adminProviderService.ts` | 620+/97- | 50+/9- |
+| `providerCatalogService.ts` | **1389+/169-** | 356+/2- |
+
+Their work is genuinely unlanded, but it cannot be merged any more. See
+`docs/CATALOG_WORKSPACE_UNLANDED.md`.
+
+The same rule applies to `ServanaClientAPP`; see its
+`docs/runbooks/DEPLOY_POLICY.md`.
+
+---
+
 ## Why CI was switched off
 
 The `Deploy Servana API (Prod)` workflow ran on a **self-hosted runner
