@@ -54,7 +54,17 @@ class VacuousRatchet {
     // skipped one never ran to assert anything.
     if (result.status !== 'passed') return;
     if (result.numPassingAsserts > 0) return;
-    const rel = (test.path || '').replace(process.cwd() + '/', '');
+    // Normalise separators BEFORE stripping the root. On Windows `test.path`
+    // uses backslashes while `process.cwd() + '/'` appends a forward slash, so
+    // this replace silently matched nothing and every key stayed a full
+    // absolute path. The frozen list holds relative POSIX keys, so nothing
+    // ever aligned: all frozen entries read as 'no longer on the list' and
+    // every current one as new. The gate could not pass on Windows at all --
+    // which now matters, because with CI off this is where it runs.
+    const root = process.cwd().replace(/\\/g, '/');
+    const rel = (test.path || '')
+      .replace(/\\/g, '/')
+      .replace(root + '/', '');
     this._zero.push(key(rel, result.fullName || result.title));
   }
 
