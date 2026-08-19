@@ -32,12 +32,18 @@ while read -r _local_ref _local_sha remote_ref _remote_sha; do
   esac
 done
 
+# stdin is redirected from /dev/null for the verify runs below, and that is
+# load-bearing, not tidiness. git hands a pre-push hook the ref list on stdin;
+# a child process inherits that pipe and can block on it forever. Without this
+# the hook hung for 7.8 hours on its first real push, producing no output and
+# leaving the push silently unlanded. Draining the list is fine (proved with a
+# trivial hook); it is handing the open pipe to npm that deadlocks.
 if [ "$remote_ref_is_main" -eq 1 ]; then
   echo "pre-push: pushing main, which DEPLOYS TO PRODUCTION — running full npm run verify"
-  npm run verify
+  npm run verify < /dev/null
   echo "pre-push: verify passed; allowing the push (and the deploy it triggers)"
 else
   echo "pre-push: non-deploying branch — running npm run verify:quick"
-  npm run verify:quick
+  npm run verify:quick < /dev/null
   echo "pre-push: verify:quick passed"
 fi
