@@ -68,7 +68,8 @@
     "security:secrets": "ts-node scripts/scan-secrets.ts",
     "security:deps": "npm audit --omit=dev --audit-level=high",
     "v1:mounted": "ts-node scripts/verify-v1-mounted.ts",
-    "db:skew": "ts-node scripts/verify-schema-code-skew.ts"
+    "db:skew": "ts-node scripts/verify-schema-code-skew.ts",
+    "deploy:verify": "bash scripts/post-deploy-readiness.sh"
   },
   "keywords": [],
   "author": "Cla H.",
