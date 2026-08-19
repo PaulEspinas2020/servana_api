@@ -98,7 +98,7 @@ owner for all rows below**, because no rota exists — which is itself G-14.
 
 | # | Gap | Opened | Closes when |
 | --- | --- | --- | --- |
-| G-01 | **No deploy can complete.** `Typecheck (source and tests)` exits 134 (SIGABRT): 805 MB peak on a 961 MB host that is serving production. Today's recovery went around it by hand | 2026-08-19 | A push to `main` produces a successful deploy run |
+| G-01 | **No deploy can complete.** `Typecheck (source and tests)` exits 134 (SIGABRT): ~650 MB peak on a 961 MB host that is serving production. Today's recovery went around it by hand | 2026-08-19 | A push to `main` produces a successful deploy run |
 | G-02 | **The portal has not deployed at all.** Live `runtime.<hash>.js` still differs from a local build. TABs 06–09 and 11 are on GitHub, not in production. `[skip ci]` is honoured by Netlify and explains part of it, but two commits pushed deliberately without it also failed to deploy | 2026-08-19 | A push to `main` changes the live `runtime.<hash>.js` |
 | G-03 | **Production cannot identify itself.** `/api/v1/health` answers `available: false`; the running build is newer than any deploy that ran | 2026-08-19 | The endpoint returns a commit that matches a deploy run |
 | G-04 | No production evidence for TAB 01 — a 403 for an under-permissioned admin has never been observed | 2026-08-19 | Probe recorded against production |

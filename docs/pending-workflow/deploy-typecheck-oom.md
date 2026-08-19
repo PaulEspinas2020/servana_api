@@ -21,11 +21,20 @@ Peak resident set size of the two commands, on the committed tree at
 
 | command | peak RSS |
 | --- | --- |
-| `npm run typecheck` (`tsc --noEmit`) | **513 MB** |
-| `npm run typecheck:tests` (`tsc -p tsconfig.tests.json`) | **805 MB** |
+| `npm run typecheck` (`tsc --noEmit`) | **~600 MB** |
+| `npm run typecheck:tests` (`tsc -p tsconfig.tests.json`) | **~650 MB** |
+
+**How these were measured, because the first attempt was wrong.**
+`/usr/bin/time -l npx tsc …` reports the resident set of the **npx wrapper**,
+not of the `tsc` it spawns — it produced readings between 93 MB and 805 MB for
+the same command minutes apart. Run the binary directly
+(`./node_modules/.bin/tsc`) and repeat: three runs gave 542/553/599 MB for the
+source config and 595/655/652 MB for the tests config. The originally documented
+805 MB was too high; the conclusion is unchanged, because the margin was never
+the problem.
 
 The deploy host has **961 MB of RAM** and is *simultaneously serving
-production* — the API process and PM2 are resident throughout. An 805 MB
+production* — the API process and PM2 are resident throughout. An ~650 MB
 compiler on that box does not fit, and 134 is what the abort looks like.
 
 Earlier deploys today succeeded (02:03, 02:18, 02:24, 02:35, 09:33) because the
@@ -47,7 +56,7 @@ typechecks the source anyway as a side effect:
 ```yaml
 # Typechecking is enforced by scripts/hooks/pre-push, which runs the full
 # `npm run verify` (typecheck + typecheck:tests + suite) before a push can
-# reach GitHub. Re-running it here cost 805 MB on a 961 MB host that is
+# reach GitHub. Re-running it here cost ~650 MB on a 961 MB host that is
 # serving production at the same time, and aborted with SIGABRT once the
 # test surface grew past the margin. `npm run build` still fails on a type
 # error in source, which is what this step is protecting.
@@ -57,7 +66,7 @@ typechecks the source anyway as a side effect:
 
 If the belief-in-defence-in-depth wins over the arithmetic, the alternative is
 **swap on the host** — 2 GB is ample — and nothing in the workflow changes. What
-must not happen is leaving an 805 MB step on a 961 MB box and reading the red as
+must not happen is leaving an ~650 MB step on a 961 MB box and reading the red as
 noise.
 
 ## Why this is held here

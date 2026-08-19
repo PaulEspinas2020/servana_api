@@ -176,7 +176,7 @@ again, check which block they are in before checking anything else.
 ### A deploy fails and nothing ships
 
 `Typecheck (source and tests)` exiting **134** is SIGABRT — out of memory. That
-step peaks at **805 MB on a 961 MB host that is simultaneously serving
+step peaks at **~650 MB on a 961 MB host that is simultaneously serving
 production**. It is redundant with `scripts/hooks/pre-push`, which runs the full
 `npm run verify` before any push reaches GitHub. Fix in
 [docs/pending-workflow/deploy-typecheck-oom.md](pending-workflow/deploy-typecheck-oom.md).
