@@ -171,6 +171,15 @@ Last updated: 2026-08-18 (TAB 16 — terminal)
 | V8.3 | Grant `refunds.mark_failed` to whoever resolves failed refunds. Without it the new terminal is unreachable, and an approved refund the processor rejected still blocks every retry for that booking | `PROD-ACCESS` | At least one non-super-admin holds it |
 | V8.4 | Probe the new canonical route on production after a deploy: 401 unauthenticated, 403 under-permissioned, 200 authorized — `POST /api/v1/admin/refunds/:refundId/mark-failed`. TAB 08's acceptance asks for this per wave and it cannot be done from here | `PROD-ACCESS` | Three probes recorded |
 
+## V2 TAB 09 — portal cutover
+
+| # | Task | Why blocked | Closes when |
+| --- | --- | --- | --- |
+| V9.1 | **Set `API_KEY` on the production host.** Token refresh answers `502 REFRESH_UNAVAILABLE` for every client — admin portal, both mobile apps, provider web — so no session can be renewed. Users are signed out when their token reaches its hour and nobody reports it as a bug. Measured 2026-08-19 on both `/api/auth/refresh` and `/api/v1/auth/refresh` | `PROD-ACCESS` | Either endpoint returns 401 for a bogus token instead of 502 |
+| V9.2 | Ship legacy telemetry to a real sink and collect **a full business week** before flipping any endpoint. Per-endpoint call counts are the precondition for claiming a legacy route is unused — the retirement gate is observed silence, and silence you never counted is not evidence | `PROD-ACCESS`, `NO-CRED` | Seven days of per-endpoint counts available |
+| V9.3 | After V9.1 and V9.2, flip `/auth/refresh` and `/auth/logout` — one entry, one deploy, one soak each. NOT done now on evidence: both surfaces currently 502 for the same reason, so migrating would move traffic onto an equally broken path | `PROD-ACCESS`, `HUMAN-JUDGEMENT` | Allowlist names them; live probe shows same data, same authorization, same error contract |
+| V9.4 | Redeploy so the v1 error envelope reaches production. `v1AuthEnvelope` landed in `5bf9da5` today; production predates it and still answers v1 auth failures in the legacy `{status,code}` shape. Already fixed in repo — this is deploy latency, not a defect | `PROD-ACCESS` | `POST /api/v1/auth/logout` with no credential returns `{error:{code,requestId}}` |
+
 ---
 
 ## Closed
