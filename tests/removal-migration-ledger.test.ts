@@ -25,18 +25,27 @@ const BASELINE = path.resolve(__dirname, '../scripts/baseline/000-baseline.sql')
 const MIGRATIONS = path.resolve(__dirname, '../scripts/migrations');
 
 describe('the baseline genuinely still carries what 037 removes', () => {
-  it('the stale notification_key constraints are in the dump', () => {
+  it('production has now applied 037, so the dump no longer carries them', () => {
     /**
-     * The premise of the whole test. If production had already lost these, 037
-     * would be a no-op and marking it applied would be harmless — so assert the
-     * premise rather than assume it.
+     * The premise FLIPPED, and this suite was written to notice.
+     *
+     * It used to assert the stale constraints were still in the dump, with the
+     * note: "If production had already lost these, 037 would be a no-op and
+     * marking it applied would be harmless — so assert the premise rather than
+     * assume it." Production applied 037 on 2026-08-18, and the 2026-08-19
+     * recapture picked that up, so the constraints are gone.
+     *
+     * The guarantee this suite exists for is unchanged and still enforced
+     * below: 037 stays ABSENT rather than being auto-marked. That is now the
+     * conservative reading rather than the load-bearing one — re-running a
+     * DROP ... IF EXISTS on a fresh database is a no-op — and conservative is
+     * the correct direction for a removal that cannot be proven either way.
      */
     const baseline = fs.readFileSync(BASELINE, 'utf8');
     const stale = baseline.match(
       /(provider|customer)_notifications_notification_key_key\d+/g,
     );
-    expect(stale).not.toBeNull();
-    expect(new Set(stale!).size).toBeGreaterThan(30);
+    expect(stale).toBeNull();
   });
 });
 
@@ -87,14 +96,28 @@ describe('the fix did not reclassify anything else', () => {
     );
   });
 
-  it('the six undeployed migrations are still ABSENT, and 036 with them', () => {
+  it('030-036 are now present, because the baseline finally contains them', () => {
+    /**
+     * These were ABSENT until 2026-08-19 for a plain reason: the baseline was
+     * captured 2026-08-16 and they were applied to production after it. The
+     * recapture reflects them, so the evidence-based checker sees their objects
+     * and reports present. Nothing about the checker changed.
+     */
     for (const f of ['030', '031', '032', '033', '034', '035', '036']) {
       const check = checks.find((c) => c.file.startsWith(f))!;
-      expect(check.verdict).toBe('ABSENT');
+      expect(check.verdict).toBe('present');
     }
   });
 
+  it('037 is the only migration left ABSENT', () => {
+    // A removal cannot be proven from a dump, so it stays ABSENT by design.
+    // Stated as "only" so that a NEW absent migration — a genuinely undeployed
+    // one — cannot hide inside this bucket unnoticed.
+    const absent = checks.filter((c) => c.verdict === 'ABSENT').map((c) => c.file);
+    expect(absent).toEqual(['037-notification-key-drop-global-uniques.sql']);
+  });
+
   it('everything the baseline demonstrably has is still "present"', () => {
-    expect(checks.filter((c) => c.verdict === 'present').length).toBe(16);
+    expect(checks.filter((c) => c.verdict === 'present').length).toBe(23);
   });
 });

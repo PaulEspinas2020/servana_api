@@ -30,11 +30,16 @@
 -- Copying owners is what reproduced the 2026-08-10 outage, where 29 of 116
 -- tables ended up owned by `postgres` and unusable by the application.
 --
+-- WHEN THIS WAS CAPTURED
+--
+-- 2026-08-19, from production with migrations 030-037 applied: 132 tables.
+-- The previous capture (2026-08-16) predated them and carried 120, which left
+-- eight migrations unreflected and the fresh-database gate correctly red.
+--
 -- HOW TO REGENERATE
 --
 --   see docs/database/DATABASE_BASELINE_CAPTURE.md
 --
-
 --
 -- PostgreSQL database dump
 --
@@ -62,6 +67,21 @@ CREATE SCHEMA IF NOT EXISTS servana;
 
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA public;
+
+
+--
+-- Name: finance_ledger_events_append_only(); Type: FUNCTION; Schema: servana; Owner: -
+--
+
+CREATE FUNCTION servana.finance_ledger_events_append_only() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  RAISE EXCEPTION
+    'finance_ledger_events is append-only: % on row % is refused. Record a compensating event instead.',
+    TG_OP, COALESCE(OLD.id, NEW.id);
+END;
+$$;
 
 
 --
@@ -117,6 +137,53 @@ CREATE SEQUENCE servana.account_deletion_requests_id_seq
 --
 
 ALTER SEQUENCE servana.account_deletion_requests_id_seq OWNED BY servana.account_deletion_requests.id;
+
+
+--
+-- Name: account_device_tokens; Type: TABLE; Schema: servana; Owner: -
+--
+
+CREATE TABLE servana.account_device_tokens (
+    token text NOT NULL,
+    uid character varying(128) NOT NULL,
+    platform character varying(16),
+    app character varying(32),
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE account_device_tokens; Type: COMMENT; Schema: servana; Owner: -
+--
+
+COMMENT ON TABLE servana.account_device_tokens IS 'Canonical push device registry for every account regardless of role. The legacy provider table and user_credentials.fcm_token are dual-written and still read; deviceTokenService.tokensFor returns the union until both can be retired by measurement.';
+
+
+--
+-- Name: account_settings; Type: TABLE; Schema: servana; Owner: -
+--
+
+CREATE TABLE servana.account_settings (
+    uid character varying(128) NOT NULL,
+    setting_id character varying(64) NOT NULL,
+    value text,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE account_settings; Type: COMMENT; Schema: servana; Owner: -
+--
+
+COMMENT ON TABLE servana.account_settings IS 'Per-account settings: locale, time zone, privacy. One row per (account, setting). Notification preferences are NOT here - they remain in provider_notification_preferences and /me/settings points at them rather than copying them.';
+
+
+--
+-- Name: COLUMN account_settings.value; Type: COMMENT; Schema: servana; Owner: -
+--
+
+COMMENT ON COLUMN servana.account_settings.value IS 'Stored as TEXT and coerced on read against the type the catalog default implies. The catalog is services/account/accountPolicy.ts SETTINGS_CATALOG, which is executable and which the generated SETTINGS_V1_CONTRACT.md is rendered from.';
 
 
 --
@@ -634,7 +701,10 @@ CREATE TABLE servana.booking_escalations (
     assigned_team text,
     actor_uid text,
     resolved_at timestamp with time zone,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    category character varying(40),
+    opened_by_role character varying(24),
+    state_snapshot jsonb
 );
 
 
@@ -656,6 +726,46 @@ CREATE SEQUENCE servana.booking_escalations_id_seq
 --
 
 ALTER SEQUENCE servana.booking_escalations_id_seq OWNED BY servana.booking_escalations.id;
+
+
+--
+-- Name: booking_evidence; Type: TABLE; Schema: servana; Owner: -
+--
+
+CREATE TABLE servana.booking_evidence (
+    id integer NOT NULL,
+    booking_id integer NOT NULL,
+    worker_uid text NOT NULL,
+    requirement_code character varying(60) NOT NULL,
+    stage character varying(30) NOT NULL,
+    file_url text NOT NULL,
+    mime_type character varying(60) NOT NULL,
+    bytes integer NOT NULL,
+    state character varying(20) DEFAULT 'UPLOADED'::character varying NOT NULL,
+    review_note text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    removed_at timestamp with time zone
+);
+
+
+--
+-- Name: booking_evidence_id_seq; Type: SEQUENCE; Schema: servana; Owner: -
+--
+
+CREATE SEQUENCE servana.booking_evidence_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: booking_evidence_id_seq; Type: SEQUENCE OWNED BY; Schema: servana; Owner: -
+--
+
+ALTER SEQUENCE servana.booking_evidence_id_seq OWNED BY servana.booking_evidence.id;
 
 
 --
@@ -689,6 +799,42 @@ CREATE SEQUENCE servana.booking_notes_id_seq
 --
 
 ALTER SEQUENCE servana.booking_notes_id_seq OWNED BY servana.booking_notes.id;
+
+
+--
+-- Name: booking_otp_events; Type: TABLE; Schema: servana; Owner: -
+--
+
+CREATE TABLE servana.booking_otp_events (
+    id integer NOT NULL,
+    booking_id integer NOT NULL,
+    purpose character varying(40) NOT NULL,
+    event character varying(20) NOT NULL,
+    actor_uid text,
+    actor_role character varying(24),
+    detail jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: booking_otp_events_id_seq; Type: SEQUENCE; Schema: servana; Owner: -
+--
+
+CREATE SEQUENCE servana.booking_otp_events_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: booking_otp_events_id_seq; Type: SEQUENCE OWNED BY; Schema: servana; Owner: -
+--
+
+ALTER SEQUENCE servana.booking_otp_events_id_seq OWNED BY servana.booking_otp_events.id;
 
 
 --
@@ -728,6 +874,100 @@ ALTER SEQUENCE servana.booking_payment_evidence_id_seq OWNED BY servana.booking_
 
 
 --
+-- Name: booking_reschedule_requests; Type: TABLE; Schema: servana; Owner: -
+--
+
+CREATE TABLE servana.booking_reschedule_requests (
+    id integer NOT NULL,
+    booking_id integer NOT NULL,
+    previous_schedule timestamp with time zone,
+    proposed_schedule timestamp with time zone NOT NULL,
+    reason_code character varying(40),
+    reason text,
+    status character varying(24) NOT NULL,
+    refusal_code character varying(40),
+    requested_by text,
+    requested_role character varying(24) NOT NULL,
+    decided_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: booking_reschedule_requests_id_seq; Type: SEQUENCE; Schema: servana; Owner: -
+--
+
+CREATE SEQUENCE servana.booking_reschedule_requests_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: booking_reschedule_requests_id_seq; Type: SEQUENCE OWNED BY; Schema: servana; Owner: -
+--
+
+ALTER SEQUENCE servana.booking_reschedule_requests_id_seq OWNED BY servana.booking_reschedule_requests.id;
+
+
+--
+-- Name: booking_support_cases; Type: TABLE; Schema: servana; Owner: -
+--
+
+CREATE TABLE servana.booking_support_cases (
+    case_id bigint NOT NULL,
+    booking_id bigint NOT NULL,
+    customer_uid character varying(128) NOT NULL,
+    provider_uid character varying(128),
+    category character varying(40) NOT NULL,
+    severity character varying(16) DEFAULT 'normal'::character varying NOT NULL,
+    routed_to character varying(16) DEFAULT 'support'::character varying NOT NULL,
+    state character varying(24) DEFAULT 'OPEN'::character varying NOT NULL,
+    summary character varying(200) NOT NULL,
+    detail text,
+    client_request_id character varying(128),
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    resolved_at timestamp with time zone
+);
+
+
+--
+-- Name: TABLE booking_support_cases; Type: COMMENT; Schema: servana; Owner: -
+--
+
+COMMENT ON TABLE servana.booking_support_cases IS 'Post-service support cases attached to a concluded booking. Distinct from support_tickets (general contact, no booking id) and provider_support_cases (a different party). routed_to = finance means the case records a complaint the finance domain resolves.';
+
+
+--
+-- Name: COLUMN booking_support_cases.routed_to; Type: COMMENT; Schema: servana; Owner: -
+--
+
+COMMENT ON COLUMN servana.booking_support_cases.routed_to IS 'support | finance. A BILLING case is stored here and RESOLVED by the refund/dispute domain; this table never moves money.';
+
+
+--
+-- Name: booking_support_cases_case_id_seq; Type: SEQUENCE; Schema: servana; Owner: -
+--
+
+CREATE SEQUENCE servana.booking_support_cases_case_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: booking_support_cases_case_id_seq; Type: SEQUENCE OWNED BY; Schema: servana; Owner: -
+--
+
+ALTER SEQUENCE servana.booking_support_cases_case_id_seq OWNED BY servana.booking_support_cases.case_id;
+
+
+--
 -- Name: booking_workers; Type: TABLE; Schema: servana; Owner: -
 --
 
@@ -748,7 +988,10 @@ CREATE TABLE servana.booking_workers (
     en_route_at timestamp with time zone,
     arrived_at timestamp with time zone,
     accepted_at timestamp with time zone,
-    declined_at timestamp with time zone
+    declined_at timestamp with time zone,
+    cancelled_at timestamp with time zone,
+    cancellation_reason_code character varying(60),
+    cancellation_note text
 );
 
 
@@ -868,6 +1111,75 @@ CREATE SEQUENCE servana.booking_tracking_id_seq
 --
 
 ALTER SEQUENCE servana.booking_tracking_id_seq OWNED BY servana.booking_tracking.id;
+
+
+--
+-- Name: booking_transition_idempotency; Type: TABLE; Schema: servana; Owner: -
+--
+
+CREATE TABLE servana.booking_transition_idempotency (
+    actor_uid text NOT NULL,
+    booking_id integer NOT NULL,
+    action text NOT NULL,
+    idempotency_key text NOT NULL,
+    request_digest text NOT NULL,
+    result jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE booking_transition_idempotency; Type: COMMENT; Schema: servana; Owner: -
+--
+
+COMMENT ON TABLE servana.booking_transition_idempotency IS 'Replay guard for booking transitions. A reused key with a different request_digest is a conflict, not a replay.';
+
+
+--
+-- Name: booking_transitions; Type: TABLE; Schema: servana; Owner: -
+--
+
+CREATE TABLE servana.booking_transitions (
+    id bigint NOT NULL,
+    booking_id integer NOT NULL,
+    action text NOT NULL,
+    from_state text NOT NULL,
+    to_state text NOT NULL,
+    actor_role text NOT NULL,
+    actor_uid text,
+    provider_uid text,
+    reason text,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    correlation_id text,
+    state_changed boolean DEFAULT true NOT NULL,
+    occurred_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE booking_transitions; Type: COMMENT; Schema: servana; Owner: -
+--
+
+COMMENT ON TABLE servana.booking_transitions IS 'Canonical ledger of booking state changes, written only by services/booking/transitionExecutor. state_changed=false marks an event-only action where from_state equals to_state by design.';
+
+
+--
+-- Name: booking_transitions_id_seq; Type: SEQUENCE; Schema: servana; Owner: -
+--
+
+CREATE SEQUENCE servana.booking_transitions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: booking_transitions_id_seq; Type: SEQUENCE OWNED BY; Schema: servana; Owner: -
+--
+
+ALTER SEQUENCE servana.booking_transitions_id_seq OWNED BY servana.booking_transitions.id;
 
 
 --
@@ -1337,8 +1649,16 @@ CREATE TABLE servana.chat_participants (
     joined_at timestamp with time zone DEFAULT now() NOT NULL,
     left_at timestamp with time zone,
     can_read boolean DEFAULT true NOT NULL,
-    can_send boolean DEFAULT true NOT NULL
+    can_send boolean DEFAULT true NOT NULL,
+    last_read_at timestamp with time zone
 );
+
+
+--
+-- Name: COLUMN chat_participants.last_read_at; Type: COMMENT; Schema: servana; Owner: -
+--
+
+COMMENT ON COLUMN servana.chat_participants.last_read_at IS 'When last_read_message_id last advanced. NULL means the pointer predates this column; it is never backfilled, because an invented receipt is worse than an absent one.';
 
 
 --
@@ -1554,6 +1874,66 @@ ALTER SEQUENCE servana.disbursements_id_seq OWNED BY servana.disbursements.id;
 
 
 --
+-- Name: domain_event_outbox; Type: TABLE; Schema: servana; Owner: -
+--
+
+CREATE TABLE servana.domain_event_outbox (
+    id bigint NOT NULL,
+    event_name character varying(64) NOT NULL,
+    event_version integer DEFAULT 1 NOT NULL,
+    dedupe_key text,
+    refs jsonb DEFAULT '{}'::jsonb NOT NULL,
+    display jsonb DEFAULT '{}'::jsonb NOT NULL,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    status character varying(16) DEFAULT 'PENDING'::character varying NOT NULL,
+    attempts integer DEFAULT 0 NOT NULL,
+    last_error text,
+    occurred_at timestamp with time zone DEFAULT now() NOT NULL,
+    dispatched_at timestamp with time zone
+);
+
+
+--
+-- Name: TABLE domain_event_outbox; Type: COMMENT; Schema: servana; Owner: -
+--
+
+COMMENT ON TABLE servana.domain_event_outbox IS 'Transactional outbox for canonical domain events. Projected into notifications by services/events/notificationProjector. Rows are retained after dispatch as the audit trail of what the platform reacted to.';
+
+
+--
+-- Name: COLUMN domain_event_outbox.refs; Type: COMMENT; Schema: servana; Owner: -
+--
+
+COMMENT ON COLUMN servana.domain_event_outbox.refs IS 'Canonical entity ids only - bookingId, serviceId (Catalog V2), conversationId, reviewId. Never a screen name and never service_family_id; the publisher refuses both.';
+
+
+--
+-- Name: COLUMN domain_event_outbox.display; Type: COMMENT; Schema: servana; Owner: -
+--
+
+COMMENT ON COLUMN servana.domain_event_outbox.display IS 'Safe display substitutions, bounded and control-stripped at publish. Never a customer name, address, phone or note - these reach a push payload, which the OS renders on a lock screen before the app decides anything.';
+
+
+--
+-- Name: domain_event_outbox_id_seq; Type: SEQUENCE; Schema: servana; Owner: -
+--
+
+CREATE SEQUENCE servana.domain_event_outbox_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: domain_event_outbox_id_seq; Type: SEQUENCE OWNED BY; Schema: servana; Owner: -
+--
+
+ALTER SEQUENCE servana.domain_event_outbox_id_seq OWNED BY servana.domain_event_outbox.id;
+
+
+--
 -- Name: email_otps; Type: TABLE; Schema: servana; Owner: -
 --
 
@@ -1711,6 +2091,52 @@ CREATE SEQUENCE servana.finance_ledger_entries_id_seq
 --
 
 ALTER SEQUENCE servana.finance_ledger_entries_id_seq OWNED BY servana.finance_ledger_entries.id;
+
+
+--
+-- Name: finance_ledger_events; Type: TABLE; Schema: servana; Owner: -
+--
+
+CREATE TABLE servana.finance_ledger_events (
+    id bigint NOT NULL,
+    event_key text NOT NULL,
+    event_type text NOT NULL,
+    booking_id integer NOT NULL,
+    payment_id integer,
+    disbursement_id integer,
+    additional_request_id integer,
+    provider_uid text,
+    customer_uid text,
+    counterparty text NOT NULL,
+    direction text NOT NULL,
+    amount numeric(12,2) DEFAULT 0 NOT NULL,
+    currency text DEFAULT 'PHP'::text NOT NULL,
+    economic_model text,
+    reason_code text,
+    processor_reference text,
+    detail jsonb,
+    occurred_at timestamp with time zone DEFAULT now() NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: finance_ledger_events_id_seq; Type: SEQUENCE; Schema: servana; Owner: -
+--
+
+CREATE SEQUENCE servana.finance_ledger_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: finance_ledger_events_id_seq; Type: SEQUENCE OWNED BY; Schema: servana; Owner: -
+--
+
+ALTER SEQUENCE servana.finance_ledger_events_id_seq OWNED BY servana.finance_ledger_events.id;
 
 
 --
@@ -3107,6 +3533,17 @@ CREATE TABLE servana.roles (
 
 
 --
+-- Name: schema_migrations; Type: TABLE; Schema: servana; Owner: -
+--
+
+CREATE TABLE servana.schema_migrations (
+    migration_name text NOT NULL,
+    checksum_sha256 text NOT NULL,
+    applied_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: service_coverage; Type: TABLE; Schema: servana; Owner: -
 --
 
@@ -3614,6 +4051,21 @@ CREATE TABLE servana.worker_notification_prefs (
 
 
 --
+-- Name: worker_onboarding; Type: TABLE; Schema: servana; Owner: -
+--
+
+CREATE TABLE servana.worker_onboarding (
+    worker_uid text NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    current_step text DEFAULT 'personal_info'::text NOT NULL,
+    completed_steps jsonb DEFAULT '[]'::jsonb NOT NULL,
+    step_data jsonb DEFAULT '{}'::jsonb NOT NULL,
+    submitted_at timestamp with time zone,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: worker_requirements; Type: TABLE; Schema: servana; Owner: -
 --
 
@@ -3848,6 +4300,13 @@ ALTER TABLE ONLY servana.booking_escalations ALTER COLUMN id SET DEFAULT nextval
 
 
 --
+-- Name: booking_evidence id; Type: DEFAULT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.booking_evidence ALTER COLUMN id SET DEFAULT nextval('servana.booking_evidence_id_seq'::regclass);
+
+
+--
 -- Name: booking_notes id; Type: DEFAULT; Schema: servana; Owner: -
 --
 
@@ -3855,10 +4314,31 @@ ALTER TABLE ONLY servana.booking_notes ALTER COLUMN id SET DEFAULT nextval('serv
 
 
 --
+-- Name: booking_otp_events id; Type: DEFAULT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.booking_otp_events ALTER COLUMN id SET DEFAULT nextval('servana.booking_otp_events_id_seq'::regclass);
+
+
+--
 -- Name: booking_payment_evidence id; Type: DEFAULT; Schema: servana; Owner: -
 --
 
 ALTER TABLE ONLY servana.booking_payment_evidence ALTER COLUMN id SET DEFAULT nextval('servana.booking_payment_evidence_id_seq'::regclass);
+
+
+--
+-- Name: booking_reschedule_requests id; Type: DEFAULT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.booking_reschedule_requests ALTER COLUMN id SET DEFAULT nextval('servana.booking_reschedule_requests_id_seq'::regclass);
+
+
+--
+-- Name: booking_support_cases case_id; Type: DEFAULT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.booking_support_cases ALTER COLUMN case_id SET DEFAULT nextval('servana.booking_support_cases_case_id_seq'::regclass);
 
 
 --
@@ -3873,6 +4353,13 @@ ALTER TABLE ONLY servana.booking_timeline_events ALTER COLUMN id SET DEFAULT nex
 --
 
 ALTER TABLE ONLY servana.booking_tracking ALTER COLUMN id SET DEFAULT nextval('servana.booking_tracking_id_seq'::regclass);
+
+
+--
+-- Name: booking_transitions id; Type: DEFAULT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.booking_transitions ALTER COLUMN id SET DEFAULT nextval('servana.booking_transitions_id_seq'::regclass);
 
 
 --
@@ -3988,6 +4475,13 @@ ALTER TABLE ONLY servana.disbursements ALTER COLUMN id SET DEFAULT nextval('serv
 
 
 --
+-- Name: domain_event_outbox id; Type: DEFAULT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.domain_event_outbox ALTER COLUMN id SET DEFAULT nextval('servana.domain_event_outbox_id_seq'::regclass);
+
+
+--
 -- Name: email_otps id; Type: DEFAULT; Schema: servana; Owner: -
 --
 
@@ -4013,6 +4507,13 @@ ALTER TABLE ONLY servana.employee_services ALTER COLUMN id SET DEFAULT nextval('
 --
 
 ALTER TABLE ONLY servana.finance_ledger_entries ALTER COLUMN id SET DEFAULT nextval('servana.finance_ledger_entries_id_seq'::regclass);
+
+
+--
+-- Name: finance_ledger_events id; Type: DEFAULT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.finance_ledger_events ALTER COLUMN id SET DEFAULT nextval('servana.finance_ledger_events_id_seq'::regclass);
 
 
 --
@@ -4199,6 +4700,22 @@ ALTER TABLE ONLY servana.account_deletion_requests
 
 
 --
+-- Name: account_device_tokens account_device_tokens_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.account_device_tokens
+    ADD CONSTRAINT account_device_tokens_pkey PRIMARY KEY (token);
+
+
+--
+-- Name: account_settings account_settings_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.account_settings
+    ADD CONSTRAINT account_settings_pkey PRIMARY KEY (uid, setting_id);
+
+
+--
 -- Name: admin_audit_events admin_audit_events_event_id_key; Type: CONSTRAINT; Schema: servana; Owner: -
 --
 
@@ -4359,6 +4876,14 @@ ALTER TABLE ONLY servana.booking_escalations
 
 
 --
+-- Name: booking_evidence booking_evidence_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.booking_evidence
+    ADD CONSTRAINT booking_evidence_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: booking_notes booking_notes_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
 --
 
@@ -4367,11 +4892,35 @@ ALTER TABLE ONLY servana.booking_notes
 
 
 --
+-- Name: booking_otp_events booking_otp_events_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.booking_otp_events
+    ADD CONSTRAINT booking_otp_events_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: booking_payment_evidence booking_payment_evidence_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
 --
 
 ALTER TABLE ONLY servana.booking_payment_evidence
     ADD CONSTRAINT booking_payment_evidence_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: booking_reschedule_requests booking_reschedule_requests_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.booking_reschedule_requests
+    ADD CONSTRAINT booking_reschedule_requests_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: booking_support_cases booking_support_cases_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.booking_support_cases
+    ADD CONSTRAINT booking_support_cases_pkey PRIMARY KEY (case_id);
 
 
 --
@@ -4396,6 +4945,22 @@ ALTER TABLE ONLY servana.booking_timeline_events
 
 ALTER TABLE ONLY servana.booking_tracking
     ADD CONSTRAINT booking_tracking_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: booking_transition_idempotency booking_transition_idempotency_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.booking_transition_idempotency
+    ADD CONSTRAINT booking_transition_idempotency_pkey PRIMARY KEY (actor_uid, booking_id, action, idempotency_key);
+
+
+--
+-- Name: booking_transitions booking_transitions_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.booking_transitions
+    ADD CONSTRAINT booking_transitions_pkey PRIMARY KEY (id);
 
 
 --
@@ -4551,22 +5116,6 @@ ALTER TABLE ONLY servana.chat_participants
 
 
 --
--- Name: customer_notifications customer_notifications_notification_key_key1; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.customer_notifications
-    ADD CONSTRAINT customer_notifications_notification_key_key1 UNIQUE (notification_key);
-
-
---
--- Name: customer_notifications customer_notifications_notification_key_key2; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.customer_notifications
-    ADD CONSTRAINT customer_notifications_notification_key_key2 UNIQUE (notification_key);
-
-
---
 -- Name: customer_notifications customer_notifications_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
 --
 
@@ -4623,6 +5172,14 @@ ALTER TABLE ONLY servana.disbursements
 
 
 --
+-- Name: domain_event_outbox domain_event_outbox_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.domain_event_outbox
+    ADD CONSTRAINT domain_event_outbox_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: email_otps email_otps_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
 --
 
@@ -4668,6 +5225,14 @@ ALTER TABLE ONLY servana.employee_services
 
 ALTER TABLE ONLY servana.finance_ledger_entries
     ADD CONSTRAINT finance_ledger_entries_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: finance_ledger_events finance_ledger_events_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.finance_ledger_events
+    ADD CONSTRAINT finance_ledger_events_pkey PRIMARY KEY (id);
 
 
 --
@@ -4884,302 +5449,6 @@ ALTER TABLE ONLY servana.provider_notification_device_tokens
 
 ALTER TABLE ONLY servana.provider_notification_preferences
     ADD CONSTRAINT provider_notification_preferences_pkey PRIMARY KEY (worker_uid);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key1; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key1 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key10; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key10 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key11; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key11 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key12; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key12 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key13; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key13 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key14; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key14 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key15; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key15 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key16; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key16 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key17; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key17 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key18; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key18 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key19; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key19 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key2; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key2 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key20; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key20 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key21; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key21 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key22; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key22 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key23; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key23 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key24; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key24 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key25; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key25 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key26; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key26 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key27; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key27 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key28; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key28 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key29; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key29 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key3; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key3 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key30; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key30 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key31; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key31 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key32; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key32 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key33; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key33 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key34; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key34 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key35; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key35 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key36; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key36 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key37; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key37 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key4; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key4 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key5; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key5 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key6; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key6 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key7; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key7 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key8; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key8 UNIQUE (notification_key);
-
-
---
--- Name: provider_notifications provider_notifications_notification_key_key9; Type: CONSTRAINT; Schema: servana; Owner: -
---
-
-ALTER TABLE ONLY servana.provider_notifications
-    ADD CONSTRAINT provider_notifications_notification_key_key9 UNIQUE (notification_key);
 
 
 --
@@ -5511,6 +5780,14 @@ ALTER TABLE ONLY servana.roles
 
 
 --
+-- Name: schema_migrations schema_migrations_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.schema_migrations
+    ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (migration_name);
+
+
+--
 -- Name: service_coverage_geo service_coverage_geo_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
 --
 
@@ -5791,6 +6068,14 @@ ALTER TABLE ONLY servana.worker_notification_prefs
 
 
 --
+-- Name: worker_onboarding worker_onboarding_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
+--
+
+ALTER TABLE ONLY servana.worker_onboarding
+    ADD CONSTRAINT worker_onboarding_pkey PRIMARY KEY (worker_uid);
+
+
+--
 -- Name: worker_requirements worker_requirements_pkey; Type: CONSTRAINT; Schema: servana; Owner: -
 --
 
@@ -5986,6 +6271,41 @@ CREATE INDEX fin_refund_status_idx ON servana.finance_refund_reviews USING btree
 
 
 --
+-- Name: finance_ledger_booking_idx; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE INDEX finance_ledger_booking_idx ON servana.finance_ledger_events USING btree (booking_id);
+
+
+--
+-- Name: finance_ledger_event_key_uidx; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE UNIQUE INDEX finance_ledger_event_key_uidx ON servana.finance_ledger_events USING btree (event_key);
+
+
+--
+-- Name: finance_ledger_occurred_idx; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE INDEX finance_ledger_occurred_idx ON servana.finance_ledger_events USING btree (occurred_at DESC);
+
+
+--
+-- Name: finance_ledger_provider_idx; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE INDEX finance_ledger_provider_idx ON servana.finance_ledger_events USING btree (provider_uid);
+
+
+--
+-- Name: finance_ledger_type_idx; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE INDEX finance_ledger_type_idx ON servana.finance_ledger_events USING btree (event_type);
+
+
+--
 -- Name: idx_abd_admin_status; Type: INDEX; Schema: servana; Owner: -
 --
 
@@ -5997,6 +6317,20 @@ CREATE INDEX idx_abd_admin_status ON servana.admin_booking_drafts USING btree (c
 --
 
 CREATE INDEX idx_abd_expires ON servana.admin_booking_drafts USING btree (expires_at) WHERE ((status)::text = ANY ((ARRAY['editing'::character varying, 'ready_for_review'::character varying])::text[]));
+
+
+--
+-- Name: idx_account_device_tokens_uid; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE INDEX idx_account_device_tokens_uid ON servana.account_device_tokens USING btree (uid);
+
+
+--
+-- Name: idx_account_settings_uid; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE INDEX idx_account_settings_uid ON servana.account_settings USING btree (uid);
 
 
 --
@@ -6060,6 +6394,41 @@ CREATE INDEX idx_adr_pending ON servana.account_deletion_requests USING btree (r
 --
 
 CREATE INDEX idx_ant_channel ON servana.admin_notification_templates USING btree (channel, is_active);
+
+
+--
+-- Name: idx_booking_evidence_booking_worker; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE INDEX idx_booking_evidence_booking_worker ON servana.booking_evidence USING btree (booking_id, worker_uid);
+
+
+--
+-- Name: idx_booking_otp_events_scope; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE INDEX idx_booking_otp_events_scope ON servana.booking_otp_events USING btree (booking_id, purpose, created_at DESC);
+
+
+--
+-- Name: idx_booking_reschedule_booking; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE INDEX idx_booking_reschedule_booking ON servana.booking_reschedule_requests USING btree (booking_id, created_at DESC);
+
+
+--
+-- Name: idx_booking_support_cases_booking; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE INDEX idx_booking_support_cases_booking ON servana.booking_support_cases USING btree (booking_id, created_at DESC);
+
+
+--
+-- Name: idx_booking_transitions_booking; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE INDEX idx_booking_transitions_booking ON servana.booking_transitions USING btree (booking_id, occurred_at);
 
 
 --
@@ -6186,6 +6555,13 @@ CREATE INDEX idx_cst_customer_uid ON servana.customer_support_tickets USING btre
 --
 
 CREATE INDEX idx_cstr_ticket_key ON servana.customer_support_ticket_replies USING btree (ticket_key, created_at);
+
+
+--
+-- Name: idx_domain_event_outbox_pending; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE INDEX idx_domain_event_outbox_pending ON servana.domain_event_outbox USING btree (status, id) WHERE ((status)::text = 'PENDING'::text);
 
 
 --
@@ -6574,10 +6950,31 @@ CREATE UNIQUE INDEX uniq_primary_address_per_user ON servana.user_address USING 
 
 
 --
+-- Name: uq_booking_escalations_one_open; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_booking_escalations_one_open ON servana.booking_escalations USING btree (booking_id) WHERE (resolved_at IS NULL);
+
+
+--
+-- Name: uq_booking_support_cases_request; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_booking_support_cases_request ON servana.booking_support_cases USING btree (customer_uid, client_request_id) WHERE (client_request_id IS NOT NULL);
+
+
+--
 -- Name: uq_customer_notifications_owner_key; Type: INDEX; Schema: servana; Owner: -
 --
 
 CREATE UNIQUE INDEX uq_customer_notifications_owner_key ON servana.customer_notifications USING btree (user_uid, notification_key);
+
+
+--
+-- Name: uq_domain_event_outbox_dedupe; Type: INDEX; Schema: servana; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_domain_event_outbox_dedupe ON servana.domain_event_outbox USING btree (event_name, dedupe_key) WHERE (dedupe_key IS NOT NULL);
 
 
 --
@@ -6697,6 +7094,13 @@ CREATE UNIQUE INDEX wsa_unique_open_application ON servana.worker_service_applic
 --
 
 CREATE INDEX wsa_worker_uid_idx ON servana.worker_service_applications USING btree (worker_uid);
+
+
+--
+-- Name: finance_ledger_events trg_finance_ledger_append_only; Type: TRIGGER; Schema: servana; Owner: -
+--
+
+CREATE TRIGGER trg_finance_ledger_append_only BEFORE DELETE OR UPDATE ON servana.finance_ledger_events FOR EACH ROW EXECUTE FUNCTION servana.finance_ledger_events_append_only();
 
 
 --

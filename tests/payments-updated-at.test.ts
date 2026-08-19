@@ -120,10 +120,15 @@ describe('the column stays honest', () => {
      * the first payment status change. `pg_dump` emits them in separate sections,
      * so it is possible to carry one and not the other.
      *
-     * It is also the ONLY trigger in the schema, which is why losing it silently
-     * would be easy.
+     * Pinned by NAME rather than by counting every CREATE TRIGGER in the file.
+     * The count assertion used to read toBe(1) on the grounds that this was the
+     * only trigger in the schema; the 2026-08-19 baseline recapture added
+     * trg_finance_ledger_append_only from 031-finance-ledger, so that reading
+     * broke without anything being lost. Naming the trigger tests the property
+     * this suite actually cares about and does not fail again the next time an
+     * unrelated trigger ships.
      */
-    expect((baseline.match(/CREATE TRIGGER/g) ?? []).length).toBe(1);
+    expect((baseline.match(/CREATE TRIGGER trg_payments_updated_at\b/g) ?? []).length).toBe(1);
     expect((baseline.match(/CREATE FUNCTION servana\.touch_payments_updated_at/g) ?? []).length).toBe(1);
   });
 });
