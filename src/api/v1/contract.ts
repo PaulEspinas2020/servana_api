@@ -88,6 +88,43 @@ export interface LegacyMapping {
   note: string;
 }
 
+/**
+ * How a replay is stopped from doing damage. Closed on purpose: a free-form tag
+ * would drift back into prose, and the point of this field is that a gate can
+ * enumerate it.
+ *
+ * Derived by reading all 34 non-idempotent entries, not invented in advance.
+ */
+export type ReplayMechanism =
+  /** The handler reads the caller's `Idempotency-Key` and replays the stored result. */
+  | 'client-idempotency-key'
+  /** A key is DERIVED for a downstream processor. The caller's own key is not read. */
+  | 'processor-idempotency-key'
+  /** A caller-supplied `clientRequestId` / `clientMsgId` deduplicates the write. */
+  | 'client-request-id'
+  /** A unique or partial-unique index collapses the repeat. */
+  | 'unique-constraint'
+  /** The write is an upsert on the primary key, so a repeat updates one row. */
+  | 'upsert-primary-key'
+  /** The UPDATE's own WHERE clause matches nothing on the second run. */
+  | 'state-predicate'
+  /** The booking state machine refuses the repeat: the entity has left that state. */
+  | 'state-machine'
+  /** A postgres advisory lock serialises concurrent attempts. */
+  | 'advisory-lock'
+  /** A row lock (`FOR UPDATE`) serialises concurrent attempts. */
+  | 'row-lock'
+  /** The credential is consumed on first use (oobCode, compare-and-swap OTP). */
+  | 'single-use-token'
+  /** An external identity provider owns the outcome and refuses or repeats it safely. */
+  | 'external-authority'
+  /** A cooldown, issue ceiling or attempt budget bounds the repeat. */
+  | 'rate-limit'
+  /** Arithmetic refuses it: the remaining ceiling computes to zero. */
+  | 'arithmetic-ceiling'
+  /** NONE, deliberately. A replay creates a second effect and that is accepted, with a reason. */
+  | 'none-accepted';
+
 export interface ContractEntry {
   /** Stable handler key. Never reused, never renamed. */
   id: string;
@@ -204,6 +241,27 @@ export interface ContractEntry {
    * with no guard named, so a new one cannot slip in unexamined.
    */
   replayGuard?: string;
+
+  /**
+   * The SAME guarantee as `replayGuard`, in a closed vocabulary a gate can read.
+   *
+   * ## Why prose was not enough
+   *
+   * `replayGuard` is the honest explanation and must stay — a reviewer needs the
+   * reasoning, not a tag. But no static check can read it. An attempt to build
+   * that gate from the prose flagged **10 of 11 entries wrongly**, and the reason
+   * is visible in the strings themselves: `auth.login` and
+   * `bookings.payments.intent` both contain the words "Idempotency-Key", and
+   * NEITHER honours a client-supplied one. The first says it would be theatre on
+   * a read-shaped operation; the second derives a key for the PROCESSOR from the
+   * payment row. Keyword-matching cannot tell those from the nine that really do
+   * replay a caller's key, and a gate with that false-positive rate gets deleted.
+   *
+   * Two fields, one truth: the prose says why, the vocabulary says what, and
+   * `tests/v1-replay-mechanism.test.ts` fails when they disagree about the one
+   * thing that is machine-checkable — whether the handler reads the header.
+   */
+  replayMechanism?: readonly ReplayMechanism[];
   /** Name of the response DTO in `openapi.ts`'s component schemas. */
   responseSchema: string;
   /** Every failure code this endpoint can return, beyond the auth defaults. */
@@ -749,6 +807,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Registers this device for push, for the authenticated account.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['upsert-primary-key'],
     replayGuard:
       'The device token is the primary key and the write is an upsert, so a repeat updates ' +
       'the same row rather than adding a second. Re-registering is the normal case - clients ' +
@@ -1060,6 +1119,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Saves a new address. The first one becomes the default.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['none-accepted'],
     replayGuard:
       'None beyond validation, and that is stated rather than claimed: a repeated POST creates a ' +
       'second address. Two identical addresses is a cosmetic problem a customer can fix, and an ' +
@@ -1215,6 +1275,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Proposes a change to a reviewable public profile field.',
     auth: 'provider',
     idempotent: false,
+    replayMechanism: ['client-request-id'],
     replayGuard:
       'A REQUIRED clientRequestId, which the compliance service dedupes revisions on. Without ' +
       'it a provider on a flaky connection would queue three copies of one biography change for ' +
@@ -1327,6 +1388,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Submits one document for review.',
     auth: 'provider',
     idempotent: false,
+    replayMechanism: ['client-request-id'],
     replayGuard:
       'A REQUIRED clientRequestId, unique per provider. A retried submit returns the ORIGINAL ' +
       'row rather than queueing a second copy of the same passport for review.',
@@ -1499,6 +1561,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Books time off, and reports the confirmed bookings it collides with.',
     auth: 'provider',
     idempotent: false,
+    replayMechanism: ['none-accepted'],
     replayGuard:
       'None, and the honest reason is that the engine offers none. A repeat creates a second ' +
       'overlapping period, which is visible and cancellable - and harmless next to the ' +
@@ -1675,6 +1738,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Reviews a completed booking. The provider comes from the assignment.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['advisory-lock', 'client-request-id', 'state-predicate'],
     replayGuard:
       'An advisory transaction lock on (customer, booking), a clientRequestId replay inside ' +
       'that transaction, and an existing-review check in the same transaction. Two devices ' +
@@ -1748,6 +1812,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Raises a support case about a concluded booking.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['advisory-lock', 'client-request-id', 'unique-constraint'],
     replayGuard:
       'An advisory transaction lock on (customer, booking) plus a partial unique index on ' +
       '(customer_uid, client_request_id). A retry on a flaky connection returns the original ' +
@@ -1866,6 +1931,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Creates an account from an email + password, or from a Firebase ID token.',
     auth: 'public',
     idempotent: false,
+    replayMechanism: ['external-authority'],
     replayGuard:
       'Firebase enforces one account per identifier, so a replayed registration collides with the identity it just created rather than making a second account. The 409 is the guard.',
     requestSchema: 'RegisterRequest',
@@ -1915,6 +1981,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'One sign-in for every identifier and every surface: email or mobile + password, or a Firebase ID token.',
     auth: 'public',
     idempotent: false,
+    replayMechanism: ['external-authority', 'rate-limit'],
     replayGuard:
       'A replay re-authenticates the same credential and mints another session. Nothing accumulates, and the per-account limiter bounds the rate — an Idempotency-Key here would be theatre on a read-shaped operation that happens to issue a token.',
     requestSchema: 'LoginRequest',
@@ -1981,6 +2048,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Exchanges a refresh token for a fresh session.',
     auth: 'public',
     idempotent: false,
+    replayMechanism: ['external-authority'],
     replayGuard:
       'Google owns the exchange and decides whether a refresh token is still redeemable. A replay yields another ID token or a refusal; nothing on this side accumulates.',
     requestSchema: 'RefreshRequest',
@@ -2064,6 +2132,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Completes a password reset and ends every existing session.',
     auth: 'public',
     idempotent: false,
+    replayMechanism: ['single-use-token'],
     replayGuard:
       'The oobCode is SINGLE-USE and consumed by Firebase on the first successful call. A replay finds it spent and answers RESET_TOKEN_INVALID.',
     requestSchema: 'ResetPasswordRequest',
@@ -2092,6 +2161,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Verifies an email address with a one-time code issued for registration.',
     auth: 'public',
     idempotent: false,
+    replayMechanism: ['single-use-token'],
     replayGuard:
       'The code is consumed by a compare-and-swap UPDATE (services/otpService.consumeOtp), so two concurrent verifications of one code cannot both succeed.',
     requestSchema: 'VerifyEmailRequest',
@@ -2448,6 +2518,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: "Opens, or resolves, the conversation for a booking.",
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['unique-constraint'],
     replayGuard:
       'One conversation per booking, enforced by a unique constraint on booking_id and an ' +
       'ON CONFLICT insert. A repeat returns the SAME conversation rather than opening a ' +
@@ -2613,6 +2684,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Sends a message. The sender is the authenticated caller.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['client-request-id', 'unique-constraint'],
     replayGuard:
       'A REQUIRED clientMsgId, unique per (conversation, sender) by partial index. A retried ' +
       'send returns the ORIGINAL message rather than creating a second one, and the pre-read ' +
@@ -2661,6 +2733,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Stores one attachment for a conversation the caller may write to.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['none-accepted'],
     replayGuard:
       'None, and none is claimed: a repeat stores a SECOND object under a fresh uuid key. ' +
       'That is wasted storage, not damage — an attachment is inert until a message ' +
@@ -2702,6 +2775,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Reports one message in this conversation to moderation.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['none-accepted'],
     replayGuard:
       'None. A second report by the same reporter files a second row, which is a moderation ' +
       'queue concern rather than a correctness one — the alternative, silently swallowing a ' +
@@ -2796,6 +2870,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: "Cancels the caller's own booking.",
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, a second ' +
       'cancel finds the booking already terminal and is refused, so a retry ' +
@@ -2866,6 +2941,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     auth: 'provider',
     activeProvider: true,
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
       'refuses the repeat because the booking has already left ASSIGNED.',
@@ -2903,6 +2979,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     auth: 'provider',
     activeProvider: true,
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
       'refuses the repeat because the booking has already left ASSIGNED.',
@@ -2940,6 +3017,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     auth: 'provider',
     activeProvider: true,
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
       'refuses the repeat because the booking has already left ACCEPTED.',
@@ -2977,6 +3055,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     auth: 'provider',
     activeProvider: true,
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
       'refuses the repeat because the booking has already left EN_ROUTE.',
@@ -3014,6 +3093,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     auth: 'provider',
     activeProvider: true,
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
       'refuses the repeat because the booking has already left ARRIVED.',
@@ -3055,6 +3135,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     auth: 'provider',
     activeProvider: true,
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
       'refuses the repeat because the booking has already left IN_PROGRESS.',
@@ -3092,6 +3173,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     auth: 'provider',
     activeProvider: true,
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the repeat ' +
       'finds the booking back at AWAITING_ASSIGNMENT with no assignment for this ' +
@@ -3194,6 +3276,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Issues a booking code for one purpose. The code is never in the response.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['rate-limit', 'state-machine'],
     replayGuard:
       'A resend cooldown, an issue ceiling per booking and purpose, and a state ' +
       'rule. A replay inside the cooldown is refused with the seconds remaining ' +
@@ -3231,6 +3314,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Presents a booking code. Success is a state transition performed by the executor.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine', 'rate-limit'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the attempt ' +
       'budget bounds it and the machine refuses a repeat because the booking has ' +
@@ -3301,6 +3385,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Moves a booking. One endpoint for the customer and the admin.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['state-predicate'],
     replayGuard:
       'The write carries `schedule IS NOT DISTINCT FROM <expected>`, so a repeat ' +
       'of an applied move finds the schedule already changed and is refused with ' +
@@ -3363,6 +3448,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     auth: 'provider',
     activeProvider: true,
     idempotent: false,
+    replayMechanism: ['none-accepted'],
     replayGuard:
       'The write requires an IN_PROGRESS assignment row held under FOR UPDATE, ' +
       'and each accepted request is a distinct priced child record — a repeat ' +
@@ -3429,6 +3515,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Opens a dispute against the booking, with the service and financial state at that moment.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['unique-constraint', 'state-predicate'],
     replayGuard:
       'At most one unresolved escalation per booking, enforced by a partial ' +
       'unique index as well as by the policy check — so two simultaneous reports ' +
@@ -3509,6 +3596,7 @@ export const V1_CONTRACT: ContractEntry[] = [
      */
     permission: 'refunds.mark_failed',
     idempotent: false,
+    replayMechanism: ['state-predicate'],
     replayGuard:
       'The state predicate, in the write itself: the UPDATE matches only ' +
       '`status = \'approved\'`, so a replay finds the row already `failed` and ' +
@@ -3630,6 +3718,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     auth: 'admin',
     permission: 'bookings.assign_provider',
     idempotent: false,
+    replayMechanism: ['row-lock', 'advisory-lock', 'state-machine'],
     replayGuard:
       'The executor locks the booking row and takes a provider-scoped advisory lock, then ' +
       'revalidates the commit-critical stages. A replayed assign of the SAME provider is ' +
@@ -3666,6 +3755,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     auth: 'admin',
     permission: 'bookings.reassign_provider',
     idempotent: false,
+    replayMechanism: ['row-lock', 'advisory-lock', 'state-machine'],
     replayGuard:
       'Same two locks as assign. The outgoing assignment row is closed inside the transaction ' +
       'and stamped with when it closed, so a replay finds no open assignment for the previous ' +
@@ -3712,6 +3802,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Starts or resumes the customer checkout for a booking.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['advisory-lock', 'processor-idempotency-key'],
     replayGuard:
       'An advisory transaction lock on the booking, plus reuse of a live session for the same ' +
       'return origin instead of minting a second, plus a processor Idempotency-Key derived from ' +
@@ -3784,6 +3875,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Requests a refund (customer) or issues one (admin).',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['arithmetic-ceiling', 'state-predicate'],
     replayGuard:
       'Eligibility is evaluated against captured-minus-already-refunded, so a second full ' +
       'refund computes a ceiling of zero and is refused by arithmetic. A customer repeat ' +
