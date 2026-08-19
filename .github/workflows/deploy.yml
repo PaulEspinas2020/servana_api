@@ -16,13 +16,35 @@ jobs:
   #
   # Calling it as a job is what makes `needs:` below meaningful. A failed gate
   # now leaves `deploy` SKIPPED rather than merely embarrassed.
-  release-gate:
-    uses: ./.github/workflows/release-gate.yml
-    secrets: inherit
+  # DISABLED AT THE origin/main MERGE, and this is the half of TAB 03 that the
+  # merge could not keep. The wiring above was written when release-gate.yml ran
+  # on every push. origin/main 463f963 then made it MANUAL ONLY, because this
+  # repo's GitHub Actions credit is exhausted and is not being topped up (owner
+  # decision, 2026-08-19).
+  #
+  # Both halves are individually correct and together they stop production
+  # deploying: `release-gate.yml` is `runs-on: ubuntu-latest`, so calling it here
+  # queues a GitHub-hosted job that cannot start, and `needs: [release-gate]`
+  # then leaves `deploy` SKIPPED. Every push to main is a production deploy on
+  # the self-hosted runner, so the merged pipeline would have deployed nothing at
+  # all — while origin/main's own note states "deploy.yml is unaffected and still
+  # deploys on push to main". Honouring that is why this is commented and not
+  # deleted.
+  #
+  # The gate has NOT gone away, it moved: scripts/hooks/pre-push runs the full
+  # `npm run verify` before a push to main leaves the machine. That is weaker in
+  # one specific way, named in the hook itself — it passes with credentials
+  # present, where 4 suites fail without them.
+  #
+  # RESTORE BOTH LINES TOGETHER, and only once Actions credit exists. The other
+  # half is the `workflow_call:` trigger kept in release-gate.yml for this.
+  #
+  # release-gate:
+  #   uses: ./.github/workflows/release-gate.yml
+  #   secrets: inherit
 
   deploy:
-    # The whole point of this TAB. Without it the line above is decoration.
-    needs: [release-gate]
+    # needs: [release-gate]   <- restore with the job above, not on its own.
     runs-on: [self-hosted, Linux, x64]
     timeout-minutes: 12
 
@@ -222,6 +244,23 @@ jobs:
           SERVANA_APPLY_DESTRUCTIVE: ${{ vars.SERVANA_APPLY_DESTRUCTIVE }}
         run: npm run migrations:apply
 
+      # Deliberately stop/delete/start rather than `pm2 reload`, which was
+      # considered on 2026-08-19 and rejected on measurement:
+      #
+      #  - `pm2 reload` is only zero-downtime in CLUSTER mode. There is no
+      #    ecosystem config here and the app is started with plain args, so it
+      #    runs in fork mode, where reload degrades to a restart and the gap
+      #    remains. It would buy nothing.
+      #  - Moving to cluster mode would run startScheduler() (src/app.ts) in
+      #    every instance, and src/scheduler.ts has no single-instance guard —
+      #    no NODE_APP_INSTANCE check, no advisory lock, no leader election. Two
+      #    instances means every cron tick fires twice, which is far worse than
+      #    the short 502 window this sequence costs.
+      #  - The delete step is load-bearing: it exists because a previous deploy
+      #    left an EADDRINUSE crash loop.
+      #
+      # Closing the 502 window properly means guarding the scheduler first, then
+      # cluster mode. Until then this sequence is the correct trade.
       - name: Restart PM2
         run: |
           APP="$(pwd)/dist/app.js"

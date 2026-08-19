@@ -6,8 +6,8 @@ import { randomUUID } from "crypto";
 // require a production service-account file merely because they imported a
 // service that happened to reference this helper.
 const getStorageBucket = async () => {
-    const { firebaseAdmin } = await import("../middleware/firebaseApp");
-    return firebaseAdmin.storage().bucket(firebaseConfig.storageBucket);
+    const { getFirebaseAdmin } = await import("../middleware/firebaseApp");
+    return getFirebaseAdmin().storage().bucket(firebaseConfig.storageBucket);
 };
 
 export interface PrivateStoredFile {

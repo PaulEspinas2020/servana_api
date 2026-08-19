@@ -407,7 +407,7 @@ jest.mock('../src/services/reviews/postServiceSupportService', () => {
 //    at import time, so it has to be stubbed before anything in the auth chain
 //    is pulled in — otherwise the suite fails to LOAD, which reads as a broken
 //    test rather than a missing credential.
-jest.mock('../src/middleware/firebaseApp', () => ({ firebaseAdmin: {}, __esModule: true }));
+jest.mock('../src/middleware/firebaseApp', () => ({ getFirebaseAdmin: () => ({}), __esModule: true }));
 jest.mock('firebase-admin/auth', () => ({ getAuth: () => ({}) }));
 jest.mock('../src/services/firebaseFunctions.service', () => ({
   firebaseAuthLogin: jest.fn().mockResolvedValue({

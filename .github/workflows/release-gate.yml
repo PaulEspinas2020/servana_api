@@ -11,18 +11,22 @@
 
 name: release-gate
 
+# MANUAL ONLY - GitHub Actions credit for this repo is exhausted and is not
+# being topped up (owner decision, 2026-08-19, origin/main 463f963). Every job
+# below is `ubuntu-latest`, i.e. GitHub-hosted, so an automatic trigger would
+# only queue a run that fails and leaves a red X that means nothing.
+#
+# The `push`/`pull_request` triggers that lived here were removed for that
+# reason. Restore them above `workflow_dispatch` when credit returns. Until
+# then the real gate is `npm run verify`, enforced by scripts/hooks/pre-push.
+#
+# `workflow_call` is KEPT, and keeping it costs nothing: a callable workflow
+# consumes no minutes until something calls it. It is retained because this
+# tree's TAB 03 work (c2c73d2) made `deploy.yml` depend on this gate as a job,
+# and that wiring is the thing to switch back on first once credit exists. See
+# the disabled `release-gate` job in deploy.yml for the other half.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
-  # Callable, so `deploy.yml` can depend on this gate as a JOB (TAB 03, F-03).
-  #
-  # Two workflows on the same trigger run in parallel and can never express a
-  # dependency between them, which is how run 32119165094 (this gate, FAILURE)
-  # and run 32119165101 (the deploy, SUCCESS) both happened on d4b0150. The gate
-  # was red and the commit shipped. `workflow_call` is what lets the deploy say
-  # `needs: [release-gate]` and mean it.
   workflow_call:
 
 jobs:
@@ -65,6 +69,11 @@ jobs:
 
       - name: Release summary
         id: summary
+        # if: always() taken from origin/main. Without it this step was SKIPPED
+        # whenever the gate above failed, so a failed run - the one you most
+        # want the summary from - fell through to the fallback placeholder
+        # below instead of producing the real document.
+        if: always()
         run: npm run release:summary
 
       # A gate must fail only for reasons that matter (TAB 03).

@@ -52,10 +52,14 @@
 
 name: fresh-db
 
+# MANUAL ONLY - same reason as release-gate.yml. All three jobs below are
+# GitHub-hosted (`ubuntu-latest`), and this repo's Actions credit is exhausted
+# and is not being topped up (owner decision, 2026-08-19, origin/main 463f963).
+# The `push`/`pull_request` triggers that lived here would only queue runs that
+# cannot start, which is the same "red X that means nothing" this file's
+# hashFiles bug produced for six runs. Restore them above `workflow_dispatch`
+# when credit exists.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 jobs:

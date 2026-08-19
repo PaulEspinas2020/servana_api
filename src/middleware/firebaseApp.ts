@@ -113,6 +113,27 @@ export const getFirebaseApp = (): FirebaseApp => {
  * inert. See `./lazyValue.ts` for the full reasoning.
  */
 
+/**
+ * Boot-time credential check, kept from origin/main's version of this fix.
+ *
+ * Both sides of the merge solved the same import-time defect independently:
+ * this tree deferred construction with `lazyValue`, origin/main converted the
+ * exports to `getFirebaseAdmin()` functions. The Proxy shape won because it is
+ * the superset — `scripts/create-admin-with-password.ts` and
+ * `scripts/backfill-verified-identifiers.ts` still import `firebaseAdmin` as a
+ * VALUE, and neither `tsconfig.json` nor `tsconfig.tests.json` compiles
+ * `scripts/`, so dropping that export would have broken both silently.
+ *
+ * The assert is kept because `src/app.ts` calls it before the server listens.
+ * It is now belt AND braces: this fires at compose-time, and `startup.ts`
+ * separately declares `firebase-admin` a required STARTUP_DEPENDENCY. Two boot
+ * checks for one credential is redundancy, not conflict — neither can regress
+ * without the other still failing the boot.
+ */
+export const assertFirebaseAdminCredentials = (): void => {
+    resolveServiceAccount();
+};
+
 export const firebaseAdmin: admin.app.App = lazyValue(getFirebaseAdmin);
 export const firebaseApp: FirebaseApp = lazyValue(getFirebaseApp);
 

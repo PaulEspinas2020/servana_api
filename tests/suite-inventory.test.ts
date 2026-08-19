@@ -55,7 +55,13 @@ const suiteFiles = (): string[] =>
  * Raise it in the same commit that adds a suite. Never lower it without
  * naming, in the commit message, which suite went and why.
  */
-const EXPECTED_SUITE_COUNT = 295;
+// 295 -> 297 at the origin/main merge. Not a judgement call between the two
+// sides' numbers (this tree said 295, origin/main said 278): both were correct
+// for their own branch, and the merged inventory is the union. origin/main
+// contributed exactly two suites this tree did not have —
+// catalog-audit-trail.test.ts and catalog-publish-integrity.test.ts — and
+// 295 + 2 = 297, which is what the readdir above actually returns.
+const EXPECTED_SUITE_COUNT = 297;
 
 describe('the suite inventory is pinned', () => {
   const files = suiteFiles();
