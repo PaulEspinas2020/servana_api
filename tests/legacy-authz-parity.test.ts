@@ -36,6 +36,7 @@ import {
   capabilitiesOf,
   capabilityLoosenings,
   resolvedChain,
+  requiresActiveProvider,
 } from '../scripts/legacy-authz-inventory';
 import { buildMountedRoutes } from '../scripts/lib/routeTable';
 
@@ -160,7 +161,7 @@ describe('legacy → v1 authorization parity', () => {
    * path, and the eighth case — additional-work — is one the portal has already
    * migrated to.
    */
-  it('reads requireActiveProvider as the capability it enforces', () => {
+  it('reads requireActiveProvider as its OWN dimension, not as a capability', () => {
     const guarded = {
       handlers: ['verifyAuth', 'requireProviderRole', 'requireActiveProvider', 'ctrl.acceptJob'],
       file: 'src/routes/provider.routes.ts',
@@ -170,12 +171,21 @@ describe('legacy → v1 authorization parity', () => {
       file: 'src/routes/provider.routes.ts',
     } as never;
 
-    expect(capabilitiesOf(guarded)).toContain('canAcceptJobs');
-    // The negative fixture: without it, a matcher returning the capability for
-    // every provider chain would make the gate unfailable in the other direction.
-    expect(capabilitiesOf(plain)).toEqual([]);
-    // Both still read as `provider` on the role ladder, which is exactly why the
-    // ladder alone could never separate them.
+    expect(requiresActiveProvider(guarded)).toBe(true);
+    // The negative fixture: a matcher true for every provider chain would make
+    // the gate unfailable in the other direction.
+    expect(requiresActiveProvider(plain)).toBe(false);
+
+    // And it must NOT be reported as a capability. The first version of this
+    // gate mapped it onto `canAcceptJobs`, which is `fullyActive &&
+    // complianceCurrent` — strictly stronger than a middleware that reads
+    // `account_status` alone and treats a blank one as working. That mapping
+    // made the v1 contract refuse providers the legacy route admits.
+    expect(capabilitiesOf(guarded)).not.toContain('canAcceptJobs');
+    expect(capabilitiesOf(guarded)).toEqual([]);
+
+    // Both still read as `provider` on the role ladder, which is why the ladder
+    // alone could never separate them.
     expect(authOf(guarded)).toBe('provider');
     expect(authOf(plain)).toBe('provider');
   });

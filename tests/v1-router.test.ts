@@ -63,6 +63,27 @@ jest.mock('../src/middleware/requireProviderRole', () => ({
 }));
 
 /**
+ * The active-provider gate, wired as a pass-through.
+ *
+ * `requireActiveProvider` reads `user_credentials.account_status` from the
+ * database. This suite drives the router with a fake identity and no database,
+ * so leaving it real means every provider action stops at the middleware and
+ * the executor is never reached — which is what happened when the job actions
+ * first declared `activeProvider: true`.
+ *
+ * Mocked open rather than removed from the chain: whether the middleware is
+ * MOUNTED is asserted by `tests/legacy-authz-parity.test.ts`, which compares the
+ * contract's `activeProvider` flag against the legacy route's own chain, and
+ * whether it REFUSES is asserted by the middleware's own suite. What this suite
+ * is for is routing and executor wiring, and a real gate here would only test
+ * the database fixture.
+ */
+jest.mock('../src/middleware/requireActiveProvider', () => ({
+  __esModule: true,
+  default: (_req: any, _res: any, next: any) => next(),
+}));
+
+/**
  * The admin permission gate. TAB 07's reconciliation route carries
  * `requirePermission('reconciliation.view')` on top of its role check, so this
  * suite has to have it WIRED for the route to answer at all — which is the

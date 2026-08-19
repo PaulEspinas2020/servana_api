@@ -305,19 +305,23 @@ const CAPABILITY_CALL = /\brequireCapability\s*\(\s*["'`]([A-Za-z0-9_]+)["'`]/g;
  * not in `transitionExecutor` — so the v1 surface reopened exactly the hole this
  * middleware was written to close, on a WRITE path that assigns real work.
  *
- * It is reported as the capability it corresponds to. `canAcceptJobs` is
- * `fullyActive && complianceCurrent`, which is false for a suspended provider —
- * deliberately unlike `canViewEarnings`, which stays true because a suspended
- * provider may still see what they earned.
+ * It is compared as its OWN dimension and deliberately NOT mapped onto a
+ * capability. `canAcceptJobs` looks equivalent and is not: the middleware reads
+ * `account_status` alone and treats a blank one as working, while the capability
+ * is `fullyActive && complianceCurrent` and refuses a provider who is
+ * mid-activation or has zero active services. Mapping one to the other made the
+ * v1 contract STRICTER than the route it supersedes, which is the same class of
+ * error as making it weaker.
  */
 const ACTIVE_PROVIDER_CALL = /\brequireActiveProvider\b/;
-const ACTIVE_PROVIDER_CAPABILITY = 'canAcceptJobs';
+/** Read as its OWN dimension. It is not equivalent to any capability — see below. */
+export const requiresActiveProvider = (route: MountedRoute): boolean =>
+  ACTIVE_PROVIDER_CALL.test(resolvedChain(route));
 
 export const capabilitiesOf = (route: MountedRoute): string[] => {
   const chain = resolvedChain(route);
   const found = new Set<string>();
   for (const match of chain.matchAll(CAPABILITY_CALL)) found.add(match[1]);
-  if (ACTIVE_PROVIDER_CALL.test(chain)) found.add(ACTIVE_PROVIDER_CAPABILITY);
   return [...found].sort();
 };
 
@@ -353,10 +357,17 @@ export const capabilityLoosenings = (): CapabilityLoosening[] => {
       if (!route) continue;
 
       const legacyCapabilities = capabilitiesOf(route);
-      if (!legacyCapabilities.length) continue;
+      // `requireActiveProvider` is its own dimension, matched against the
+      // contract's `activeProvider` flag rather than against a capability.
+      const legacyActive = requiresActiveProvider(route);
+      const declaredActive = (entry as { activeProvider?: true }).activeProvider === true;
+      const activeDropped = legacyActive && !declaredActive;
+
+      if (!legacyCapabilities.length && !activeDropped) continue;
 
       const declared = (entry as { capability?: string }).capability ?? null;
       const dropped = legacyCapabilities.filter((c) => c !== declared);
+      if (activeDropped) dropped.push('requireActiveProvider');
       if (!dropped.length) continue;
 
       found.push({
