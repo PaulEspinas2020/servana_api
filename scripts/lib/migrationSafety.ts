@@ -173,7 +173,7 @@ export type Severity = 'BLOCKING' | 'ADVISORY';
 
 export interface MigrationFinding {
   file: string;
-  rule: 'transaction-control' | 'object-ownership' | 'filename' | 'destructive';
+  rule: 'transaction-control' | 'object-ownership' | 'filename' | 'contracting-ddl' | 'destructive';
   severity: Severity;
   detail: string;
 }
@@ -236,6 +236,60 @@ export const migrationNumber = (fileName: string): number | null => {
  * property that actually protects a deploy, and `tests/migration-safety.test.ts`
  * asserts it over every file in the directory.
  */
+/**
+ * Contracting DDL: the statements that can break a client that has not shipped.
+ *
+ * One backend serves five clients and the mobile apps go through two app stores,
+ * so a rename or a drop lands while somebody is still reading the old shape.
+ * Expand-migrate-contract exists for exactly that gap: add, backfill, and only
+ * remove once every reader has moved.
+ *
+ * `SET NOT NULL` is here because it fails the deploy on existing rows rather
+ * than breaking a reader — different failure, same requirement to be deliberate.
+ *
+ * Comments are masked first. `024-catalog-v2-canonical-rename.sql` quotes its
+ * own reverse procedure in prose — `ALTER TABLE servana.services RENAME TO
+ * catalog_services;` — and a scanner that reads docblocks reports nine
+ * violations in a file that executes three. Raw grep across the migration set
+ * claims five offending files; masked, the truth is two.
+ */
+const CONTRACTING_DDL =
+  /\b(DROP\s+(?:COLUMN|TABLE|VIEW|CONSTRAINT)|RENAME\s+(?:TO|CONSTRAINT|COLUMN)|ALTER\s+COLUMN\s+\S+\s+TYPE|SET\s+NOT\s+NULL)\b/gi;
+
+export interface ContractingFinding {
+  statement: string;
+  line: number;
+}
+
+export const findContractingDdl = (sql: string): ContractingFinding[] => {
+  const masked = maskNonCode(sql);
+  const out: ContractingFinding[] = [];
+  for (const m of masked.matchAll(CONTRACTING_DDL)) {
+    out.push({
+      statement: m[0].replace(/\s+/g, ' ').toUpperCase(),
+      line: masked.slice(0, m.index ?? 0).split('\n').length,
+    });
+  }
+  return out;
+};
+
+/**
+ * From this migration number on, contracting DDL must declare itself.
+ *
+ * Mirrors OWNERSHIP_REQUIRED_FROM. A floor rather than a retroactive sweep,
+ * because an applied migration's checksum is recorded in the ledger — editing
+ * one to add a marker makes the ledger reject it, which converts a documentation
+ * gap into a failed deploy.
+ *
+ * The two below the floor are recorded as advisory rather than ignored:
+ *   012-provider-reputation-quality.sql   DROP CONSTRAINT
+ *   024-catalog-v2-canonical-rename.sql   DROP VIEW, RENAME TO, RENAME CONSTRAINT
+ *
+ * 024 is the one whose own docblock records causing an outage and names the
+ * reverse that restored service. It has never declared itself destructive.
+ */
+export const CONTRACT_DECLARATION_REQUIRED_FROM = 38;
+
 export const scanMigration = (fileName: string, sql: string): MigrationFinding[] => {
   const findings: MigrationFinding[] = [];
   const number = migrationNumber(fileName);
@@ -269,6 +323,23 @@ export const scanMigration = (fileName: string, sql: string): MigrationFinding[]
         `declares ${DESTRUCTIVE_MARKER} — the runner will refuse it unless ` +
         `${DESTRUCTIVE_ACK_VAR} names it.`,
     });
+  }
+
+  const contracting = findContractingDdl(sql);
+  if (contracting.length > 0 && !declaresDestructive(sql)) {
+    const declarationRequired =
+      number !== null && number >= CONTRACT_DECLARATION_REQUIRED_FROM;
+    for (const finding of contracting) {
+      findings.push({
+        file: fileName,
+        rule: 'contracting-ddl',
+        severity: declarationRequired ? 'BLOCKING' : 'ADVISORY',
+        detail:
+          `line ${finding.line}: ${finding.statement} is contracting DDL and the ` +
+          `file does not declare ${DESTRUCTIVE_MARKER}. Expand first, contract only ` +
+          'once every client reading the old shape has shipped.',
+      });
+    }
   }
 
   const ownershipRequired = number !== null && number >= OWNERSHIP_REQUIRED_FROM;
