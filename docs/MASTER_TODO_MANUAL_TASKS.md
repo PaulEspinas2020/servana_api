@@ -180,6 +180,15 @@ Last updated: 2026-08-18 (TAB 16 — terminal)
 | V9.3 | After V9.1 and V9.2, flip `/auth/refresh` and `/auth/logout` — one entry, one deploy, one soak each. NOT done now on evidence: both surfaces currently 502 for the same reason, so migrating would move traffic onto an equally broken path | `PROD-ACCESS`, `HUMAN-JUDGEMENT` | Allowlist names them; live probe shows same data, same authorization, same error contract |
 | V9.4 | Redeploy so the v1 error envelope reaches production. `v1AuthEnvelope` landed in `5bf9da5` today; production predates it and still answers v1 auth failures in the legacy `{status,code}` shape. Already fixed in repo — this is deploy latency, not a defect | `PROD-ACCESS` | `POST /api/v1/auth/logout` with no credential returns `{error:{code,requestId}}` |
 
+## V2 TAB 10 — supply chain
+
+| # | Task | Why blocked | Closes when |
+| --- | --- | --- | --- |
+| V10.1 | Drop `--legacy-peer-deps` from `.github/workflows/admin-ci.yml` (line 28) and raise its `node-version` from `'20'` to `'20.19.5'`. Both are already done in `netlify.toml`, `.nvmrc` and `engines`; the workflow file cannot be pushed with this PAT. Bare `'20'` may resolve below Angular 20's `^20.19` floor | `NO-TOOL` (PAT lacks `workflow` scope) | `admin-ci.yml` runs `npm ci` with no flags on 20.19.5 |
+| V10.2 | **Schedule Angular 21 before 2026-10-31.** `latest` is 22.1.2; this repository is on `v20-lts`. Angular ships a major every ~6 months with 6 months active + 12 months LTS, putting 20's end of life at approximately late November 2026. Supported and unvulnerable today, on the last third of its life | `HUMAN-JUDGEMENT` | 21 landed with its own soak, or a dated decision to skip to 22 |
+| V10.3 | Confirm the Netlify build picked up `NODE_VERSION = "20.19.5"` and built with no NPM flags. A failed build leaves the previous deploy serving, so a silent failure looks like nothing happening | `PROD-ACCESS` | Netlify deploy log shows 20.19.5 and a clean `npm ci` |
+| V10.4 | Soak the Angular 20 upgrade in real use for a week. 1592 tests and a production build passed, but a runtime regression across two majors is exactly what a suite does not catch | `HUMAN-JUDGEMENT` | A week of operator use with no framework-attributable defect |
+
 ---
 
 ## Closed
