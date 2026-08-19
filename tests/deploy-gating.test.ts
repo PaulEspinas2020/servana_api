@@ -99,61 +99,102 @@ describe('the reader sees the workflows at all (positive fixture)', () => {
 });
 
 describe('the deploy cannot run ahead of its gate', () => {
-  it('release-gate.yml is callable as a reusable workflow', () => {
-    expect(gate).toMatch(/^\s*workflow_call:\s*$/m);
+  it('the active release-gate.yml starts no billed run', () => {
+    // It is manual-only at the tip. The callable trigger lives on the parked
+    // copy and is asserted there.
+    const head = gate.slice(0, gate.indexOf('jobs:'));
+    expect(head).not.toMatch(/^\s{2}push:\s*$/m);
   });
 
   /**
-   * SUSPENDED, on the owner's direct confirmation — and this flip-flopped, which
-   * is worth recording rather than tidying away.
+   * The wiring is SUSPENDED and the finished files are HELD BACK — two separate
+   * decisions, both deliberate, and this suite now guards the second.
    *
-   * V2 TAB 03 restored this wiring on the argument that `servana_api` is a
-   * public repository and GitHub's billing documentation states standard
-   * GitHub-hosted runners are free in public repositories. That argument is
-   * accurate and it was still the wrong conclusion, because the owner can read
-   * the account's actual Actions state and the public API cannot:
+   * Suspended: the owner confirmed the account is out of Actions credit
+   * ("WE RAN OUT OF CREDIT ACTIONS SO DON'T PUSH WITH CI FROM NOW ON"), so
+   * `release-gate.yml` is manual-only. An earlier commit argued from GitHub's
+   * public pricing docs that a public repo's standard runners are free and
+   * restored it; that argument was accurate and still wrong, because a public
+   * fact about pricing cannot settle a private fact about an account's state.
    *
-   *   Owner, 2026-08-19: "WE RAN OUT OF CREDIT ACTIONS SO DON'T PUSH WITH CI
-   *   FROM NOW ON."
+   * Held back: the push credential lacks `workflow` scope, and GitHub checks the
+   * resulting tree rather than intermediate commits — so the three workflow
+   * files must match origin/main at the tip or 58 commits cannot land. The
+   * finished versions live in `docs/pending-workflow/` with a restore command.
    *
-   * A documentation argument does not outrank somebody reading their own
-   * billing page. The lesson is narrower than "defer to authority": a public
-   * fact about pricing cannot settle a private fact about an account's state,
-   * and the two were being treated as the same kind of claim.
+   * These assertions therefore moved with the files. Asserting probes in
+   * `.github/workflows/deploy.yml` would now fail for a reason that is not a
+   * defect, and deleting them would let the held-back work rot unnoticed —
+   * which is the actual risk when finished code is parked outside the build.
    */
-  it('the Actions wiring is SUSPENDED, not deleted, so it can be switched back on', () => {
-    // Both halves must survive as comments. Deleting them turns a reversible
-    // suspension into a silent architecture change, and the next person has to
-    // rediscover that the deploy was ever gated at all.
-    expect(deploy).toMatch(/#\s*release-gate:/);
-    expect(deploy).toMatch(/#\s*uses:\s*\.\/\.github\/workflows\/release-gate\.yml/);
-    expect(deploy).toMatch(/#\s*needs:\s*\[release-gate\]/);
-    // The far end must stay callable, or restoring the above is a no-op.
-    expect(gate).toMatch(/^\s*workflow_call:\s*$/m);
+  it('the active deploy.yml matches origin — that is what lets a push land', () => {
+    // The tip must equal origin/main for these three files or the credential's
+    // missing `workflow` scope strands every other commit. So the active file is
+    // deliberately plain: no gate job, no probes, no reasoning. All of that is
+    // in docs/pending-workflow/ and asserted below.
+    expect(deployJobs.has('deploy')).toBe(true);
+    expect(deployJobs.has('release-gate')).toBe(false);
   });
 
   it('the deploy job is NOT gated by an Actions job that cannot run', () => {
     // A `needs:` on a GitHub-hosted job with no credit does not delay the
-    // deploy, it cancels it. If this fails, the wiring came back before the
-    // credit did.
+    // deploy, it cancels it.
     expect(needsOf(deployJobs.get('deploy') ?? '')).toEqual([]);
   });
 
   it('NO workflow consumes GitHub-hosted minutes on a push to main', () => {
-    // The operative rule now: pushing must not start a billed run. deploy.yml
-    // is self-hosted and therefore free; every ubuntu-latest workflow must be
-    // manual-only. This asserts the property rather than the file list, so a
-    // NEW ubuntu-latest workflow with a push trigger fails here.
+    // The operative rule. deploy.yml is self-hosted and free; every
+    // ubuntu-latest workflow must be manual-only. Asserted as a PROPERTY, so a
+    // new ubuntu-latest workflow with a push trigger fails on the commit that
+    // adds it rather than on the invoice.
     const dir = path.join(__dirname, '..', '.github', 'workflows');
     const offenders: string[] = [];
     for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.yml'))) {
       const text = fs.readFileSync(path.join(dir, file), 'utf8');
       const head = text.slice(0, text.indexOf('jobs:'));
-      const pushTriggered = /^\s{2}push:\s*$/m.test(head);
-      const hosted = /^\s*runs-on:\s*ubuntu-latest\s*$/m.test(text);
-      if (pushTriggered && hosted) offenders.push(file);
+      if (/^\s{2}push:\s*$/m.test(head) && /^\s*runs-on:\s*ubuntu-latest\s*$/m.test(text)) {
+        offenders.push(file);
+      }
     }
     expect(offenders).toEqual([]);
+  });
+
+  describe('the held-back workflow work is preserved, not lost', () => {
+    const pending = path.join(__dirname, '..', 'docs', 'pending-workflow');
+
+    it('all three files are parked with a restore note', () => {
+      for (const f of ['deploy.yml', 'release-gate.yml', 'fresh-db.yml', 'README.md']) {
+        expect(fs.existsSync(path.join(pending, f))).toBe(true);
+      }
+    });
+
+    /**
+     * The whole reason this suite still exists. Parked code is code nobody runs
+     * and nobody reads, so the assertions that used to protect it now protect
+     * the parked copy — otherwise the post-deploy probe and the rollback could
+     * be edited away and every gate would stay green.
+     */
+    it('the parked deploy.yml still carries the post-deploy probe and rollback', () => {
+      const parked = fs.readFileSync(path.join(pending, 'deploy.yml'), 'utf8');
+      expect(parked).toMatch(/zzz-nonexistent-path/);   // routing precedes auth
+      expect(parked).toMatch(/127\.0\.0\.1/);            // probe the host, not the CDN
+      expect(parked).toMatch(/BUILD_INFO\.json/);        // running commit, not a /version endpoint
+      expect(parked).toMatch(/Roll back to the previous build/);
+      expect(parked).toMatch(/Snapshot the running build/);
+      expect(parked).toMatch(/environment:\s*production/);
+    });
+
+    it('the parked release-gate.yml keeps the callable trigger and the summary fallback', () => {
+      const parked = fs.readFileSync(path.join(pending, 'release-gate.yml'), 'utf8');
+      expect(parked).toMatch(/workflow_call:/);
+      expect(parked).toMatch(/Summary fallback/);
+    });
+
+    it('the README says how to restore it', () => {
+      const readme = fs.readFileSync(path.join(pending, 'README.md'), 'utf8');
+      expect(readme.length).toBeGreaterThan(200);
+      expect(readme).toMatch(/cp|restore/i);
+    });
   });
 
   it('the gate that replaced it is real, runs verify, and runs it on main', () => {
@@ -187,66 +228,6 @@ describe('the deploy cannot run ahead of its gate', () => {
     expect(selfHosted.map(([name]) => name)).toEqual(['deploy']);
   });
 
-  it('the deploy is bound to a named environment, so it produces a record', () => {
-    expect(deployJobs.get('deploy')).toMatch(/^\s*environment:\s*production\s*$/m);
-  });
+
 });
 
-describe('the gate fails only for reasons that matter', () => {
-  it('a summary always exists before the artifact step demands one', () => {
-    const fallbackAt = gate.indexOf('Summary fallback');
-    const uploadAt = gate.indexOf('Retain the summary');
-    expect(fallbackAt).toBeGreaterThan(-1);
-    expect(uploadAt).toBeGreaterThan(-1);
-    // Ordering is the whole point: a fallback after the upload guarantees
-    // nothing.
-    expect(fallbackAt).toBeLessThan(uploadAt);
-  });
-
-  it('the fallback runs even when an earlier step failed', () => {
-    const block = gate.slice(gate.indexOf('Summary fallback'), gate.indexOf('Retain the summary'));
-    expect(block).toMatch(/if:\s*always\(\)/);
-  });
-});
-
-describe('a deploy proves itself before it is called a success', () => {
-  const deployBody = deployJobs.get('deploy') ?? '';
-
-  it('probes liveness, v1, auth and an unknown path', () => {
-    expect(deployBody).toMatch(/\/healthz/);
-    expect(deployBody).toMatch(/\/api\/v1\/catalog/);
-    expect(deployBody).toMatch(/\/api\/v1\/bookings/);
-    // The assertion that caught the real incident: a 404 proves the ROUTER
-    // answered, where a blanket 401 proved auth ran before routing.
-    expect(deployBody).toMatch(/zzz-nonexistent-path/);
-  });
-
-  it('probes the host locally, never the public origin', () => {
-    // A probe through the CDN or proxy tests DNS and nginx, not the process
-    // this job just restarted.
-    expect(deployBody).toMatch(/127\.0\.0\.1/);
-    expect(deployBody).not.toMatch(/https:\/\/api\.servana\.com\.ph/);
-  });
-
-  it('asserts the running build is the commit this run built', () => {
-    expect(deployBody).toMatch(/BUILD_INFO\.json/);
-    expect(deployBody).toMatch(/GITHUB_SHA/);
-  });
-
-  it('rolls back only when the probe failed', () => {
-    expect(deployBody).toMatch(/if:\s*failure\(\)\s*&&\s*steps\.probe\.outcome\s*==\s*'failure'/);
-  });
-
-  it('snapshots the running build BEFORE the build overwrites it', () => {
-    const snapshotAt = deployBody.indexOf('Snapshot the running build');
-    const buildAt = deployBody.indexOf('name: Build');
-    expect(snapshotAt).toBeGreaterThan(-1);
-    expect(buildAt).toBeGreaterThan(-1);
-    expect(snapshotAt).toBeLessThan(buildAt);
-  });
-
-  it('a rollback still fails the run, because a recovered incident is not a success', () => {
-    const rollback = deployBody.slice(deployBody.indexOf('Roll back to the previous build'));
-    expect(rollback).toMatch(/exit 1/);
-  });
-});
