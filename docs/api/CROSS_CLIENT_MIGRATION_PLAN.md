@@ -62,7 +62,7 @@ The surface as it stands:
 - **110 canonical endpoints live**, each driven end to end by `tests/v1-router.test.ts`.
 - **0 planned**, documented and not mounted — see §11 of [`API_V1_CONTRACT.md`](API_V1_CONTRACT.md).
 - **94 legacy aliases** counted by telemetry, derived from the contract.
-- **520 routes** mounted outside `/api/v1`, every one classified in the matrix.
+- **517 routes** mounted outside `/api/v1`, every one classified in the matrix.
 <!-- END GENERATED: v1-surface -->
 
 Each phase below opens with a generated table of what that client can move

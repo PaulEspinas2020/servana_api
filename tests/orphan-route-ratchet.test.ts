@@ -32,7 +32,9 @@ describe('the undispositioned legacy surface', () => {
     // the live route table is what stops this becoming decoration.
     const now = orphanRoutes();
     expect(now.length).toBeGreaterThan(100);
-    expect(now.every((r) => /^(GET|POST|PUT|PATCH|DELETE) \/api\//.test(r))).toBe(true);
+    // Not every route lives under /api — the store-policy deletion page is
+    // mounted at the app root — so the shape is asserted, not the prefix.
+    expect(now.every((r) => /^(GET|POST|PUT|PATCH|DELETE) \/[a-z]/.test(r))).toBe(true);
   });
 
   it('never counts a v1 route as an orphan (negative fixture)', () => {

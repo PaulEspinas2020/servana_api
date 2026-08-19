@@ -1,7 +1,7 @@
 {
  "note": "Mounted legacy routes the v1 contract does not name. Invisible to the migration matrix, the deprecation schedule and the authorization parity gate alike. The list may SHRINK and may not GROW; regenerate with --write when routes are dispositioned or retired, never to admit a new one.",
  "generatedBy": "scripts/orphan-route-ratchet.ts",
- "count": 405,
+ "count": 402,
  "routes": [
   "DELETE /api/admin/booking-drafts/:x",
   "DELETE /api/admin/communications/templates/:x",
@@ -210,9 +210,6 @@
   "GET /api/workers/:x/services",
   "GET /api/workers/all",
   "GET /api/workers/role/:x",
-  "GET /user-agent",
-  "GET /x-servana-client",
-  "GET /x-servana-client-version",
   "PATCH /api/admin/admin-users/:x",
   "PATCH /api/admin/admin-users/:x/permissions",
   "PATCH /api/admin/admin-users/:x/status",

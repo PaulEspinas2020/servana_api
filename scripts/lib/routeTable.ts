@@ -288,6 +288,25 @@ export function buildMountedRoutes(): MountedRoute[] {
     for (const row of rows) {
       if (row.verb === 'use') continue;
       if (wantedRouter && row.router !== wantedRouter) continue;
+      /**
+       * A route with NO handler is not a route.
+       *
+       * The parser keys on `.get('…')`, and `req.get('x-servana-client')` has
+       * that exact shape. Three header reads in `api/v1/legacyTelemetry.ts` were
+       * being emitted as mounted GET routes — `/user-agent`,
+       * `/x-servana-client`, `/x-servana-client-version` — inflating every count
+       * derived from this table.
+       *
+       * That is not cosmetic. `authOf` classifies a chain by the middleware
+       * NAMES in it, so an empty chain matches no rung and resolves to `public`,
+       * the weakest. Three phantom public routes sat in the authorization
+       * inventory, and an orphan ratchet built on this table would have frozen
+       * them as real surface to drain.
+       *
+       * Discriminating rather than blunt: every genuine route carries at least
+       * one handler, and a header read carries none.
+       */
+      if (!row.handlers || row.handlers.length === 0) continue;
       const joined = `${mount.prefix}${row.path.startsWith('/') ? '' : '/'}${row.path}`;
       out.push({
         ...row,
