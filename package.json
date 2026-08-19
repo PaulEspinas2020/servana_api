@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/stamp-build-info.mjs",
     "start": "tsc -p . && node dist/app.js",
     "dev": "nodemon --files src/app.ts",
     "typecheck": "tsc --noEmit",
