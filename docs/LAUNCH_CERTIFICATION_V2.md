@@ -28,12 +28,23 @@ Established by probe, not by assumption:
 | --- | --- | --- |
 | `GET /api/v1/health` | 200 | the running build includes `9c6b141` |
 | `POST /api/v1/admin/refunds/1/mark-failed` | **404** | it does **not** include `2d34699` |
-| `GET /api/v1/health` → `available: false` | — | built **by hand**, not by `deploy.yml` |
+| `GET /api/v1/health` → `available: false` | — | **nothing stamps provenance at all** — see the correction below |
 | Actions run list | last success `82abbd0d`, 09:33 UTC | the running build is newer than any deploy that ran |
 
-So production sits **between `9c6b141` and `2d34699`**, was assembled by hand,
-and cannot identify itself. `deploy.yml` writes the provenance stamp; a manual
-`git pull && build && pm2 restart` leaves the endpoint answering with nulls.
+So production sits **between `9c6b141` and `2d34699`** and cannot identify
+itself.
+
+**Correction to an earlier reading in this document.** `available: false` was
+first taken as proof the build was assembled by hand, on the grounds that
+`deploy.yml` writes the stamp. It does not. The stamping step exists only in the
+PARKED copy at `docs/pending-workflow/deploy.yml`; the live workflow has no
+BUILD_INFO step, so the endpoint would answer `available: false` after a
+perfectly ordinary deploy too. The reading proved nothing.
+
+The conclusion survives on independent evidence: the Actions run list shows no
+successful deploy since 09:33 UTC, and the running build serves
+`/api/v1/health`, which `82abbd0d` predates. So the build *is* newer than any
+deploy that ran — established by the run list, not by the stamp.
 
 A note on method: `POST /api/admin/<anything>` returns **401**, including for
 routes that do not exist, because auth precedes routing in that namespace. Any
@@ -100,7 +111,7 @@ owner for all rows below**, because no rota exists — which is itself G-14.
 | --- | --- | --- | --- |
 | G-01 | **No deploy can complete.** `Typecheck (source and tests)` exits 134 (SIGABRT): ~650 MB peak on a 961 MB host that is serving production. Today's recovery went around it by hand | 2026-08-19 | A push to `main` produces a successful deploy run |
 | G-02 | **The portal has not deployed at all.** Live `runtime.<hash>.js` still differs from a local build. TABs 06–09 and 11 are on GitHub, not in production. `[skip ci]` is honoured by Netlify and explains part of it, but two commits pushed deliberately without it also failed to deploy | 2026-08-19 | A push to `main` changes the live `runtime.<hash>.js` |
-| G-03 | **Production cannot identify itself.** `/api/v1/health` answers `available: false`; the running build is newer than any deploy that ran | 2026-08-19 | The endpoint returns a commit that matches a deploy run |
+| G-03 | **Production cannot identify itself, and cannot be made to.** `/api/v1/health` answers `available: false` because the live `deploy.yml` has **no stamping step** — it exists only in the parked copy the PAT cannot push. The endpoint is built, contracted, documented and fed by nothing | 2026-08-19 | The stamping step lands with the other held-back workflow edits, and the endpoint returns a commit |
 | G-04 | No production evidence for TAB 01 — a 403 for an under-permissioned admin has never been observed | 2026-08-19 | Probe recorded against production |
 | G-05 | `payouts.trigger_due_run` is granted to nobody; the due-payout run is unreachable | earlier | At least one non-super-admin holds it |
 | G-06 | `refunds.mark_failed` is granted to nobody; the refund `failed` terminal is unreachable | 2026-08-19 | At least one non-super-admin holds it |

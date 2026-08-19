@@ -146,13 +146,13 @@ ref, built-at, run. Three answers, three meanings:
 
 * **404** — the running build predates the endpoint. Production is older than
   you think, and that is the answer.
-* **200 with `available: false`** — the app is newer than the endpoint but
-  `dist/BUILD_INFO.json` is missing, which means **it was built by hand on the
-  host rather than by `deploy.yml`**. The stamp is written by the workflow, so a
-  manual `git pull && npm run build && pm2 restart` produces exactly this.
-  Measured on 2026-08-19 after the 502 recovery: the running build was newer
-  than any deploy that had run, and the commit serving production could not be
-  identified from outside at all.
+* **200 with `available: false`** — `dist/BUILD_INFO.json` is missing, and as of
+  2026-08-19 that tells you **nothing about how the build was made**, because
+  the live `.github/workflows/deploy.yml` has no stamping step. The step that
+  writes it sits in the parked copy at `docs/pending-workflow/deploy.yml`, held
+  back with the other workflow edits the PAT cannot push. Until that lands, this
+  endpoint answers `available: false` after every deploy, and **"what commit is
+  serving?" is unanswerable from outside**. Use the Actions run list instead.
 * **200 with a commit** — believe it, and compare it to `origin/main`.
 
 The middle case is worth naming because it is the one that looks like a working
