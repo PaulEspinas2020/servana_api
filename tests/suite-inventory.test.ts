@@ -61,7 +61,7 @@ const suiteFiles = (): string[] =>
 // contributed exactly two suites this tree did not have —
 // catalog-audit-trail.test.ts and catalog-publish-integrity.test.ts — and
 // 295 + 2 = 297, which is what the readdir above actually returns.
-const EXPECTED_SUITE_COUNT = 297;
+const EXPECTED_SUITE_COUNT = 298;
 
 describe('the suite inventory is pinned', () => {
   const files = suiteFiles();
