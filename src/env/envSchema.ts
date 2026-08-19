@@ -102,6 +102,27 @@ export const DEGRADED_ENV: readonly EnvVarSpec[] = Object.freeze([
   { name: 'MONGO_HOST', requirement: 'degraded', purpose: 'chat and notification storage' },
   { name: 'MONGO_DB', requirement: 'degraded', purpose: 'chat and notification storage' },
   { name: 'SEMAPHORE_API_KEY', requirement: 'degraded', purpose: 'SMS/OTP delivery' },
+  /**
+   * The Firebase Web API key, used ONLY to redeem a refresh token at Google's
+   * secure-token endpoint.
+   *
+   * It was in no list at all until 2026-08-19, and its absence is not quiet:
+   * `refreshIdToken` answers 502 REFRESH_UNAVAILABLE for every client — admin
+   * portal, both mobile apps, provider web — so no session can ever be renewed.
+   * The symptom is not an error anybody reports as one. Users are simply signed
+   * out when their token reaches its hour, because the client correctly refuses
+   * to discard a session on a 502 and then presents a token the server rejects.
+   *
+   * Measured on production that day: POST /api/auth/refresh and
+   * POST /api/v1/auth/refresh both returned
+   * `502 {"code":"REFRESH_UNAVAILABLE"}` for any token.
+   *
+   * `degraded` rather than `required`: the server genuinely can serve without
+   * it, and making it fatal would turn a broken-refresh incident into a
+   * won't-boot incident. What was missing was not severity — it was VISIBILITY.
+   * Nothing named this variable, so nothing could report it unset.
+   */
+  { name: 'API_KEY', requirement: 'degraded', purpose: 'redeeming refresh tokens — without it NO session can be renewed' },
   { name: 'GOOGLE_PLACES_SERVER_API_KEY', requirement: 'degraded', purpose: 'address lookup' },
   { name: 'APP_URL', requirement: 'degraded', purpose: 'links in email and payment return URLs' },
 ]);
