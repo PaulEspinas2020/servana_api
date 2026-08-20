@@ -1454,7 +1454,9 @@ export const SCHEMAS: Record<string, unknown> = {
           gross: { type: 'number', description: 'Base price plus PAID additional work.' },
           grossMinor: { type: 'integer' },
           basePrice: { type: 'number' },
+          basePriceMinor: { type: 'integer' },
           additionalWork: { type: 'number', description: 'Charged through its own checkout.' },
+          additionalWorkMinor: { type: 'integer' },
         },
       },
       earning: {
@@ -1473,6 +1475,7 @@ export const SCHEMAS: Record<string, unknown> = {
         description: 'CUSTOMER and ADMIN. Never disclosed to the provider.',
         properties: {
           refundedAmount: { type: 'number' },
+          refundedAmountMinor: { type: 'integer' },
           refundedAt: { type: ['string', 'null'], format: 'date-time' },
           refundable: { type: 'number', description: 'Captured minus already refunded. Never below zero.' },
           refundableMinor: { type: 'integer' },
@@ -1498,6 +1501,7 @@ export const SCHEMAS: Record<string, unknown> = {
               'What the provider is owed, in PHP major units. ZERO for an internal fixer, '
               + 'always — and withheldReason then says why. See TAB 04 on money units.',
           },
+          payableMinor: { type: 'integer' },
           isEstimate: {
             type: 'boolean',
             description:
@@ -1521,6 +1525,7 @@ export const SCHEMAS: Record<string, unknown> = {
               'Everything not owed to the provider, in PHP major units. The WHOLE gross for '
               + 'an internal fixer.',
           },
+          revenueMinor: { type: 'integer' },
           commissionRate: {
             type: 'number',
             minimum: 0,
@@ -2862,8 +2867,8 @@ export const SCHEMAS: Record<string, unknown> = {
       serviceName: { type: ['string', 'null'] },
       specificServiceName: { type: ['string', 'null'] },
       scheduledAt: { $ref: '#/components/schemas/UtcTimestamp' },
-      quotedPrice: { type: ['number', 'string', 'null'], description: 'numeric(12,2). See TAB 04 on money units.' },
-      finalPrice: { type: ['number', 'string', 'null'], description: 'numeric(12,2). See TAB 04 on money units.' },
+      quotedPrice: { $ref: '#/components/schemas/MoneyRaw' },
+      finalPrice: { $ref: '#/components/schemas/MoneyRaw' },
       paymentMethod: { type: ['string', 'null'] },
       paymentStatus: { type: ['string', 'null'] },
       branchId: { type: ['integer', 'null'] },
@@ -3216,11 +3221,13 @@ export const SCHEMAS: Record<string, unknown> = {
           + 'IN_PROGRESS, PROCEEDING and COMPLETED.',
       },
       total_amount: {
-        type: ['number', 'string'],
-        description: 'numeric - may arrive as a string through some drivers. See TAB 04.',
+        allOf: [{ $ref: '#/components/schemas/MoneyRaw' }],
+        description:
+          'A STRING on the wire. This response is a raw row with no mapper, and nothing '
+          + 'parses OID 1700. Adding two of these concatenates.',
       },
       approved_amount: {
-        type: ['number', 'string', 'null'],
+        allOf: [{ $ref: '#/components/schemas/MoneyRaw' }],
         description:
           'NOT a stored column: a CASE expression returning total_amount when status is in '
           + 'the approved set and NULL otherwise. It is total_amount seen through the status, '
@@ -3293,10 +3300,77 @@ export const SCHEMAS: Record<string, unknown> = {
       id: { type: 'integer' },
       name: { type: 'string', description: 'The level_3 label.' },
       unit: { type: ['string', 'null'] },
-      basePrice: { type: ['number', 'string', 'null'], description: 'See TAB 04 on money units.' },
+      basePrice: { $ref: '#/components/schemas/MoneyMajor' },
       basePriceSummary: { type: ['string', 'null'], description: 'Pre-rendered "P350 per unit" style text.' },
       durationMins: { type: ['integer', 'null'] },
     },
+  },
+  /**
+   * The three ways an amount appears on this API, declared once.
+   *
+   * TAB 04 asks for the JSON type, the unit and the currency of every money
+   * field. Three schemas rather than three sentences repeated forty times: a
+   * field that references one of these cannot disagree with the others about
+   * what a peso is, and a field added tomorrow has to choose.
+   *
+   * ## Why there are THREE and not two
+   *
+   * The book supposes the string case is a driver quirk — "numeric(12,2)
+   * reaches some clients as a string through some drivers and the portal cannot
+   * know which fields do". Measured here, it is not about the driver at all.
+   *
+   * `src/db/dbQuery.ts` registers type parsers for OIDs 1114, 1184 and 1082 —
+   * timestamps and dates. It registers NOTHING for 1700, `numeric`. So
+   * node-postgres hands every numeric column back as a STRING, always,
+   * deterministically, on every machine.
+   *
+   * What decides the wire type is therefore whether a MAPPER coerced it:
+   *
+   *   `financePolicy.toCentavos`  = Number(v ?? 0) rounded to 2dp
+   *   `catalogPublicService.money` = v == null ? null : Number(v)
+   *
+   * Every canonical v1 finance and catalog response passes through one of
+   * those, so it carries a real `number`. The responses that return a raw row —
+   * `AdminBookingRow`, `AdditionalWorkRequest_Row` — have no mapper at all and
+   * carry the driver's STRING.
+   *
+   * That is a knowable, per-field fact rather than an unknowable driver
+   * property, so this contract states it per field. A client no longer has to
+   * accept `number | string` everywhere defensively; it has to accept it
+   * exactly where `MoneyRaw` says so.
+   */
+  MoneyMajor: {
+    type: ['number', 'null'],
+    description:
+      'UNIT: PHP MAJOR units — pesos, two decimal places. CURRENCY: PHP. A real JSON number: '
+      + 'the value passed through a coercing mapper (financePolicy.toCentavos or '
+      + 'catalogPublicService.money) before serialisation. Currency is PHP; there is one '
+      + 'currency in this system and financePolicy.CURRENCY is the constant. '
+      + 'Prefer the Minor twin for arithmetic where one exists: a float number of pesos '
+      + 'accumulates error at the fourth decimal place and surfaces months later in a '
+      + 'reconciliation report.',
+  },
+  MoneyMinor: {
+    type: ['integer', 'null'],
+    description:
+      'UNIT: PHP MINOR units — centavos, an INTEGER. CURRENCY: PHP. This is the representation to '
+      + 'compute with: an integer number of centavos cannot drift. Produced by '
+      + 'financePolicy.toMinorUnits, which is Math.round(toCentavos(v) * 100).',
+  },
+  MoneyRaw: {
+    type: ['number', 'string', 'null'],
+    description:
+      'UNIT: PHP MAJOR units — pesos. CURRENCY: PHP. Reaches the wire UNCOERCED, so it is a '
+      + 'STRING whenever the column is non-null.'
+      + ' '
+      + 'Not a driver quirk and not a maybe. node-postgres has no type parser registered for '
+      + 'OID 1700 (numeric) in this application, so every numeric column arrives as a string; '
+      + 'the fields declared MoneyMajor are numbers because a mapper called Number() on them, '
+      + 'and these have no mapper. `number` stays in the union only because a caller may send '
+      + 'one back and because a non-numeric column could occupy the same field.'
+      + ' '
+      + 'A client MUST NOT do arithmetic on this without converting. Adding two of them '
+      + 'concatenates.',
   },
   UtcTimestamp: {
     type: ['string', 'null'],
@@ -3365,6 +3439,106 @@ export function stateTheUtcRule<T>(node: T): T {
     }
   }
   for (const value of Object.values(o)) stateTheUtcRule(value);
+  return node;
+}
+
+/**
+ * The unit and currency of an amount, stated on EVERY money field.
+ *
+ * TAB 04 asks for three things per money field: its JSON type, its unit, and
+ * its currency. The type is already declared on each field and the unit is
+ * settled by `MoneyMajor` / `MoneyMinor` / `MoneyRaw`. What was missing is that
+ * a reader had to KNOW which of those a given field was — the portal ended up
+ * accepting `number | string` everywhere because the contract never said.
+ *
+ * Stamped by the generator for the same reason the UTC rule is: forty copies of
+ * one sentence is forty chances to disagree, and a field added tomorrow
+ * inherits this without anybody remembering to.
+ *
+ * ## Deciding what is money
+ *
+ * By NAME, then narrowed by type, then by an explicit exclusion list. Name
+ * alone is not enough — `total` is a row count on a page, `payoutWindowHours`
+ * is a duration, `refundReviewId` is a key, `commissionRate` is a fraction and
+ * TAB 05 governs it. Each exclusion is listed rather than pattern-matched, so
+ * adding one is a decision somebody makes in a diff.
+ */
+const MONEY_NAME = /amount|gross|fee|earning|payout|price|payable|revenue|refunded|refundable/i;
+
+/**
+ * Money-SHAPED names that are not money. Each states why, because a silent
+ * exclusion is how a real amount ends up undocumented.
+ */
+const NOT_MONEY: Record<string, string> = {
+  refundReviewId: 'a key into finance_refund_reviews, not an amount',
+  refundId: 'a key',
+  payoutWindowHours: 'a duration in hours',
+  payoutStatus: 'an enum',
+  providerPayoutStatus: 'an enum',
+  payoutStatusCanonical: 'an enum',
+  payoutBlockedBy: 'an enum',
+  payoutBlockedReason: 'prose',
+  priceSummary: 'pre-rendered display text, already carrying its own currency mark',
+  basePriceSummary: 'pre-rendered display text',
+  commissionRate: 'a FRACTION of gross, not an amount. TAB 05 governs it',
+  estimatedJobsCount: 'a count',
+  refundedAt: 'a timestamp',
+  releasedAt: 'a timestamp',
+  paidAt: 'a timestamp',
+  eligibleAt: 'a timestamp',
+  reversesProviderEarning: 'a boolean',
+  pendingIsEstimate: 'a boolean',
+  earningsDisclosure: 'prose',
+  withheldReason: 'prose',
+};
+
+const MINOR_RULE =
+  'UNIT: PHP MINOR units — centavos, an integer. This is the representation to compute '
+  + 'with; an integer number of centavos cannot drift. CURRENCY: PHP (financePolicy.CURRENCY).';
+
+const MAJOR_RULE =
+  'UNIT: PHP MAJOR units — pesos, two decimal places. CURRENCY: PHP '
+  + '(financePolicy.CURRENCY). Prefer the Minor twin for arithmetic where one exists.';
+
+const RAW_RULE =
+  'UNIT: PHP MAJOR units — pesos. CURRENCY: PHP. Arrives as a STRING: nothing parses '
+  + 'OID 1700 (numeric) in this application and this response has no coercing mapper, so '
+  + 'adding two of these concatenates.';
+
+const isNumericType = (t: unknown): boolean => {
+  const types = Array.isArray(t) ? t : [t];
+  return types.some((x) => x === 'number' || x === 'integer');
+};
+
+/** Append the unit and currency to every money field's description. */
+export function stateTheMoneyRule<T>(node: T): T {
+  if (!node || typeof node !== 'object') return node;
+  if (Array.isArray(node)) {
+    node.forEach((child) => stateTheMoneyRule(child));
+    return node;
+  }
+  const o = node as Record<string, unknown>;
+
+  const props = o.properties as Record<string, Record<string, unknown>> | undefined;
+  if (props) {
+    for (const [name, field] of Object.entries(props)) {
+      if (!field || typeof field !== 'object') continue;
+      if (!MONEY_NAME.test(name) || NOT_MONEY[name]) continue;
+
+      const isMinor = /Minor$/.test(name);
+      const types = Array.isArray(field.type) ? field.type : [field.type];
+      const isRaw = types.includes('string');
+      if (!isNumericType(field.type) && !isRaw) continue;
+
+      const rule = isMinor ? MINOR_RULE : isRaw ? RAW_RULE : MAJOR_RULE;
+      const existing = typeof field.description === 'string' ? field.description.trim() : '';
+      if (!existing.includes('UNIT: PHP')) {
+        field.description = existing ? `${existing} ${rule}` : rule;
+      }
+    }
+  }
+
+  for (const value of Object.values(o)) stateTheMoneyRule(value);
   return node;
 }
 
@@ -3496,8 +3670,8 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       // both run in one process during `npm run verify`, so that is not
       // hypothetical — it is the difference between a stable document and one
       // that grows a duplicated sentence every time it is generated.
-      schemas: stateTheUtcRule(
-        JSON.parse(JSON.stringify(SCHEMAS)) as Record<string, unknown>,
+      schemas: stateTheMoneyRule(
+        stateTheUtcRule(JSON.parse(JSON.stringify(SCHEMAS)) as Record<string, unknown>),
       ),
     },
     tags: [...new Set(V1_CONTRACT.map((e) => e.domain))].sort().map((name) => ({ name })),
