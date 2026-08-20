@@ -742,6 +742,101 @@ export const ADMIN_RESPONSES: Record<string, AdminResponseSchema> = {
     },
   },
 
+  'GET /api/admin/providers/:uid/profile-photo-submissions': {
+    derivedFrom: 'providerProfileMediaService.listProfilePhotos -> present()',
+    schema: { type: 'array', items: { $ref: '#/components/schemas/ProfilePhotoSubmission' } },
+    note:
+      'Metadata only. publishedUrl is withheld unless the submission is APPROVED — see the '
+      + 'schema. Use the preview endpoint for a URL to an unapproved one.',
+  },
+
+  'GET /api/admin/providers/:uid/profile-photo-submissions/:submissionId/preview': {
+    derivedFrom:
+      'providerProfileMediaService.previewProfilePhoto -> firebaseStorageUploader.'
+      + 'createPrivatePreviewUrl(path, 300)',
+    schema: {
+      type: 'object',
+      required: ['submissionId', 'url', 'expiresAt'],
+      properties: {
+        submissionId: { type: 'string' },
+        mimeType: { type: ['string', 'null'] },
+        url: {
+          type: 'string',
+          description:
+            'A SIGNED, TIME-LIMITED URL to private storage. Not a permanent address: do not '
+            + 'cache it, store it, or put it in an audit record.',
+        },
+        expiresAt: {
+          type: 'string',
+          format: 'date-time',
+          description:
+            'ISO with Z — the helper calls Date.toISOString() directly, so this one does '
+            + 'NOT come through the Postgres parser. 300 seconds after issue.',
+        },
+      },
+    },
+    note:
+      'Scoped by provider uid AS WELL as submission id in the WHERE clause, so an admin '
+      + 'cannot read one provider submission through another provider path.',
+  },
+
+  'GET /api/admin/providers/:uid/attribution': {
+    derivedFrom: 'adminMobileAttributionService.getProviderAttribution',
+    schema: { $ref: '#/components/schemas/ProviderAttribution' },
+    note:
+      'Every field prefers the STORED attribution and falls back to a freshly inferred one, '
+      + 'so a value here may be a recorded fact or a deduction — read registrationConfidence '
+      + 'before reporting it as either.',
+  },
+
+  'GET /api/admin/providers/:uid/catalog-association': {
+    derivedFrom: 'adminMobileAttributionService.getProviderCatalogAssociation',
+    schema: { $ref: '#/components/schemas/ProviderCatalogAssociation' },
+  },
+
+  'GET /api/admin/providers/mobile-metrics': {
+    derivedFrom: 'adminMobileAttributionService.getMobileMetrics',
+    schema: {
+      type: 'object',
+      required: ['totalProviders', 'inferredMobileRegistrants'],
+      properties: {
+        totalProviders: { type: 'integer' },
+        inferredMobileRegistrants: {
+          type: 'integer',
+          description:
+            'INFERRED, not recorded. These providers did not declare a registration source; '
+            + 'it was deduced from activity. Reporting this as "mobile signups" overstates it.',
+        },
+        providersWithMobileActivity: { type: 'integer' },
+        totalMobileEvents: { type: 'integer' },
+        catalogFullyMapped: { type: 'integer' },
+        catalogPartiallyMapped: {
+          type: 'integer',
+          description: 'Some services map to a catalog offering and some do not — see the association route.',
+        },
+        catalogUnmapped: { type: 'integer' },
+      },
+    },
+  },
+
+  'POST /api/admin/providers/attribution/backfill': {
+    derivedFrom: 'adminMobileAttributionService.backfillAttribution',
+    schema: {
+      type: 'object',
+      required: ['processed', 'inferred'],
+      properties: {
+        processed: { type: 'integer', description: 'Providers examined.' },
+        inferred: {
+          type: 'integer',
+          description:
+            'How many gained an INFERRED source. processed minus inferred is the number '
+            + 'left unknown, not the number confirmed.',
+        },
+      },
+    },
+    note: 'Idempotent by predicate: a provider with a stored source is not re-inferred.',
+  },
+
   // ── auto-online ───────────────────────────────────────────────────────────
 
   'GET /api/admin/providers/:uid/auto-online/readiness': {
@@ -2026,6 +2121,106 @@ export const ADMIN_SCHEMAS: Record<string, unknown> = {
       resolutions: { type: 'array', items: { type: 'object', additionalProperties: true } },
       appeals: { type: 'array', items: { type: 'object', additionalProperties: true } },
       escalations: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    },
+  },
+
+  ProfilePhotoSubmission: {
+    type: 'object',
+    required: ['submissionId', 'kind', 'state', 'version'],
+    description: 'One profile-photo submission awaiting or past review.',
+    properties: {
+      submissionId: { type: 'string', description: 'A STRING — String(row.id).' },
+      kind: { type: 'string', description: "Coalesced to 'profile_photo'." },
+      state: { type: 'string' },
+      scanState: {
+        type: ['string', 'null'],
+        description: 'The malware scan result. Not the same thing as the review state.',
+      },
+      providerReasonCode: { type: ['string', 'null'] },
+      providerReasonDetail: { type: ['string', 'null'], description: 'What the PROVIDER is told.' },
+      publishedUrl: {
+        type: ['string', 'null'],
+        description:
+          'NULL unless state is exactly `approved` — the presenter gates it on that, so an '
+          + 'unapproved submission never leaks a public URL through the list. Null here means '
+          + '"not approved", NOT "no image": use the preview endpoint to look at one.',
+      },
+      submittedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      reviewedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      version: { type: 'integer', description: 'Coalesced to 1.' },
+    },
+  },
+
+  ProviderAttribution: {
+    type: 'object',
+    required: ['providerUid', 'registrationSource', 'registrationConfidence'],
+    description:
+      'Where a provider came from. Every field prefers a STORED value and falls back to a '
+      + 'freshly inferred one, so this object mixes recorded fact with deduction — '
+      + 'registrationConfidence is the field that says which.',
+    properties: {
+      providerUid: { type: 'string' },
+      registrationSource: { type: 'string' },
+      registrationConfidence: {
+        type: 'string',
+        description: "'inferred' means deduced from activity, not declared. Do not report it as declared.",
+      },
+      sourceSignals: {
+        type: ['object', 'array', 'null'],
+        description: 'The evidence behind an inference.',
+      },
+      firstSeenMobileAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      firstSeenWebAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      lastMobileAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      lastWebAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      mobileActivityCount: { type: 'integer' },
+      webActivityCount: { type: 'integer' },
+      attributionComputedAt: {
+        oneOf: [{ $ref: '#/components/schemas/UtcTimestamp' }],
+        description: 'NULL when nothing was ever stored — everything above is then inferred live.',
+      },
+    },
+  },
+
+  ProviderCatalogAssociation: {
+    type: 'object',
+    required: ['status', 'serviceCount', 'mappedCount', 'unmappedCount', 'ambiguousCount', 'hasCapabilities', 'services'],
+    description:
+      'How this provider legacy services line up with the canonical catalog. The counts are '
+      + 'the adoption measure for retiring the legacy fallback.',
+    properties: {
+      status: {
+        type: 'string',
+        description:
+          "'not_applicable' is returned WHOLE when the provider has no services at all — "
+          + 'every count is then 0 and services is empty. That is not "fully mapped".',
+      },
+      serviceCount: { type: 'integer' },
+      mappedCount: { type: 'integer' },
+      unmappedCount: {
+        type: 'integer',
+        description: 'Services with no catalog offering. These exist only through the legacy fallback.',
+      },
+      ambiguousCount: {
+        type: 'integer',
+        description:
+          'Services matching MORE THAN ONE offering. Ambiguity outranks everything else in '
+          + 'the status calculation, because a provider mapped two ways is not mapped.',
+      },
+      hasCapabilities: { type: 'boolean' },
+      services: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            serviceId: { type: 'integer' },
+            serviceName: { type: ['string', 'null'] },
+            offeringIds: { type: 'array', items: { type: 'integer' } },
+            offeringNames: { type: 'array', items: { type: 'string' } },
+            status: { type: 'string', description: 'Per-service, and what the aggregate counts are built from.' },
+          },
+        },
+      },
     },
   },
 
