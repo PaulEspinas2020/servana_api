@@ -171,9 +171,21 @@ describe('the fix did not reclassify anything else', () => {
      * reference.
      */
     const noEffect = checks.filter((c) => c.verdict === 'no-schema-effect');
-    expect(noEffect.length).toBe(14);
+    expect(noEffect.length).toBe(15);
     expect(noEffect.map((c) => c.file)).toEqual(
-      expect.arrayContaining(['002-massage-specific-services.sql']),
+      expect.arrayContaining([
+        '002-massage-specific-services.sql',
+        // 15th, from cf80d9c. `039-electrical-service-coverage.sql` inserts
+        // service_coverage_geo rows for legacy family 67 and declares no DDL at
+        // all — 0 CREATE/ALTER/DROP, 2 INSERTs — so the classifier puts it in
+        // this bucket by its own rule. That commit updated schema-baseline.test
+        // for the new migration and did not update this count, which left the
+        // gate red on a correct migration.
+        //
+        // NAMED rather than only counted, so the next DML migration arrives as
+        // a reviewable line in the diff instead of a number somebody bumps.
+        '039-electrical-service-coverage.sql',
+      ]),
     );
   });
 
