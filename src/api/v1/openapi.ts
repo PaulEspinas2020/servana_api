@@ -3306,7 +3306,9 @@ export const SCHEMAS: Record<string, unknown> = {
       + 'src/db/dbQuery.ts registers asUtcIso against OIDs 1114 (timestamp) and 1184 '
       + '(timestamptz), and that function ends in Date.toISOString(), which always emits a '
       + 'trailing Z. Postgres native "2026-08-11 11:03:23.421016+00" therefore cannot reach '
-      + 'a client through this path. See TAB 03.',
+      + 'a client through this path. This became true in TAB 03: the parser was always '
+      + 'installed, but its zone guard demanded a four-digit offset while Postgres emits '
+      + 'two, so every timestamptz fell through unconverted. See TAB 03.',
   },
 };
 
@@ -3326,6 +3328,45 @@ export const allErrorsFor = (entry: ContractEntry): V1ErrorCode[] => {
 /** `/catalog/services/:serviceId` → `/catalog/services/{serviceId}` */
 const toOpenApiPath = (path: string): string =>
   path.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
+
+/**
+ * The UTC rule, stated on EVERY timestamp rather than on one of them.
+ *
+ * TAB 03 asks for exactly this: *"State the rule in the schema description of
+ * every timestamp field, not one of them."* Before this, precisely one field in
+ * 62 carried it — a convention written down once and therefore true by memory.
+ *
+ * Applied by the GENERATOR rather than typed into 62 descriptions, because a
+ * hand-maintained copy of one sentence is a hand-maintained opportunity for 62
+ * of them to disagree. A field added tomorrow inherits it without anybody
+ * remembering to.
+ *
+ * The sentence is appended, never substituted: a field that already explains
+ * what it means keeps its own words and gains the guarantee after them.
+ */
+export const UTC_RULE =
+  'ISO 8601 with a UTC designator — always ends in Z. Guaranteed at the driver, '
+  + 'not per field: src/db/dbQuery.ts parses OIDs 1114 and 1184 through asUtcIso, '
+  + 'which ends in Date.toISOString(). Never Postgres native '
+  + '"2026-08-11 11:03:23.421016+00".';
+
+/** Append UTC_RULE to every `format: date-time` description in the document. */
+export function stateTheUtcRule<T>(node: T): T {
+  if (!node || typeof node !== 'object') return node;
+  if (Array.isArray(node)) {
+    node.forEach((child) => stateTheUtcRule(child));
+    return node;
+  }
+  const o = node as Record<string, unknown>;
+  if (o.format === 'date-time') {
+    const existing = typeof o.description === 'string' ? o.description.trim() : '';
+    if (!existing.includes('UTC designator')) {
+      o.description = existing ? `${existing} ${UTC_RULE}` : UTC_RULE;
+    }
+  }
+  for (const value of Object.values(o)) stateTheUtcRule(value);
+  return node;
+}
 
 export function buildOpenApiDocument(): Record<string, unknown> {
   const paths: Record<string, Record<string, unknown>> = {};
@@ -3449,7 +3490,15 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             'rejected with TOKEN_REVOKED, not accepted until expiry.',
         },
       },
-      schemas: SCHEMAS,
+      // Deep-cloned before the rule is stamped in: SCHEMAS is a module-level
+      // singleton, and mutating it would make the second call to this function
+      // see descriptions the first one wrote. `api:docs` and `api:docs:check`
+      // both run in one process during `npm run verify`, so that is not
+      // hypothetical — it is the difference between a stable document and one
+      // that grows a duplicated sentence every time it is generated.
+      schemas: stateTheUtcRule(
+        JSON.parse(JSON.stringify(SCHEMAS)) as Record<string, unknown>,
+      ),
     },
     tags: [...new Set(V1_CONTRACT.map((e) => e.domain))].sort().map((name) => ({ name })),
     'x-generated-from': 'src/api/v1/contract.ts',

@@ -140,7 +140,15 @@ shape.
 `type: 'null'` so no generated client mistakes it for a timestamp that might
 arrive.
 
-**6. TAB 05 is answered on the way past.** `SERVANA_COMMISSION_RATE = 0.2` and
+**6. CORRECTION, entered here because this document made the claim.** This TAB
+originally recorded that TAB 03 was "largely pre-closed" because `dbQuery.ts`
+routes every timestamp through `asUtcIso`. **That was wrong**, and TAB 03 found
+out why: the function's zone guard required a four-digit offset while Postgres
+emits two, so every `timestamptz` fell through and was returned in Postgres'
+native format — the exact string the contract promises clients will never see.
+The parser was installed; the guarantee was not delivered. See TAB 03.
+
+**7. TAB 05 is answered on the way past.** `SERVANA_COMMISSION_RATE = 0.2` and
 its sibling `PROVIDER_SHARE_RATE = 0.8` sum to exactly 1. `commissionRate` is a
 **fraction in [0, 1]**, not a percentage, and is now declared with
 `minimum: 0, maximum: 1`. The portal's current reading is correct.
