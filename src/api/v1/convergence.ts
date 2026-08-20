@@ -218,6 +218,22 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'the same four fields from the same stamp; there is no projection to differ on.',
   },
   {
+    key: 'clientRecall',
+    title: 'Ask whether this client build may still run',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['clientConfig.read'],
+    domainModule: 'api/v1/domains/clientConfig.readClientConfig',
+    surfaces: CLIENT_SURFACES,
+    roleSplitRationale:
+      'No role split, and no role at all — the caller is a BUILD, not a person. The endpoint ' +
+      'is public because the client being recalled may be too old to authenticate, and a kill ' +
+      'switch reachable only with a credential cannot kill the builds that most need it. ' +
+      'Every surface reads the same floor from the same file and applies the same comparison; ' +
+      'a per-surface answer would let two clients disagree about whether the same version is ' +
+      'supported. The web surfaces are listed because they reload and so are never stranded — ' +
+      'they may read it, and it will never block them.',
+  },
+  {
     key: 'bookingRead',
     title: 'Read a booking',
     source: 'api/v1/convergence (core)',

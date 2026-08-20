@@ -14,7 +14,7 @@
 > [`CROSS_CLIENT_MIGRATION_PLAN.md`](CROSS_CLIENT_MIGRATION_PLAN.md), which is
 > hand-written because an argument is not derivable. This is what each client
 > actually has to change, and it is generated because a hand-maintained list of
-> 111 endpoints across five clients is stale the day after it is written.
+> 112 endpoints across five clients is stale the day after it is written.
 
 ## How to read this
 
@@ -180,17 +180,18 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 40 |
+| Capabilities that apply | 41 |
 | Already on canonical | 0 |
 | Still on a legacy route | 20 |
 | Partially migrated | 6 |
-| No equivalent called today | 14 |
+| No equivalent called today | 15 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
 | A provider's own job queue | ⚠ mixed | `GET /api/worker/job-cards`, `GET /api/worker/job-cards/:bookingId`, `GET /api/workers/:workerId/job-cards` | `GET /api/v1/provider/jobs`, `GET /api/v1/provider/jobs/:bookingId` |
 | Additional work | planned | `GET /api/additional/booking/:bookingId`, `POST /api/additional/request/:userId` | `POST /api/v1/bookings/:bookingId/additional-work`, `GET /api/v1/bookings/:bookingId/additional-work` |
 | Advance the read pointer | legacy | `POST /api/chat/conversations/:id/read` | `POST /api/v1/conversations/:conversationId/read` |
+| Ask whether this client build may still run | planned | _no legacy equivalent — this is new_ | `GET /api/v1/client-config` |
 | Attach a file to a conversation | planned | `POST /api/chat/attachments/upload` | `POST /api/v1/conversations/:conversationId/attachments` |
 | Booking codes (OTP) | planned | `POST /api/:bookingId/resend-otp`, `POST /api/:id/confirm-otp` | `POST /api/v1/bookings/:bookingId/otp/request`, `POST /api/v1/bookings/:bookingId/otp/verify` |
 | Browse the service catalog | legacy | `GET /api/:serviceId/options-with-addons`, `GET /api/catalog`, `GET /api/catalog/services`, `GET /api/catalog/services/:serviceId`, `GET /api/catalog/summary`, `GET /api/services/:serviceId/level2`, `GET /api/services/:serviceId/options-with-addons`, `GET /api/services/full` | `GET /api/v1/catalog`, `GET /api/v1/catalog/summary`, `GET /api/v1/catalog/categories`, `GET /api/v1/catalog/categories/:categoryId`, `GET /api/v1/catalog/categories/:categoryId/subcategories`, `GET /api/v1/catalog/subcategories/:subcategoryId`, `GET /api/v1/catalog/subcategories/:subcategoryId/services`, `GET /api/v1/catalog/services`, `GET /api/v1/catalog/services/:serviceId` |
@@ -236,17 +237,18 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 46 |
+| Capabilities that apply | 47 |
 | Already on canonical | 0 |
 | Still on a legacy route | 20 |
 | Partially migrated | 5 |
-| No equivalent called today | 21 |
+| No equivalent called today | 22 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
 | A provider's rating summary | planned | `GET /api/providers/:providerUid/rating` | `GET /api/v1/reviews/providers/:providerUid/rating` |
 | Additional work | planned | `GET /api/additional/booking/:bookingId`, `POST /api/additional/request/:userId` | `POST /api/v1/bookings/:bookingId/additional-work`, `GET /api/v1/bookings/:bookingId/additional-work` |
 | Advance the read pointer | legacy | `POST /api/chat/conversations/:id/read` | `POST /api/v1/conversations/:conversationId/read` |
+| Ask whether this client build may still run | planned | _no legacy equivalent — this is new_ | `GET /api/v1/client-config` |
 | Attach a file to a conversation | planned | `POST /api/chat/attachments/upload` | `POST /api/v1/conversations/:conversationId/attachments` |
 | Booking codes (OTP) | legacy | `POST /api/:bookingId/resend-otp`, `POST /api/:id/confirm-otp` | `POST /api/v1/bookings/:bookingId/otp/request`, `POST /api/v1/bookings/:bookingId/otp/verify` |
 | Browse the service catalog | ⚠ mixed | `GET /api/:serviceId/options-with-addons`, `GET /api/catalog`, `GET /api/catalog/services`, `GET /api/catalog/services/:serviceId`, `GET /api/catalog/summary`, `GET /api/services/:serviceId/level2`, `GET /api/services/:serviceId/options-with-addons`, `GET /api/services/full` | `GET /api/v1/catalog`, `GET /api/v1/catalog/summary`, `GET /api/v1/catalog/categories`, `GET /api/v1/catalog/categories/:categoryId`, `GET /api/v1/catalog/categories/:categoryId/subcategories`, `GET /api/v1/catalog/subcategories/:subcategoryId`, `GET /api/v1/catalog/subcategories/:subcategoryId/services`, `GET /api/v1/catalog/services`, `GET /api/v1/catalog/services/:serviceId` |

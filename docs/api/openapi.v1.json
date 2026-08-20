@@ -88,6 +88,68 @@
         }
       }
     },
+    "/api/v1/client-config": {
+      "get": {
+        "operationId": "clientConfig.read",
+        "summary": "The minimum client version that may run, per platform. The only recall a released mobile build has.",
+        "tags": [
+          "health"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "api/v1/domains/clientConfig.readClientConfig",
+        "x-legacy": [],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "platform",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ClientConfig"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Public because the client being recalled may be too old to authenticate, and a kill switch reachable only with a credential cannot kill the builds that most need it. Served from a JSON file, not the database: a recall is pulled during an incident, and the incident this platform actually had was every database-backed read returning 500 for six days. Editing the file takes effect within ~2 minutes with no restart and no deploy. The server fails OPEN — a missing or malformed file serves a permissive 0.0.0 floor — because the client fails CLOSED, and two closed halves would let one deleted file brick every installed app at once."
+      }
+    },
     "/api/v1/health": {
       "get": {
         "operationId": "health.build",
@@ -12807,6 +12869,60 @@
           }
         }
       },
+      "ClientConfig": {
+        "type": "object",
+        "description": "The client recall lever. `minimumSupported` is the version below which a client must refuse to run; `latestAvailable` never blocks. `source` is `default` when the configuration file was absent or unusable, which means the permissive 0.0.0 floor is in force and any configured recall is NOT being applied.",
+        "required": [
+          "platforms",
+          "source"
+        ],
+        "properties": {
+          "platforms": {
+            "type": "object",
+            "required": [
+              "ios",
+              "android"
+            ],
+            "properties": {
+              "ios": {
+                "$ref": "#/components/schemas/ClientPlatformConfig"
+              },
+              "android": {
+                "$ref": "#/components/schemas/ClientPlatformConfig"
+              }
+            }
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "config",
+              "default"
+            ]
+          }
+        }
+      },
+      "ClientPlatformConfig": {
+        "type": "object",
+        "required": [
+          "minimumSupported",
+          "latestAvailable",
+          "message"
+        ],
+        "properties": {
+          "minimumSupported": {
+            "type": "string",
+            "description": "MAJOR.MINOR.PATCH. A client at exactly this version is supported."
+          },
+          "latestAvailable": {
+            "type": "string",
+            "description": "MAJOR.MINOR.PATCH. Informational; never a reason to block."
+          },
+          "message": {
+            "type": "string",
+            "description": "Shown verbatim when the client blocks."
+          }
+        }
+      },
       "BuildInfo": {
         "type": "object",
         "description": "Build provenance. Four fields and nothing else — no environment, no dependency liveness, no internal versions. `available` is false when no stamp was found, which happens on a first deploy or a cleaned workspace; the other fields are then null and the response is still 200, because absence is an answer.",
@@ -17840,6 +17956,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 111,
-  "x-total-count": 111
+  "x-implemented-count": 112,
+  "x-total-count": 112
 }

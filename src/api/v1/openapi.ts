@@ -59,6 +59,37 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  ClientConfig: {
+    type: 'object',
+    description:
+      'The client recall lever. `minimumSupported` is the version below which a client must '
+      + 'refuse to run; `latestAvailable` never blocks. `source` is `default` when the '
+      + 'configuration file was absent or unusable, which means the permissive 0.0.0 floor is '
+      + 'in force and any configured recall is NOT being applied.',
+    required: ['platforms', 'source'],
+    properties: {
+      platforms: {
+        type: 'object',
+        required: ['ios', 'android'],
+        properties: {
+          ios: { $ref: '#/components/schemas/ClientPlatformConfig' },
+          android: { $ref: '#/components/schemas/ClientPlatformConfig' },
+        },
+      },
+      source: { type: 'string', enum: ['config', 'default'] },
+    },
+  },
+
+  ClientPlatformConfig: {
+    type: 'object',
+    required: ['minimumSupported', 'latestAvailable', 'message'],
+    properties: {
+      minimumSupported: { type: 'string', description: 'MAJOR.MINOR.PATCH. A client at exactly this version is supported.' },
+      latestAvailable: { type: 'string', description: 'MAJOR.MINOR.PATCH. Informational; never a reason to block.' },
+      message: { type: 'string', description: 'Shown verbatim when the client blocks.' },
+    },
+  },
+
   BuildInfo: {
     type: 'object',
     description:

@@ -356,6 +356,7 @@ import { handlers as conversationHandlers } from './domains/conversations';
 import { handlers as accountHandlers } from './domains/account';
 import { handlers as homeHandlers } from './domains/home';
 import { handlers as healthHandlers } from './domains/health';
+import { handlers as clientConfigHandlers } from './domains/clientConfig';
 import { handlers as adminBookingHandlers } from './domains/adminBookings';
 import { handlers as adminFinanceHandlers } from './domains/adminFinance';
 import {
@@ -384,6 +385,7 @@ export const V1_HANDLERS: V1Handlers = {
   ...accountHandlers,
   ...homeHandlers,
   ...healthHandlers,
+  ...clientConfigHandlers,
   ...adminBookingHandlers,
   ...adminFinanceHandlers,
 };

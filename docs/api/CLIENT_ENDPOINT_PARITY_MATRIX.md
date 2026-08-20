@@ -18,11 +18,11 @@
 
 | | |
 | --- | --- |
-| Capabilities | 59 |
-| Canonical endpoints mounted | 111 |
+| Capabilities | 60 |
+| Canonical endpoints mounted | 112 |
 | Canonical endpoints planned | 0 |
 | Legacy mappings tracked | 125 |
-| Converged (one route family) | 52 |
+| Converged (one route family) | 53 |
 | Role-split over ONE service | 4 |
 | Single-surface | 3 |
 | **Divergent (forked truth)** | **0** |
@@ -81,6 +81,7 @@ direction of whoever wrote it.
 | Ask which commit is serving | SHARED | — | — | — | — | — |
 | Browse the service catalog | SHARED | ⚠ mixed | planned | legacy | — | — |
 | Search services | ROLE_SPLIT_SHARED_SERVICE | ⚠ mixed | planned | — | — | — |
+| Ask whether this client build may still run | SHARED | planned | — | planned | — | — |
 | Read the support cases I raised on a booking | SHARED | planned | planned | — | — | — |
 | A provider's own job queue | SHARED | — | — | ⚠ mixed | **migrated** | — |
 | Read a provider's public profile | SHARED | planned | planned | — | — | planned |
@@ -498,6 +499,20 @@ Legacy still aliased for this capability:
   - `GET /api/services/full`
 
 No role split. Two paths, ONE service: /api/v1/search is the top-level entry a client expects and /api/v1/catalog/search is its in-domain twin. Both delegate to the same function, which is what stops them ranking differently.
+
+### Ask whether this client build may still run
+
+- key: `core:clientRecall` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `api/v1/domains/clientConfig`
+- route families: `/client-config`
+
+Canonical:
+  - `GET /api/v1/client-config`
+
+Legacy still aliased for this capability:
+  - none
+
+No role split, and no role at all — the caller is a BUILD, not a person. The endpoint is public because the client being recalled may be too old to authenticate, and a kill switch reachable only with a credential cannot kill the builds that most need it. Every surface reads the same floor from the same file and applies the same comparison; a per-surface answer would let two clients disagree about whether the same version is supported. The web surfaces are listed because they reload and so are never stranded — they may read it, and it will never block them.
 
 ### Read the support cases I raised on a booking
 

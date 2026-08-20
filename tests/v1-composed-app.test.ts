@@ -105,6 +105,40 @@ describe('the composed application serves /api/v1', () => {
     }
   });
 
+  /**
+   * TAB 02's gate: the recall lever answers with NO credential.
+   *
+   * Asserted through the composed application rather than the isolated router
+   * because the thing being proven is that nothing mounted in app.ts — an
+   * authentication middleware running before routing, a parity rewrite, a proxy
+   * shim — stands between a credential-less client and this answer. The client
+   * this exists for may be too old to authenticate, and it fails closed: if this
+   * request does not come back readable, the app blocks itself.
+   */
+  it('serves the client recall lever with no credential at all', async () => {
+    const res = await request(base, 'GET', '/api/v1/client-config');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toMatch(/max-age=\d+/);
+
+    const data = (res.body as { data: Record<string, any> }).data;
+    for (const platform of ['ios', 'android']) {
+      // Parseable by the client's own check, which is the whole contract.
+      expect(data.platforms[platform].minimumSupported).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(data.platforms[platform].latestAvailable).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(typeof data.platforms[platform].message).toBe('string');
+    }
+  });
+
+  it('sends an Authorization header nowhere near the recall lever', async () => {
+    // A garbage credential must not turn a 200 into a 401. An endpoint that
+    // refuses a BAD token still refuses the client being recalled, which
+    // commonly holds a stale one.
+    const res = await request(base, 'GET', '/api/v1/client-config', {
+      headers: { Authorization: 'Bearer not-a-real-token' },
+    });
+    expect(res.status).toBe(200);
+  });
+
   it('stamps a request id on the response, for every route', async () => {
     // correlationMiddleware is mounted in app.ts and nowhere near the v1
     // router, so this is only observable through the composed application.

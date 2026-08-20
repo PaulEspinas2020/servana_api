@@ -335,6 +335,31 @@ export const V1_CONTRACT: ContractEntry[] = [
     observability: 'catalog',
   },
   {
+    id: 'clientConfig.read',
+    domain: 'health',
+    method: 'get',
+    path: '/client-config',
+    summary: 'The minimum client version that may run, per platform. The only recall a released mobile build has.',
+    auth: 'public',
+    idempotent: true,
+    responseSchema: 'ClientConfig',
+    errors: [],
+    status: 'implemented',
+    domainService: 'api/v1/domains/clientConfig.readClientConfig',
+    legacy: [],
+    callers: { ...ALL_PLANNED, customerWeb: 'n/a', providerWeb: 'n/a', admin: 'n/a' },
+    observability: 'platform',
+    notes:
+      'Public because the client being recalled may be too old to authenticate, and a kill '
+      + 'switch reachable only with a credential cannot kill the builds that most need it. '
+      + 'Served from a JSON file, not the database: a recall is pulled during an incident, '
+      + 'and the incident this platform actually had was every database-backed read '
+      + 'returning 500 for six days. Editing the file takes effect within ~2 minutes with '
+      + 'no restart and no deploy. The server fails OPEN — a missing or malformed file '
+      + 'serves a permissive 0.0.0 floor — because the client fails CLOSED, and two closed '
+      + 'halves would let one deleted file brick every installed app at once.',
+  },
+  {
     id: 'health.build',
     domain: 'health',
     method: 'get',

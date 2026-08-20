@@ -35,7 +35,7 @@
  * in a log, and masking invites someone to widen it later.
  */
 
-export type EnvRequirement = 'required' | 'degraded';
+export type EnvRequirement = 'required' | 'degraded' | 'optional';
 
 export interface EnvVarSpec {
   name: string;
@@ -43,6 +43,41 @@ export interface EnvVarSpec {
   /** What breaks without it. Written for whoever reads the boot failure. */
   purpose: string;
 }
+
+/**
+ * Read by the code, has a working default, and its absence is not a problem.
+ *
+ * ## Why this tier exists rather than filing such variables under `degraded`
+ *
+ * `tests/env-schema-completeness.test.ts` requires every `process.env` read to
+ * be declared, and it is right to: a variable whose absence nothing can report
+ * is how a missing `API_KEY` silently broke token refresh for every client.
+ *
+ * But the only two tiers available said something false about
+ * `CLIENT_CONFIG_PATH`. `required` would make production refuse to boot without
+ * an override nobody needs; `degraded` prints it at boot under the banner "the
+ * features these serve will not work", and that is simply untrue — unset, the
+ * recall lever reads `config/client-config.json` and works exactly as intended.
+ *
+ * A boot log that cries wolf about a variable that does not matter is a boot log
+ * people stop reading, and the degraded list is the one place this application
+ * announces genuinely missing integrations. Keeping it true is worth a third
+ * tier.
+ *
+ * So: declared and discoverable, never reported missing. If a variable here has
+ * no safe default, it is in the wrong tier.
+ */
+export const OPTIONAL_ENV: readonly EnvVarSpec[] = Object.freeze([
+  {
+    name: 'CLIENT_CONFIG_PATH',
+    requirement: 'optional',
+    purpose:
+      'absolute path to the client recall configuration. Unset, the server reads '
+      + 'config/client-config.json. Set it to a path OUTSIDE the checkout so a deploy that '
+      + 'replaces the working directory cannot replace the recall lever with whatever the '
+      + 'release happened to ship. See docs/CLIENT_RECALL_RUNBOOK.md',
+  },
+]);
 
 /**
  * Variables whose absence would already have broken production.
@@ -130,6 +165,9 @@ export const DEGRADED_ENV: readonly EnvVarSpec[] = Object.freeze([
 export const ENV_SCHEMA: readonly EnvVarSpec[] = Object.freeze([
   ...REQUIRED_ENV,
   ...DEGRADED_ENV,
+  // Declared so the completeness gate can see the read, and so a reader can
+  // discover the override. Never reported missing — see OPTIONAL_ENV.
+  ...OPTIONAL_ENV,
 ]);
 
 const isSet = (name: string): boolean => {

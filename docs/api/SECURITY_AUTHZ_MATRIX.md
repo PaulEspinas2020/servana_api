@@ -15,8 +15,8 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 111 |
-| `public` | 21 |
+| Mounted endpoints | 112 |
+| `public` | 22 |
 | `authenticated` | 58 |
 | `provider` | 26 |
 | `admin` | 6 |
@@ -178,6 +178,7 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `catalog.subcategories.get` | GET /catalog/subcategories/:subcategoryId | `public` | ● ● ● ● | — |
 | `catalog.subcategories.services` | GET /catalog/subcategories/:subcategoryId/services | `public` | ● ● ● ● | — |
 | `catalog.summary` | GET /catalog/summary | `public` | ● ● ● ● | — |
+| `clientConfig.read` | GET /client-config | `public` | ● ● ● ● | — |
 | `conversations.attachments.create` | POST /conversations/:conversationId/attachments | `authenticated` | · ● ● ● | ✔ conversationId |
 | `conversations.create` | POST /conversations | `authenticated` | · ● ● ● | — |
 | `conversations.get` | GET /conversations/:conversationId | `authenticated` | · ● ● ● | ✔ conversationId |
@@ -265,7 +266,7 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-57 of 111 endpoints are probeable; the other
+58 of 112 endpoints are probeable; the other
 54 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.
