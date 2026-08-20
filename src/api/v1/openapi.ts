@@ -54,7 +54,23 @@ export const SCHEMAS: Record<string, unknown> = {
     properties: {
       limit: { type: 'integer' },
       offset: { type: 'integer' },
-      total: { type: ['integer', 'null'], description: 'null when the total is not cheaply knowable.' },
+      total: {
+        type: 'integer',
+        minimum: 0,
+        description:
+          'The EXACT size of the filtered set, never null. This was previously declared '
+          + '`integer | null` with the note "null when the total is not cheaply knowable" — '
+          + 'a hedge against a cost nothing in this API pays. All four list endpoints derive '
+          + 'it from a real count: three from an array length, and the reviews list from '
+          + 'COUNT(*)::int, which parses to a JS number BECAUSE of the ::int cast (a bare '
+          + 'COUNT(*) is bigint and node-postgres would hand back a string). So the nullable '
+          + 'half was never reachable, and every client declared plain number anyway.'
+          + ' '
+          + 'If a total ever does become expensive, send a capped or estimated NUMBER and add '
+          + 'a sibling totalIsEstimate flag beside it — do not reintroduce null. That flag is '
+          + 'deliberately absent today: a field no producer ever sets is one every client '
+          + 'branches on for nothing. See TAB 06.',
+      },
       hasMore: { type: 'boolean' },
     },
   },
