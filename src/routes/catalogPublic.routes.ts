@@ -27,6 +27,13 @@ const router = express.Router();
 router.get("/catalog", catalogPublicController.getCatalog);
 router.get("/catalog/summary", catalogPublicController.getSummary);
 router.get("/catalog/services", catalogPublicController.listServices);
+// Declared before the parameterised sibling below, for the same reason the
+// header gives: Express binds the first match, and a literal segment reached
+// after `:serviceId` never runs.
+router.get(
+  "/catalog/services/:serviceId/serviceability",
+  catalogPublicController.getServiceability,
+);
 router.get(
   "/catalog/services/:serviceId",
   catalogPublicController.getService,

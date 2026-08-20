@@ -117,9 +117,26 @@ describe('no import cycle', () => {
     // names both services while explaining the cycle it avoids, and matching
     // that would be grading prose rather than dependencies. That mistake has
     // been made three times in this codebase already.
-    const imports = (
-      read('services/adminInviteState.ts').match(/^\s*import.*$/gm) ?? []
-    ).join(' ');
+    const importLines =
+      read('services/adminInviteState.ts').match(/^\s*import\b.*$/gm) ?? [];
+
+    /**
+     * The match must not be EMPTY.
+     *
+     * This regex previously carried a LITERAL BACKSPACE where the word-boundary
+     * escape `\b` was intended. No source file contains a backspace, so
+     * `.match()` returned null, `?? []` made it an empty array, and both
+     * assertions below passed against an empty string. The guard had never
+     * checked anything.
+     *
+     * That is the same class of mistake the comment above warns about, arriving
+     * from a different direction: not grading prose, but grading nothing. A
+     * search that matches zero lines proves zero things, so the count is
+     * asserted before the content is.
+     */
+    expect(importLines.length).toBeGreaterThan(0);
+
+    const imports = importLines.join(' ');
     expect(imports).not.toContain('adminPermissionService');
     expect(imports).not.toContain('adminInviteService');
   });

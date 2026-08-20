@@ -67,7 +67,12 @@ export const handlers: V1Handlers = {
       return ok(
         res,
         req,
-        { bookings: bookingService.formatBookings(window) },
+        {
+          // Self-scoped: getBookingsByUserId filters on the CUSTOMER column, so
+          // every row belongs to the caller as its customer and the one-time
+          // codes are theirs. A provider's assigned jobs are not in this set.
+          bookings: bookingService.formatBookings(window, { includeCredentials: true }),
+        },
         { page: pageMeta(page, window.length, total) },
       );
     } catch (error) {
@@ -78,12 +83,31 @@ export const handlers: V1Handlers = {
   'bookings.get': async (req: Request, res: Response) => {
     try {
       const bookingId = readBookingId(req);
-      await assertBookingAccess(bookingId, actorOf(req));
+      // The ROLE, not just the fact of access. It decides whether the one-time
+      // codes on this booking may be disclosed, and it was already being
+      // computed and thrown away.
+      const role = await assertBookingAccess(bookingId, actorOf(req));
 
       const booking = await bookingService.getBookingById(bookingId);
       if (!booking) throw new ApiError('BOOKING_NOT_FOUND', 'No booking with that id.');
 
-      return ok(res, req, bookingService.formatBooking(booking));
+      /**
+       * `worker_code` is the SERVICE_START credential and this response is its
+       * declared delivery channel — BOOKING_OTP_PURPOSES sets
+       * `delivery: 'booking_detail'`, so the customer reads it here and says it
+       * out loud on the doorstep. The provider TYPES IT IN; giving it to them
+       * over the API defeats the proof of presence entirely, and
+       * resolveBookingAccess grants `provider` from ASSIGNED onward — every
+       * state before the start it gates.
+       *
+       * So: customer and admin see it, the assigned provider does not. An admin
+       * is included because BOOKING_OTP_PURPOSES lists admin among the
+       * verifiers, and an operator on a support call is the fallback when the
+       * customer cannot read their own booking.
+       */
+      const includeCredentials = role === 'customer' || role === 'admin';
+
+      return ok(res, req, bookingService.formatBooking(booking, { includeCredentials }));
     } catch (error) {
       return sendCaught(res, req, 'bookings.get', asApiError(error));
     }

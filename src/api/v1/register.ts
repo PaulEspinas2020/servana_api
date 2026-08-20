@@ -40,6 +40,7 @@ import requireCapability from '../../middleware/requireCapability';
 import requireActiveProvider from '../../middleware/requireActiveProvider';
 import { ContractEntry, IMPLEMENTED, V1_CONTRACT, HttpMethod } from './contract';
 import { fail } from './envelope';
+import { contractDigest, CONTRACT_DIGEST_HEADER } from './contractDigest';
 import { V1ErrorCode } from './errors';
 import { V1Handler, V1Handlers } from './types';
 
@@ -313,6 +314,28 @@ export function buildV1Router(handlers: V1Handlers, middleware: V1Middleware = {
 
   const router = Router();
   const mounted: BuildResult['mounted'] = [];
+
+  /**
+   * The contract digest, on EVERY v1 response (TAB 08).
+   *
+   * The book asks for a sha256 in a response header and says why that alone is
+   * enough: *"a client can detect staleness with one cheap request and no
+   * parsing."* Putting it only on `/openapi.json` would mean fetching 330 kB to
+   * learn whether you needed to.
+   *
+   * Set before the handlers run, so it rides on error responses too — the
+   * moment a client most wants to know whether it is talking to the contract it
+   * was built against is when a call has just failed in a shape it did not
+   * expect.
+   *
+   * `contractDigest()` memoises: the first call serialises the document, every
+   * later one returns a string. The contract cannot change under a running
+   * process — a new contract is a new build, which is a new process.
+   */
+  router.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader(CONTRACT_DIGEST_HEADER, contractDigest());
+    next();
+  });
 
   for (const entry of [...IMPLEMENTED].sort(bySpecificity)) {
     router[entry.method](

@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**113 implemented** · **0 planned** · 113 total.
+**114 implemented** · **1 planned** · 115 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -17,6 +17,7 @@ Caller legend: ✅ migrated · ⏳ still on a legacy route · · planned · — 
 | `GET` | `/api/v1/catalog` | **live** | public | — | `CatalogTree` | yes | catalog |
 | `GET` | `/api/v1/catalog/summary` | **live** | public | — | `CatalogSummary` | yes | catalog |
 | `GET` | `/api/v1/catalog/services` | **live** | public | — | `CatalogServiceList` | yes | catalog |
+| `GET` | `/api/v1/catalog/services/:serviceId/serviceability` | _planned_ | public | — | `CatalogServiceability` | yes | catalog |
 | `GET` | `/api/v1/catalog/services/:serviceId` | **live** | public | — | `CatalogServiceDetail` | yes | catalog |
 | `GET` | `/api/v1/catalog/search` | **live** | public | — | `SearchResults` | yes | catalog |
 | `GET` | `/api/v1/catalog/categories` | **live** | public | — | `CategorySummaryList` | yes | catalog |
@@ -55,6 +56,20 @@ Flat list of every bookable service, for search and deep links.
 - **Callers** — Cust Mobile · · Cust Web · · Prov Mobile — · Prov Web — · Admin —
 - **Legacy it replaces**
   - `GET /api/catalog/services` — **ALIAS_TEMPORARILY** — Same router, superseded by this route.
+
+### `GET /api/v1/catalog/services/:serviceId/serviceability`
+
+Whether a service can be booked at a given point, before the customer fills in a form.
+
+> The verdict createBooking would reach, offered before the journey rather than at the end of it: today a customer picks an address, a date and a payment method and only then learns "Service not available in your area." It resolves the service family with the statement createBooking uses, so the pre-check cannot promise a booking the server will refuse. It answers a verdict and never the coverage discs or the legacy id, which catalogPublicService withholds deliberately (§11, §58).
+
+- **Domain service** — `services/catalogPublicService.getServiceability`
+- **Error codes** — `INTERNAL`, `VALIDATION_FAILED`
+- **Path params** — `serviceId` (integer) Canonical services.id
+- **Query** — `lat` (string, required) Latitude of the service address, as a decimal degree; `lon` (string, required) Longitude of the service address, as a decimal degree
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile — · Prov Web — · Admin —
+- **Legacy it replaces**
+  - `GET /api/catalog/services/:serviceId/serviceability` — **CANONICALIZE** — Mounted on the public catalog router alongside the read it belongs to. Should become the canonical v1 route; no v1 successor built yet.
 
 ### `GET /api/v1/catalog/services/:serviceId`
 
@@ -164,6 +179,7 @@ Accept a small, closed set of scrubbed worker-app events. No free text, ever.
 |---|---|---|---|---|---|---|---|
 | `GET` | `/api/v1/client-config` | **live** | public | — | `ClientConfig` | yes | platform |
 | `GET` | `/api/v1/health` | **live** | public | — | `BuildInfo` | yes | platform |
+| `GET` | `/api/v1/openapi.json` | **live** | any signed-in | — | `OpenApiDocument` | yes | platform |
 
 ### `GET /api/v1/client-config`
 
@@ -185,6 +201,17 @@ The commit this build was made from. Public, and carries nothing else.
 - **Domain service** — `api/v1/domains/health.readBuildInfo`
 - **Error codes** — `INTERNAL`
 - **Callers** — Cust Mobile — · Cust Web — · Prov Mobile — · Prov Web — · Admin —
+- **Legacy it replaces** — none; new capability.
+
+### `GET /api/v1/openapi.json`
+
+The OpenAPI document this process implements, with its sha256 in a header.
+
+> TAB 08. Before this the document was served at no path at all, so a client could only compare its pin against a git CHECKOUT — a statement about a repository, not about a server. The portal reported its pin going stale twice in one session and could not tell a shape change from an annotation-only one without diffing 530 kB by hand. AUTHENTICATED, not public, unlike health.build. Build provenance is four fields and exists to be checkable by someone who has no credential; a full API surface is a map, and every client that needs it already holds a token. `health.build` stays public because a provenance check that needs a credential can only be run by someone who already has one — that argument does not transfer to the whole contract. Every /api/v1 response also carries the same digest in x-contract-sha256, so a client detects staleness with one cheap request and no parsing, which is what the book asked for. This endpoint is for when the answer is yes and it wants the document. Answers in the usual v1 envelope. A bare document would be marginally more convenient for a generator pointed straight at the URL, and it would be the only endpoint of ninety-five that did not answer { data } — an exception to that shape is how the shape stops being relied upon.
+
+- **Domain service** — `api/v1/domains/health.servedContract`
+- **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin ·
 - **Legacy it replaces** — none; new capability.
 
 ## identity
@@ -1588,8 +1615,10 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `POST /api/v1/telemetry` | — | — | · | · | — |
 | `GET /api/v1/client-config` | · | — | · | — | — |
 | `GET /api/v1/health` | — | — | — | — | — |
+| `GET /api/v1/openapi.json` | · | · | · | · | · |
 | `GET /api/v1/catalog/summary` | · | · | — | — | — |
 | `GET /api/v1/catalog/services` | · | · | — | — | — |
+| `GET /api/v1/catalog/services/:serviceId/serviceability` | · | · | — | — | — |
 | `GET /api/v1/catalog/services/:serviceId` | · | · | — | — | — |
 | `GET /api/v1/me` | · | · | ✅ | ✅ | · |
 | `GET /api/v1/bookings` | ⏳ | ⏳ | — | — | — |

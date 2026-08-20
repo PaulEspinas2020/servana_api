@@ -150,8 +150,21 @@ describe('a new inner join in an admin list service has to be looked at', () => 
    *
    * All 31 at the time of writing were audited individually and are recorded in
    * `docs/audits/TAB14_QUERY_SAFETY.md`.
+   *
+   * **31 -> 34 on 2026-08-20.** Three joins were added to
+   * `getPublicCatalogSummary`, which had been counting each level by its own
+   * status while `getPublicCatalog` filters through both ancestors — so the
+   * summary reported 95 services beside a tree of 85 the moment a subcategory
+   * was archived. The counts now use the tree's rule, which needs the joins.
+   *
+   * Audited by the question this gate asks. Can the left row exist without a
+   * match on the right? No, and the describe block directly above proves it
+   * rather than asserting it: `services.subcategory_id` and
+   * `catalog_subcategories.category_id` are both NOT NULL in the baseline. An
+   * inner join along that chain cannot hide a row, which is the same guarantee
+   * that makes the tree's own joins safe.
    */
-  const REVIEWED_ADMIN_INNER_JOINS = 31;
+  const REVIEWED_ADMIN_INNER_JOINS = 34;
 
   it(`has exactly ${REVIEWED_ADMIN_INNER_JOINS} reviewed inner joins`, () => {
     const found = adminJoins();

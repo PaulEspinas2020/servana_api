@@ -109,7 +109,18 @@ export const handlers: V1Handlers = {
 
       const result = await reviewService.listProviderReviews(providerUid, page.limit, page.offset);
       const reviews = result?.reviews ?? [];
-      const total = typeof result?.total === 'number' ? result.total : null;
+      /**
+       * The only call site that could ever have produced a null total, and it
+       * could not either: `listProviderReviews` runs `COUNT(*)::int`, and int4
+       * parses to a JS number — including 0 on an empty set. The `?? 0` is the
+       * guard for a service that returned nothing at all, which would be a
+       * programming error rather than an expensive count, and 0 is the honest
+       * answer for "no rows were found" in that case.
+       *
+       * It used to coerce a non-number to null, which was the sole reason
+       * PageMeta.total was declared nullable. See TAB 06.
+       */
+      const total = typeof result?.total === 'number' ? result.total : 0;
 
       return ok(res, req, { reviews }, { page: pageMeta(page, reviews.length, total) });
     } catch (error) {

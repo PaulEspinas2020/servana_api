@@ -225,6 +225,7 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'catalog.categories.list', 'catalog.categories.get', 'catalog.categories.subcategories',
       'catalog.subcategories.get', 'catalog.subcategories.services',
       'catalog.services.list', 'catalog.services.get',
+      'catalog.services.serviceability',
     ],
     domainModule: 'services/catalogPublicService',
     surfaces: CLIENT_SURFACES,
@@ -232,7 +233,10 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'No role split. The catalog is public product data keyed on services.id — Catalog V2, ' +
       'category → subcategory → service. A provider browsing what they can apply for and a ' +
       'customer browsing what they can book are reading the same tree; a second projection ' +
-      'would be the moment service_families crept back in as a parallel identity.',
+      'would be the moment service_families crept back in as a parallel identity. ' +
+      'Serviceability belongs to browsing rather than to booking for the same reason: it ' +
+      'answers "can this be booked here" while the customer is still choosing, and it ' +
+      'answers it identically for every surface.',
   },
   {
     key: 'catalogSearch',
@@ -259,6 +263,27 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'situation it exists to fix — a deploy whose migration step fails stops short of the PM2 ' +
       'restart, so the old code keeps serving and nothing outward says so. Every surface reads ' +
       'the same four fields from the same stamp; there is no projection to differ on.',
+  },
+  {
+    key: 'contractDiscovery',
+    title: 'Fetch the contract this process implements',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['health.contract'],
+    // Names the module the ENDPOINT reaches, matching the contract entry's
+    // domainService. The handler lives in domains/health and delegates to
+    // api/v1/contractDigest.servedContract, which the rationale below names —
+    // the gate compares reachability, and a module no endpoint reaches is the
+    // drift it exists to catch.
+    domainModule: 'api/v1/domains/health.servedContract',
+    surfaces: CLIENT_SURFACES,
+    roleSplitRationale:
+      'No role split. Every client generates types from the same document, so a per-surface ' +
+      'projection would defeat the point — the value is that all five are reading one ' +
+      'contract. AUTHENTICATED rather than public, unlike buildProvenance: four fields of ' +
+      'provenance exist to be checkable by somebody holding no credential, but a full API ' +
+      'surface is a map, and every client that wants it already holds a token. The same ' +
+      'digest also rides on every /api/v1 response in x-contract-sha256, so a client asks ' +
+      '"am I stale?" without calling this at all.',
   },
   {
     key: 'workerTelemetry',

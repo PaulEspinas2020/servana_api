@@ -67,7 +67,13 @@ export const createBooking = async (req: any, res: any) => {
       if (existing) {
         return res.json({
           success: true,
-          booking: formatBooking(existing),
+          // The caller created this booking, so they are its customer and the
+          // one-time codes are theirs. BOOKING_OTP_PURPOSES declares
+          // `delivery: 'booking_detail'`, which makes a booking body the
+          // delivery channel for the doorstep start code. Opting in here keeps
+          // the client apps byte-identical to before; the new DEFAULT is to
+          // omit, and that is what closes the provider leak elsewhere.
+          booking: formatBooking(existing, { includeCredentials: true }),
           idempotentReplay: true,
         });
       }
@@ -142,7 +148,13 @@ export const createBooking = async (req: any, res: any) => {
       if (existing) {
         return res.json({
           success: true,
-          booking: formatBooking(existing),
+          // The caller created this booking, so they are its customer and the
+          // one-time codes are theirs. BOOKING_OTP_PURPOSES declares
+          // `delivery: 'booking_detail'`, which makes a booking body the
+          // delivery channel for the doorstep start code. Opting in here keeps
+          // the client apps byte-identical to before; the new DEFAULT is to
+          // omit, and that is what closes the provider leak elsewhere.
+          booking: formatBooking(existing, { includeCredentials: true }),
           idempotentReplay: true,
         });
       }
@@ -193,7 +205,12 @@ export const confirmOtp = async (req: Request, res: Response) => {
       correlationId: String((req as any).id ?? ''),
     });
 
-    return res.json({ success: true, booking: formatBooking(booking) });
+    // The customer just proved ownership with the OTP, and the executor refuses
+    // a caller who does not own the booking independently of that. Codes stay.
+    return res.json({
+      success: true,
+      booking: formatBooking(booking, { includeCredentials: true }),
+    });
   } catch (e: any) {
     return res.status(400).json({ success: false, message: e.message });
   }
@@ -247,7 +264,9 @@ export const getBooking = async (req: Request, res: Response) => {
     // Authorization before retrieval: booking ids are sequential integers,
     // so an unscoped read here exposed every customer's name, phone and
     // address by enumeration (§11).
-    await assertBookingAccess(bookingId, (req as any).user?.uid);
+    // The ROLE, not merely the fact of access. It decides whether the one-time
+    // codes may be disclosed, and it was already being computed and discarded.
+    const role = await assertBookingAccess(bookingId, (req as any).user?.uid);
 
     const booking = await bookingService.getBookingById(bookingId);
 
@@ -255,7 +274,21 @@ export const getBooking = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: "Booking not found" });
     }
 
-    return res.json({ success: true, booking: formatBooking(booking) });
+    /**
+     * `worker_code` is the SERVICE_START credential and this endpoint is its
+     * declared delivery channel: the customer reads it here and says it out
+     * loud on the doorstep, and the provider types it in.
+     * `resolveBookingAccess` grants the role `provider` from ASSIGNED onward —
+     * every state BEFORE the start it gates — so serving it to a provider let
+     * them start a job without ever arriving. Customer and admin, never the
+     * assigned provider.
+     */
+    const includeCredentials = role === 'customer' || role === 'admin';
+
+    return res.json({
+      success: true,
+      booking: formatBooking(booking, { includeCredentials }),
+    });
   } catch (e: any) {
     if (sendBookingAccessError(res, e)) return;
     return res.status(500).json({ success: false, message: e.message });
@@ -267,6 +300,10 @@ export const listAllBookings = async (req: Request, res: Response) => {
     const from = req.query.from as string | undefined;
     const to   = req.query.to   as string | undefined;
     const bookings = await bookingService.getAllBookings(from, to);
+    // Deliberately NOT opting in. An admin is entitled to a code (they are a
+    // listed verifier) but a bulk listing of every booking's live credentials is
+    // exposure nobody asked for. An operator who needs one reads the detail
+    // endpoint for that booking, which discloses it and is auditable per-booking.
     res.json({ success: true, bookings: formatBookings(bookings) });
   } catch (error: any) {
     res.status(500).json({
@@ -307,7 +344,13 @@ export const listUserBookings = async (req: Request, res: Response) => {
     }
 
     const bookings = await bookingService.getBookingsByUserId(userId);
-    res.json({ success: true, bookings: formatBookings(bookings) });
+    // Self-scoped: the 403 above proves actor.uid === userId, and this query
+    // filters on the CUSTOMER column, so every row here belongs to the caller
+    // as its customer. Their own codes.
+    res.json({
+      success: true,
+      bookings: formatBookings(bookings, { includeCredentials: true }),
+    });
   } catch (error: any) {
     res.status(500).json({
       success: false,
@@ -320,7 +363,7 @@ export const getTracking = async (req: Request, res: Response) => {
   try {
     const bookingId = Number(req.params.id);
 
-    await assertBookingAccess(bookingId, (req as any).user?.uid);
+    const trackingRole = await assertBookingAccess(bookingId, (req as any).user?.uid);
 
     if (!bookingId || Number.isNaN(bookingId)) {
       return res.status(400).json({ success: false, message: "Invalid booking id" });
@@ -328,7 +371,14 @@ export const getTracking = async (req: Request, res: Response) => {
 
     // If you have auth: const userId = (req as any).user?.uid;
     const tracking = await bookingService.getTracking(bookingId /*, userId */);
-    return res.json({ success: true, tracking: formatBookings(tracking) });
+    // Same seat rule as the detail endpoint: a provider tracking their own job
+    // must not be handed the code that proves they reached the door.
+    return res.json({
+      success: true,
+      tracking: formatBookings(tracking, {
+        includeCredentials: trackingRole === 'customer' || trackingRole === 'admin',
+      }),
+    });
   } catch (e: any) {
     if (sendBookingAccessError(res, e)) return;
     return res.status(500).json({ success: false, message: e.message });

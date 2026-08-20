@@ -171,9 +171,36 @@ describe('the fix did not reclassify anything else', () => {
      * reference.
      */
     const noEffect = checks.filter((c) => c.verdict === 'no-schema-effect');
-    expect(noEffect.length).toBe(14);
+    expect(noEffect.length).toBe(18);
     expect(noEffect.map((c) => c.file)).toEqual(
-      expect.arrayContaining(['002-massage-specific-services.sql']),
+      expect.arrayContaining([
+        '002-massage-specific-services.sql',
+        // 15th, from cf80d9c. `039-electrical-service-coverage.sql` inserts
+        // service_coverage_geo rows for legacy family 67 and declares no DDL at
+        // all — 0 CREATE/ALTER/DROP, 2 INSERTs — so the classifier puts it in
+        // this bucket by its own rule. That commit updated schema-baseline.test
+        // for the new migration and did not update this count, which left the
+        // gate red on a correct migration.
+        //
+        // NAMED rather than only counted, so the next DML migration arrives as
+        // a reviewable line in the diff instead of a number somebody bumps.
+        '039-electrical-service-coverage.sql',
+        // 16th. `040-retire-duplicate-massage-subcategory.sql` flips one
+        // `catalog_subcategories.status` to 'archived' — 0 CREATE/ALTER/DROP,
+        // 1 UPDATE — so it lands here by the same rule.
+        //
+        // Like 039 it is executed nowhere else: the fresh-database rehearsal
+        // seeds this bucket as already applied, so a data migration would
+        // otherwise reach production having never run. `npm run
+        // migration:040:rehearse` runs it on PGlite.
+        '040-retire-duplicate-massage-subcategory.sql',
+        // 17th and 18th. 041 inserts offering mappings, a draft subcategory and
+        // coverage rows; 042 sets `deleted_at` on four families. Both are pure
+        // DML, both are executed only by
+        // `npm run migration:041-042:rehearse`.
+        '041-home-maintenance-plumbing-carpentry.sql',
+        '042-retire-duplicate-service-families.sql',
+      ]),
     );
   });
 

@@ -18,11 +18,11 @@
 
 | | |
 | --- | --- |
-| Capabilities | 61 |
-| Canonical endpoints mounted | 113 |
-| Canonical endpoints planned | 0 |
-| Legacy mappings tracked | 125 |
-| Converged (one route family) | 53 |
+| Capabilities | 62 |
+| Canonical endpoints mounted | 114 |
+| Canonical endpoints planned | 1 |
+| Legacy mappings tracked | 126 |
+| Converged (one route family) | 54 |
 | Role-split over ONE service | 4 |
 | Single-surface | 4 |
 | **Divergent (forked truth)** | **0** |
@@ -82,6 +82,7 @@ direction of whoever wrote it.
 | Browse the service catalog | SHARED | ⚠ mixed | planned | legacy | — | — |
 | Search services | ROLE_SPLIT_SHARED_SERVICE | ⚠ mixed | planned | — | — | — |
 | Ask whether this client build may still run | SHARED | planned | — | planned | — | — |
+| Fetch the contract this process implements | SHARED | planned | planned | planned | planned | planned |
 | Read the support cases I raised on a booking | SHARED | planned | planned | — | — | — |
 | A provider's own job queue | SHARED | — | — | **migrated** | **migrated** | — |
 | Read a provider's public profile | SHARED | planned | planned | — | — | planned |
@@ -473,18 +474,20 @@ Canonical:
   - `GET /api/v1/catalog/subcategories/:subcategoryId/services`
   - `GET /api/v1/catalog/services`
   - `GET /api/v1/catalog/services/:serviceId`
+  - `GET /api/v1/catalog/services/:serviceId/serviceability`
 
 Legacy still aliased for this capability:
   - `GET /api/:serviceId/options-with-addons`
   - `GET /api/catalog`
   - `GET /api/catalog/services`
   - `GET /api/catalog/services/:serviceId`
+  - `GET /api/catalog/services/:serviceId/serviceability`
   - `GET /api/catalog/summary`
   - `GET /api/services/:serviceId/level2`
   - `GET /api/services/:serviceId/options-with-addons`
   - `GET /api/services/full`
 
-No role split. The catalog is public product data keyed on services.id — Catalog V2, category → subcategory → service. A provider browsing what they can apply for and a customer browsing what they can book are reading the same tree; a second projection would be the moment service_families crept back in as a parallel identity.
+No role split. The catalog is public product data keyed on services.id — Catalog V2, category → subcategory → service. A provider browsing what they can apply for and a customer browsing what they can book are reading the same tree; a second projection would be the moment service_families crept back in as a parallel identity. Serviceability belongs to browsing rather than to booking for the same reason: it answers "can this be booked here" while the customer is still choosing, and it answers it identically for every surface.
 
 ### Search services
 
@@ -514,6 +517,20 @@ Legacy still aliased for this capability:
   - none
 
 No role split, and no role at all — the caller is a BUILD, not a person. The endpoint is public because the client being recalled may be too old to authenticate, and a kill switch reachable only with a credential cannot kill the builds that most need it. Every surface reads the same floor from the same file and applies the same comparison; a per-surface answer would let two clients disagree about whether the same version is supported. The web surfaces are listed because they reload and so are never stranded — they may read it, and it will never block them.
+
+### Fetch the contract this process implements
+
+- key: `core:contractDiscovery` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `api/v1/domains/health`
+- route families: `/openapi.json`
+
+Canonical:
+  - `GET /api/v1/openapi.json`
+
+Legacy still aliased for this capability:
+  - none
+
+No role split. Every client generates types from the same document, so a per-surface projection would defeat the point — the value is that all five are reading one contract. AUTHENTICATED rather than public, unlike buildProvenance: four fields of provenance exist to be checkable by somebody holding no credential, but a full API surface is a map, and every client that wants it already holds a token. The same digest also rides on every /api/v1 response in x-contract-sha256, so a client asks "am I stale?" without calling this at all.
 
 ### Read the support cases I raised on a booking
 

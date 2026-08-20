@@ -1,4 +1,5 @@
 import { db } from "../config";
+import { businessMonthLabel, businessMonthOf } from './sql/businessPeriod';
 import dbQuery, { pool } from "../db/dbQuery";
 import mongoDb from "../db/mongodbQuery";
 import { generateOTP } from "../helpers/otp";
@@ -2574,7 +2575,7 @@ export const getWorkerEarningsHistory = async (workerUid: string) => {
     dbQuery.query(
       `
       SELECT
-        TO_CHAR(DATE_TRUNC('month', bw.completed_at), 'YYYY-MM')   AS month,
+        ${businessMonthLabel('bw.completed_at', true)}   AS month,
         COUNT(d.id)                                                  AS jobs,
         COALESCE(SUM(d.total_amount), 0)                             AS total_collected,
         COALESCE(SUM(d.servana_share), 0)                            AS servana_deduction,
@@ -2588,8 +2589,8 @@ export const getWorkerEarningsHistory = async (workerUid: string) => {
        AND bw.worker_uid = d.worker_uid
        AND bw.status     = 'COMPLETED'
       WHERE d.worker_uid = $1
-      GROUP BY DATE_TRUNC('month', bw.completed_at)
-      ORDER BY DATE_TRUNC('month', bw.completed_at) DESC
+      GROUP BY ${businessMonthOf('bw.completed_at', true)}
+      ORDER BY ${businessMonthOf('bw.completed_at', true)} DESC
       `,
       [workerUid]
     ),

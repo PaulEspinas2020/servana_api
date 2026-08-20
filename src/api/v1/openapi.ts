@@ -54,7 +54,23 @@ export const SCHEMAS: Record<string, unknown> = {
     properties: {
       limit: { type: 'integer' },
       offset: { type: 'integer' },
-      total: { type: ['integer', 'null'], description: 'null when the total is not cheaply knowable.' },
+      total: {
+        type: 'integer',
+        minimum: 0,
+        description:
+          'The EXACT size of the filtered set, never null. This was previously declared '
+          + '`integer | null` with the note "null when the total is not cheaply knowable" — '
+          + 'a hedge against a cost nothing in this API pays. All four list endpoints derive '
+          + 'it from a real count: three from an array length, and the reviews list from '
+          + 'COUNT(*)::int, which parses to a JS number BECAUSE of the ::int cast (a bare '
+          + 'COUNT(*) is bigint and node-postgres would hand back a string). So the nullable '
+          + 'half was never reachable, and every client declared plain number anyway.'
+          + ' '
+          + 'If a total ever does become expensive, send a capped or estimated NUMBER and add '
+          + 'a sibling totalIsEstimate flag beside it — do not reintroduce null. That flag is '
+          + 'deliberately absent today: a field no producer ever sets is one every client '
+          + 'branches on for nothing. See TAB 06.',
+      },
       hasMore: { type: 'boolean' },
     },
   },
@@ -168,6 +184,30 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  CatalogServiceability: {
+    type: 'object',
+    required: ['serviceable', 'reason', 'defaulted'],
+    description:
+      'Whether a service can be booked at a point, answered before the customer fills in ' +
+      'a form rather than at submission. Deliberately a verdict and nothing more: the ' +
+      'coverage geometry and the legacy service id stay unexposed, as they are on every ' +
+      'other public catalog read.',
+    properties: {
+      serviceable: { type: 'boolean' },
+      reason: {
+        type: ['string', 'null'],
+        enum: ['OUTSIDE_SERVICE_AREA', 'UNKNOWN_SERVICE', 'INVALID_LOCATION', null],
+        description: 'Null when serviceable. INVALID_LOCATION means the point could not be judged.',
+      },
+      defaulted: {
+        type: 'boolean',
+        description:
+          'True when the service has no coverage configured and the Servana-supported ' +
+          'footprint decided the answer (§28). False when explicit coverage decided it.',
+      },
+    },
+  },
+
   CatalogRef: {
     type: 'string',
     pattern: '^(category|subcategory|service|addon):[0-9]+$',
@@ -250,7 +290,7 @@ export const SCHEMAS: Record<string, unknown> = {
           fullDescription: { type: ['string', 'null'] },
           inclusions: { type: 'array', items: { type: 'string' } },
           exclusions: { type: 'array', items: { type: 'string' } },
-          addons: { type: 'array', items: { type: 'object' } },
+          addons: { type: 'array', items: { $ref: '#/components/schemas/CatalogAddon' } },
           available: {
             type: 'boolean',
             description:
@@ -413,7 +453,18 @@ export const SCHEMAS: Record<string, unknown> = {
       idempotentReplay: { type: 'boolean', description: 'True when an identical request had already been applied.' },
       correlationId: { type: 'string' },
       timelineEventId: { type: ['integer', 'null'] },
-      state: { type: 'object', description: 'The caller-appropriate projection of the new state.' },
+      state: {
+        oneOf: [
+          { $ref: '#/components/schemas/CustomerBookingState' },
+          { $ref: '#/components/schemas/ProviderBookingState' },
+        ],
+        description:
+          'The caller-appropriate projection of the new state, so a client never has to '
+          + 'derive it. WHICH of the two arrives is decided by the caller seat, not by the '
+          + 'booking: a customer gets CustomerBookingState, a provider or admin gets '
+          + 'ProviderBookingState. The two are not interchangeable — one carries `detail` '
+          + 'and the other `nextAction`.',
+      },
     },
   },
 
@@ -461,7 +512,66 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
-  Booking: { type: 'object', description: 'A booking as produced by bookingService.formatBooking.' },
+  Booking: {
+    type: 'object',
+    required: ['bookingId', 'bookingCode', 'status', 'effectiveStatus'],
+    additionalProperties: true,
+    description:
+      'A booking as produced by bookingService.formatBooking.'
+      + ' '
+      + 'AN OPEN SHAPE, and deliberately declared as one. formatBooking spreads the whole '
+      + 'camelCased database row — `{ ...toCamel(raw) }` — and getBookingById selects '
+      + '`b.*` plus a dozen joined aliases, so the wire carries every column of `bookings` '
+      + 'and then some. The properties below are the fields the FORMATTER itself '
+      + 'guarantees; everything else is whatever the query selected that day. '
+      + 'additionalProperties is true because saying otherwise would be a lie, not because '
+      + 'the extra fields are unknowable.'
+      + ' '
+      + 'Note what this means for the v1 parity exemption: /api/v1 is exempt from '
+      + 'parityMiddleware so that a declared shape IS the wire, but formatBooking adds its '
+      + 'own aliases one layer down — bookingId, scheduleAt AND scheduledAt, providerUid, '
+      + 'customerId AND customerUid, statusLower, assignmentStatus. The exemption stops '
+      + 'the middleware, not the habit.'
+      + ' '
+      + 'CREDENTIALS ARE NOT IN THIS SHAPE. `bookings` stores otp_code and worker_code, '
+      + 'and the spread used to disclose both to every caller with booking access — '
+      + 'including the assigned provider, for whom worker_code is the doorstep proof they '
+      + 'are supposed to be GIVEN. formatBooking now omits them unless a caller that has '
+      + 'established the actor opts in. See tests/booking-credential-disclosure.test.ts.',
+    properties: {
+      bookingId: { type: 'integer', description: 'Added by the formatter when the row carries only `id`.' },
+      id: { type: 'integer', description: 'The raw primary key. Present because the row is spread.' },
+      bookingCode: {
+        type: 'string',
+        description: 'Human-readable, SVN-XXXXXX, derived from the id when the row has none.',
+      },
+      status: { type: 'string', description: 'The raw bookings.status column, uppercase as stored.' },
+      statusLower: {
+        type: 'string',
+        description: 'The same value lowercased, added for platforms that normalise. Not a second state.',
+      },
+      effectiveStatus: {
+        type: 'string',
+        description:
+          'DERIVED by deriveEffectiveBookingStatus from status and worker_status together. '
+          + 'The only status field here that reconciles the two columns.',
+      },
+      scheduleAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      scheduledAt: {
+        oneOf: [{ $ref: '#/components/schemas/UtcTimestamp' }],
+        description: 'The SAME value as scheduleAt. Two names for one column, both emitted.',
+      },
+      providerUid: { type: ['string', 'null'], description: 'Alias of worker_uid.' },
+      workerUid: { type: ['string', 'null'] },
+      customerUid: { type: ['string', 'null'], description: 'Alias of user_id.' },
+      customerId: {
+        type: ['string', 'null'],
+        description: 'The SAME value as customerUid. A string uid despite the name.',
+      },
+      assignmentStatus: { type: ['string', 'null'], description: 'Alias of booking_workers.status.' },
+      workerStatus: { type: ['string', 'null'] },
+    },
+  },
 
   BookingList: {
     type: 'object',
@@ -472,8 +582,59 @@ export const SCHEMAS: Record<string, unknown> = {
   BookingTimeline: {
     type: 'object',
     required: ['timeline'],
-    properties: { timeline: { type: 'array', items: { type: 'object' } } },
-    description: 'Operational history, voiced for the customer. Not the audit record (§16).',
+    description:
+      'Operational history, voiced for the customer. Not the audit record (§16).'
+      + '\n\nCORRECTED. This schema declared `timeline` as an ARRAY of untyped objects. '
+      + 'The handler answers ok(res, req, { timeline }) where timeline is the RETURN of '
+      + 'bookingService.getCustomerBookingTimeline — an OBJECT carrying { bookingId, '
+      + 'events, currentStep }. A client generated from the previous declaration would '
+      + 'have iterated `timeline` and found nothing, with no error anywhere. Nothing '
+      + 'caught it because `items: { type: object }` generates as an empty object, so no '
+      + 'client could bind tightly enough to notice the OUTER type was wrong either. '
+      + 'The wire is unchanged; the document now matches it.',
+    properties: {
+      timeline: {
+        type: 'object',
+        required: ['bookingId', 'events'],
+        properties: {
+          bookingId: { type: 'integer' },
+          events: {
+            type: 'array',
+            description: 'Oldest first, from projectTimelineForCustomer.',
+            items: { $ref: '#/components/schemas/CustomerTimelineEvent' },
+          },
+          currentStep: {
+            type: ['string', 'null'],
+            description:
+              'The code of the LAST event, or null when there are none. Derived, not stored.',
+          },
+        },
+      },
+    },
+  },
+  CustomerTimelineEvent: {
+    type: 'object',
+    required: ['code', 'label', 'actor', 'sequence'],
+    description:
+      'One timeline entry as the CUSTOMER sees it. Only `event_type` and `created_at` '
+      + 'cross from booking_timeline_events: `title`, `description` and `metadata` there '
+      + 'are admin-authored and must never reach a customer.',
+    properties: {
+      code: { type: 'string', description: 'The event code. Stable; the label is not.' },
+      label: {
+        type: 'string',
+        description:
+          'Customer-voiced, never a backend transition name (§5). PROVIDER_DECLINED '
+          + 'deliberately does not say the professional refused — §14 forbids exposing '
+          + 'declined providers.',
+      },
+      at: { $ref: '#/components/schemas/UtcTimestamp' },
+      actor: {
+        type: 'string',
+        description: "Falls back to 'SERVANA' when the provider seat does not map to a customer-facing actor.",
+      },
+      sequence: { type: 'integer' },
+    },
   },
 
   // ── Booking experiences (TAB 06) ─────────────────────────────────────────
@@ -643,7 +804,27 @@ export const SCHEMAS: Record<string, unknown> = {
       reasonCode: { type: ['string', 'null'] },
       appliedImmediately: { type: 'boolean', description: 'True while the provider is not a party to rescheduling.' },
       reasons: { type: 'array', items: { type: 'string' } },
-      verdict: { type: 'object', description: 'The policy verdict, including the notice window that applied to this actor.' },
+      verdict: {
+        type: 'object',
+        required: ['allowed', 'refusal', 'noticeHours', 'reasons'],
+        description:
+          'The policy verdict, including the notice window that applied to this actor. '
+          + 'From experiencePolicy.evaluateReschedule, which decides everything reachable '
+          + 'WITHOUT the provider calendar. PROVIDER_CONFLICT is deliberately not decided '
+          + 'there — it needs a query — so `allowed: true` here does not mean the '
+          + 'reschedule succeeded, only that policy did not refuse it.',
+        properties: {
+          allowed: { type: 'boolean' },
+          refusal: { type: ['string', 'null'], description: 'The refusal code when allowed is false.' },
+          noticeCutoff: {
+            type: ['string', 'null'],
+            format: 'date-time',
+            description: 'The earliest instant this actor could still have moved it to.',
+          },
+          noticeHours: { type: 'integer', description: 'The notice window that applied to THIS actor.' },
+          reasons: { type: 'array', items: { type: 'string' } },
+        },
+      },
     },
   },
 
@@ -700,7 +881,7 @@ export const SCHEMAS: Record<string, unknown> = {
     properties: {
       bookingId: { type: 'integer' },
       request: {
-        type: 'object',
+        allOf: [{ $ref: '#/components/schemas/AdditionalWorkRequest_Row' }],
         description:
           'The child request as stored: id, status (PENDING_ADMIN_APPROVAL → ' +
           'WAITING_FOR_PAYMENT → WAITING_WORKER_APPROVAL → ACCEPTED → IN_PROGRESS) and ' +
@@ -715,7 +896,7 @@ export const SCHEMAS: Record<string, unknown> = {
     required: ['bookingId', 'requests'],
     properties: {
       bookingId: { type: 'integer' },
-      requests: { type: 'array', items: { type: 'object' } },
+      requests: { type: 'array', items: { $ref: '#/components/schemas/AdditionalWorkRequest_Row' } },
     },
   },
 
@@ -777,15 +958,77 @@ export const SCHEMAS: Record<string, unknown> = {
 
   JobCard: {
     type: 'object',
+    required: ['bookingId', 'canonicalState', 'customer', 'address', 'availableActions'],
     description:
-      'A job card as produced by controllers/jobCardView.formatJobCard. Carries '
-      + 'the CANONICAL booking state alongside the legacy raw columns: '
-      + '`canonicalState` (one of the eleven machine states), `stateLabel`, '
-      + '`nextAction` and `terminal`. `status` and `workerStatus` are the raw '
-      + 'legacy columns, preserved for shipped clients and DEPRECATED — read '
-      + '`canonicalState` instead. `availableActions` is generated from the '
-      + 'canonical transition whitelist, so an action never appears for a state '
-      + 'the executor would refuse.',
+      'One job as the assigned provider sees it, from controllers/jobCardView.formatJobCard.'
+      + ' '
+      + 'An EXPLICIT allow-list, unlike Booking: the formatter names every field it emits, '
+      + 'which is why the one-time codes on the booking row never reached this response '
+      + 'even when the same columns were leaking through formatBooking. That is the '
+      + 'argument bookingPaymentService.projectFor makes in this codebase — an additive '
+      + 'projection discloses only what it names.'
+      + ' '
+      + 'DISCLOSURE IS TIERED. Customer identity and the exact address appear only after '
+      + 'the provider has accepted; before that the name is masked and the address narrows '
+      + 'to city and country; and a relinquished job discloses neither. So a null here is '
+      + 'frequently "not yet entitled", not "not recorded".',
+    properties: {
+      bookingId: { type: 'integer' },
+      workerId: { type: ['string', 'null'] },
+      status: { type: 'string', description: 'DEPRECATED — raw bookings.status. Read canonicalState.' },
+      workerStatus: { type: ['string', 'null'], description: 'DEPRECATED — raw booking_workers.status.' },
+      scheduleAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      paymentMethod: { type: ['string', 'null'] },
+      paymentStatus: { type: ['string', 'null'] },
+      customer: {
+        type: 'object',
+        description: 'Masked until the job is accepted; emptied when it is relinquished.',
+        properties: {
+          uid: { type: ['string', 'null'] },
+          name: { type: 'string', description: 'Masked before acceptance; empty string once relinquished.' },
+          phone: { type: ['string', 'null'], description: 'NULL until the job is accepted.' },
+        },
+      },
+      address: {
+        type: 'object',
+        description:
+          'Before acceptance only city, country and label are disclosed. Coordinates come '
+          + 'from the stored point and are never fabricated from a city centre — a null lat '
+          + 'means no exact point was recorded, not that one was approximated.',
+        properties: {
+          addressOne: { type: ['string', 'null'] },
+          addressTwo: { type: ['string', 'null'] },
+          city: { type: ['string', 'null'] },
+          zipCode: { type: ['string', 'null'] },
+          country: { type: ['string', 'null'] },
+          label: { type: ['string', 'null'] },
+          instructions: { type: ['string', 'null'] },
+          lat: { type: ['number', 'null'] },
+          lng: { type: ['number', 'null'] },
+        },
+      },
+      service: {
+        type: 'object',
+        properties: { name: { type: ['string', 'null'] }, type: { type: ['string', 'null'] } },
+      },
+      addOns: { description: 'The pricing_breakdown jsonb, passed through unshaped.' },
+      assignedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      startedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      completedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      canonicalState: { type: 'string' },
+      stateLabel: { type: 'string', description: 'Provider voice: what they do next, not what the booking is.' },
+      nextAction: { type: ['string', 'null'] },
+      terminal: { type: 'boolean' },
+      availableActions: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'GENERATED from the transition whitelist, not switched on a raw status string. '
+          + 'Where the two status columns disagree it answers about the BOOKING: a booking '
+          + 'cancelled while the assignment row still read ACCEPTED is read-only here, and '
+          + 'used to offer MARK_EN_ROUTE.',
+      },
+    },
   },
 
   JobCardList: {
@@ -923,8 +1166,40 @@ export const SCHEMAS: Record<string, unknown> = {
 
   MessageReport: {
     type: 'object',
-    description: 'The receipt for a message reported to moderation.',
-    properties: { reportId: { type: 'string' } },
+    required: ['reportId'],
+    description:
+      'The RECEIPT for a message reported to moderation — not the report itself, and not '
+      + 'a moderation queue row.'
+      + ' '
+      + 'TAB 07 reports that this name "describes a different object" from the admin '
+      + 'portal DTO of the same name, and that two objects are travelling under one name. '
+      + 'Both halves are true and neither side is wrong; they are describing DIFFERENT '
+      + 'ENDPOINTS ON DIFFERENT TREES.'
+      + ' '
+      + 'This schema is the 201 from POST /api/v1/conversations/{id}/messages/{id}/report, '
+      + 'and chat.service.reportMessage is typed `Promise<{ reportId: string }>` and returns '
+      + '`{ reportId: String(report.id) }`. One field is the whole answer: the filer needs a '
+      + 'handle, not the queue.'
+      + ' '
+      + 'What the portal holds is a MODERATION QUEUE ROW, from '
+      + 'GET /api/admin/communications/reports on the legacy admin tree — id, messageId, '
+      + 'reportedByUid, reason, messageBody, conversationId, status, resolvedByUid, '
+      + 'resolvedAt, resolutionNote, createdAt. That entity is published as '
+      + '`AdminMessageReport` in docs/api/openapi.admin.json so the collision cannot '
+      + 'persist. Note it answers camelCase from a mapper, while the PATCH on the same '
+      + 'entity returns the raw snake_case row — see TAB 01.'
+      + ' '
+      + 'reportId is REQUIRED: the service cannot return without it, and an optional field '
+      + 'that is always present teaches every client to null-check for nothing.',
+    properties: {
+      reportId: {
+        type: 'string',
+        description:
+          'A STRING — chat_message_reports.id wrapped in String() by the service. The '
+          + 'admin queue row exposes the same key as an INTEGER `id`, unstringified. Two '
+          + 'representations of one row, and the reason each is declared where it is used.',
+      },
+    },
   },
 
   NotificationPreferencePatch: {
@@ -993,7 +1268,10 @@ export const SCHEMAS: Record<string, unknown> = {
   ProviderReviewList: {
     type: 'object',
     required: ['reviews'],
-    properties: { reviews: { type: 'array', items: { type: 'object' } } },
+    properties: {
+      reviews: { type: 'array', items: { $ref: '#/components/schemas/PublicReview' } },
+      total: { type: 'integer', description: 'An exact COUNT(*)::int over the same filters. Never null.' },
+    },
     description: 'No customer identity is projected (§58).',
   },
 
@@ -1248,7 +1526,9 @@ export const SCHEMAS: Record<string, unknown> = {
           gross: { type: 'number', description: 'Base price plus PAID additional work.' },
           grossMinor: { type: 'integer' },
           basePrice: { type: 'number' },
+          basePriceMinor: { type: 'integer' },
           additionalWork: { type: 'number', description: 'Charged through its own checkout.' },
+          additionalWorkMinor: { type: 'integer' },
         },
       },
       earning: {
@@ -1267,13 +1547,99 @@ export const SCHEMAS: Record<string, unknown> = {
         description: 'CUSTOMER and ADMIN. Never disclosed to the provider.',
         properties: {
           refundedAmount: { type: 'number' },
+          refundedAmountMinor: { type: 'integer' },
           refundedAt: { type: ['string', 'null'], format: 'date-time' },
-          refundable: { type: 'number', description: 'Captured minus already refunded. Never below zero.' },
+          refundable: {
+            type: 'number',
+            description:
+              'Captured minus already refunded. Never below zero.'
+              + ' '
+              + 'BOOKING-LEVEL, and therefore NOT the maximum for a single refund request. '
+              + 'It is gross minus refunded, where gross is final_price PLUS paid '
+              + 'additional work — and paid additional work is charged through its OWN '
+              + 'payments row (earningsBasis.paidAdditionalWorkSql sums payments where '
+              + 'additional_request_id IS NOT NULL).'
+              + ' '
+              + 'adminFinanceService.openRefundReview bounds an operator-entered amount by '
+              + 'a PAYMENT-level figure instead: payments.amount minus refunded_amount, for '
+              + 'the one row named by paymentId. On any booking with paid additional work '
+              + 'this field is larger, by exactly that amount. A client that bounds its '
+              + 'input with this number will let an operator enter a figure the server then '
+              + 'refuses — using a ceiling the system itself supplied. Bound by the payment, '
+              + 'display this. See TAB 10.',
+          },
           refundableMinor: { type: 'integer' },
         },
       },
-      provider: { type: 'object', description: 'ADMIN only.' },
-      servana: { type: 'object', description: 'ADMIN only — the retained revenue and commission rate.' },
+      provider: {
+        type: 'object',
+        required: ['uid', 'economicModel', 'payable', 'isEstimate'],
+        description:
+          'ADMIN only. Present because projectFor builds an explicit per-actor DTO rather '
+          + 'than deleting fields from a shared object — a subtractive projection discloses '
+          + 'every field somebody forgets to remove. Read from financeLedger.provider.',
+        properties: {
+          uid: { type: ['string', 'null'] },
+          economicModel: {
+            type: 'string',
+            enum: ['EXTERNAL_PROVIDER', 'INTERNAL_FIXER'],
+            description: 'An INTERNAL_FIXER earns nothing; the whole gross is Servana revenue.',
+          },
+          payable: {
+            type: 'number',
+            description:
+              'What the provider is owed, in PHP major units. ZERO for an internal fixer, '
+              + 'always — and withheldReason then says why. See TAB 04 on money units.',
+          },
+          payableMinor: { type: 'integer' },
+          isEstimate: {
+            type: 'boolean',
+            description:
+              'FALSE means `payable` came from a real disbursement row; TRUE means it was '
+              + 'derived from the split and the actual payout has not been written yet.',
+          },
+          withheldReason: {
+            type: ['string', 'null'],
+            description: 'Present when the model earns nothing, so a zero is never unexplained.',
+          },
+        },
+      },
+      servana: {
+        type: 'object',
+        required: ['revenue', 'commissionRate'],
+        description: 'ADMIN only — the retained revenue and commission rate.',
+        properties: {
+          revenue: {
+            type: 'number',
+            description:
+              'Everything not owed to the provider, in PHP major units. The WHOLE gross for '
+              + 'an internal fixer.',
+          },
+          revenueMinor: { type: 'integer' },
+          commissionRate: {
+            type: 'number',
+            minimum: 0,
+            maximum: 1,
+            description:
+              'A FRACTION of gross in [0, 1], not a percentage. 0.2 means 20%. The value is '
+              + 'SERVANA_COMMISSION_RATE in services/revenueSplit.ts, and its sibling '
+              + 'PROVIDER_SHARE_RATE is 0.8 — the two sum to exactly 1, which is what settles '
+              + 'the unit beyond argument. tests/revenue-split asserts that sum.'
+              + ' '
+              + 'TWO VALUES REACH THE WIRE TODAY, and the second one matters: financePolicy '
+              + 'splitFor returns SERVANA_COMMISSION_RATE for an EXTERNAL_PROVIDER and '
+              + 'exactly 1 for an INTERNAL_FIXER, who earns no job share so Servana retains '
+              + 'the whole gross. So 1 is a REAL value, not a theoretical edge — which is '
+              + 'precisely where the magnitude heuristic `rate <= 1 ? rate * 100 : rate` is '
+              + 'ambiguous, because 1 could be read as 100% or as 1%. Read it as a fraction '
+              + 'and 1 is 100%, which is what an internal fixer means. Never infer the unit '
+              + 'from the magnitude.'
+              + ' '
+              + 'Contrast providerSharePercent on ProviderEarningsTransactions, which is a '
+              + 'whole-number PERCENT in [0, 100] on this same API. See TAB 05.',
+          },
+        },
+      },
       payout: {
         type: 'object',
         description: 'PROVIDER and ADMIN. `blockedBy` names the ONE rule refusing release.',
@@ -1353,6 +1719,19 @@ export const SCHEMAS: Record<string, unknown> = {
       totalRefunded: { type: 'number' },
       pendingRecordedAmount: { type: 'number', description: 'Backed by a disbursement row.' },
       pendingEstimatedAmount: { type: 'number', description: 'Derived; no disbursement row yet.' },
+      totalEarnedMinor: { type: 'integer' },
+      totalPaidMinor: { type: 'integer' },
+      totalPendingMinor: { type: 'integer' },
+      totalFailedMinor: { type: 'integer' },
+      totalRefundedMinor: { type: 'integer' },
+      pendingRecordedAmountMinor: { type: 'integer' },
+      pendingEstimatedAmountMinor: {
+        type: 'integer',
+        description:
+          'The seven Minor fields are derived from the SAME expressions as their majors, '
+          + 'not re-summed — a twin computed independently is a second and subtly different '
+          + 'source for one number. Compute with these; display the majors.',
+      },
       pendingIsEstimate: { type: 'boolean' },
       estimatedJobsCount: { type: 'integer' },
       jobsCount: { type: 'integer' },
@@ -1378,7 +1757,27 @@ export const SCHEMAS: Record<string, unknown> = {
         bookingAmountMinor: { type: 'integer' },
         providerShareAmount: { type: 'number' },
         providerShareAmountMinor: { type: 'integer' },
-        providerSharePercent: { type: 'integer', description: '0 for an INTERNAL_FIXER.' },
+        providerSharePercent: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 100,
+          description:
+            'A WHOLE-NUMBER PERCENTAGE in [0, 100]. 80 means 80%. It is NOT a fraction, '
+            + 'and this is the field on which that has already gone wrong once: '
+            + 'providerController records that Provider Web kept its own constant named '
+            + 'PROVIDER_SHARE_PERCENT holding a FRACTION — eight tenths — under a name '
+            + 'saying percent, against a backend constant of eighty. Same name, same '
+            + 'concept, units a hundredfold apart.'
+            + ' '
+            + 'Note the asymmetry with BookingPayment.servana.commissionRate, which is a '
+            + 'FRACTION in [0, 1] on the same API. Two representations of one split exist '
+            + 'because two audiences want different ones; neither NAME says which, so both '
+            + 'now say it here. Derived from PROVIDER_SHARE_PERCENT, which '
+            + 'tests/provider-earnings-rate-and-eta pins to Math.round(PROVIDER_SHARE_RATE '
+            + '* 100).'
+            + ' '
+            + '0 for an INTERNAL_FIXER, who earns no job share at all.',
+        },
         isEstimate: { type: 'boolean' },
         economicModel: { type: 'string', enum: ['EXTERNAL_PROVIDER', 'INTERNAL_FIXER'] },
         withheldReason: { type: ['string', 'null'] },
@@ -1465,6 +1864,19 @@ export const SCHEMAS: Record<string, unknown> = {
           outstandingProviderLiability: {
             type: 'number',
             description: 'Accrued minus released — what Servana still owes providers.',
+          },
+          capturedAmountMinor: { type: 'integer' },
+          refundedAmountMinor: { type: 'integer' },
+          accruedProviderEarningsMinor: { type: 'integer' },
+          releasedPayoutsMinor: { type: 'integer' },
+          internalFixerRevenueMinor: { type: 'integer' },
+          outstandingProviderLiabilityMinor: {
+            type: 'integer',
+            description:
+              'This is the screen the minor units exist FOR. A reconciliation report is '
+              + 'where a float number of pesos surfaces its drift, and this field is a '
+              + 'SUBTRACTION of two floats — exactly the arithmetic that accumulates it. '
+              + 'Reconcile on the Minor fields.',
           },
         },
       },
@@ -1874,7 +2286,12 @@ export const SCHEMAS: Record<string, unknown> = {
       role: { type: 'string', enum: ['customer', 'provider'] },
       percent: {
         type: 'integer',
-        description: 'Counts EVERY requirement including the cosmetic ones - what a progress bar means to a person.',
+        minimum: 0,
+        maximum: 100,
+        description:
+          'A WHOLE-NUMBER PERCENTAGE in [0, 100]. 80 means 80%, not 0.8. '
+          + 'Counts EVERY requirement including the cosmetic ones - what a progress bar '
+          + 'means to a person.',
       },
       isComplete: { type: 'boolean' },
       canProceed: {
@@ -2071,29 +2488,80 @@ export const SCHEMAS: Record<string, unknown> = {
 
   ProviderTimeOff: {
     type: 'object',
+    required: ['id', 'startDate', 'endDate', 'allDay', 'status', 'createdAt'],
     description:
-      'One period, as STORED. bookingConflicts is present on creation: time off does NOT ' +
-      'cancel accepted work, and a response silent about that would leave a provider ' +
-      'assuming it had.',
+      'One period, as STORED. bookingConflicts is present on creation: time off does NOT '
+      + 'cancel accepted work, and a response silent about that would leave a provider '
+      + 'assuming it had.'
+      + ' '
+      + 'CORRECTED IN TAB 07. `id` was declared `string` here and `number` in the admin '
+      + 'portal, and the portal deliberately did not change on a guess — correctly, because '
+      + 'the CONTRACT was the wrong one. `worker_time_off.id` is `integer NOT NULL`, '
+      + 'node-postgres parses int4 to a JS number, and this repository own '
+      + '`interface ProviderTimeOff` has always declared `id: number`. Three sources agreed '
+      + 'and the document disagreed with all of them. A client that had trusted the '
+      + 'contract and compared `id === "5"` would never have matched.',
     properties: {
-      id: { type: 'string' },
-      startDate: { type: 'string', format: 'date' },
+      id: {
+        type: 'integer',
+        description:
+          'A NUMBER. The column is integer and nothing stringifies it — contrast '
+          + 'NotificationTemplate.id and CommunicationEvent.id on the admin tree, which are '
+          + 'wrapped in String() by their mappers and really are strings.',
+      },
+      startDate: {
+        type: 'string',
+        format: 'date',
+        description: 'YYYY-MM-DD. A DATE column, deliberately left unparsed — a date has no zone.',
+      },
       endDate: { type: 'string', format: 'date' },
-      allDay: { type: 'boolean' },
-      startTime: { type: ['string', 'null'] },
-      endTime: { type: ['string', 'null'] },
-      reason: { type: 'string' },
+      allDay: {
+        type: 'boolean',
+        description: 'False only for a single-day window with explicit start and end times.',
+      },
+      startTime: { type: ['string', 'null'], description: 'HH:mm, null when allDay.' },
+      endTime: { type: ['string', 'null'], description: 'HH:mm, null when allDay.' },
+      reason: {
+        type: ['string', 'null'],
+        description: 'NULLABLE — the column is `reason text` with no NOT NULL.',
+      },
       note: { type: ['string', 'null'] },
-      createdAt: { type: ['string', 'null'], format: 'date-time' },
-      bookingConflicts: { type: 'array', items: { type: 'object', additionalProperties: true } },
+      status: {
+        type: 'string',
+        enum: ['active', 'cancelled'],
+        description:
+          'Cancelling does not delete the row, so a cancelled period is still returned by '
+          + 'the list. A client filtering for live time off must read this.',
+      },
+      createdAt: {
+        type: 'string',
+        format: 'date-time',
+        description: 'NOT NULL in the schema, so never null here.',
+      },
+      createdBy: { type: ['string', 'null'] },
+      cancelledAt: { type: ['string', 'null'], format: 'date-time' },
+      cancelledBy: { type: ['string', 'null'] },
+      bookingConflicts: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: true },
+        description:
+          'Present on CREATION only. Time off does not cancel accepted work; these are the '
+          + 'bookings that now overlap it and are still the provider responsibility.',
+      },
       conflictNotice: { type: ['string', 'null'] },
     },
   },
 
   ProviderTimeOffList: {
     type: 'object',
+    required: ['timeOff'],
     properties: {
-      timeOff: { type: 'array', items: { type: 'object', additionalProperties: true } },
+      timeOff: {
+        type: 'array',
+        items: { $ref: '#/components/schemas/ProviderTimeOff' },
+        description:
+          'Ordered by start_date ascending. Includes CANCELLED periods — read `status`.',
+      },
     },
   },
 
@@ -2512,17 +2980,311 @@ export const SCHEMAS: Record<string, unknown> = {
       },
     },
   },
-  EarningsSummary: { type: 'object', description: 'PLANNED — owned by the provider-earnings domain command.' },
-  AdminBookingList: { type: 'object', description: 'PLANNED — owned by the admin-bookings domain command.' },
-  AssignmentCandidatePool: {
-    type: 'object',
+  EarningsSummary: {
+    allOf: [{ $ref: '#/components/schemas/ProviderEarningsSummary' }],
+    deprecated: true,
     description:
-      'PLANNED — the ranked candidate list under `data`, plus `diagnostics`: population, '
-      + 'evaluated, the cap applied, how many providers hold the service at all, the dominant '
-      + 'blocker and a zero-candidate reason code. Shaped by services/booking/candidateDiagnostics.',
+      'DEPRECATED ALIAS. Nothing references this name: the earnings endpoint declares '
+      + 'ProviderEarningsSummary, and a reference count over the generated document finds '
+      + 'zero for this one. It was an empty object that no endpoint served and no schema '
+      + 'pointed at — a name with nothing behind it.'
+      + ' '
+      + 'Kept as an alias rather than deleted, because a client may already have generated '
+      + 'a type from the name. Aliasing gives that type a real shape instead of '
+      + 'Record<string, never>, which is strictly better for anyone holding it, and lets '
+      + 'the name be removed later on evidence rather than on assumption.',
   },
-  AdminAssignRequest: { type: 'object', description: 'PLANNED — providerUid and an optional reason.' },
-  AdminReassignRequest: { type: 'object', description: 'PLANNED — providerUid and a REQUIRED reason; the override is audited.' },
+  AdminBookingList: {
+    type: 'object',
+    required: ['rows', 'total', 'page', 'limit'],
+    description:
+      'The admin operations list. Read from adminBookingService.getAdminBookings, which '
+      + 'returns { rows, total, page, limit } — note ROWS, not `items` and not the v1 '
+      + '`data`/`meta` pagination shape used elsewhere on this surface. Documented as it '
+      + 'stands rather than renamed: a rename bundled into a documentation pass is a change '
+      + 'nobody can review.',
+    properties: {
+      rows: { type: 'array', items: { $ref: '#/components/schemas/AdminBookingRow' } },
+      total: {
+        type: 'integer',
+        description:
+          'An exact COUNT(*) over the filtered set, never null. Contrast PageMeta.total, '
+          + 'which the contract declares nullable — see TAB 06.',
+      },
+      page: { type: 'integer', description: 'Clamped to a minimum of 1.' },
+      limit: {
+        type: 'integer',
+        description: 'Clamped to 1..100. A larger request is capped silently, not refused.',
+      },
+    },
+  },
+  AdminBookingRow: {
+    type: 'object',
+    required: ['bookingId', 'canonicalState', 'stateGroup', 'terminal', 'customerType'],
+    description:
+      'One row of the admin operations list, as the mapper inside getAdminBookings builds '
+      + 'it. Every `null` here is a COALESCE in that mapper, so null means "the column was '
+      + 'null", never "the field was omitted".',
+    properties: {
+      bookingId: { type: 'integer' },
+      rawStatus: { type: ['string', 'null'], description: 'The legacy bookings.status column, unmapped.' },
+      operationsStatus: {
+        type: 'string',
+        description:
+          'The LEGACY operations vocabulary. It cannot express EN_ROUTE or ARRIVED and '
+          + 'reports both as `accepted`. It travels beside canonicalState, never instead of '
+          + 'it, because portal badge maps are still keyed on this union.',
+      },
+      canonicalState: {
+        type: 'string',
+        description:
+          'The authoritative state, read from the COMPUTED column rather than re-derived, '
+          + 'so a row cannot display one state while having been filtered on another.',
+      },
+      stateGroup: { type: 'string' },
+      stateLabel: { type: 'string' },
+      stateIsCollapsedInLegacyField: {
+        type: 'boolean',
+        description: 'True when operationsStatus cannot express canonicalState — the EN_ROUTE/ARRIVED case.',
+      },
+      terminal: { type: 'boolean' },
+      customerType: { type: 'string', enum: ['guest', 'client'], description: "Defaults to 'client'." },
+      customerUid: { type: ['string', 'null'] },
+      guestCustomerId: { type: ['string', 'null'] },
+      customerName: {
+        type: ['string', 'null'],
+        description: 'Trimmed; an all-whitespace name becomes null rather than an empty string.',
+      },
+      providerUid: { type: ['string', 'null'] },
+      providerName: { type: ['string', 'null'], description: 'Trimmed, as customerName.' },
+      assignmentStatus: { type: ['string', 'null'], description: 'The worker_status column.' },
+      confirmationSource: {
+        type: ['string', 'null'],
+        enum: ['admin_on_behalf_of_provider', null],
+        description: 'Non-null only when an admin confirmed on a provider behalf.',
+      },
+      serviceId: { type: ['integer', 'null'] },
+      serviceOptionId: { type: ['integer', 'null'] },
+      serviceName: { type: ['string', 'null'] },
+      specificServiceName: { type: ['string', 'null'] },
+      scheduledAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      quotedPrice: { $ref: '#/components/schemas/MoneyRaw' },
+      finalPrice: { $ref: '#/components/schemas/MoneyRaw' },
+      paymentMethod: { type: ['string', 'null'] },
+      paymentStatus: { type: ['string', 'null'] },
+      branchId: { type: ['integer', 'null'] },
+      branchName: { type: ['string', 'null'] },
+      branchCity: { type: ['string', 'null'] },
+      isUnassigned: { type: 'boolean', description: 'Derived: worker_uid is absent.' },
+      isLate: {
+        type: 'boolean',
+        description:
+          'Derived at READ TIME from scheduled_at < now(), excluding completed and '
+          + 'cancelled. It is a property of when you asked, not a stored fact.',
+      },
+      hasPaymentIssue: { type: 'boolean', description: "Derived: payment_status in (FAILED, REFUND_PENDING)." },
+      hasDispute: { type: 'boolean' },
+      needsAdminAction: {
+        type: 'boolean',
+        description: "Derived: unassigned AND operationsStatus in (new, awaiting_assignment).",
+      },
+      createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      updatedAt: {
+        type: 'null',
+        description:
+          'ALWAYS null. The mapper hard-codes `updatedAt: null` — it is a constant, not a '
+          + 'signal, and a client must not read it as "never updated". Declared as type null '
+          + 'so a generated client cannot mistake it for a timestamp that might arrive.',
+      },
+    },
+  },
+  AssignmentCandidatePool: {
+    type: 'array',
+    items: { $ref: '#/components/schemas/AssignmentCandidate' },
+    description:
+      'The ranked candidate list. An ARRAY, not an object: the handler calls '
+      + 'ok(res, req, candidates, { diagnostics }), so `data` is the candidates and the '
+      + 'diagnostics ride in `meta` — the legacy route put them in a sibling key for the '
+      + 'same reason, that widening the array under `data` later is a breaking change. '
+      + 'The diagnostics are CandidatePoolDiagnostics.',
+  },
+  AssignmentCandidate: {
+    type: 'object',
+    required: ['providerUid', 'eligible', 'score', 'reasons', 'checks', 'provider'],
+    description:
+      'One evaluated provider, from providerEligibilityEngine. This is the PREVIEW of a '
+      + 'mutation and runs the same PROVIDER_CAPABILITY_SQL the assign call commits with: a '
+      + 'preview narrower than its committer does not fail safe, it hides assignable '
+      + 'providers from the operator deciding.',
+    properties: {
+      providerUid: { type: 'string' },
+      eligible: { type: 'boolean' },
+      score: { type: 'integer', minimum: 0, maximum: 100, description: '0-100, higher is a better candidate. The sort key.' },
+      reasons: { type: 'array', items: { $ref: '#/components/schemas/EligibilityReason' } },
+      checks: {
+        type: 'object',
+        required: [
+          'accountActive', 'activationActive', 'notArchived', 'hasActiveService',
+          'servicePolicyOk', 'availabilityOk', 'serviceAreaOk', 'complianceOk',
+        ],
+        description: 'Every stage evaluated, so an operator sees which one refused rather than only that one did.',
+        properties: {
+          accountActive: { type: 'boolean' },
+          activationActive: { type: 'boolean' },
+          notArchived: { type: 'boolean' },
+          hasActiveService: { type: 'boolean' },
+          servicePolicyOk: { type: 'boolean' },
+          availabilityOk: { type: 'boolean' },
+          serviceAreaOk: { type: 'boolean' },
+          complianceOk: { type: 'boolean' },
+        },
+      },
+      provider: {
+        type: 'object',
+        required: ['uid', 'name', 'email', 'activeServices'],
+        properties: {
+          uid: { type: 'string' },
+          name: { type: 'string' },
+          email: { type: 'string' },
+          phone: { type: ['string', 'null'] },
+          avatarUrl: { type: ['string', 'null'] },
+          activeServices: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+  },
+  EligibilityReason: {
+    type: 'object',
+    required: ['code', 'severity', 'message'],
+    description:
+      'Why a provider is or is not assignable. `code` is an OPEN union — the engine types '
+      + 'it as EligibilityCheckCode | string — so a client must not switch on it without a '
+      + 'default branch.',
+    properties: {
+      code: {
+        type: 'string',
+        description:
+          'Known codes: ACCOUNT_INACTIVE, ACCOUNT_ARCHIVED, NO_ACTIVE_SERVICE, '
+          + 'SERVICE_GRANT_INACTIVE, TIME_OFF, BOOKING_CONFLICT, NO_AVAILABILITY_SET, '
+          + 'DAY_NOT_AVAILABLE, OUTSIDE_SCHEDULE_WINDOW, NO_SERVICE_AREA, CITY_NOT_IN_AREA, '
+          + 'BRANCH_NOT_IN_AREA, DEFAULT_ALL_CITIES, ELIGIBLE. NOT declared as an enum, '
+          + 'because the engine permits any string and an exact enum would make a new code a '
+          + 'compile error in every client.',
+      },
+      severity: { type: 'string', enum: ['info', 'warning', 'blocker'] },
+      message: { type: 'string' },
+    },
+  },
+  CandidatePoolDiagnostics: {
+    type: 'object',
+    required: ['capabilityEvaluated', 'population', 'evaluated', 'truncated', 'eligible', 'blocked'],
+    description:
+      'Why the pool is the size it is. Carried in `meta.diagnostics` on the '
+      + 'assignment-candidates response. A count alone cannot answer, months later, whether '
+      + 'supply was healthy at the moment of an assignment.',
+    properties: {
+      serviceId: { type: ['string', 'null'] },
+      capabilityEvaluated: {
+        type: 'boolean',
+        description:
+          'FALSE means the booking resolved to no canonical service, so the capability stage '
+          + 'was SKIPPED and every provider listed is "eligible" for a job nobody was checked '
+          + 'against. That is a more dangerous pool than an empty one and it shows up in no '
+          + 'count — read this before trusting `eligible`.',
+      },
+      population: { type: 'integer', description: 'Providers returned by the population query.' },
+      evaluated: { type: 'integer', description: 'Providers actually evaluated. Lower than population means capped.' },
+      truncated: { type: 'boolean' },
+      cap: { type: ['integer', 'null'], description: 'CANDIDATE_POOL_CAP, currently 20. Named and reported so "no providers available" can never again mean "the ones who could do it sort after the twentieth first name".' },
+      capable: { type: ['integer', 'null'], description: 'Providers holding the canonical service grant. null = not measured.' },
+      eligible: { type: 'integer' },
+      blocked: { type: 'integer' },
+      primaryBlockers: {
+        type: 'object',
+        additionalProperties: { type: 'integer' },
+        description: 'One entry per blocked provider, attributed to its EARLIEST blocker by BLOCKER_PRECEDENCE. Sums to `blocked`.',
+      },
+      blockerOccurrences: {
+        type: 'object',
+        additionalProperties: { type: 'integer' },
+        description: 'Every blocker seen, counted once per provider. Sums HIGHER than `blocked`, deliberately.',
+      },
+      dominantBlocker: { type: ['string', 'null'] },
+      zeroCandidateReason: {
+        type: ['string', 'null'],
+        enum: [
+          'BOOKING_HAS_NO_SERVICE', 'NO_PROVIDER_POPULATION', 'NO_PROVIDER_HAS_CAPABILITY',
+          'POOL_TRUNCATED_BEFORE_EVALUATION', 'ALL_CANDIDATES_BLOCKED', null,
+        ],
+      },
+      zeroCandidateMessage: { type: ['string', 'null'] },
+      supplyCollapse: {
+        type: 'object',
+        required: ['suspected'],
+        properties: {
+          suspected: { type: 'boolean' },
+          detail: { type: ['string', 'null'], description: 'The arithmetic that raised it, in words.' },
+        },
+      },
+      capabilitySource: {
+        type: 'object',
+        description:
+          'The capability-source split. `canonicalCovers: false` means this pool exists ONLY '
+          + 'because the legacy fallback is still in the predicate — remove it today and these '
+          + 'providers stop being assignable.',
+        properties: {
+          canonicalServiceId: { type: ['string', 'null'] },
+          legacyFamilyId: { type: ['string', 'null'] },
+          capableCanonical: { type: ['integer', 'null'] },
+          capableLegacyOnly: { type: ['integer', 'null'] },
+          canonicalCovers: { type: ['boolean', 'null'] },
+        },
+      },
+    },
+  },
+  AdminAssignRequest: {
+    type: 'object',
+    required: ['providerUid'],
+    description: 'Assign a provider to an UNASSIGNED booking. Read from the admin.bookings.assign handler.',
+    properties: {
+      providerUid: {
+        type: 'string',
+        minLength: 1,
+        description: 'Rejected when empty or absent — readNonEmpty, not a truthiness check.',
+      },
+      reason: {
+        type: 'string',
+        description:
+          'OPTIONAL here and REQUIRED on reassign. The asymmetry is deliberate: a first '
+          + 'assignment takes nothing away from anybody, so it needs no justification.',
+      },
+    },
+  },
+  AdminReassignRequest: {
+    type: 'object',
+    required: ['toProviderUid', 'reason'],
+    description:
+      'Move an assigned booking from one provider to another. NOTE the field name: the '
+      + 'handler reads `toProviderUid`, NOT `providerUid`. The previous description of this '
+      + 'schema said providerUid, and a client built from that sentence would have sent a '
+      + 'body the handler rejects as missing.',
+    properties: {
+      toProviderUid: {
+        type: 'string',
+        minLength: 1,
+        description: 'The provider receiving the job. The one losing it is read from the booking.',
+      },
+      reason: {
+        type: 'string',
+        minLength: 1,
+        description:
+          'MANDATORY, and enforced twice — readNonEmpty in the handler and a second check in '
+          + 'adminReassignProvider. Taking a job from a provider who already has it is an '
+          + 'override, and an override without a stated reason is an audit record that cannot '
+          + 'answer the only question it will ever be asked.',
+      },
+    },
+  },
   RefundFailureRequest: {
     type: 'object',
     required: ['failureReason'],
@@ -2540,7 +3302,311 @@ export const SCHEMAS: Record<string, unknown> = {
       status: { type: 'string', enum: ['failed'], description: 'The terminal reached.' },
     },
   },
-  AdminBookingActionResult: { type: 'object', description: 'PLANNED — the canonical booking projection after the transition.' },
+  /**
+   * Retained as a UNION, not deleted.
+   *
+   * This one name was the declared response of BOTH assign and reassign, and
+   * reading the two services shows they return DIFFERENT objects: assign
+   * answers { bookingId, providerUid, providerName, status }, reassign answers
+   * { bookingId, fromProviderUid, toProviderUid, providerName } and carries no
+   * `status` at all. One schema could never have described both.
+   *
+   * Each endpoint now declares its own precise shape. This name stays, as a
+   * oneOf over the two, so a client that pinned it still resolves — additive
+   * per the expand/migrate/contract rule, rather than a rename that breaks a
+   * generated client the day it lands.
+   */
+  AdminBookingActionResult: {
+    oneOf: [
+      { $ref: '#/components/schemas/AdminAssignResult' },
+      { $ref: '#/components/schemas/AdminReassignResult' },
+    ],
+    description:
+      'DEPRECATED as a response type. Prefer AdminAssignResult or AdminReassignResult — '
+      + 'this name described two different objects and could not be bound to either.',
+  },
+  AdminAssignResult: {
+    type: 'object',
+    required: ['bookingId', 'providerUid', 'status'],
+    description: 'Read from adminBookingService.adminAssignProvider. Both of its return paths.',
+    properties: {
+      bookingId: { type: 'integer' },
+      providerUid: { type: 'string' },
+      providerName: { type: ['string', 'null'] },
+      status: {
+        type: 'string',
+        enum: ['WORKER_ASSIGNED'],
+        description: 'A single value today. Present on assign and ABSENT on reassign.',
+      },
+      idempotent: {
+        type: 'boolean',
+        enum: [true],
+        description:
+          'Present ONLY when the booking already carried this provider, so the call changed '
+          + 'nothing. Absent on a first assignment — a client must test presence, not truth.',
+      },
+    },
+  },
+  AdminReassignResult: {
+    type: 'object',
+    required: ['bookingId', 'fromProviderUid', 'toProviderUid'],
+    description:
+      'Read from adminBookingService.adminReassignProvider. It carries NO `status` field, '
+      + 'unlike the assign result, and names both ends of the move.',
+    properties: {
+      bookingId: { type: 'integer' },
+      fromProviderUid: { type: ['string', 'null'], description: 'The provider losing the job. Null when the booking was unassigned.' },
+      toProviderUid: { type: 'string' },
+      providerName: {
+        type: 'string',
+        description:
+          'Present on the committed path and ABSENT on the idempotent early return, which '
+          + 'answers { bookingId, fromProviderUid, toProviderUid, idempotent } only.',
+      },
+      idempotent: {
+        type: 'boolean',
+        enum: [true],
+        description: 'Present only when the booking already carried toProviderUid.',
+      },
+    },
+  },
+  CustomerBookingState: {
+    type: 'object',
+    required: ['canonicalState', 'label', 'detail', 'terminal', 'availableActions'],
+    description:
+      'From projections.toCustomerProjection. Deliberately about the PROVIDER progress '
+      + 'rather than the administrative state: "Awaiting Assignment" is an operations '
+      + 'concept and means nothing to somebody waiting for a cleaner.',
+    properties: {
+      canonicalState: { type: 'string' },
+      label: { type: 'string', description: 'What the customer is told. Their register, not the operator one.' },
+      detail: { type: 'string', description: 'One line of context under the label. NOT present on the provider projection.' },
+      terminal: { type: 'boolean' },
+      availableActions: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  ProviderBookingState: {
+    type: 'object',
+    required: ['canonicalState', 'label', 'terminal', 'availableActions'],
+    description: 'From projections.toProviderProjection. Action-oriented.',
+    properties: {
+      canonicalState: { type: 'string' },
+      label: { type: 'string', description: 'What the provider does next, not what the booking is.' },
+      nextAction: {
+        type: ['string', 'null'],
+        description: 'The single next step when there is an obvious one. NOT present on the customer projection.',
+      },
+      terminal: { type: 'boolean' },
+      availableActions: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  AdditionalWorkRequest_Row: {
+    type: 'object',
+    required: ['id', 'booking_id', 'status', 'total_amount'],
+    description:
+      'A change order row, as additional.service returns it. '
+      + 'NOTE THE FIELD NAMES: this is a RAW database row and its keys are SNAKE_CASE '
+      + '- booking_id, total_amount, approved_at, worker_decision. Almost every other v1 '
+      + 'response is camelCase, because a mapper sits between the query and the wire. There '
+      + 'is no mapper here: getByBooking returns res.rows and createRequest returns rows[0] '
+      + 'from an INSERT ... RETURNING *. Documented as it stands rather than renamed - the '
+      + 'wire is what clients read today.',
+    properties: {
+      id: { type: 'integer' },
+      booking_id: { type: 'integer' },
+      status: {
+        type: 'string',
+        description:
+          'Created as PENDING_ADMIN_APPROVAL. The statuses that count as approved for '
+          + 'amount purposes are WAITING_FOR_PAYMENT, WAITING_WORKER_APPROVAL, ACCEPTED, '
+          + 'IN_PROGRESS, PROCEEDING and COMPLETED.',
+      },
+      total_amount: {
+        allOf: [{ $ref: '#/components/schemas/MoneyRaw' }],
+        description:
+          'A STRING on the wire. This response is a raw row with no mapper, and nothing '
+          + 'parses OID 1700. Adding two of these concatenates.',
+      },
+      approved_amount: {
+        allOf: [{ $ref: '#/components/schemas/MoneyRaw' }],
+        description:
+          'NOT a stored column: a CASE expression returning total_amount when status is in '
+          + 'the approved set and NULL otherwise. It is total_amount seen through the status, '
+          + 'never a separately agreed figure. Absent from the CREATE response, which is '
+          + 'RETURNING * and so carries only real columns.',
+      },
+      approved_at: { $ref: '#/components/schemas/UtcTimestamp' },
+      paid_at: { $ref: '#/components/schemas/UtcTimestamp' },
+      worker_decision: { type: ['string', 'null'] },
+      decided_at: { $ref: '#/components/schemas/UtcTimestamp' },
+      created_at: { $ref: '#/components/schemas/UtcTimestamp' },
+      updated_at: { $ref: '#/components/schemas/UtcTimestamp' },
+      requested_by: {
+        type: ['string', 'null'],
+        description: 'Present on the CREATE response (RETURNING *); not selected by the list query.',
+      },
+    },
+  },
+  PublicReview: {
+    type: 'object',
+    required: ['reviewId', 'overallRating', 'visibility', 'moderationStatus'],
+    description:
+      'One publicly visible review, from customerReviewService.mapPublicReviewRow. '
+      + 'NO CUSTOMER IDENTITY is projected (§58) — there is no customerUid, no name and no '
+      + 'avatar, and that is a property of the mapper rather than of the query. '
+      + 'The list is already filtered: only PUBLIC and ANONYMOUS_PUBLIC visibility, only '
+      + 'PUBLISHED/EDITED/REDACTED publication states, and only non-deleted rows. A review '
+      + 'missing from this list has been withdrawn or held, and the two are not '
+      + 'distinguishable from here.',
+    properties: {
+      reviewId: { type: 'string', description: 'Cast to text in SQL — a STRING, not a number.' },
+      overallRating: { type: 'number' },
+      publicComment: { type: ['string', 'null'] },
+      visibility: { type: 'string', enum: ['PUBLIC', 'ANONYMOUS_PUBLIC'] },
+      moderationStatus: { type: 'string' },
+      createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      editedAt: {
+        oneOf: [{ $ref: '#/components/schemas/UtcTimestamp' }],
+        description: 'Non-null means the customer edited it after publishing.',
+      },
+      providerResponse: {
+        oneOf: [
+          {
+            type: 'object',
+            required: ['responseId', 'body'],
+            properties: {
+              responseId: { type: 'string', description: 'Cast to text — a STRING.' },
+              body: { type: 'string' },
+              createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+            },
+          },
+          { type: 'null' },
+        ],
+        description:
+          'NULL when there is no response OR when the response exists but is deleted or '
+          + 'not yet through moderation — the LEFT JOIN filters on both. A null is not '
+          + 'proof the provider stayed silent.',
+      },
+    },
+  },
+  CatalogAddon: {
+    type: 'object',
+    required: ['ref', 'id', 'name'],
+    description:
+      'An add-on offered with a catalog service, from catalogPublicService. Both `ref` and '
+      + '`id` are emitted: the ref is the stable addressable handle, the id is the raw '
+      + 'numeric key the legacy option tables use.',
+    properties: {
+      ref: { type: 'string', description: 'makeRef(addon, id). Prefer this over id.' },
+      id: { type: 'integer' },
+      name: { type: 'string', description: 'The level_3 label.' },
+      unit: { type: ['string', 'null'] },
+      basePrice: { $ref: '#/components/schemas/MoneyMajor' },
+      basePriceSummary: { type: ['string', 'null'], description: 'Pre-rendered "P350 per unit" style text.' },
+      durationMins: { type: ['integer', 'null'] },
+    },
+  },
+  /**
+   * The three ways an amount appears on this API, declared once.
+   *
+   * TAB 04 asks for the JSON type, the unit and the currency of every money
+   * field. Three schemas rather than three sentences repeated forty times: a
+   * field that references one of these cannot disagree with the others about
+   * what a peso is, and a field added tomorrow has to choose.
+   *
+   * ## Why there are THREE and not two
+   *
+   * The book supposes the string case is a driver quirk — "numeric(12,2)
+   * reaches some clients as a string through some drivers and the portal cannot
+   * know which fields do". Measured here, it is not about the driver at all.
+   *
+   * `src/db/dbQuery.ts` registers type parsers for OIDs 1114, 1184 and 1082 —
+   * timestamps and dates. It registers NOTHING for 1700, `numeric`. So
+   * node-postgres hands every numeric column back as a STRING, always,
+   * deterministically, on every machine.
+   *
+   * What decides the wire type is therefore whether a MAPPER coerced it:
+   *
+   *   `financePolicy.toCentavos`  = Number(v ?? 0) rounded to 2dp
+   *   `catalogPublicService.money` = v == null ? null : Number(v)
+   *
+   * Every canonical v1 finance and catalog response passes through one of
+   * those, so it carries a real `number`. The responses that return a raw row —
+   * `AdminBookingRow`, `AdditionalWorkRequest_Row` — have no mapper at all and
+   * carry the driver's STRING.
+   *
+   * That is a knowable, per-field fact rather than an unknowable driver
+   * property, so this contract states it per field. A client no longer has to
+   * accept `number | string` everywhere defensively; it has to accept it
+   * exactly where `MoneyRaw` says so.
+   */
+  OpenApiDocument: {
+    type: 'object',
+    description:
+      'An OpenAPI 3.1 document — this one, as the running process derives it, under the '
+      + 'usual v1 `data` key. It is NOT the committed docs/api/openapi.v1.json: that file '
+      + 'answers what the repository says, which a checkout already answers. This is '
+      + 'derived from the same V1_CONTRACT that register.ts mounts the routers from, so '
+      + 'there is no second copy that can go stale.'
+      + ' '
+      + 'The response carries x-contract-sha256 and an ETag of the same digest. The digest '
+      + 'is sha256(JSON.stringify(document)) with no indentation — a client holding a '
+      + 'pinned copy reproduces it by parsing that file and stringifying it the same way. '
+      + 'It is deliberately NOT the hash of the response body, which carries a per-request '
+      + 'id and would differ every time. See TAB 08.',
+    additionalProperties: true,
+    properties: {
+      openapi: { type: 'string', enum: ['3.1.0'] },
+      info: { type: 'object', additionalProperties: true },
+      paths: { type: 'object', additionalProperties: true },
+      components: { type: 'object', additionalProperties: true },
+    },
+  },
+  MoneyMajor: {
+    type: ['number', 'null'],
+    description:
+      'UNIT: PHP MAJOR units — pesos, two decimal places. CURRENCY: PHP. A real JSON number: '
+      + 'the value passed through a coercing mapper (financePolicy.toCentavos or '
+      + 'catalogPublicService.money) before serialisation. Currency is PHP; there is one '
+      + 'currency in this system and financePolicy.CURRENCY is the constant. '
+      + 'Prefer the Minor twin for arithmetic where one exists: a float number of pesos '
+      + 'accumulates error at the fourth decimal place and surfaces months later in a '
+      + 'reconciliation report.',
+  },
+  MoneyMinor: {
+    type: ['integer', 'null'],
+    description:
+      'UNIT: PHP MINOR units — centavos, an INTEGER. CURRENCY: PHP. This is the representation to '
+      + 'compute with: an integer number of centavos cannot drift. Produced by '
+      + 'financePolicy.toMinorUnits, which is Math.round(toCentavos(v) * 100).',
+  },
+  MoneyRaw: {
+    type: ['number', 'string', 'null'],
+    description:
+      'UNIT: PHP MAJOR units — pesos. CURRENCY: PHP. Reaches the wire UNCOERCED, so it is a '
+      + 'STRING whenever the column is non-null.'
+      + ' '
+      + 'Not a driver quirk and not a maybe. node-postgres has no type parser registered for '
+      + 'OID 1700 (numeric) in this application, so every numeric column arrives as a string; '
+      + 'the fields declared MoneyMajor are numbers because a mapper called Number() on them, '
+      + 'and these have no mapper. `number` stays in the union only because a caller may send '
+      + 'one back and because a non-numeric column could occupy the same field.'
+      + ' '
+      + 'A client MUST NOT do arithmetic on this without converting. Adding two of them '
+      + 'concatenates.',
+  },
+  UtcTimestamp: {
+    type: ['string', 'null'],
+    format: 'date-time',
+    description:
+      'ISO 8601 with a UTC designator, guaranteed at the DRIVER rather than per field: '
+      + 'src/db/dbQuery.ts registers asUtcIso against OIDs 1114 (timestamp) and 1184 '
+      + '(timestamptz), and that function ends in Date.toISOString(), which always emits a '
+      + 'trailing Z. Postgres native "2026-08-11 11:03:23.421016+00" therefore cannot reach '
+      + 'a client through this path. This became true in TAB 03: the parser was always '
+      + 'installed, but its zone guard demanded a four-digit offset while Postgres emits '
+      + 'two, so every timestamptz fell through unconverted. See TAB 03.',
+  },
 };
 
 const AUTH_DEFAULT_ERRORS: Record<ContractEntry['auth'], V1ErrorCode[]> = {
@@ -2559,6 +3625,145 @@ export const allErrorsFor = (entry: ContractEntry): V1ErrorCode[] => {
 /** `/catalog/services/:serviceId` → `/catalog/services/{serviceId}` */
 const toOpenApiPath = (path: string): string =>
   path.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
+
+/**
+ * The UTC rule, stated on EVERY timestamp rather than on one of them.
+ *
+ * TAB 03 asks for exactly this: *"State the rule in the schema description of
+ * every timestamp field, not one of them."* Before this, precisely one field in
+ * 62 carried it — a convention written down once and therefore true by memory.
+ *
+ * Applied by the GENERATOR rather than typed into 62 descriptions, because a
+ * hand-maintained copy of one sentence is a hand-maintained opportunity for 62
+ * of them to disagree. A field added tomorrow inherits it without anybody
+ * remembering to.
+ *
+ * The sentence is appended, never substituted: a field that already explains
+ * what it means keeps its own words and gains the guarantee after them.
+ */
+export const UTC_RULE =
+  'ISO 8601 with a UTC designator — always ends in Z. Guaranteed at the driver, '
+  + 'not per field: src/db/dbQuery.ts parses OIDs 1114 and 1184 through asUtcIso, '
+  + 'which ends in Date.toISOString(). Never Postgres native '
+  + '"2026-08-11 11:03:23.421016+00".';
+
+/** Append UTC_RULE to every `format: date-time` description in the document. */
+export function stateTheUtcRule<T>(node: T): T {
+  if (!node || typeof node !== 'object') return node;
+  if (Array.isArray(node)) {
+    node.forEach((child) => stateTheUtcRule(child));
+    return node;
+  }
+  const o = node as Record<string, unknown>;
+  if (o.format === 'date-time') {
+    const existing = typeof o.description === 'string' ? o.description.trim() : '';
+    if (!existing.includes('UTC designator')) {
+      o.description = existing ? `${existing} ${UTC_RULE}` : UTC_RULE;
+    }
+  }
+  for (const value of Object.values(o)) stateTheUtcRule(value);
+  return node;
+}
+
+/**
+ * The unit and currency of an amount, stated on EVERY money field.
+ *
+ * TAB 04 asks for three things per money field: its JSON type, its unit, and
+ * its currency. The type is already declared on each field and the unit is
+ * settled by `MoneyMajor` / `MoneyMinor` / `MoneyRaw`. What was missing is that
+ * a reader had to KNOW which of those a given field was — the portal ended up
+ * accepting `number | string` everywhere because the contract never said.
+ *
+ * Stamped by the generator for the same reason the UTC rule is: forty copies of
+ * one sentence is forty chances to disagree, and a field added tomorrow
+ * inherits this without anybody remembering to.
+ *
+ * ## Deciding what is money
+ *
+ * By NAME, then narrowed by type, then by an explicit exclusion list. Name
+ * alone is not enough — `total` is a row count on a page, `payoutWindowHours`
+ * is a duration, `refundReviewId` is a key, `commissionRate` is a fraction and
+ * TAB 05 governs it. Each exclusion is listed rather than pattern-matched, so
+ * adding one is a decision somebody makes in a diff.
+ */
+const MONEY_NAME = /amount|gross|fee|earning|payout|price|payable|revenue|refunded|refundable/i;
+
+/**
+ * Money-SHAPED names that are not money. Each states why, because a silent
+ * exclusion is how a real amount ends up undocumented.
+ */
+const NOT_MONEY: Record<string, string> = {
+  refundReviewId: 'a key into finance_refund_reviews, not an amount',
+  refundId: 'a key',
+  payoutWindowHours: 'a duration in hours',
+  payoutStatus: 'an enum',
+  providerPayoutStatus: 'an enum',
+  payoutStatusCanonical: 'an enum',
+  payoutBlockedBy: 'an enum',
+  payoutBlockedReason: 'prose',
+  priceSummary: 'pre-rendered display text, already carrying its own currency mark',
+  basePriceSummary: 'pre-rendered display text',
+  commissionRate: 'a FRACTION of gross, not an amount. TAB 05 governs it',
+  estimatedJobsCount: 'a count',
+  refundedAt: 'a timestamp',
+  releasedAt: 'a timestamp',
+  paidAt: 'a timestamp',
+  eligibleAt: 'a timestamp',
+  reversesProviderEarning: 'a boolean',
+  pendingIsEstimate: 'a boolean',
+  earningsDisclosure: 'prose',
+  withheldReason: 'prose',
+};
+
+const MINOR_RULE =
+  'UNIT: PHP MINOR units — centavos, an integer. This is the representation to compute '
+  + 'with; an integer number of centavos cannot drift. CURRENCY: PHP (financePolicy.CURRENCY).';
+
+const MAJOR_RULE =
+  'UNIT: PHP MAJOR units — pesos, two decimal places. CURRENCY: PHP '
+  + '(financePolicy.CURRENCY). Prefer the Minor twin for arithmetic where one exists.';
+
+const RAW_RULE =
+  'UNIT: PHP MAJOR units — pesos. CURRENCY: PHP. Arrives as a STRING: nothing parses '
+  + 'OID 1700 (numeric) in this application and this response has no coercing mapper, so '
+  + 'adding two of these concatenates.';
+
+const isNumericType = (t: unknown): boolean => {
+  const types = Array.isArray(t) ? t : [t];
+  return types.some((x) => x === 'number' || x === 'integer');
+};
+
+/** Append the unit and currency to every money field's description. */
+export function stateTheMoneyRule<T>(node: T): T {
+  if (!node || typeof node !== 'object') return node;
+  if (Array.isArray(node)) {
+    node.forEach((child) => stateTheMoneyRule(child));
+    return node;
+  }
+  const o = node as Record<string, unknown>;
+
+  const props = o.properties as Record<string, Record<string, unknown>> | undefined;
+  if (props) {
+    for (const [name, field] of Object.entries(props)) {
+      if (!field || typeof field !== 'object') continue;
+      if (!MONEY_NAME.test(name) || NOT_MONEY[name]) continue;
+
+      const isMinor = /Minor$/.test(name);
+      const types = Array.isArray(field.type) ? field.type : [field.type];
+      const isRaw = types.includes('string');
+      if (!isNumericType(field.type) && !isRaw) continue;
+
+      const rule = isMinor ? MINOR_RULE : isRaw ? RAW_RULE : MAJOR_RULE;
+      const existing = typeof field.description === 'string' ? field.description.trim() : '';
+      if (!existing.includes('UNIT: PHP')) {
+        field.description = existing ? `${existing} ${rule}` : rule;
+      }
+    }
+  }
+
+  for (const value of Object.values(o)) stateTheMoneyRule(value);
+  return node;
+}
 
 export function buildOpenApiDocument(): Record<string, unknown> {
   const paths: Record<string, Record<string, unknown>> = {};
@@ -2682,7 +3887,15 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             'rejected with TOKEN_REVOKED, not accepted until expiry.',
         },
       },
-      schemas: SCHEMAS,
+      // Deep-cloned before the rule is stamped in: SCHEMAS is a module-level
+      // singleton, and mutating it would make the second call to this function
+      // see descriptions the first one wrote. `api:docs` and `api:docs:check`
+      // both run in one process during `npm run verify`, so that is not
+      // hypothetical — it is the difference between a stable document and one
+      // that grows a duplicated sentence every time it is generated.
+      schemas: stateTheMoneyRule(
+        stateTheUtcRule(JSON.parse(JSON.stringify(SCHEMAS)) as Record<string, unknown>),
+      ),
     },
     tags: [...new Set(V1_CONTRACT.map((e) => e.domain))].sort().map((name) => ({ name })),
     'x-generated-from': 'src/api/v1/contract.ts',

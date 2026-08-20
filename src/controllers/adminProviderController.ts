@@ -266,6 +266,28 @@ export const listAllServiceApplications = async (req: Request, res: Response) =>
 
 // ── Approve / Reject Application ──────────────────────────────────────────────
 
+/**
+ * `affectedProviderUid` and `changedScopes` on the three application decisions.
+ *
+ * RE-IMPLEMENTED from `feat/admin-dedup-hardening` rather than merged. That
+ * branch is 600+ commits behind and its own version of these handlers predates
+ * the atomic `expectedVersion` path, the before/after audit and the auto-online
+ * re-evaluation that main now carries — merging it would take all three away.
+ *
+ * One thing from the branch was deliberately NOT carried over. It also set
+ *
+ *     requestId: `admin-app-approve-${Date.now()}`
+ *
+ * which is a FABRICATED identifier: it appears in no log line and no audit row,
+ * because `writeSuccess` below records the real correlation id from
+ * `(req as any).id`. That is the same defect TAB 09 found in `adminError`, and
+ * handing an operator a number that resolves to nothing is worse than handing
+ * them none.
+ *
+ * The two fields themselves are additive and are what the portal's refresh
+ * coordinator reads to decide which Provider 360 tabs to reload after a
+ * decision, instead of hard-coding that mapping on the client.
+ */
 export const approveServiceApplication = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
@@ -287,7 +309,13 @@ export const approveServiceApplication = async (req: Request, res: Response) => 
       userAgent: req.headers['user-agent'] ?? null,
     });
     autoOnlineEngine.evaluateProvider(approved.worker_uid, 'admin', admin).catch(() => {});
-    return ok(res, { id, status: 'approved', version: approved.version });
+    return ok(res, {
+      id,
+      status: 'approved',
+      version: approved.version,
+      affectedProviderUid: approved.worker_uid,
+      changedScopes: ['applications', 'activeServices', 'identity'],
+    });
 
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
@@ -322,7 +350,13 @@ export const rejectServiceApplication = async (req: Request, res: Response) => {
       userAgent: req.headers['user-agent'] ?? null,
     });
     autoOnlineEngine.evaluateProvider(rejected.worker_uid, 'admin', admin).catch(() => {});
-    return ok(res, { id, status: 'rejected', version: rejected.version });
+    return ok(res, {
+      id,
+      status: 'rejected',
+      version: rejected.version,
+      affectedProviderUid: rejected.worker_uid,
+      changedScopes: ['applications', 'identity'],
+    });
 
   } catch (err: any) {
     const code = err?.statusCode ?? 500;
@@ -352,7 +386,13 @@ export const flagServiceApplicationActionRequired = async (req: Request, res: Re
       requestId: (req as any).id ?? null, ipAddress: req.ip ?? null,
       userAgent: req.headers['user-agent'] ?? null,
     });
-    return ok(res, { id, status: 'action_required', version: app.version });
+    return ok(res, {
+      id,
+      status: 'action_required',
+      version: app.version,
+      affectedProviderUid: app.worker_uid,
+      changedScopes: ['applications'],
+    });
 
   } catch (err: any) {
     const code = err?.statusCode ?? 500;

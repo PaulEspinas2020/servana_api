@@ -36,6 +36,62 @@ function codeToKind(code: AdminErrorCode): string {
   return map[code] ?? 'unknown';
 }
 
+/**
+ * The id an admin error reports, and why it is not a fresh one.
+ *
+ * This helper used to do `randomUUID()` unconditionally. It has no `req` — the
+ * signature takes only `res` — so minting one looked like the only option.
+ *
+ * It was worse than no id at all. `correlationMiddleware` runs `app.use`d ahead
+ * of every router and stamps the real correlation id on the response; the
+ * structured request log emits THAT id, `auditFire` records THAT id in
+ * `admin_audit_events.request_id`, and this function overwrote it a moment
+ * before the body was sent. So an operator reading an id off a failed admin
+ * screen and searching for it found nothing — not because the log was missing,
+ * but because they were given a number that appears nowhere else in the system.
+ *
+ * TAB 09 calls the request id "a token with no lock". On the admin tree it was
+ * a token with a lock that could never open, and nothing said so.
+ *
+ * The id is therefore read back off the response, where the middleware already
+ * put it. No call site changes — and there are a great many of them across 251
+ * admin operations, which is exactly why the fix had to not need them.
+ *
+ * `randomUUID()` survives as the fallback for a response that somehow never met
+ * the middleware. That is not reachable through the mounted app; it is reachable
+ * from a unit test constructing a bare `res`, and returning `undefined` there
+ * would put the string "undefined" in an error envelope.
+ */
+function correlationIdOf(res: Response): string {
+  /**
+   * Defensive about `getHeader` existing, and that is not a test
+   * accommodation.
+   *
+   * The first version called `res.getHeader(...)` directly and threw
+   * `TypeError: res.getHeader is not a function` against a response double that
+   * only implemented `setHeader`. The consequence is the point: this function
+   * runs while BUILDING AN ERROR RESPONSE, so throwing here does not produce a
+   * worse error message — it replaces a clean 403 with an unhandled exception.
+   * `tests/authz-negative` turned 148 assertions from `403` into `0`.
+   *
+   * A formatter on the failure path must not be able to fail. Reading a header
+   * is never worth a crash, so an absent accessor falls through to the same
+   * branch as an absent header.
+   */
+  try {
+    const stamped =
+      typeof (res as { getHeader?: unknown }).getHeader === 'function'
+        ? res.getHeader('x-request-id')
+        : undefined;
+    if (typeof stamped === 'string' && stamped.length > 0 && stamped !== 'unknown') {
+      return stamped;
+    }
+  } catch {
+    // Same answer as "no header": mint one below.
+  }
+  return randomUUID();
+}
+
 export function adminError(
   res: Response,
   httpStatus: number,
@@ -43,7 +99,7 @@ export function adminError(
   message: string,
   fieldErrors?: Record<string, string[]>,
 ): Response {
-  const requestId = randomUUID();
+  const requestId = correlationIdOf(res);
   res.setHeader('x-request-id', requestId);
 
   const body: AdminErrorEnvelope = {

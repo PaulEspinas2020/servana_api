@@ -43,6 +43,7 @@ import fs from 'fs';
 import path from 'path';
 import { ok, sendCaught } from '../envelope';
 import { V1Handlers } from '../types';
+import { servedContract, CONTRACT_DIGEST_HEADER } from '../contractDigest';
 
 export interface BuildInfo {
   commit: string | null;
@@ -111,6 +112,53 @@ export const handlers: V1Handlers = {
       return ok(res, req, readBuildInfo());
     } catch (error) {
       return sendCaught(res, req, 'health.build', error as never);
+    }
+  },
+
+  /**
+   * The contract this process implements (TAB 08).
+   *
+   * Served from `buildOpenApiDocument()`, not from the committed
+   * `docs/api/openapi.v1.json`. The committed file answers "what does the
+   * repository say?", which is the question a checkout already answers. This
+   * answers "what is this process actually mounting?", because the document is
+   * derived from the same `V1_CONTRACT` that `register.ts` builds the routers
+   * from. There is no second copy that can go stale.
+   *
+   * ## Why it IS wrapped in the v1 envelope
+   *
+   * The first version sent a bare document, reasoning that a generator pointed
+   * at the URL should receive a document rather than something to unwrap. That
+   * was the wrong trade. `tests/v1-router` asserts that EVERY implemented entry
+   * answers `{ data }` and carries no second success signal, across all
+   * ninety-five of them — and an exception to "every response has this shape"
+   * is how a shape stops being relied upon. One endpoint's convenience is not
+   * worth the invariant that makes the other ninety-four predictable.
+   *
+   * Unwrapping is one line. The staleness question — which is what TAB 08 is
+   * actually about — is answered by the header on every response and never
+   * needs this endpoint at all.
+   *
+   * ## Reproducing the digest
+   *
+   * `sha256(JSON.stringify(document))`, no indentation. A client that holds a
+   * pinned copy reproduces it by parsing that file and stringifying it the same
+   * way, which is why the recipe is stated rather than left to be guessed. It
+   * is deliberately NOT the hash of this response body: the envelope carries a
+   * per-request id, so hashing the body would give a different answer every
+   * time.
+   */
+  'health.contract': async (req: Request, res: Response) => {
+    try {
+      const { document, digest } = servedContract();
+      res.setHeader(CONTRACT_DIGEST_HEADER, digest);
+      // Safe to cache hard: a contract changes only when the process does. A
+      // client polling for staleness then costs a conditional request rather
+      // than the whole document.
+      res.setHeader('etag', `"${digest}"`);
+      return ok(res, req, document, { contractSha256: digest } as never);
+    } catch (error) {
+      return sendCaught(res, req, 'health.contract', error as never);
     }
   },
 };

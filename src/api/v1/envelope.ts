@@ -38,7 +38,41 @@ import { ApiError, V1ErrorCode, V1_ERROR_STATUS } from './errors';
 export interface PageMeta {
   limit: number;
   offset: number;
-  total: number | null;
+  /**
+   * The exact size of the filtered set. NEVER null — decided, not defaulted.
+   *
+   * TAB 06 of the Admin API Master Command: *"What is not acceptable is leaving
+   * it undecided: the portal is currently correct only by luck."* The contract
+   * said `integer | null`, with the note "null when the total is not cheaply
+   * knowable"; every client that used it declared plain `number`, and no client
+   * rendered anything for null.
+   *
+   * Measured before deciding, rather than picking the convenient answer. Four
+   * call sites exist and none of them can produce null:
+   *
+   *   bookings.listMine       rows.length
+   *   notifications.list      all.length
+   *   provider.jobs.list      jobs.length
+   *   reviews.provider.list   listProviderReviews -> COUNT(*)::int
+   *
+   * The `::int` cast is what makes the last one safe: int4 parses to a JS
+   * number, where a bare `COUNT(*)` is bigint and node-postgres would hand back
+   * a STRING. Proven against PGlite — `COUNT(*)::int` yields `3`, and `0` on an
+   * empty set, both `typeof number`.
+   *
+   * So the nullable half was never reachable. It was a hedge against a cost
+   * nothing in this API actually pays, and it obliged every client to render an
+   * empty state for a case that never occurs.
+   *
+   * ## If a total ever DOES become expensive
+   *
+   * Do not reintroduce null. Send a capped or estimated number and add a
+   * sibling `totalIsEstimate: boolean` beside it, as the book suggests. That
+   * field is deliberately NOT added now: a flag no producer ever sets is a
+   * foundation without callers, and clients would branch on something that is
+   * always false.
+   */
+  total: number;
   hasMore: boolean;
 }
 
@@ -157,12 +191,16 @@ export function readPage(req: Request, opts: { defaultLimit?: number; maxLimit?:
   return { limit, offset };
 }
 
-export function pageMeta(page: PageParams, returned: number, total: number | null): PageMeta {
+export function pageMeta(page: PageParams, returned: number, total: number): PageMeta {
   return {
     limit: page.limit,
     offset: page.offset,
     total,
-    hasMore: total === null ? returned === page.limit : page.offset + returned < total,
+    // One expression, because there is one case. The previous version branched
+    // on `total === null` and inferred `hasMore` from a full page — a heuristic
+    // that is wrong for a set whose size is an exact multiple of the limit, and
+    // which never ran, because no caller ever passed null.
+    hasMore: page.offset + returned < total,
   };
 }
 

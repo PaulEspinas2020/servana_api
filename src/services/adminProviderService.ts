@@ -9,6 +9,7 @@
 import { createHash, randomUUID } from 'crypto';
 import dbQuery, { pool } from '../db/dbQuery';
 import { providerShareOf, PROVIDER_SHARE_PERCENT } from './revenueSplit';
+import { inCurrentBusinessPeriod } from './sql/businessPeriod';
 import { db } from '../config';
 import mongoDb from '../db/mongodbQuery';
 import * as serviceApplicationService from './serviceApplicationService';
@@ -830,7 +831,10 @@ export const getProviderEarningsSummary = async (uid: string) => {
     `SELECT
        COUNT(*) AS total_jobs,
        COALESCE(SUM(final_price), 0) AS total_gross,
-       COALESCE(SUM(final_price) FILTER (WHERE schedule IS NOT NULL AND schedule::text <> '' AND DATE_TRUNC('month', schedule::text::timestamptz) = DATE_TRUNC('month', NOW())), 0) AS this_month_gross
+       COALESCE(SUM(final_price) FILTER (
+         WHERE schedule IS NOT NULL AND schedule::text <> ''
+           AND ${inCurrentBusinessPeriod("schedule::text::timestamptz", 'month')}
+       ), 0) AS this_month_gross
      FROM ${dbSchema}.bookings
      WHERE worker_uid = $1 AND status = 'COMPLETED'`,
     [uid]

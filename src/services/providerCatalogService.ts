@@ -144,6 +144,9 @@ const BUILTIN_OFFERINGS: OfferingSeed[] = [
 ];
 
 export const seedBuiltInOfferings = async (): Promise<void> => {
+  /** Seeded mappings whose family name matched nothing. Reported at the end. */
+  const unresolved: string[] = [];
+
   // Pre-load service name → id map for mapping resolution
   const svcs = await dbQuery.query(
     `SELECT id, name FROM ${dbSchema}.service_families ORDER BY id`,
@@ -187,7 +190,30 @@ export const seedBuiltInOfferings = async (): Promise<void> => {
     // Upsert mappings for this offering
     for (const m of seed.mappings) {
       const sid = serviceIdByName.get(m.serviceFamilyName.toLowerCase());
-      if (!sid) continue; // Service family not yet in DB; skip silently
+      if (!sid) {
+        // NOT silent any more.
+        //
+        // This read `if (!sid) continue; // skip silently`, and it had skipped
+        // three of the eight built-in offerings for months. The seed resolves a
+        // family by NAME, and three of the names it looks for do not exist:
+        //
+        //   'Plumbing Services'    the family is called 'Plumbing'   (69)
+        //   'Carpentry & Handyman' the family is called 'Carpentry'  (70)
+        //   'Aircon Services'      the family is called 'Aircon 2'   (1)
+        //
+        // An offering with no mapping has `application_open` false in
+        // `evaluateApplicationEligibility`, so Plumbing and Carpentry were
+        // active, provider-visible, and impossible to apply for — with nothing
+        // anywhere reporting why. Identity taken from display text is what §7
+        // forbids, and a silent `continue` is what let it survive.
+        //
+        // Warn rather than throw: this runs as an OPTIONAL startup dependency,
+        // and refusing to boot over one unmapped offering would trade a quiet
+        // catalogue gap for an outage. The line is the fix — it makes the gap
+        // findable in the place an operator already looks.
+        unresolved.push(`${seed.name} -> "${m.serviceFamilyName}"`);
+        continue;
+      }
 
       await dbQuery.query(
         `INSERT INTO ${dbSchema}.provider_catalog_offering_mappings
@@ -197,6 +223,16 @@ export const seedBuiltInOfferings = async (): Promise<void> => {
         [offeringId, sid, m.level2, m.displayOrder]
       );
     }
+  }
+
+  if (unresolved.length) {
+    console.warn(
+      `[provider-catalog] ${unresolved.length} built-in offering mapping(s) ` +
+        `resolved to no service family and were skipped: ${unresolved.join(', ')}. ` +
+        `Those offerings are visible to providers and cannot be applied for ` +
+        `until a family of that exact name exists, or the mapping is inserted ` +
+        `by id.`,
+    );
   }
 };
 

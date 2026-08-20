@@ -143,7 +143,20 @@ export const projectFor = (actor: FinanceActor, finance: BookingFinance) => {
     };
   }
 
-  // Admin. Everything, including what Servana keeps and what blocks the payout.
+  /**
+   * Admin. Everything, including what Servana keeps and what blocks the payout.
+   *
+   * Every amount here carries its MINOR-unit twin (TAB 04). `gross` and
+   * `refundable` already had one; `basePrice`, `additionalWork`,
+   * `refundedAmount`, `payable` and `revenue` did not, and this is the seat
+   * where an operator reads all of them — the reconciliation screen is exactly
+   * where a float number of pesos surfaces its drift, small and real and
+   * extremely expensive to explain.
+   *
+   * Purely ADDITIVE: no existing field changed name, type or value, so a client
+   * reading the major-unit field is unaffected and one that wants to compute
+   * can stop doing arithmetic on floats.
+   */
   return {
     ...shared,
     paymentId: finance.payment.paymentId,
@@ -151,10 +164,13 @@ export const projectFor = (actor: FinanceActor, finance: BookingFinance) => {
       gross: finance.gross,
       grossMinor: toMinorUnits(finance.gross),
       basePrice: finance.basePrice,
+      basePriceMinor: toMinorUnits(finance.basePrice),
       additionalWork: finance.additionalWork,
+      additionalWorkMinor: toMinorUnits(finance.additionalWork),
     },
     refund: {
       refundedAmount: finance.payment.refundedAmount,
+      refundedAmountMinor: toMinorUnits(finance.payment.refundedAmount),
       refundedAt: finance.payment.refundedAt,
       refundable: finance.payment.refundable,
       refundableMinor: toMinorUnits(finance.payment.refundable),
@@ -163,10 +179,14 @@ export const projectFor = (actor: FinanceActor, finance: BookingFinance) => {
       uid: finance.provider.uid,
       economicModel: finance.provider.economicModel,
       payable: finance.provider.payable,
+      payableMinor: toMinorUnits(finance.provider.payable),
       isEstimate: finance.provider.isEstimate,
       withheldReason: finance.provider.withheldReason,
     },
-    servana: finance.servana,
+    servana: {
+      ...finance.servana,
+      revenueMinor: toMinorUnits(finance.servana.revenue),
+    },
     payout: {
       disbursementId: finance.payout.disbursementId,
       status: finance.payout.status,

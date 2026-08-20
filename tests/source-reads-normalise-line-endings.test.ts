@@ -105,3 +105,90 @@ describe('source-introspection tests survive CRLF', () => {
     expect(FIXED_WINDOW.test(fine)).toBe(false);
   });
 });
+
+/**
+ * No source file carries a literal control byte.
+ *
+ * ## Why this exists
+ *
+ * A regex written as `/import\b/` is a word boundary. The same regex generated
+ * by a tool that mishandles the escape becomes `/import\x08/` — a LITERAL
+ * BACKSPACE — and no source file contains one, so the pattern never matches.
+ *
+ * That is not a loud failure. It is a silent one, and it produced a guard in
+ * this repository that had never run:
+ *
+ *     tests/admin-invite-state.test.ts
+ *       read('services/adminInviteState.ts').match(/^\s*import\x08.*$/gm) ?? []
+ *
+ * `.match()` returned null, `?? []` made it an empty array, `.join(' ')` gave
+ * an empty string, and both `expect(...).not.toContain(...)` assertions passed
+ * against it. The import-cycle guard it was protecting had never checked
+ * anything, and its own comment warned about a neighbouring mistake — "that
+ * mistake has been made three times in this codebase already".
+ *
+ * ## Why a byte check rather than a smarter one
+ *
+ * Because this class is invisible at every other layer. It compiles, it lints,
+ * it reads correctly in a diff — the backspace renders as nothing — and the
+ * test goes green. The only thing that distinguishes it from working code is
+ * the byte, so the byte is what is checked.
+ *
+ * Tab and the two line-ending bytes are permitted; everything else in the C0
+ * range is not. A genuine need for one is a `\xNN` escape, which is text.
+ */
+describe('no source file carries a literal control byte', () => {
+  const ROOTS = ['src', 'tests', 'scripts'];
+  const REPO = join(__dirname, '..');
+
+  /** C0 controls except tab (09), line feed (0A) and carriage return (0D). */
+  // eslint-disable-next-line no-control-regex
+  const FORBIDDEN = /[\x00-\x08\x0b\x0c\x0e-\x1f]/;
+
+  const files = (dir: string, acc: string[] = []): string[] => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules') continue;
+        files(full, acc);
+      } else if (/\.(ts|js|mjs)$/.test(entry.name)) acc.push(full);
+    }
+    return acc;
+  };
+
+  const all = ROOTS.flatMap((r) => files(join(REPO, r)));
+
+  it('scans a real number of files, so the sweep is not vacuous', () => {
+    // The mistake this whole describe is about is a search that matches
+    // nothing and reports success. It would be a poor joke to make it here.
+    expect(all.length).toBeGreaterThan(300);
+  });
+
+  it('finds no backspace, form feed or other C0 control', () => {
+    const offenders: string[] = [];
+    for (const file of all) {
+      const src = readFileSync(file, 'utf8');
+      if (!FORBIDDEN.test(src)) continue;
+      src.split('\n').forEach((line, i) => {
+        const m = FORBIDDEN.exec(line);
+        if (!m) return;
+        offenders.push(
+          `${file.slice(REPO.length + 1).replace(/\\/g, '/')}:${i + 1}` +
+            `  U+${m[0].charCodeAt(0).toString(16).padStart(4, '0').toUpperCase()}`,
+        );
+      });
+    }
+    // Named with the codepoint, because the character itself is invisible and
+    // a bare filename would send somebody hunting for something they cannot see.
+    expect(offenders).toEqual([]);
+  });
+
+  it('would catch one if it were there', () => {
+    // The detector, against a known offender. Without this the assertion above
+    // passes just as well when the regex has stopped matching.
+    expect(FORBIDDEN.test(`import${String.fromCharCode(8)}`)).toBe(true);
+    expect(FORBIDDEN.test('import\\b')).toBe(false);
+    expect(FORBIDDEN.test('a\tb')).toBe(false);
+    expect(FORBIDDEN.test('a\r\nb')).toBe(false);
+  });
+});

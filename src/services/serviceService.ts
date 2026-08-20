@@ -1,5 +1,6 @@
 import { db } from "../config";
 import dbQuery from "../db/dbQuery";
+import { isWithinSupportedFootprint } from "./serviceAreaFootprint";
 import { toCamel } from "../helpers/idGenerator";
 const dbSchema = db.schema;
 
@@ -242,10 +243,35 @@ export const checkCoverageGeo = async (serviceId: number, lat: number, lon: numb
     );
 
     const match = r.rows.find((x: any) => Number(x.distance_km) <= Number(x.radius_km));
+
+    // No coverage configured at all is NOT "covered nowhere" (§28).
+    //
+    // This used to return `covered: !!match` unconditionally, so a service with
+    // zero `service_coverage_geo` rows was unbookable everywhere. Legacy family
+    // 67 was in exactly that state, and `createBooking` refused the only Home
+    // Maintenance service in the catalogue AFTER the customer had chosen an
+    // address and a time.
+    //
+    // The fallback is the area Servana can actually serve, not the planet: all
+    // 27 provider service areas draw from a 21-city Metro Manila catalogue and
+    // name nothing outside it. See `serviceAreaFootprint.ts` for the
+    // measurement. `defaulted` is on the result so a caller can tell an
+    // explicit coverage decision from an assumed one.
+    if (r.rows.length === 0) {
+        const covered = isWithinSupportedFootprint(Number(lat), Number(lon));
+        return {
+            covered,
+            nearest: null,
+            matched: null,
+            defaulted: true,
+        };
+    }
+
     return {
         covered: !!match,
         nearest: r.rows[0] || null,
         matched: match || null,
+        defaulted: false,
     };
 };
 
