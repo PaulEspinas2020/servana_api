@@ -269,6 +269,259 @@ export const ADMIN_RESPONSES: Record<string, AdminResponseSchema> = {
       'an already-resolved report is a 404, not a repeat.',
   },
 
+  // ── audit-logs ────────────────────────────────────────────────────────────
+  // 7 operations. The lock TAB 09 found already existed: request_id is a real
+  // column here, filtered in SQL, so an operator's quoted reference resolves.
+
+  'GET /api/admin/audit-logs': {
+    derivedFrom: 'adminAuditService.findEvents -> rowToListItem',
+    schema: {
+      type: 'array',
+      items: { $ref: '#/components/schemas/AuditListItem' },
+    },
+    note:
+      'The controller answers ok(res, result.rows, meta) — the ARRAY is under `data` and '
+      + 'total/page/limit/totalPages ride in `meta`, together with the requestId and a '
+      + "generatedAt. Filterable by request_id, which is what makes an operator's quoted "
+      + 'reference resolvable. See TAB 09.',
+  },
+
+  'GET /api/admin/audit-logs/:eventId': {
+    derivedFrom: 'adminAuditService.getEventById',
+    schema: { $ref: '#/components/schemas/AuditEventDetail' },
+    note: 'Returns null for an unknown id and the controller renders that as a 404.',
+  },
+
+  'GET /api/admin/audit-logs/actor/:actorUid': {
+    derivedFrom: 'adminAuditService.findActorTimeline -> rowToListItem',
+    schema: { type: 'array', items: { $ref: '#/components/schemas/AuditListItem' } },
+    note: 'Everything one actor did. Same item shape as the main list.',
+  },
+
+  'GET /api/admin/audit-logs/entity/:entityType/:entityId': {
+    derivedFrom: 'adminAuditService.findEntityTimeline -> rowToListItem',
+    schema: { type: 'array', items: { $ref: '#/components/schemas/AuditListItem' } },
+    note: 'Everything that happened TO one entity. Same item shape as the main list.',
+  },
+
+  'GET /api/admin/audit-logs/summary': {
+    derivedFrom: 'adminAuditService.getSummary — typed in the service signature',
+    schema: {
+      type: 'object',
+      required: ['total', 'failed', 'blocked', 'highRisk', 'payment', 'booking', 'provider', 'catalog'],
+      properties: {
+        total: { type: 'integer' },
+        failed: { type: 'integer' },
+        blocked: {
+          type: 'integer',
+          description:
+            'Refused attempts, which are the more interesting security events — a denied '
+            + 'super-admin bootstrap is audited as blocked.',
+        },
+        highRisk: {
+          type: 'integer',
+          description:
+            'Actions the service classifies HIGH_RISK: onboarding final decisions, provider '
+            + 'suspension and archival, payment approvals, catalog publishes.',
+        },
+        payment: { type: 'integer' },
+        booking: { type: 'integer' },
+        provider: { type: 'integer' },
+        catalog: { type: 'integer' },
+      },
+    },
+  },
+
+  'POST /api/admin/audit-logs/export': {
+    derivedFrom: 'adminAuditService.exportEvents',
+    schema: {
+      type: 'object',
+      required: ['content', 'format', 'count'],
+      properties: {
+        content: {
+          type: 'string',
+          description: 'The whole export as a STRING in the JSON body — not a file download.',
+        },
+        format: { type: 'string', enum: ['csv', 'json'] },
+        count: { type: 'integer', description: 'Rows exported, capped by EXPORT_LIMIT.' },
+      },
+    },
+    note:
+      'Unlike the communications export, which sends text/csv as an attachment, this one '
+      + 'returns the payload inside the normal JSON envelope. Two admin exports, two '
+      + 'transports. A reason is required and the export is itself audited.',
+  },
+
+  'GET /api/admin/audit-logs/actions': {
+    derivedFrom: 'adminAuditController.getAuditActions — the ACTION_LABELS vocabulary',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description: 'The action vocabulary a client should populate its filter from.',
+    },
+  },
+
+  // ── notifications ─────────────────────────────────────────────────────────
+
+  'GET /api/admin/notifications': {
+    derivedFrom: 'adminNotificationService.listForAdmin, with unreadCount in meta',
+    schema: { type: 'array', items: { $ref: '#/components/schemas/AdminNotification' } },
+    note:
+      'The unread COUNT rides in `meta.unread`, not in the array. Limit defaults to 30 and '
+      + 'a non-finite value falls back to 30 rather than erroring.',
+  },
+
+  'PATCH /api/admin/notifications/:id/read': {
+    derivedFrom: 'adminNotificationService.markRead(uid, id) — the handler returns no payload',
+    schema: {
+      description:
+        'NO PAYLOAD. The body is `{ status: "success" }` and nothing else — one of only two '
+        + 'admin operations that acknowledge without returning anything. A client must not '
+        + 'wait for an updated notification; re-read the list.',
+    },
+  },
+
+  'PATCH /api/admin/notifications/read-all': {
+    derivedFrom: 'adminNotificationService.markRead(uid) — no id, so every unread row',
+    schema: {
+      description:
+        'NO PAYLOAD, and no count of what was marked. Same acknowledgement-only shape as '
+        + 'the single-read route.',
+    },
+  },
+
+  // ── users ─────────────────────────────────────────────────────────────────
+
+  'GET /api/admin/users': {
+    derivedFrom: 'adminUserAccountService.listUsers',
+    schema: { type: 'array', items: { $ref: '#/components/schemas/AdminUserRow' } },
+    note:
+      'The array is under `data`; total/page/limit ride in `meta`. Every ROLE is in scope '
+      + 'here — customers, providers and admins — unlike /api/admin/providers, which is '
+      + 'filtered to roles 2 and 4.',
+  },
+
+  'PATCH /api/admin/users/:uid/archive': {
+    derivedFrom: 'adminUserAccountService.setUserArchive',
+    schema: {
+      type: 'object',
+      required: ['uid', 'role', 'isArchive'],
+      properties: {
+        uid: { type: 'string' },
+        role: { type: 'integer', description: 'A NUMBER — Number(row.role).' },
+        accountStatus: { type: ['string', 'null'] },
+        isArchive: { type: 'boolean', description: 'The state AFTER the write, not the request.' },
+      },
+    },
+    note: 'Archiving is reversible and does not delete the account.',
+  },
+
+  // ── customers ─────────────────────────────────────────────────────────────
+  // Guests and clients are two different things in this system, and several of
+  // these routes exist only because of that split.
+
+  'GET /api/admin/customers': {
+    derivedFrom: 'adminGuestService.listAllCustomers — typed `data: any[]` in the signature',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description:
+        'Clients AND guests in one list. The row shape is `any[]` in the service signature, '
+        + 'so it is NOT described here — an honest gap rather than a guessed shape.',
+    },
+    note: 'total/page/limit ride in `meta`. Limit is clamped to 1..100.',
+  },
+
+  'GET /api/admin/customers/guests': {
+    derivedFrom: 'adminGuestService.listGuests — typed `data: any[]`',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description: 'Guest rows. Item shape is `any[]` in the service and is not guessed here.',
+    },
+    note: 'total/page/limit in `meta`. Limit clamped to 1..100, default 25.',
+  },
+
+  'GET /api/admin/customers/metrics': {
+    derivedFrom: 'adminGuestService.getCustomerMetrics — typed in the service signature',
+    schema: {
+      type: 'object',
+      required: ['totalClients', 'totalGuests', 'totalCustomers'],
+      properties: {
+        totalClients: { type: 'integer', description: 'user_credentials with role 3.' },
+        totalGuests: { type: 'integer' },
+        totalCustomers: {
+          type: 'integer',
+          description:
+            'Clients plus guests. NOT a distinct-person count — a guest later linked to a '
+            + 'client is counted in both halves, which is what linkedToClient measures.',
+        },
+        guestsWithUpcomingBookings: { type: 'integer' },
+        repeatGuests: { type: 'integer' },
+        linkedToClient: {
+          type: 'integer',
+          description: 'Guests since matched to a client account. The overlap in totalCustomers.',
+        },
+        withPaymentOutstanding: { type: 'integer' },
+      },
+    },
+  },
+
+  'GET /api/admin/customers/guest-check': {
+    derivedFrom:
+      'adminBookingCreateService.detectGuestDuplicate, spread with normalizedPhone added ' +
+      'by the controller',
+    schema: {
+      type: 'object',
+      required: ['normalizedPhone'],
+      additionalProperties: true,
+      properties: {
+        normalizedPhone: {
+          type: 'string',
+          description:
+            'The phone AFTER normalizePhilippinePhone. Echoed deliberately: the caller sent '
+            + 'a raw string and the duplicate check ran against this one, so a client that '
+            + 'stores the raw value will not match what the system matched on.',
+        },
+      },
+    },
+    note:
+      'Whether this contact already exists as a guest or a client. Read before creating a '
+      + 'guest, so one person does not become two records. The duplicate half of the '
+      + 'payload is spread from the service and is not otherwise described here.',
+  },
+
+  // ── support ───────────────────────────────────────────────────────────────
+
+  'GET /api/admin/support/cases': {
+    derivedFrom: 'adminSupportCaseService.listAdminCases',
+    schema: { type: 'array', items: { $ref: '#/components/schemas/AdminSupportCaseRow' } },
+  },
+
+  'GET /api/admin/support/cases/:caseId': {
+    derivedFrom:
+      'adminSupportCaseService.getAdminCase — spreads the RAW case row and attaches eight '
+      + 'raw child collections',
+    schema: { $ref: '#/components/schemas/AdminSupportCaseDetail' },
+  },
+
+  'POST /api/admin/support/cases/sla-sweep': {
+    derivedFrom: 'adminSupportCaseService.sweepBreachedCases',
+    schema: {
+      type: 'object',
+      required: ['processed'],
+      properties: {
+        processed: {
+          type: 'integer',
+          description:
+            'How many breached cases were swept. ZERO is the normal answer and means nothing '
+            + 'had breached, not that the sweep failed.',
+        },
+      },
+    },
+    note: 'Idempotent by predicate: a second run finds nothing still breached.',
+  },
+
   // ── providers ─────────────────────────────────────────────────────────────
   // 50 operations, the largest single admin area. Third by blast radius: these
   // read and change the record of a person's ability to work — their identity,
@@ -1593,6 +1846,186 @@ export const ADMIN_SCHEMAS: Record<string, unknown> = {
           },
         },
       },
+    },
+  },
+
+  AuditListItem: {
+    type: 'object',
+    required: ['eventId', 'action', 'actionCategory', 'outcome', 'entityType', 'entityId', 'severity'],
+    description: 'One audit event as the lists project it. Every field is stringified or defaulted by rowToListItem.',
+    properties: {
+      eventId: { type: 'string' },
+      occurredAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      displayTime: {
+        type: 'string',
+        description:
+          'A PRE-RENDERED Manila local time string, beside the ISO occurredAt. Two '
+          + 'representations of one instant: render this, compute with occurredAt. Do not '
+          + 'parse displayTime — it is display text, not a timestamp.',
+      },
+      action: { type: 'string' },
+      actionLabel: { type: 'string', description: 'Human-readable, FALLING BACK to the raw action when unmapped.' },
+      actionCategory: { type: 'string', description: "Coalesced to ''." },
+      outcome: { type: 'string', description: "Coalesced to 'success'." },
+      actorUid: { type: ['string', 'null'] },
+      actorDisplayName: { type: ['string', 'null'] },
+      actorRole: { type: ['string', 'null'] },
+      entityType: { type: 'string', description: "Coalesced to ''." },
+      entityId: { type: 'string', description: "A STRING, coalesced to ''." },
+      entityDisplayName: { type: ['string', 'null'] },
+      summary: { type: 'string', description: 'Composed server-side from action, outcome, entity and actor.' },
+      severity: { type: 'string', description: 'Computed from the action and its outcome, not stored.' },
+      requestId: {
+        type: ['string', 'null'],
+        description:
+          'THE JOIN KEY. Filterable via ?request_id=, which is how an operator turns a '
+          + 'quoted reference into the action that produced it. See TAB 09.',
+      },
+    },
+  },
+
+  AuditEventDetail: {
+    type: 'object',
+    description: 'One audit event in full, including the before/after state it changed.',
+    additionalProperties: true,
+    properties: {
+      entity: { type: 'object', additionalProperties: true },
+      relatedEntities: { type: ['object', 'null'] },
+      before: { type: ['object', 'null'], description: 'State BEFORE the action. Null when it created something.' },
+      after: { type: ['object', 'null'], description: 'State AFTER. Null when it deleted something.' },
+      changedFields: { type: 'array', items: { type: 'string' }, description: 'Coalesced to [].' },
+      reason: { type: ['string', 'null'] },
+      note: { type: ['string', 'null'] },
+      request: {
+        type: 'object',
+        description: 'How the action arrived. This is the block an operator joins a quoted id against.',
+        properties: {
+          requestId: { type: ['string', 'null'] },
+          clientRequestId: { type: ['string', 'null'] },
+          ipAddress: { type: ['string', 'null'] },
+          userAgent: { type: ['string', 'null'] },
+          source: { type: 'string', description: "Coalesced to 'admin_portal'." },
+        },
+      },
+      metadata: { type: ['object', 'null'] },
+      severity: { type: 'string' },
+      display: {
+        type: 'object',
+        description: 'Pre-composed presentation text, so two clients cannot word the same event differently.',
+        properties: {
+          title: { type: 'string' },
+          summary: { type: 'string' },
+          actorLabel: { type: 'string', description: "Falls back to the uid, then to 'System'." },
+          entityLabel: { type: 'string', description: 'entityType:entityId.' },
+          changedFieldsSummary: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+  },
+
+  AdminNotification: {
+    type: 'object',
+    required: ['id', 'type', 'severity', 'title'],
+    properties: {
+      id: { type: 'integer', description: 'A NUMBER — Number(row.id).' },
+      type: { type: 'string' },
+      severity: { type: 'string' },
+      title: { type: 'string' },
+      body: { type: ['string', 'null'] },
+      bookingId: { type: ['integer', 'null'] },
+      conversationId: { type: ['integer', 'null'] },
+      readAt: {
+        oneOf: [{ $ref: '#/components/schemas/UtcTimestamp' }],
+        description: 'NULL means unread. This is the field, not a boolean.',
+      },
+      createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+    },
+  },
+
+  AdminUserRow: {
+    type: 'object',
+    required: ['uid', 'role', 'isArchive', 'isEmailVerified'],
+    description: 'One account of ANY role — customer, provider or admin.',
+    properties: {
+      uid: { type: 'string' },
+      email: { type: ['string', 'null'] },
+      phoneNumber: { type: ['string', 'null'] },
+      firstName: { type: 'string', description: "Coalesced to '', never null." },
+      lastName: { type: 'string', description: "Coalesced to ''." },
+      fullName: {
+        type: 'string',
+        description:
+          'Joined from the parts that exist. EMPTY STRING when neither does — it does NOT '
+          + 'fall back to the email, unlike the provider and onboarding lists, which do.',
+      },
+      role: { type: 'integer', description: 'A NUMBER. 1 admin, 2 and 4 provider, 3 customer.' },
+      accountStatus: { type: ['string', 'null'] },
+      isArchive: { type: 'boolean' },
+      isEmailVerified: { type: 'boolean' },
+      createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+    },
+  },
+
+  AdminSupportCaseRow: {
+    type: 'object',
+    required: ['caseId', 'domain', 'providerState', 'internalState', 'version'],
+    description:
+      'One support case in the admin queue. Note the TWO state fields: providerState is '
+      + 'what the provider is shown, internalState is what the queue runs on. They are not '
+      + 'the same vocabulary and must not be rendered interchangeably.',
+    properties: {
+      caseId: { type: 'string', description: 'A STRING — String(row.case_id).' },
+      reference: { type: 'string', description: 'The PUBLIC reference, which is what a provider quotes.' },
+      providerUid: { type: 'string' },
+      domain: { type: 'string' },
+      categoryId: { type: ['string', 'null'] },
+      categoryTitle: {
+        type: ['string', 'null'],
+        description: 'The PROVIDER-facing category title, from provider_title.',
+      },
+      title: { type: ['string', 'null'] },
+      providerState: { type: 'string', description: 'What the provider sees.' },
+      internalState: { type: 'string', description: 'What the queue runs on. NOT provider-facing.' },
+      severity: { type: ['string', 'null'] },
+      priority: { type: ['string', 'null'] },
+      queue: { type: ['string', 'null'], description: 'current_queue.' },
+      providerActionRequired: { type: 'boolean' },
+      escalationState: { type: ['string', 'null'] },
+      escalationDueAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      version: { type: 'integer', description: 'Optimistic-concurrency token for transitions.' },
+    },
+  },
+
+  AdminSupportCaseDetail: {
+    type: 'object',
+    description:
+      'A case in full. The RAW case row is spread at the top level — so those keys are '
+      + 'SNAKE_CASE — with `caseId` added as a camelCase string alongside, and eight raw '
+      + 'child collections attached. One object, two naming conventions, and the children '
+      + 'are unmapped query rows.',
+    additionalProperties: true,
+    properties: {
+      caseId: { type: 'string', description: 'Added by the service beside the raw case_id it duplicates.' },
+      sources: { type: 'array', items: { type: 'object', additionalProperties: true } },
+      messages: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: true },
+        description: 'Provider-visible correspondence.',
+      },
+      internalNotes: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: true },
+        description: 'REVIEWER-ONLY. Never render these beside messages — they are not provider-facing.',
+      },
+      events: { type: 'array', items: { type: 'object', additionalProperties: true } },
+      attachments: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: true },
+        description: 'Metadata only. Use the preview endpoint for a URL.',
+      },
+      resolutions: { type: 'array', items: { type: 'object', additionalProperties: true } },
+      appeals: { type: 'array', items: { type: 'object', additionalProperties: true } },
+      escalations: { type: 'array', items: { type: 'object', additionalProperties: true } },
     },
   },
 

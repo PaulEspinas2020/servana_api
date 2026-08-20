@@ -40,7 +40,7 @@ successor for one of these must not be QUIETER than the route it replaces.
 
 ## Payload schemas
 
-Authored: **48** of 251.
+Authored: **67** of 251.
 
 The remainder publish their envelope, guard, permission and parity status, and declare
 the payload `UNSPECIFIED`. That is deliberate. A guessed schema is worse than an absent
@@ -243,28 +243,28 @@ only rise.
 
 | Method | Path | Guard | Permission | Envelope | Payload | Parity |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/admin/audit-logs` | permission | `audit_logs.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/audit-logs/:eventId` | permission | `audit_logs.details.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/audit-logs/actions` | permission | `audit_logs.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/audit-logs/actor/:actorUid` | permission | `audit_logs.actor_history.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/audit-logs/entity/:entityType/:entityId` | permission | `audit_logs.entity_timeline.view` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/audit-logs/export` | permission | `audit_logs.export` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/audit-logs/summary` | permission | `audit_logs.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/audit-logs` | permission | `audit_logs.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/audit-logs/:eventId` | permission | `audit_logs.details.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/audit-logs/actions` | permission | `audit_logs.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/audit-logs/actor/:actorUid` | permission | `audit_logs.actor_history.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/audit-logs/entity/:entityType/:entityId` | permission | `audit_logs.entity_timeline.view` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/audit-logs/export` | permission | `audit_logs.export` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/audit-logs/summary` | permission | `audit_logs.view` | `status-success` | ✅ authored | rewritten |
 
 ## `/api/admin/notifications` (3)
 
 | Method | Path | Guard | Permission | Envelope | Payload | Parity |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/admin/notifications` | admin-role | — | `status-success` | — unspecified | rewritten |
-| `PATCH` | `/api/admin/notifications/:id/read` | admin-role | — | `status-success` | — unspecified | rewritten |
-| `PATCH` | `/api/admin/notifications/read-all` | admin-role | — | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/notifications` | admin-role | — | `status-success` | ✅ authored | rewritten |
+| `PATCH` | `/api/admin/notifications/:id/read` | admin-role | — | `status-success` | ✅ authored | rewritten |
+| `PATCH` | `/api/admin/notifications/read-all` | admin-role | — | `status-success` | ✅ authored | rewritten |
 
 ## `/api/admin/users` (2)
 
 | Method | Path | Guard | Permission | Envelope | Payload | Parity |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/admin/users` | permission | `users.view` | `status-success` | — unspecified | rewritten |
-| `PATCH` | `/api/admin/users/:uid/archive` | permission | `users.archive` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/users` | permission | `users.view` | `status-success` | ✅ authored | rewritten |
+| `PATCH` | `/api/admin/users/:uid/archive` | permission | `users.archive` | `status-success` | ✅ authored | rewritten |
 
 ## `/api/admin/auto-online` (4)
 
@@ -304,16 +304,16 @@ only rise.
 
 | Method | Path | Guard | Permission | Envelope | Payload | Parity |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/admin/customers` | permission | `customers.read` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/customers` | permission | `customers.read` | `status-success` | ✅ authored | rewritten |
 | `GET` | `/api/admin/customers/clients/:identityId` | permission | `customers.read` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/customers/clients/:identityId/addresses` | permission | `customers.addresses.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/customers/guest-check` | permission | `bookings.create_guest` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/customers/guests` | permission | `customers.read_guests` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/customers/guest-check` | permission | `bookings.create_guest` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/customers/guests` | permission | `customers.read_guests` | `status-success` | ✅ authored | rewritten |
 | `GET` | `/api/admin/customers/guests/:guestId` | permission | `customers.read_guests` | `status-success` | — unspecified | rewritten |
 | `PATCH` | `/api/admin/customers/guests/:guestId` | permission | `customers.edit_guest` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/customers/guests/:guestId/bookings` | permission | `customers.read_guests` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/customers/guests/:guestId/link-client` | permission | `customers.link_guest_client` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/customers/metrics` | permission | `customers.read` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/customers/metrics` | permission | `customers.read` | `status-success` | ✅ authored | rewritten |
 | `GET` | `/api/admin/customers/search` | permission | `bookings.create_for_client` | `status-success` | — unspecified | rewritten |
 
 ## `/api/admin/dashboard` (1)
@@ -412,8 +412,8 @@ only rise.
 
 | Method | Path | Guard | Permission | Envelope | Payload | Parity |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/admin/support/cases` | permission | `support.cases.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/support/cases/:caseId` | permission | `support.cases.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/support/cases` | permission | `support.cases.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/support/cases/:caseId` | permission | `support.cases.view` | `status-success` | ✅ authored | rewritten |
 | `PATCH` | `/api/admin/support/cases/:caseId/appeals/:appealId` | permission | `support.appeals.decide` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/support/cases/:caseId/attachments/:attachmentId/preview` | permission | `support.evidence.sensitive.view` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/support/cases/:caseId/escalations` | permission | `support.cases.escalate` | `status-success` | — unspecified | rewritten |
@@ -421,7 +421,7 @@ only rise.
 | `POST` | `/api/admin/support/cases/:caseId/messages` | permission | `support.cases.reply` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/support/cases/:caseId/resolutions` | permission | `support.cases.resolve` | `status-success` | — unspecified | rewritten |
 | `PATCH` | `/api/admin/support/cases/:caseId/state` | permission | `support.cases.transition` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/support/cases/sla-sweep` | permission | `support.sla.manage` | `status-success` | — unspecified | rewritten |
+| `POST` | `/api/admin/support/cases/sla-sweep` | permission | `support.sla.manage` | `status-success` | ✅ authored | rewritten |
 
 ## `/api/admin/workers` (1)
 

@@ -47,7 +47,7 @@ import { staleFiles, toOpenApiPath, pathParams } from '../scripts/generate-admin
  */
 const FLOOR = {
   operations: 251,
-  authoredResponses: 48,
+  authoredResponses: 67,
 };
 
 /** Operations whose guard this reader cannot name. Must stay zero. */
