@@ -110,11 +110,29 @@ describe('the parity matrix states what the contract states', () => {
     }
   });
 
-  it('states plainly that no client has migrated', () => {
-    // The honest number. A matrix showing optimistic cells reads as permission
-    // to start deleting aliases.
-    expect(summary.migratedCallerCells).toBe(0);
-    expect(doc).toContain('No client has migrated');
+  it('states the migration count it measured, whatever that number is', () => {
+    /**
+     * Was `expect(migratedCallerCells).toBe(0)` plus a hardcoded sentence "No
+     * client has migrated" (TAB 04).
+     *
+     * The concern behind it is real and kept: a matrix showing optimistic cells
+     * reads as permission to start deleting aliases. But pinning the number to
+     * zero pinned a KNOWN-WRONG registry in place — the portal had migrated 36
+     * endpoints and the document said none — and the generator printed the count
+     * and the contradicting sentence one line apart: "22 cells on canonical. No
+     * client has migrated."
+     *
+     * So the assertion is now consistency rather than a constant: the prose must
+     * agree with the count, in both directions.
+     */
+    expect(doc).toContain(`**${summary.migratedCallerCells} cells on canonical.**`);
+    if (summary.migratedCallerCells === 0) {
+      expect(doc).toContain('No client has migrated');
+    } else {
+      expect(doc).not.toContain('No client has migrated');
+      // And it must say WHY the number is trustworthy, which is the manifest.
+      expect(doc).toContain('manifest');
+    }
   });
 
   it('reports zero divergent capabilities as a number, not a claim', () => {

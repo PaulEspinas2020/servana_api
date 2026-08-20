@@ -146,6 +146,40 @@ describe('the exempt list', () => {
   });
 });
 
+describe('a placeholder NEARBY does not silence a real credential', () => {
+  /**
+   * The placeholder test used to run over a four-line window (i-1 .. i+3) for
+   * EVERY rule. A real remote-database URL therefore went unreported whenever a
+   * neighbouring line happened to contain a placeholder marker — and a template
+   * line sitting directly above the real value it is a template for is the
+   * ordinary shape of a config file.
+   *
+   * The window exists so a PEM header on one line can be recognised as a
+   * template by its REPLACE_ME body on the next. That is a property of the
+   * multi-line rules alone, so the window belongs to them alone.
+   */
+  const REAL_URL = 'const pg = "postgres://admin:hunter2@prod-db.servana.internal:5432/servana";';
+
+  it('reports a real URL when the line ABOVE holds a placeholder', () => {
+    // The placeholder line must NOT itself be credential-shaped. Written first
+    // as `AKIAEXAMPLEEXAMPLE00`, this passed with the bug still in place —
+    // scanText reported that line, so the assertion never depended on the URL
+    // below it at all. A test that cannot fail is the thing this TAB is about.
+    expect(scanText('f.ts', 'const k = "<your-key-here>";\n' + REAL_URL)).not.toHaveLength(0);
+  });
+
+  it('reports a real URL when the line BELOW holds a placeholder', () => {
+    expect(scanText('f.ts', REAL_URL + '\nconst t = "<your-key-here>";')).not.toHaveLength(0);
+  });
+
+  it('still recognises a PEM template whose body is on the NEXT line', () => {
+    // The negative half. Losing this is how the fix above turns into noise.
+    expect(
+      scanText('k.pem', '-----BEGIN PRIVATE KEY-----\nREPLACE_ME\n-----END PRIVATE KEY-----'),
+    ).toHaveLength(0);
+  });
+});
+
 describe('the repository itself is clean', () => {
   it('no tracked file carries secret-shaped content', () => {
     const findings = scanRepository(path.resolve(__dirname, '..'));

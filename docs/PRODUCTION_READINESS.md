@@ -5,20 +5,53 @@
 
 ## The headline
 
-The v1 backend is **built and gated, and neither deployed nor adopted.**
+**CORRECTED 2026-08-18 (TAB 00 of the Admin Portal Production Launch Master
+Command V1).** This document previously read "built and gated, and neither
+deployed nor adopted", and recorded `origin/main = 2e03a4b`. Both statements
+were true when written and are false now. They are corrected here rather than
+appended to, because a stale headline is read as the answer and an appended
+correction is read as a footnote.
+
+The v1 backend is **deployed. It is not yet adopted.**
 
 ```
 backend implementation      COMPLETE   95 canonical endpoints from ONE contract
-local verification          GREEN      271 suites, 5846 tests, exit 0
+local verification          GREEN      276 suites, 5935 tests, exit 0 (2026-08-18)
 startup                     BOOTED     binds, resolves the graph, /readyz 503 when degraded
-production deployment       NONE       109 commits unpushed; origin/main = 2e03a4b
+production deployment       DEPLOYED   d4b0150 — deploy run 32119165101, 2026-08-18T09:09:15Z
+v1 surface in production    MOUNTED    98/98 probeable routes answer, 0x 404
 client adoption             ZERO       615 legacy routes mounted, 0 of 108 migrated
+admin domain of v1          1 OF 105   the integration gap is a MISSING DOMAIN, not a deploy
 production smoke            NEVER RUN  tooling delivered, never executed
 ```
 
-That last line is the one to hold on to. Every certification in `docs/` is a
-statement about **this repository**, proven against tests and an in-process
-PostgreSQL. None of it is a statement about the running system.
+The line to hold on to is now the second-to-last. The blocker recorded in every
+prior session — "the deploy failed, production serves no `/api/v1`" — is gone.
+What replaced it is a smaller and more precise problem: the v1 layer was built
+for the client applications, so of its 105 routes exactly **one** is
+admin-authenticated. The admin portal cannot migrate onto a surface that does
+not model its domain. See `docs/LAUNCH_BASELINE.md`.
+
+### How this correction was evidenced
+
+Stated plainly, because this document's own rule is that the method is named
+beside the number:
+
+- **Locally verified, by this session.** `origin/main` in this clone resolves to
+  `d4b0150`, and `d4b0150` is an ancestor of `HEAD` — so the commit the book
+  names as deployed is a real, pushed commit in this history, not a claim.
+  `npm run verify`, `npm run db:verify:embedded` and `npm run schema:authority`
+  were executed here and are green.
+- **Taken from the Master Command V1 evidence base, NOT re-probed here.** The
+  deploy-run id, the timestamp, and the 98/98 route probe. This session holds no
+  authorisation for production access, so it did not re-run those probes. They
+  are recorded as measured-by-the-book and are listed for re-execution in
+  `docs/MASTER_TODO_MANUAL_TASKS.md`.
+
+Every certification in `docs/` remains a statement about **this repository**,
+proven against tests and an in-process PostgreSQL — with the single exception of
+the deploy facts above, which are statements about the running system on the
+authority named beside them.
 
 ---
 
@@ -101,12 +134,28 @@ A failing test touches nothing. A failing migration stops short of the restart,
 so the old code keeps serving. This order was got wrong once before — migrations
 used to run before Node was installed.
 
-### 1.7 Push is still blocked by a standing rule, not by readiness
+### 1.7 The deploy happened. The standing local-only rule still governs what comes next.
 
-109 commits are unpushed. A push to `main` IS the deploy. The standing
-instruction is that everything stays local until the admin, client and worker
-apps are migrated, and **zero clients have migrated**. That is product
-sequencing, not engineering readiness.
+**CORRECTED 2026-08-18.** This section previously read "109 commits are
+unpushed". That is no longer the state: `d4b0150` was pushed and deployed, and
+this clone now carries **2 local commits ahead of `origin/main`** —
+
+    0aaf89f  gate(heap): bound the suite's heap permanently, and stop the leak
+    fca1ed1  fix(gate): the release gate could never pass, because importing the
+             app needed a production key
+
+A push to `main` IS the deploy — a self-hosted runner on the production host
+applies migrations and restarts PM2, with no staging hop and no human approval
+in between. That fact is unchanged and is exactly why the standing rule stands:
+everything remains local until an explicit, reaffirmed go is given for each
+occasion. A prior authorisation does not carry forward.
+
+What HAS changed is the reason. It is no longer "no client has migrated, so
+there is nothing to deploy for". It is now that the two commits above are CI
+repairs whose value is realised on the next deploy, whenever that is
+authorised — and that the deploy pipeline they repair is itself a P0 finding
+(F-03: `deploy.yml` has no `needs:` on the release gate, so a red gate shipped
+`d4b0150` anyway). Fixing the gate before using it is the correct order.
 
 ## 2. What "operational" additionally requires
 
@@ -163,9 +212,13 @@ Everything below is prepared and verified locally. None of it has been executed.
 ```
 1  mark the ledger        DONE 2026-08-16   30 rows, owner admin
 2  apply 030–035          DONE 2026-08-16   6 migrations, 121 -> 128 tables
-3  push / deploy          PENDING           63 commits; push IS the deploy
+2b apply 036 + 037        DONE 2026-08-18   132 tables, ledger 38
+3  push / deploy          DONE 2026-08-18   d4b0150 via run 32119165101 — CORRECTED,
+                                            this line previously read PENDING
+3b redeploy the 2 CI fixes PENDING          0aaf89f, fca1ed1 — local only
 4  production smoke       PENDING           needs credentials
-5  migrate client 1       PENDING           admin web — cheapest to correct
+5  migrate client 1       PENDING           admin web — BLOCKED on the v1 admin
+                                            domain existing at all (1 of 105 routes)
 ```
 
 Steps 1 and 2 were executed under explicit authorisation and verified:

@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**105 implemented** · **4 planned** · 109 total.
+**113 implemented** · **0 planned** · 113 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -141,6 +141,52 @@ The Services of one Subcategory.
   - `GET /api/services/:serviceId/options-with-addons` — **CANONICALIZE** — The legacy shape. Its `:serviceId` is a service_families.id and it returns level_2 / level_3 option groups, not Services. ServanaWorker calls the un-prefixed twin instead, which is the only catalog route without the /services/ prefix its neighbours use.
   - `GET /api/:serviceId/options-with-addons` — **ALIAS_TEMPORARILY** — The original un-prefixed form, and what ServanaWorker calls in production. It cannot be retired until that app moves; the customer app followed the convention instead of the exception and 404d for months as a result.
 
+## telemetry
+
+| Method | Path | Status | Auth | Request | Response | Idem | Owner |
+|---|---|---|---|---|---|---|---|
+| `POST` | `/api/v1/telemetry` | **live** | any signed-in | `TelemetryIngestRequest` | `TelemetryIngestResult` | no | platform |
+
+### `POST /api/v1/telemetry`
+
+Accept a small, closed set of scrubbed worker-app events. No free text, ever.
+
+> FIRST-PARTY by decision, not by default — see docs/TELEMETRY_DECISION.md. The worker app scrubs to an allowlist carrying no name, phone, location or token, but it still carries bookingRef, and RA 10173 s3(g) makes information personal when identity can be "reasonably and directly ascertained by the entity holding the information". Servana holds the bookings table. So the scrubbed payload is still personal data in our hands, and a foreign sink would be a cross-border transfer engaging s21 accountability, NPC model contractual clauses, and registration above 1,000 data subjects. The server re-scrubs from its own allowlist rather than trusting the client: a server that trusts a client's scrubbing has one control, not two.
+
+- **Domain service** — `services/telemetryService.recordTelemetryEvents`
+- **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces** — none; new capability.
+
+## health
+
+| Method | Path | Status | Auth | Request | Response | Idem | Owner |
+|---|---|---|---|---|---|---|---|
+| `GET` | `/api/v1/client-config` | **live** | public | — | `ClientConfig` | yes | platform |
+| `GET` | `/api/v1/health` | **live** | public | — | `BuildInfo` | yes | platform |
+
+### `GET /api/v1/client-config`
+
+The minimum client version that may run, per platform. The only recall a released mobile build has.
+
+> Public because the client being recalled may be too old to authenticate, and a kill switch reachable only with a credential cannot kill the builds that most need it. Served from a JSON file, not the database: a recall is pulled during an incident, and the incident this platform actually had was every database-backed read returning 500 for six days. Editing the file takes effect within ~2 minutes with no restart and no deploy. The server fails OPEN — a missing or malformed file serves a permissive 0.0.0 floor — because the client fails CLOSED, and two closed halves would let one deleted file brick every installed app at once.
+
+- **Domain service** — `api/v1/domains/clientConfig.readClientConfig`
+- **Error codes** — `INTERNAL`
+- **Callers** — Cust Mobile · · Cust Web — · Prov Mobile · · Prov Web — · Admin —
+- **Legacy it replaces** — none; new capability.
+
+### `GET /api/v1/health`
+
+The commit this build was made from. Public, and carries nothing else.
+
+> Reads dist/BUILD_INFO.json, which deploy.yml stamps on every deploy. It answers the one question a deploy cannot otherwise be asked from outside: which commit is actually serving. A deploy whose migration step fails stops short of the PM2 restart, so the old code keeps serving and nothing outward says so.
+
+- **Domain service** — `api/v1/domains/health.readBuildInfo`
+- **Error codes** — `INTERNAL`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile — · Prov Web — · Admin —
+- **Legacy it replaces** — none; new capability.
+
 ## identity
 
 | Method | Path | Status | Auth | Request | Response | Idem | Owner |
@@ -153,7 +199,7 @@ The authenticated caller, whatever their role.
 
 - **Domain service** — `services/identityService.getIdentity`
 - **Error codes** — `INTERNAL`, `NOT_FOUND`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web ⏳ · Admin ·
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ✅ · Prov Web ✅ · Admin ·
 - **Legacy it replaces**
   - `GET /api/auth/me` — **ALIAS_TEMPORARILY** — Provider Web reads this on every session bootstrap. It now delegates to the same identityService.getIdentity this route uses, so the two cannot drift; only the envelope differs.
   - `GET /api/user/profile` — **ROLE_SPECIFIC** — Not a duplicate: returns the CUSTOMER profile aggregate (addresses, preferences), not the identity record. Retained; a v1 successor belongs in the customer-profile domain command, not here.
@@ -224,7 +270,7 @@ The canonical transition history: one event per state change, oldest first.
 - **Domain service** — `services/booking/transitionExecutor.getBookingTimeline`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin ·
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ✅ · Prov Web · · Admin ·
 - **Legacy it replaces**
   - `GET /api/:id/timeline` — **KEEP** — NOT a duplicate. The legacy timeline is a re-voiced operational narrative built from per-stage timestamps for the customer to read. This is the append-only event log the executor writes inside each transaction — the evidence, not the story. Admin, Customer and Provider all read THIS to agree on what happened.
 
@@ -251,7 +297,7 @@ The authenticated provider's job cards.
 - **Domain service** — `services/technicianService.getJobCardsByWorker + controllers/jobCardView.formatJobCard`
 - **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
 - **Query** — `limit` (integer) Page size, 1-100, default 50; `offset` (integer) Rows to skip, default 0
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `GET /api/worker/job-cards` — **ALIAS_TEMPORARILY** — Provider Web calls this today. Same service, same view function, legacy envelope (a bare array).
   - `GET /api/workers/:workerId/job-cards` — **ALIAS_TEMPORARILY** — ServanaWorker calls this. Takes the provider uid from the PATH; it is now behind verifyAuth + verifyOwnership, but the parameter remains a BOLA shape that v1 removes. Retirement gated on a ServanaWorker release.
@@ -263,7 +309,7 @@ One job card, scoped to the authenticated provider's own assignment.
 - **Domain service** — `services/technicianService.getJobCardByWorker + controllers/jobCardView.formatJobCard`
 - **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `GET /api/worker/job-cards/:bookingId` — **ALIAS_TEMPORARILY** — Provider Web. Same service and view function.
 
@@ -274,7 +320,7 @@ Accepts the assignment.
 - **Domain service** — `services/booking/transitionExecutor.transitionBooking (PROVIDER_ACCEPT)`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `PUT /api/worker/bookings/:bookingId/accept` — **ALIAS_TEMPORARILY** — The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment.
 
@@ -285,7 +331,7 @@ Declines the assignment, returning the booking to the pool.
 - **Domain service** — `services/booking/transitionExecutor.transitionBooking (PROVIDER_DECLINE)`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `PUT /api/worker/bookings/:bookingId/decline` — **ALIAS_TEMPORARILY** — The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment.
 
@@ -296,7 +342,7 @@ Marks the provider on the way.
 - **Domain service** — `services/booking/transitionExecutor.transitionBooking (PROVIDER_EN_ROUTE)`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `PUT /api/worker/bookings/:bookingId/en-route` — **ALIAS_TEMPORARILY** — The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment.
 
@@ -307,7 +353,7 @@ Marks the provider at the address.
 - **Domain service** — `services/booking/transitionExecutor.transitionBooking (PROVIDER_ARRIVED)`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `PUT /api/worker/bookings/:bookingId/arrived` — **ALIAS_TEMPORARILY** — The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment.
 
@@ -320,7 +366,7 @@ Starts the job. Requires the customer worker code.
 - **Domain service** — `services/booking/transitionExecutor.transitionBooking (PROVIDER_START)`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `BOOKING_WORKER_CODE_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ⏳ · Admin —
 - **Legacy it replaces**
   - `PUT /api/worker/bookings/:bookingId/start` — **ALIAS_TEMPORARILY** — The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment.
 
@@ -331,7 +377,7 @@ Completes the job.
 - **Domain service** — `services/booking/transitionExecutor.transitionBooking (PROVIDER_COMPLETE)`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `PUT /api/worker/bookings/:bookingId/complete` — **ALIAS_TEMPORARILY** — The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment.
 
@@ -344,7 +390,7 @@ Cancels a job the provider had already accepted, subject to the notice policy.
 - **Domain service** — `services/booking/transitionExecutor.transitionBooking (PROVIDER_CANCEL)`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_POLICY_REFUSED`, `BOOKING_PROVIDER_CANCEL_REASON_INVALID`, `BOOKING_PROVIDER_CANCEL_SCHEDULE_UNKNOWN`, `BOOKING_PROVIDER_CANCEL_STAGE_INVALID`, `BOOKING_PROVIDER_CANCEL_WINDOW_EXPIRED`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `POST /api/provider/bookings/:bookingId/cancel` — **ALIAS_TEMPORARILY** — The live Provider Web / Provider Mobile cancel. It ALREADY runs the executor and the same providerCancellationWindow guard — this entry gives it a canonical path and a v1 error vocabulary, it does not give it a second implementation.
   - `GET /api/provider/bookings/:bookingId/cancellation-eligibility` — **KEEP** — NOT a duplicate. It answers "may I cancel, and until when" without cancelling, from the same evaluateCancellation function. The canonical successor for that question is the availableActions block on GET /bookings/:id/transitions.
@@ -370,7 +416,7 @@ The caller's notifications.
 - **Domain service** — `services/events/notificationInbox.listNotifications`
 - **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
 - **Query** — `filter` (string) Optional service-side filter key; `limit` (integer) Page size, 1-100, default 50; `offset` (integer) Rows to skip, default 0
-- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ·
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ✅ · Admin ·
 - **Legacy it replaces**
   - `GET /api/user/notifications` — **ALIAS_TEMPORARILY** — Customer clients call this today.
 
@@ -380,7 +426,7 @@ How many unread notifications the caller has.
 
 - **Domain service** — `services/events/notificationInbox.countUnread`
 - **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ·
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ✅ · Admin ·
 - **Legacy it replaces**
   - `GET /api/user/notifications/unread-count` — **ALIAS_TEMPORARILY** — Declared before /user/notifications/:key on the legacy router precisely so "unread-count" is not parsed as a notification key. v1 has the same ordering requirement and the shadow test now enforces it.
 
@@ -391,7 +437,7 @@ Marks one notification read. Repeating it is a no-op, not an error.
 - **Domain service** — `services/events/notificationInbox.markRead`
 - **Error codes** — `INTERNAL`, `NOTIFICATION_NOT_ACTIONABLE`, `NOTIFICATION_NOT_FOUND`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `key` (string) Opaque notification key
-- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ·
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ✅ · Admin ·
 - **Legacy it replaces**
   - `PATCH /api/user/notifications/:key/read` — **ALIAS_TEMPORARILY** — Same service and the same key validation. The path differs only in the /user prefix, which named the caller rather than the resource.
 
@@ -402,7 +448,7 @@ Dismisses one notification. Repeating it is a no-op, not an error.
 - **Domain service** — `services/events/notificationInbox.dismiss`
 - **Error codes** — `INTERNAL`, `NOTIFICATION_NOT_ACTIONABLE`, `NOTIFICATION_NOT_FOUND`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `key` (string) Opaque notification key
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `DELETE /api/provider/notifications/:key` — **CANONICALIZE** — The provider inbox had list, read, read-all and dismiss; v1 took the first three and left dismiss behind, so every provider client kept one legacy call for one verb. The legacy route is provider-only and reaches provider_notifications directly; this one resolves the store from the caller, so a CUSTOMER can dismiss for the first time.
 
@@ -412,7 +458,7 @@ Marks every notification read. Naturally idempotent.
 
 - **Domain service** — `services/events/notificationInbox.markAllRead`
 - **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ·
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ✅ · Admin ·
 - **Legacy it replaces**
   - `POST /api/user/notifications/mark-all-read` — **ALIAS_TEMPORARILY** — Same service; v1 uses the resource-shaped path.
 
@@ -424,7 +470,7 @@ The caller's notification preferences, every declared category.
 
 - **Domain service** — `services/events/notificationPreferences.getPreferences`
 - **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ⏳ · Prov Web ⏳ · Admin ·
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ⏳ · Prov Web ✅ · Admin ·
 - **Legacy it replaces**
   - `GET /api/provider/notification-preferences` — **ALIAS_TEMPORARILY** — Provider Web. Same uid-keyed table - nothing about it is provider-specific, and the role gate on this path is the reason customers had no way to configure notifications they were already receiving.
 
@@ -436,7 +482,7 @@ Changes named categories. Unnamed ones keep their value.
 
 - **Domain service** — `services/events/notificationPreferences.patchPreferences`
 - **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ⏳ · Prov Web ⏳ · Admin ·
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ⏳ · Prov Web ✅ · Admin ·
 - **Legacy it replaces**
   - `PUT /api/provider/notification-preferences` — **ALIAS_TEMPORARILY** — Provider Web sends a full replace. Both shapes reach one writer, so a provider who has not migrated keeps the exact behaviour they have.
 
@@ -448,7 +494,7 @@ Registers this device for push, for the authenticated account.
 
 - **Domain service** — `services/events/deviceTokenService.registerDevice`
 - **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
-- **Callers** — Cust Mobile ⏳ · Cust Web · · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile ⏳ · Cust Web · · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `POST /api/provider/fcm-token` — **ALIAS_TEMPORARILY** — ServanaWorker and Provider Web. Multi-device already, and dual-written by the canonical service so a device registered either way stays reachable.
   - `POST /api/user/fcm-token` — **ALIAS_TEMPORARILY** — ServanaClient. Wrote a SINGLE column, so a customer with a phone and a tablet only ever received push on whichever signed in last - silently. The canonical route gives customers the multi-device behaviour providers already had.
@@ -461,7 +507,7 @@ Releases this device, or every device for the account.
 
 - **Domain service** — `services/events/deviceTokenService.releaseDevice`
 - **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile ⏳ · Cust Web · · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile ⏳ · Cust Web · · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `DELETE /api/provider/fcm-token` — **ALIAS_TEMPORARILY** — Same operation, provider-gated. Both reach one service.
   - `DELETE /api/user/fcm-token` — **ALIAS_TEMPORARILY** — Same operation for customers, against the single legacy column.
@@ -517,7 +563,7 @@ The caller's settings: locale, privacy, security posture and a notification poin
 
 - **Domain service** — `services/account/accountSettingsService.getSettings`
 - **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin ·
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ✅ · Prov Web · · Admin ·
 - **Legacy it replaces** — none; new capability.
 
 ### `PATCH /api/v1/me/settings`
@@ -528,7 +574,7 @@ Changes named settings. Unnamed ones keep their value.
 
 - **Domain service** — `services/account/accountSettingsService.patchSettings`
 - **Error codes** — `ACCOUNT_FIELD_NOT_WRITABLE`, `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin ·
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ✅ · Prov Web · · Admin ·
 - **Legacy it replaces** — none; new capability.
 
 ### `GET /api/v1/me/security`
@@ -550,7 +596,7 @@ What is left before this account is usable. Backend-derived.
 
 - **Domain service** — `services/account/profileCompletionService.getCompletion`
 - **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin —
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ✅ · Prov Web · · Admin —
 - **Legacy it replaces**
   - `GET /api/provider/account-state` — **KEEP** — NOT a duplicate. Account state answers "what may this provider do RIGHT NOW" - suspended, pending, active - and is what gates the app. Completion answers "what is left to fill in". A suspended provider can be 100% complete, and a pending one can be active-eligible and missing a photo.
 
@@ -644,7 +690,7 @@ The caller's own provider profile, field-scoped by seat.
 
 - **Domain service** — `services/account/providerProfileService.getProviderProfile`
 - **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin ·
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ✅ · Admin ·
 - **Legacy it replaces**
   - `GET /api/provider/profile` — **ALIAS_TEMPORARILY** — The live provider profile, built inline in a controller with a hand-written column list. Safe only for as long as nobody adds a column; the canonical route emits the fields the policy says this seat may read.
   - `GET /api/provider/profile-center` — **ROLE_SPECIFIC** — The compliance view: revision history, review state, field-level edit affordances. A genuinely different question, and it already reads the same field registry this entry projects from.
@@ -657,7 +703,7 @@ Proposes a change to a reviewable public profile field.
 
 - **Domain service** — `services/account/providerProfileService.patchProviderProfile`
 - **Error codes** — `ACCOUNT_FIELD_NOT_WRITABLE`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `POST /api/provider/public-profile-revisions` — **ALIAS_TEMPORARILY** — The live revision submit. IDENTICAL domain call - this is a second URL onto one workflow.
 
@@ -681,7 +727,7 @@ Document and requirement REVIEW STATE. Never content.
 
 - **Domain service** — `services/account/providerProfileService.listDocuments`
 - **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `GET /api/provider/documents` — **ALIAS_TEMPORARILY** — The live document list. Same `worker_requirements` model - the command is explicit that provider_documents must not be invented, and it does not exist.
 
@@ -693,7 +739,7 @@ The document catalog: what may be submitted, and which are required.
 
 - **Domain service** — `services/providerProfileComplianceService.DOCUMENT_TYPE_CATALOG`
 - **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ⏳ · Admin —
 - **Legacy it replaces**
   - `GET /api/provider/document-types` — **ALIAS_TEMPORARILY** — The same static catalog constant. No per-caller data of any kind.
 
@@ -705,7 +751,7 @@ Submits one document for review.
 
 - **Domain service** — `services/providerProfileComplianceService.uploadDocument`
 - **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `POST /api/provider/documents` — **ALIAS_TEMPORARILY** — The live submit for both provider clients. IDENTICAL domain call, and it carries the same post-commit `autoOnlineEngine.evaluateProvider` — submitting the last outstanding requirement is what makes a provider eligible to go online, so an endpoint that stored the file without re-evaluating would leave them blocked.
 
@@ -718,7 +764,7 @@ A short-lived signed URL for one document the caller owns.
 - **Domain service** — `services/providerProfileComplianceService.getDocumentPreview`
 - **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
 - **Path params** — `documentId` (integer) worker_requirements.id
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `GET /api/provider/documents/:documentId/preview` — **ALIAS_TEMPORARILY** — Same authorization and the same short-lived grant. The `Cache-Control: private, no-store` and `Pragma: no-cache` headers are set by the handler rather than the route, so they travel with the only v1 response that contains a private storage URL.
 
@@ -729,7 +775,7 @@ Withdraws one document.
 - **Domain service** — `services/providerProfileComplianceService.deleteDocument`
 - **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
 - **Path params** — `documentId` (integer) worker_requirements.id
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `DELETE /api/provider/documents/:documentId` — **ALIAS_TEMPORARILY** — IDENTICAL domain call, and it re-evaluates online eligibility for the same reason the upload does: withdrawing a requirement can make a provider ineligible, and skipping it would leave someone online against a document they just removed.
 
@@ -763,7 +809,7 @@ The ACTIVE time-off periods belonging to the caller.
 
 - **Domain service** — `services/providerAvailabilityEngine.listTimeOff`
 - **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ⏳ · Admin —
 - **Legacy it replaces**
   - `GET /api/worker/time-off` — **ALIAS_TEMPORARILY** — Same engine, same active-only filter. A cancelled period is history rather than a commitment and appears in neither.
 
@@ -775,7 +821,7 @@ Books time off, and reports the confirmed bookings it collides with.
 
 - **Domain service** — `services/providerAvailabilityEngine.createTimeOff`
 - **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ⏳ · Admin —
 - **Legacy it replaces**
   - `POST /api/worker/time-off` — **ALIAS_TEMPORARILY** — IDENTICAL engine call, and it carries the same bookingConflicts and conflictNotice. Time off is created even when it overlaps confirmed work - a provider who is ill must be able to record it - but the work is still theirs, and a response that did not say so would leave them assuming leave cancels their jobs.
 
@@ -788,7 +834,7 @@ Cancels one time-off period.
 - **Domain service** — `services/providerAvailabilityEngine.cancelTimeOff`
 - **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
 - **Path params** — `timeOffId` (integer) provider_time_off.id
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ⏳ · Admin —
 - **Legacy it replaces**
   - `DELETE /api/worker/time-off/:id` — **ALIAS_TEMPORARILY** — IDENTICAL engine call. Cancels rather than deletes; the row survives as history.
 
@@ -800,7 +846,7 @@ The services the caller is approved for, keyed on services.id.
 
 - **Domain service** — `services/account/providerProfileService.listServices`
 - **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web · · Admin —
 - **Legacy it replaces**
   - `GET /api/worker/services-overview` — **ALIAS_TEMPORARILY** — The live provider services screen. Same `employee_services` qualification; the canonical entry projects it keyed on services.id with the active flag matching actually selects on.
   - `GET /api/worker/service-applications` — **KEEP** — NOT a duplicate. An application is the REQUEST to be approved for a service and carries its own lifecycle; this entry is the resulting qualification. A provider can have a pending application and no qualification, which is exactly the state the two endpoints exist to tell apart.
@@ -983,7 +1029,7 @@ Ends every session for the authenticated account and clears its push token.
 
 - **Domain service** — `services/authSessionService.endAllSessions`
 - **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ⏳
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ✅ · Admin ⏳
 - **Legacy it replaces**
   - `POST /api/auth/logout` — **ALIAS_TEMPORARILY** — Same effect; both now go through the one session service so the side-effect set is decided once.
 
@@ -1038,7 +1084,7 @@ Records a mobile number as verified, proven by a Firebase phone credential.
 
 - **Domain service** — `services/identityVerificationSync.provenFrom + recordProvenIdentifiers, guarded by services/accountLinkGuard`
 - **Error codes** — `ACCOUNT_LINK_REQUIRED`, `INTERNAL`, `INVALID_CREDENTIALS`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin —
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ✅ · Prov Web · · Admin —
 - **Legacy it replaces** — none; new capability.
 
 ## search
@@ -1113,7 +1159,7 @@ Opens, or resolves, the conversation for a booking.
 
 - **Domain service** — `services/messaging/messagingService.openConversation`
 - **Error codes** — `BOOKING_NOT_FOUND`, `CONVERSATION_ACCESS_DENIED`, `CONVERSATION_NOT_AVAILABLE`, `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
-- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ⏳
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ✅ · Admin ⏳
 - **Legacy it replaces**
   - `GET /api/bookings/:bookingId/conversation` — **ALIAS_TEMPORARILY** — The live resolve-by-booking call. It is a GET that never creates, and the customer app already maps its 404 to "no conversation yet". This entry adds the explicit open, gated by the same rule: a booking conversation exists because a provider was confirmed, not because somebody opened a screen.
 
@@ -1125,7 +1171,7 @@ The caller's booking conversations, with unread counts.
 
 - **Domain service** — `services/messaging/messagingService.listConversations`
 - **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ⏳
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ✅ · Admin ⏳
 - **Legacy it replaces**
   - `GET /api/chat/conversations` — **ALIAS_TEMPORARILY** — The live inbox for all four apps. Chat routes do NOT use an envelope — the stores read a top-level `conversations` key — so the legacy shape is kept exactly and this entry adds the canonical one alongside. Both now read the same unread expression.
   - `GET /api/admin/communications/conversations` — **ROLE_SPECIFIC** — The admin oversight list carries a named permission and a booking filter, and joins moderation state this route has no business publishing to a customer. Same tables, same conversation ids; a genuinely different question.
@@ -1139,7 +1185,7 @@ One conversation: state, participants, and the caller's unread count.
 - **Domain service** — `services/messaging/messagingService.getConversation`
 - **Error codes** — `CONVERSATION_ACCESS_DENIED`, `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `conversationId` (integer) chat_conversations.id
-- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ⏳
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ✅ · Admin ⏳
 - **Legacy it replaces**
   - `GET /api/chat/conversations/:id` — **ALIAS_TEMPORARILY** — The live detail call. Same authorization; the canonical shape adds the seat, the send capability with its reason, the unread count and a last-message preview built through the caller's own read floor.
   - `GET /api/admin/communications/conversations/:id` — **ROLE_SPECIFIC** — The admin detail view, permissioned, and carrying report and moderation state. Different fields, different authorization, same conversation id.
@@ -1154,7 +1200,7 @@ A page of the transcript, newest first, cursor-paged.
 - **Error codes** — `CONVERSATION_ACCESS_DENIED`, `INTERNAL`, `MESSAGE_HISTORY_UNAVAILABLE`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `conversationId` (integer) chat_conversations.id
 - **Query** — `limit` (integer) Default 30, clamped to 100.; `cursor` (integer) A message id. Returns messages strictly OLDER than it.
-- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ⏳
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ✅ · Admin ⏳
 - **Legacy it replaces**
   - `GET /api/chat/conversations/:id/messages` — **ALIAS_TEMPORARILY** — The live transcript read, now a narrower projection of the SAME page reader — same authorization, same read floor, same builder. Its cursor parameter is called `before`; the canonical one is `cursor`, and both mean the same message id.
   - `GET /api/admin/communications/conversations/:id/messages` — **ROLE_SPECIFIC** — The permissioned admin transcript. It reads the whole thread by design — the audit trail is the point — where this route applies the caller's own read floor.
@@ -1168,7 +1214,7 @@ Sends a message. The sender is the authenticated caller.
 - **Domain service** — `chat/chat.service.sendMessage`
 - **Error codes** — `CONVERSATION_ACCESS_DENIED`, `CONVERSATION_NOT_WRITABLE`, `INTERNAL`, `MESSAGE_ATTACHMENT_REJECTED`, `MESSAGE_IDEMPOTENCY_KEY_INVALID`, `MESSAGE_INVALID`, `RATE_LIMITED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `conversationId` (integer) chat_conversations.id
-- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ⏳
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ✅ · Admin ⏳
 - **Legacy it replaces**
   - `POST /api/chat/conversations/:id/messages` — **ALIAS_TEMPORARILY** — The live send for all four apps. IDENTICAL domain call — this entry is a second URL onto one write, not a second write path.
   - `POST /api/admin/communications/conversations/:id/messages` — **ROLE_SPECIFIC** — The admin send. Permissioned and audited, and it already delegates to `chat.service.sendMessage`, so an admin message obeys the same idempotency, validation and attachment rules as anyone else's.
@@ -1208,7 +1254,7 @@ Advances the caller's read pointer and returns the resulting unread count.
 - **Domain service** — `services/messaging/messagingService.markRead`
 - **Error codes** — `CONVERSATION_ACCESS_DENIED`, `INTERNAL`, `READ_POINTER_INVALID`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `conversationId` (integer) chat_conversations.id
-- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ⏳ · Admin ⏳
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ⏳ · Prov Web ✅ · Admin ⏳
 - **Legacy it replaces**
   - `POST /api/chat/conversations/:id/read` — **ALIAS_TEMPORARILY** — The live read-pointer call, which answers `{ success: true }` and nothing else. The canonical one returns the resulting unread count, so a client stops having to guess what its badge should now say.
 
@@ -1236,7 +1282,7 @@ Tracking history, canonical state, and the provider's position when the policy p
 - **Domain service** — `services/booking/bookingTrackingService.getBookingTracking`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile · · Prov Web · · Admin ·
+- **Callers** — Cust Mobile ⏳ · Cust Web ⏳ · Prov Mobile ✅ · Prov Web ✅ · Admin ·
 - **Legacy it replaces**
   - `GET /api/:id/tracking` — **ALIAS_TEMPORARILY** — The live customer tracking call. It returns the raw booking_tracking rows through formatBookings and applies NO state or time-window rule to the provider position, because it never returned one — the position came from a separate route.
   - `GET /api/booking/:bookingId/provider-location` — **ALIAS_TEMPORARILY** — The authenticated position route. Booking-scoped already, but answers in EVERY state — a customer could watch their provider on a booking cancelled last week. This entry adds the state and time-window rules §64 requires.
@@ -1261,7 +1307,7 @@ Presents a booking code. Success is a state transition performed by the executor
 - **Domain service** — `services/booking/bookingOtpService.verifyBookingOtp`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_OTP_ACTOR_NOT_PERMITTED`, `BOOKING_OTP_ATTEMPTS_EXHAUSTED`, `BOOKING_OTP_EXPIRED`, `BOOKING_OTP_INVALID`, `BOOKING_OTP_NOT_APPLICABLE`, `BOOKING_OTP_NOT_ISSUED`, `BOOKING_OTP_PURPOSE_INVALID`, `BOOKING_STATE_CONFLICT`, `BOOKING_TERMINAL`, `BOOKING_TRANSITION_INVALID`, `BOOKING_WORKER_CODE_INVALID`, `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`, `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile ⏳ · Cust Web · · Prov Mobile · · Prov Web · · Admin ·
+- **Callers** — Cust Mobile ⏳ · Cust Web · · Prov Mobile · · Prov Web ✅ · Admin ·
 - **Legacy it replaces**
   - `POST /api/:id/confirm-otp` — **ALIAS_TEMPORARILY** — The live customer confirmation. Already on the executor since Phase C; it now delegates through the OTP service so expiry and the attempt limit apply to it too. Accepts the code in the query string for builds that cannot be changed.
 
@@ -1275,7 +1321,7 @@ Code lifetime, attempts left and resend availability, without spending an attemp
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `BOOKING_OTP_PURPOSE_INVALID`, `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
 - **Query** — `purpose` (string) BOOKING_CONFIRMATION (default) or SERVICE_START.
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin ·
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ✅ · Prov Web ✅ · Admin ·
 - **Legacy it replaces** — none; new capability.
 
 ### `POST /api/v1/bookings/:bookingId/reschedule`
@@ -1300,7 +1346,7 @@ Every attempt to move this booking, accepted or refused.
 - **Domain service** — `services/booking/bookingRescheduleService.listRescheduleRequests`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin ·
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web ✅ · Admin ·
 - **Legacy it replaces** — none; new capability.
 
 ### `POST /api/v1/bookings/:bookingId/additional-work`
@@ -1312,7 +1358,7 @@ Raises a change order against the booking, as a child request awaiting approval.
 - **Domain service** — `services/additional.service.additionalService.createRequest`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_ADDITIONAL_WORK_INVALID`, `BOOKING_ADDITIONAL_WORK_NOT_IN_PROGRESS`, `BOOKING_NOT_FOUND`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `POST /api/additional/request/:userId` — **ALIAS_TEMPORARILY** — The live Provider Web call. Its :userId segment is legacy and has never been treated as identity — the provider comes from the token in both paths, and both call the same additionalService instance.
 
@@ -1323,7 +1369,7 @@ The change orders on this booking, for anyone entitled to the booking.
 - **Domain service** — `services/additional.service.additionalService.getByBooking`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web ⏳ · Admin ·
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ✅ · Prov Web ⏳ · Admin ·
 - **Legacy it replaces**
   - `GET /api/additional/booking/:bookingId` — **ALIAS_TEMPORARILY** — Already booking-scoped and already the same service. The canonical path differs only in living under the booking it belongs to, which is what §60 asks for.
 
@@ -1336,7 +1382,7 @@ Opens a dispute against the booking, with the service and financial state at tha
 - **Domain service** — `services/booking/bookingDisputeService.openDispute`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_DISPUTE_ALREADY_OPEN`, `BOOKING_DISPUTE_CATEGORY_INVALID`, `BOOKING_DISPUTE_NOT_ACTIONABLE`, `BOOKING_NOT_FOUND`, `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin ⏳
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ✅ · Prov Web ✅ · Admin ⏳
 - **Legacy it replaces**
   - `POST /api/admin/bookings/:id/escalate` — **ALIAS_TEMPORARILY** — The admin-only predecessor, and the only way to open a dispute before this. Writes the same booking_escalations row; it does not record a category, the opening role or the state snapshot §66 requires. Kept until the portal migrates.
   - `GET /api/provider/bookings/:bookingId/dispute-status` — **ROLE_SPECIFIC** — Provider-facing eligibility summary, shipped as "entry point only; opening is later". It reads the same table and the same categories. It stays because it answers "may I open one" for a live client that has no other way to ask.
@@ -1350,17 +1396,36 @@ The disputes on this booking. Investigation notes are never projected.
 - **Domain service** — `services/booking/bookingDisputeService.listDisputes`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin ·
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ✅ · Prov Web ✅ · Admin ·
 - **Legacy it replaces** — none; new capability.
+
+## admin-finance
+
+| Method | Path | Status | Auth | Request | Response | Idem | Owner |
+|---|---|---|---|---|---|---|---|
+| `POST` | `/api/v1/admin/refunds/:refundId/mark-failed` | **live** | admin (role 1) | `RefundFailureRequest` | `RefundTransitionResult` | no | admin-finance |
+
+### `POST /api/v1/admin/refunds/:refundId/mark-failed`
+
+Record that an approved refund did not go through.
+
+> Distinct from reject: rejected means a human decided against the refund, failed means everyone agreed and the money did not move. Only the second is worth retrying.
+
+- **Domain service** — `services/adminFinanceService.markRefundFailed`
+- **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PERMISSION_REQUIRED`, `ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `refundId` (integer) finance_refund_reviews.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile — · Prov Web — · Admin ⏳
+- **Legacy it replaces**
+  - `POST /api/admin/finance/refunds/:refundId/mark-failed` — **CANONICALIZE** — Mounted in the same change as this entry rather than inherited. The transition did not exist before — an approved refund the processor refused had no terminal, so it stayed `approved` and BLOCKED every retry for that booking, because openRefundReview refuses a second review while one is requested or approved. Both surfaces call the same executor; neither carries a copy of the rule.
 
 ## admin-bookings
 
 | Method | Path | Status | Auth | Request | Response | Idem | Owner |
 |---|---|---|---|---|---|---|---|
-| `GET` | `/api/v1/admin/bookings` | _planned_ | admin (role 1) | — | `AdminBookingList` | yes | admin-bookings |
-| `GET` | `/api/v1/admin/bookings/:bookingId/assignment-candidates` | _planned_ | admin (role 1) | — | `AssignmentCandidatePool` | yes | admin-bookings |
-| `POST` | `/api/v1/admin/bookings/:bookingId/assign` | _planned_ | admin (role 1) | `AdminAssignRequest` | `AdminBookingActionResult` | no | admin-bookings |
-| `POST` | `/api/v1/admin/bookings/:bookingId/reassign` | _planned_ | admin (role 1) | `AdminReassignRequest` | `AdminBookingActionResult` | no | admin-bookings |
+| `GET` | `/api/v1/admin/bookings` | **live** | admin (role 1) | — | `AdminBookingList` | yes | admin-bookings |
+| `GET` | `/api/v1/admin/bookings/:bookingId/assignment-candidates` | **live** | admin (role 1) | — | `AssignmentCandidatePool` | yes | admin-bookings |
+| `POST` | `/api/v1/admin/bookings/:bookingId/assign` | **live** | admin (role 1) | `AdminAssignRequest` | `AdminBookingActionResult` | no | admin-bookings |
+| `POST` | `/api/v1/admin/bookings/:bookingId/reassign` | **live** | admin (role 1) | `AdminReassignRequest` | `AdminBookingActionResult` | no | admin-bookings |
 
 ### `GET /api/v1/admin/bookings`
 
@@ -1445,7 +1510,7 @@ A booking's payment state and price breakdown, scoped to the caller's seat.
 - **Domain service** — `services/finance/bookingPaymentService.getBookingPayment`
 - **Error codes** — `BOOKING_ACCESS_DENIED`, `BOOKING_NOT_FOUND`, `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
 - **Path params** — `bookingId` (integer) bookings.id
-- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin ·
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile ✅ · Prov Web · · Admin ·
 - **Legacy it replaces**
   - `GET /api/admin/finance/ledger/booking/:bookingId` — **ROLE_SPECIFIC** — The admin revenue-recognition view over finance_ledger_entries. It answers a different question (what was recognised, when, by whom) and carries its own permission. Both now read the same underlying capture events.
 
@@ -1471,7 +1536,7 @@ The provider's own earnings totals, with pending split from failed and estimated
 - **Domain service** — `services/finance/providerEarningsService.getEarningsSummary`
 - **Error codes** — `EARNINGS_RANGE_INVALID`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
 - **Query** — `startDate` (string) ISO date. Must be sent with endDate.; `endDate` (string) ISO date. Must be sent with startDate.
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `GET /api/provider/earnings/summary` — **ALIAS_TEMPORARILY** — The live provider portal call, now delegating to the same domain service so the two paths return identical figures during migration rather than merely similar ones.
 
@@ -1484,7 +1549,7 @@ One row per completed job with its gross, the provider's share and its payout st
 - **Domain service** — `services/finance/providerEarningsService.listEarningsTransactions`
 - **Error codes** — `EARNINGS_RANGE_INVALID`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
 - **Query** — `startDate` (string) ISO date. Must be sent with endDate.; `endDate` (string) ISO date. Must be sent with startDate.
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `GET /api/provider/earnings` — **ALIAS_TEMPORARILY** — The live earnings list. Same domain service now; the v1 shape adds the economic model, the payout block reason and minor-unit amounts.
   - `GET /api/provider/ledger` — **ALIAS_TEMPORARILY** — A THIRD reading of the same columns, which used to hardcode every completed booking as "settled" and report failed payouts as money in hand. Superseded entirely.
@@ -1498,7 +1563,7 @@ The provider's own payouts, with the 72-hour window's expected arrival date.
 
 - **Domain service** — `services/finance/providerEarningsService.listProviderPayouts`
 - **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
-- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ⏳ · Admin —
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `GET /api/provider/payouts` — **ALIAS_TEMPORARILY** — The live payouts list, now delegating to the same domain service. Both exclude the processor id, servana_share, payout_error and the admin hold fields by projection.
 
@@ -1520,29 +1585,32 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | Endpoint | Cust Mobile | Cust Web | Prov Mobile | Prov Web | Admin |
 |---|---|---|---|---|---|
 | `GET /api/v1/catalog` | · | · | — | — | — |
+| `POST /api/v1/telemetry` | — | — | · | · | — |
+| `GET /api/v1/client-config` | · | — | · | — | — |
+| `GET /api/v1/health` | — | — | — | — | — |
 | `GET /api/v1/catalog/summary` | · | · | — | — | — |
 | `GET /api/v1/catalog/services` | · | · | — | — | — |
 | `GET /api/v1/catalog/services/:serviceId` | · | · | — | — | — |
-| `GET /api/v1/me` | · | · | · | ⏳ | · |
+| `GET /api/v1/me` | · | · | ✅ | ✅ | · |
 | `GET /api/v1/bookings` | ⏳ | ⏳ | — | — | — |
 | `GET /api/v1/bookings/:bookingId` | ⏳ | ⏳ | ⏳ | · | · |
 | `GET /api/v1/bookings/:bookingId/timeline` | ⏳ | · | — | — | — |
-| `GET /api/v1/provider/jobs` | — | — | ⏳ | ⏳ | — |
-| `GET /api/v1/provider/jobs/:bookingId` | — | — | · | ⏳ | — |
-| `GET /api/v1/notifications` | ⏳ | ⏳ | ⏳ | ⏳ | · |
-| `GET /api/v1/notifications/unread-count` | ⏳ | ⏳ | ⏳ | ⏳ | · |
-| `PATCH /api/v1/notifications/:key/read` | ⏳ | ⏳ | ⏳ | ⏳ | · |
-| `DELETE /api/v1/notifications/:key` | · | · | · | ⏳ | — |
-| `POST /api/v1/notifications/read-all` | ⏳ | ⏳ | ⏳ | ⏳ | · |
-| `GET /api/v1/me/notification-preferences` | · | · | ⏳ | ⏳ | · |
-| `PATCH /api/v1/me/notification-preferences` | · | · | ⏳ | ⏳ | · |
-| `POST /api/v1/me/devices` | ⏳ | · | ⏳ | ⏳ | — |
-| `DELETE /api/v1/me/devices` | ⏳ | · | ⏳ | ⏳ | — |
+| `GET /api/v1/provider/jobs` | — | — | ✅ | ✅ | — |
+| `GET /api/v1/provider/jobs/:bookingId` | — | — | ✅ | ✅ | — |
+| `GET /api/v1/notifications` | ⏳ | ⏳ | ⏳ | ✅ | · |
+| `GET /api/v1/notifications/unread-count` | ⏳ | ⏳ | ⏳ | ✅ | · |
+| `PATCH /api/v1/notifications/:key/read` | ⏳ | ⏳ | ⏳ | ✅ | · |
+| `DELETE /api/v1/notifications/:key` | · | · | · | ✅ | — |
+| `POST /api/v1/notifications/read-all` | ⏳ | ⏳ | ⏳ | ✅ | · |
+| `GET /api/v1/me/notification-preferences` | · | · | ⏳ | ✅ | · |
+| `PATCH /api/v1/me/notification-preferences` | · | · | ⏳ | ✅ | · |
+| `POST /api/v1/me/devices` | ⏳ | · | ✅ | ✅ | — |
+| `DELETE /api/v1/me/devices` | ⏳ | · | ✅ | ✅ | — |
 | `PATCH /api/v1/me` | ⏳ | ⏳ | ⏳ | ⏳ | · |
-| `GET /api/v1/me/settings` | · | · | · | · | · |
-| `PATCH /api/v1/me/settings` | · | · | · | · | · |
+| `GET /api/v1/me/settings` | · | · | ✅ | · | · |
+| `PATCH /api/v1/me/settings` | · | · | ✅ | · | · |
 | `GET /api/v1/me/security` | · | · | · | · | · |
-| `GET /api/v1/me/completion` | · | · | · | · | — |
+| `GET /api/v1/me/completion` | · | · | ✅ | · | — |
 | `GET /api/v1/customer/profile` | ⏳ | ⏳ | — | — | · |
 | `PATCH /api/v1/customer/profile` | ⏳ | ⏳ | — | — | · |
 | `GET /api/v1/customer/addresses` | ⏳ | ⏳ | — | — | — |
@@ -1550,20 +1618,20 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `PATCH /api/v1/customer/addresses/:addressId` | ⏳ | ⏳ | — | — | — |
 | `DELETE /api/v1/customer/addresses/:addressId` | ⏳ | ⏳ | — | — | — |
 | `POST /api/v1/customer/addresses/:addressId/default` | ⏳ | ⏳ | — | — | — |
-| `GET /api/v1/provider/profile` | — | — | ⏳ | ⏳ | · |
-| `PATCH /api/v1/provider/profile` | — | — | ⏳ | ⏳ | — |
+| `GET /api/v1/provider/profile` | — | — | ⏳ | ✅ | · |
+| `PATCH /api/v1/provider/profile` | — | — | ⏳ | ✅ | — |
 | `GET /api/v1/providers/:providerUid/profile` | · | · | — | — | · |
-| `GET /api/v1/provider/documents` | — | — | ⏳ | ⏳ | — |
-| `GET /api/v1/provider/document-types` | — | — | · | ⏳ | — |
-| `POST /api/v1/provider/documents` | — | — | · | ⏳ | — |
-| `GET /api/v1/provider/documents/:documentId/preview` | — | — | · | ⏳ | — |
-| `DELETE /api/v1/provider/documents/:documentId` | — | — | · | ⏳ | — |
+| `GET /api/v1/provider/documents` | — | — | ⏳ | ✅ | — |
+| `GET /api/v1/provider/document-types` | — | — | ✅ | ⏳ | — |
+| `POST /api/v1/provider/documents` | — | — | ✅ | ✅ | — |
+| `GET /api/v1/provider/documents/:documentId/preview` | — | — | ✅ | ✅ | — |
+| `DELETE /api/v1/provider/documents/:documentId` | — | — | ✅ | ✅ | — |
 | `GET /api/v1/provider/availability` | — | — | ⏳ | ⏳ | — |
 | `PATCH /api/v1/provider/availability` | — | — | ⏳ | ⏳ | — |
-| `GET /api/v1/provider/time-off` | — | — | · | ⏳ | — |
-| `POST /api/v1/provider/time-off` | — | — | · | ⏳ | — |
-| `DELETE /api/v1/provider/time-off/:timeOffId` | — | — | · | ⏳ | — |
-| `GET /api/v1/provider/services` | — | — | · | · | — |
+| `GET /api/v1/provider/time-off` | — | — | ✅ | ⏳ | — |
+| `POST /api/v1/provider/time-off` | — | — | ✅ | ⏳ | — |
+| `DELETE /api/v1/provider/time-off/:timeOffId` | — | — | ✅ | ⏳ | — |
+| `GET /api/v1/provider/services` | — | — | ✅ | · | — |
 | `GET /api/v1/reviews/providers/:providerUid` | · | · | — | — | — |
 | `GET /api/v1/reviews/providers/:providerUid/rating` | · | · | — | — | — |
 | `POST /api/v1/bookings/:bookingId/review` | ⏳ | ⏳ | — | — | — |
@@ -1575,12 +1643,12 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `POST /api/v1/auth/register` | ⏳ | · | ⏳ | ⏳ | — |
 | `POST /api/v1/auth/login` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
 | `POST /api/v1/auth/refresh` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
-| `POST /api/v1/auth/logout` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
+| `POST /api/v1/auth/logout` | ⏳ | ⏳ | ⏳ | ✅ | ⏳ |
 | `POST /api/v1/auth/forgot-password` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
 | `POST /api/v1/auth/reset-password` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
 | `POST /api/v1/auth/verify-email` | ⏳ | · | ⏳ | · | — |
 | `POST /api/v1/auth/resend-verification` | ⏳ | · | ⏳ | ⏳ | — |
-| `POST /api/v1/auth/verify-mobile` | · | · | · | · | — |
+| `POST /api/v1/auth/verify-mobile` | · | · | ✅ | · | — |
 | `GET /api/v1/search` | ⏳ | · | — | — | — |
 | `GET /api/v1/catalog/search` | · | · | — | — | — |
 | `GET /api/v1/catalog/categories` | · | · | — | — | — |
@@ -1590,41 +1658,42 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `GET /api/v1/catalog/subcategories/:subcategoryId/services` | · | · | ⏳ | — | — |
 | `GET /api/v1/home` | · | · | — | — | — |
 | `GET /api/v1/home/sections` | · | · | — | — | · |
-| `POST /api/v1/conversations` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
-| `GET /api/v1/conversations` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
-| `GET /api/v1/conversations/:conversationId` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
-| `GET /api/v1/conversations/:conversationId/messages` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
-| `POST /api/v1/conversations/:conversationId/messages` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
+| `POST /api/v1/conversations` | ⏳ | ⏳ | ⏳ | ✅ | ⏳ |
+| `GET /api/v1/conversations` | ⏳ | ⏳ | ⏳ | ✅ | ⏳ |
+| `GET /api/v1/conversations/:conversationId` | ⏳ | ⏳ | ⏳ | ✅ | ⏳ |
+| `GET /api/v1/conversations/:conversationId/messages` | ⏳ | ⏳ | ⏳ | ✅ | ⏳ |
+| `POST /api/v1/conversations/:conversationId/messages` | ⏳ | ⏳ | ⏳ | ✅ | ⏳ |
 | `POST /api/v1/conversations/:conversationId/attachments` | · | · | · | · | · |
 | `POST /api/v1/conversations/:conversationId/messages/:messageId/report` | · | · | · | · | — |
-| `POST /api/v1/conversations/:conversationId/read` | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
+| `POST /api/v1/conversations/:conversationId/read` | ⏳ | ⏳ | ⏳ | ✅ | ⏳ |
 | `POST /api/v1/bookings/:bookingId/cancel` | ⏳ | ⏳ | — | — | — |
-| `GET /api/v1/bookings/:bookingId/transitions` | · | · | · | · | · |
-| `POST /api/v1/provider/jobs/:bookingId/accept` | — | — | ⏳ | ⏳ | — |
-| `POST /api/v1/provider/jobs/:bookingId/decline` | — | — | ⏳ | ⏳ | — |
-| `POST /api/v1/provider/jobs/:bookingId/en-route` | — | — | ⏳ | ⏳ | — |
-| `POST /api/v1/provider/jobs/:bookingId/arrived` | — | — | ⏳ | ⏳ | — |
-| `POST /api/v1/provider/jobs/:bookingId/start` | — | — | ⏳ | ⏳ | — |
-| `POST /api/v1/provider/jobs/:bookingId/complete` | — | — | ⏳ | ⏳ | — |
-| `POST /api/v1/provider/jobs/:bookingId/cancel` | — | — | ⏳ | ⏳ | — |
-| `GET /api/v1/bookings/:bookingId/tracking` | ⏳ | ⏳ | · | · | · |
+| `GET /api/v1/bookings/:bookingId/transitions` | · | · | ✅ | · | · |
+| `POST /api/v1/provider/jobs/:bookingId/accept` | — | — | ✅ | ✅ | — |
+| `POST /api/v1/provider/jobs/:bookingId/decline` | — | — | ✅ | ✅ | — |
+| `POST /api/v1/provider/jobs/:bookingId/en-route` | — | — | ✅ | ✅ | — |
+| `POST /api/v1/provider/jobs/:bookingId/arrived` | — | — | ✅ | ✅ | — |
+| `POST /api/v1/provider/jobs/:bookingId/start` | — | — | ✅ | ⏳ | — |
+| `POST /api/v1/provider/jobs/:bookingId/complete` | — | — | ✅ | ✅ | — |
+| `POST /api/v1/provider/jobs/:bookingId/cancel` | — | — | ✅ | ✅ | — |
+| `GET /api/v1/bookings/:bookingId/tracking` | ⏳ | ⏳ | ✅ | ✅ | · |
 | `POST /api/v1/bookings/:bookingId/otp/request` | ⏳ | · | — | — | · |
-| `POST /api/v1/bookings/:bookingId/otp/verify` | ⏳ | · | · | · | · |
-| `GET /api/v1/bookings/:bookingId/otp/status` | · | · | · | · | · |
+| `POST /api/v1/bookings/:bookingId/otp/verify` | ⏳ | · | · | ✅ | · |
+| `GET /api/v1/bookings/:bookingId/otp/status` | · | · | ✅ | ✅ | · |
 | `POST /api/v1/bookings/:bookingId/reschedule` | · | · | — | — | ⏳ |
-| `GET /api/v1/bookings/:bookingId/reschedule` | · | · | · | · | · |
-| `POST /api/v1/bookings/:bookingId/additional-work` | — | — | · | ⏳ | — |
-| `GET /api/v1/bookings/:bookingId/additional-work` | · | · | · | ⏳ | · |
-| `POST /api/v1/bookings/:bookingId/disputes` | · | · | · | · | ⏳ |
-| `GET /api/v1/bookings/:bookingId/disputes` | · | · | · | · | · |
+| `GET /api/v1/bookings/:bookingId/reschedule` | · | · | · | ✅ | · |
+| `POST /api/v1/bookings/:bookingId/additional-work` | — | — | ✅ | ✅ | — |
+| `GET /api/v1/bookings/:bookingId/additional-work` | · | · | ✅ | ⏳ | · |
+| `POST /api/v1/bookings/:bookingId/disputes` | · | · | ✅ | ✅ | ⏳ |
+| `GET /api/v1/bookings/:bookingId/disputes` | · | · | ✅ | ✅ | · |
+| `POST /api/v1/admin/refunds/:refundId/mark-failed` | — | — | — | — | ⏳ |
 | `GET /api/v1/admin/bookings` | — | — | — | — | ⏳ |
 | `GET /api/v1/admin/bookings/:bookingId/assignment-candidates` | — | — | — | — | ⏳ |
 | `POST /api/v1/admin/bookings/:bookingId/assign` | — | — | — | — | ⏳ |
 | `POST /api/v1/admin/bookings/:bookingId/reassign` | — | — | — | — | ⏳ |
 | `POST /api/v1/bookings/:bookingId/payment-intents` | ⏳ | ⏳ | — | — | · |
-| `GET /api/v1/bookings/:bookingId/payment` | · | · | · | · | · |
+| `GET /api/v1/bookings/:bookingId/payment` | · | · | ✅ | · | · |
 | `POST /api/v1/bookings/:bookingId/refunds` | · | · | — | — | ⏳ |
-| `GET /api/v1/provider/earnings/summary` | — | — | ⏳ | ⏳ | — |
-| `GET /api/v1/provider/earnings/transactions` | — | — | ⏳ | ⏳ | — |
-| `GET /api/v1/provider/earnings/payouts` | — | — | ⏳ | ⏳ | — |
+| `GET /api/v1/provider/earnings/summary` | — | — | ⏳ | ✅ | — |
+| `GET /api/v1/provider/earnings/transactions` | — | — | ⏳ | ✅ | — |
+| `GET /api/v1/provider/earnings/payouts` | — | — | ⏳ | ✅ | — |
 | `GET /api/v1/admin/finance/reconciliation` | — | — | — | — | ⏳ |

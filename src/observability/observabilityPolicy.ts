@@ -251,6 +251,36 @@ export const METRICS: readonly MetricSpec[] = Object.freeze([
     why: 'Separates "a client shipped a bad token refresh" from "somebody is trying uids", which look identical in an error-rate chart.',
   },
   {
+    name: 'public_path_auth_failures_total',
+    kind: 'counter',
+    description:
+      'A request to a path the v1 contract declares auth: \'public\' that was answered '
+      + '401 or 403. Labelled by route template only — the caller is anonymous by definition.',
+    labels: Object.freeze(['route', 'namespace']),
+    why:
+      'This is not a rate, it is an INVARIANT: a public entry refusing an anonymous caller '
+      + 'means the request never reached the router that would have allowed it. On 2026-08-18 '
+      + 'production answered 401 to every path including ones that do not exist, because auth '
+      + 'ran before routing — and no existing signal named it. api-error-rate is 5xx only, so a '
+      + '401 storm is invisible to it; auth-failure-spike is relative to a 24h median, so once '
+      + 'the broken state persists past a day it BECOMES the median and the alert goes quiet '
+      + 'while production stays broken.',
+  },
+  {
+    name: 'contract_mismatch_total',
+    kind: 'counter',
+    description: 'Requests for a namespaced path this build does not serve.',
+    labels: ['namespace', 'client', 'method'],
+    why:
+      'An ordinary 404 is a client asking for something that never existed. This is a client ' +
+      'asking for something that was PROMISED — it holds a contract naming the route and the ' +
+      'running build does not serve it. A spike on the v1 namespace is the signature of a ' +
+      'portal deployed against a backend that has not shipped, which has happened here and ' +
+      'presented as "the API is down" rather than as a version mismatch. The operator response ' +
+      'is a deploy or a rollback, never a code change, which is why it must not be buried in ' +
+      'the general 404 rate.',
+  },
+  {
     name: 'legacy_route_hits_total',
     kind: 'counter',
     description: 'Calls to a legacy route that has a canonical successor.',
@@ -285,6 +315,36 @@ export const METRICS: readonly MetricSpec[] = Object.freeze([
     labels: Object.freeze(['channel', 'outcome']),
     why: 'Distinguishes suppressed-by-preference from failed-to-send, which an aggregate count conflates into "notifications are down".',
   },
+  {
+    name: 'worker_telemetry_events_total',
+    kind: 'counter',
+    description: 'Scrubbed worker-app events accepted by the ingest endpoint, by event name and build flavor.',
+    labels: Object.freeze(['event', 'flavor']),
+    why:
+      'The worker app\'s failures are silent by nature. A job offer that never arrives produces '
+      + 'no error anywhere — the provider simply does not get the work, and the first report is '
+      + 'somebody asking why they had a quiet week. This is the only series that can notice it.',
+  },
+  {
+    name: 'worker_telemetry_dropped_keys_total',
+    kind: 'counter',
+    description: 'Payload keys the server refused. Names are counted, values never leave the request.',
+    labels: Object.freeze([]),
+    why:
+      'The client scrubs and the server scrubs again, from separately maintained lists. A rising '
+      + 'value is not an attack — it is the two lists having drifted, which means a client is '
+      + 'sending something nobody will be able to query. Better as a number than as a surprise.',
+  },
+  {
+    name: 'worker_telemetry_write_failures_total',
+    kind: 'counter',
+    description: 'Telemetry rows that could not be stored. The request still succeeded.',
+    labels: Object.freeze([]),
+    why:
+      'Ingest deliberately swallows write failures, because telemetry that can 500 a client gets '
+      + 'switched off in the build that most needed it. Swallowed is not the same as unnoticed, '
+      + 'and this is the difference.',
+  },
 ]);
 
 export const METRIC_NAMES: readonly string[] = Object.freeze(METRICS.map((m) => m.name));
@@ -316,6 +376,31 @@ export const ALERTS: readonly AlertSpec[] = Object.freeze([
     firstAction: 'Group by route and namespace. One route means a deploy; every route means the database or the process.',
   },
   {
+    name: 'public-path-auth-failure',
+    metric: 'public_path_auth_failures_total',
+    severity: 'P0',
+    condition:
+      'ANY occurrence. Absolute, deliberately — not a rate, not a share, and not relative to '
+      + 'a baseline, because the correct value is zero and a threshold relative to history '
+      + 'stops firing once the broken state becomes the history.',
+    firstAction:
+      'Do NOT start with credentials. A contract-public entry refusing an anonymous caller '
+      + 'means the request did not reach the v1 router. Probe three paths and compare: a public '
+      + 'one, a guarded one, and one that cannot exist. If all three answer alike, authentication '
+      + 'is running before routing — check the middleware mounted above app.use("/api/v1") and '
+      + 'whether the process restarted on the commit it claims.',
+  },
+  {
+    name: 'v1-contract-mismatch',
+    metric: 'contract_mismatch_total',
+    severity: 'P1',
+    condition: 'any sustained rate on the v1 namespace — more than 10/minute for 5 minutes',
+    firstAction:
+      'Compare the deployed commit against the client build. This is almost never a bug in a ' +
+      'route: it is a client asking for an endpoint this build does not have, so the fix is a ' +
+      'deploy or a rollback, not a code change. Group by client to see which one is ahead.',
+  },
+  {
     name: 'auth-failure-spike',
     metric: 'auth_failures_total',
     severity: 'P0',
@@ -335,6 +420,22 @@ export const ALERTS: readonly AlertSpec[] = Object.freeze([
     severity: 'P1',
     condition: '> 20% of assignment attempts in an hour',
     firstAction: 'Check provider availability and the eligibility pipeline before assuming demand moved.',
+  },
+  {
+    name: 'worker-activation-stall',
+    metric: 'worker_telemetry_events_total',
+    severity: 'P1',
+    // OWNER: the backend on-call engineer. Named in docs/TELEMETRY_DECISION.md,
+    // because an alert with no owner is a log line.
+    condition:
+      'activationStarted > 0 and activationCompleted == 0 over 24 hours. Absolute rather than a '
+      + 'rate: at launch the denominator is single digits, and a percentage of three providers '
+      + 'is noise. What matters is the SHAPE — people beginning activation and nobody finishing.',
+    firstAction:
+      'Walk the activation path yourself against production before touching code. Every endpoint '
+      + 'in it returns 200 and none had been carried end to end by a person as of 2026-08-20, so '
+      + 'the likely failure is a step that refuses with a message a provider cannot act on rather '
+      + 'than a route that errors. Compare activationStarted against the completion checklist.',
   },
   {
     name: 'p99-latency',

@@ -49,7 +49,66 @@ const DOW_TO_DAY: Record<number, string> = { 0: 'sun', 1: 'mon', 2: 'tue', 3: 'w
 const WEB_ALL_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const ENGINE_DOW_LABELS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
-function bridgeToEngineSlots(schedule: any[]): availEngine.WeeklyScheduleSlot[] {
+/**
+ * The capacity the Provider Web schedule cannot see, and must not destroy.
+ *
+ * ## The defect
+ *
+ * `maxJobs` is a per-slot capacity the provider sets on MOBILE. The web schedule
+ * UI has no field for it, so a web payload never carries one — and this bridge
+ * built every slot with `maxJobs: null`, then handed the lot to
+ * `saveWeeklySchedule`, which REPLACES the stored week. So any save from the web
+ * silently erased capacity set on mobile, and `bridgeToWebSchedule` never
+ * returned the value either, so nothing on the web could have shown the provider
+ * what they were about to lose.
+ *
+ * It is a data-loss defect that exists whether or not the client migrates, and
+ * it affects mobile today.
+ *
+ * ## The rule, and why it is this one
+ *
+ * A client may only clear a field it can express. The web cannot express
+ * capacity, so a web save is an edit to TIME RANGES and nothing else.
+ *
+ *   1. A slot that still exists — same day, same start, same end — keeps its
+ *      capacity exactly.
+ *   2. A slot whose times CHANGED inherits the day's capacity when that day had
+ *      exactly one distinct non-null value. In practice capacity is set per day,
+ *      and losing it because someone moved 09:00 to 09:30 would be the same
+ *      defect wearing a smaller hat.
+ *   3. Where a day held SEVERAL different capacities, an unmatched slot gets
+ *      null. There is no non-arbitrary answer, and guessing at a number that
+ *      limits how much work a provider is offered is worse than not having one.
+ *
+ * A provider who genuinely wants no cap still clears it on mobile, where the
+ * field exists.
+ */
+const carryCapacity = (
+  existing: availEngine.WeeklyScheduleSlot[],
+): ((dayOfWeek: number, startTime: string, endTime: string) => number | null) => {
+  const exact = new Map<string, number | null>();
+  const perDay = new Map<number, Set<number>>();
+  for (const slot of existing) {
+    const capacity = slot.maxJobs ?? null;
+    exact.set(`${slot.dayOfWeek}|${slot.startTime}|${slot.endTime}`, capacity);
+    if (capacity !== null) {
+      if (!perDay.has(slot.dayOfWeek)) perDay.set(slot.dayOfWeek, new Set());
+      perDay.get(slot.dayOfWeek)!.add(capacity);
+    }
+  }
+  return (dayOfWeek, startTime, endTime) => {
+    const key = `${dayOfWeek}|${startTime}|${endTime}`;
+    if (exact.has(key)) return exact.get(key) ?? null;
+    const distinct = perDay.get(dayOfWeek);
+    return distinct && distinct.size === 1 ? [...distinct][0] : null;
+  };
+};
+
+function bridgeToEngineSlots(
+  schedule: any[],
+  existing: availEngine.WeeklyScheduleSlot[] = [],
+): availEngine.WeeklyScheduleSlot[] {
+  const capacityFor = carryCapacity(existing);
   const invalid = (message: string): never => {
     const error: any = new Error(message);
     error.statusCode = 422;
@@ -78,13 +137,15 @@ function bridgeToEngineSlots(schedule: any[]): availEngine.WeeklyScheduleSlot[] 
     const dayLabel = ENGINE_DOW_LABELS[dow] ?? '';
     if (!day.enabled) {
       // Represent disabled day as an unavailable placeholder so the day is tracked
-      slots.push({ dayOfWeek: dow as 0|1|2|3|4|5|6, dayLabel, startTime: '09:00', endTime: '17:00', isAvailable: false, maxJobs: null });
+      // A disabled day is a placeholder, not a slot the provider offers — but its
+      // capacity is still carried so re-enabling the day does not silently reset it.
+      slots.push({ dayOfWeek: dow as 0|1|2|3|4|5|6, dayLabel, startTime: '09:00', endTime: '17:00', isAvailable: false, maxJobs: capacityFor(dow, '09:00', '17:00') });
     } else {
       for (const s of day.slots) {
         if (!s || typeof s !== 'object' || typeof s.startTime !== 'string' || typeof s.endTime !== 'string') {
           invalid(`${dayKey} contains a malformed slot`);
         }
-        slots.push({ dayOfWeek: dow as 0|1|2|3|4|5|6, dayLabel, startTime: s.startTime, endTime: s.endTime, isAvailable: true, maxJobs: null });
+        slots.push({ dayOfWeek: dow as 0|1|2|3|4|5|6, dayLabel, startTime: s.startTime, endTime: s.endTime, isAvailable: true, maxJobs: capacityFor(dow, s.startTime, s.endTime) });
       }
     }
   }
@@ -92,13 +153,16 @@ function bridgeToEngineSlots(schedule: any[]): availEngine.WeeklyScheduleSlot[] 
 }
 
 function bridgeToWebSchedule(engineSlots: availEngine.WeeklyScheduleSlot[]): any[] {
-  const byDay: Record<string, { id: string; startTime: string; endTime: string }[]> = {};
+  // `maxJobs` is returned so the web can DISPLAY the capacity it does not edit.
+  // Additive: a client that ignores the field is unaffected, and one that shows
+  // it stops being the only surface where a provider cannot see their own cap.
+  const byDay: Record<string, { id: string; startTime: string; endTime: string; maxJobs: number | null }[]> = {};
   for (const sl of engineSlots) {
     if (!sl.isAvailable) continue;
     const dayKey = DOW_TO_DAY[sl.dayOfWeek];
     if (!dayKey) continue;
     if (!byDay[dayKey]) byDay[dayKey] = [];
-    byDay[dayKey].push({ id: `slot-${dayKey}-${sl.startTime.replace(':', '')}`, startTime: sl.startTime, endTime: sl.endTime });
+    byDay[dayKey].push({ id: `slot-${dayKey}-${sl.startTime.replace(':', '')}`, startTime: sl.startTime, endTime: sl.endTime, maxJobs: sl.maxJobs ?? null });
   }
   return WEB_ALL_DAYS.map(day => ({ day, enabled: (byDay[day]?.length ?? 0) > 0, slots: byDay[day] ?? [] }));
 }
@@ -655,7 +719,10 @@ export const saveWorkerAvailability = async (req: Request, res: Response) => {
         message: "schedule must contain each weekday exactly once with enabled and slots fields",
       });
     }
-    const engineSlots = bridgeToEngineSlots(schedule);
+    // Read before replace: saveWeeklySchedule overwrites the stored week, and the
+    // capacity to carry forward only exists in what is already there.
+    const current = await availEngine.getAvailabilityProfile(uid);
+    const engineSlots = bridgeToEngineSlots(schedule, current.weeklySchedule);
     const result = await availEngine.saveWeeklySchedule(uid, engineSlots, timezone ?? "Asia/Manila", uid, expectedVersion);
     return res.status(200).json({ status: "success", data: { success: true, updatedAt: result.updatedAt, version: result.version } });
   } catch (error: any) {

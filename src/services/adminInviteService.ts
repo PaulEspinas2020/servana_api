@@ -1,4 +1,5 @@
-import { getFirebaseAdmin } from "../middleware/firebaseApp";
+import { firebaseAdmin } from "../middleware/firebaseApp";
+import { lazyValue } from "../middleware/lazyValue";
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
 import dbQuery from "../db/dbQuery";
 import { db } from "../config";
@@ -7,10 +8,9 @@ import { normalizeEmail } from "../helpers/phoneIdentifier";
 import { createAdminUser } from "./adminPermissionService";
 
 const s = db.schema;
-// Lazy: resolving the Auth service at module scope made importing this file
-// require a live Admin credential. getAuth() memoises per app internally and
-// getFirebaseAdmin() memoises the app, so calling this per request is cheap.
-const auth = () => getAuthAdmin(getFirebaseAdmin());
+// Deferred: `getAuthAdmin` resolves the credential eagerly, which made
+// importing this module — and so the composed app — require a live key.
+const auth = lazyValue(() => getAuthAdmin(firebaseAdmin));
 
 /**
  * Where the invitation link returns the invitee after they set a password.
@@ -77,11 +77,11 @@ export async function inviteAdminUser(
   let created = false;
 
   try {
-    const existing = await auth().getUserByEmail(email);
+    const existing = await auth.getUserByEmail(email);
     uid = existing.uid;
   } catch (e: any) {
     if (e?.code !== "auth/user-not-found") throw e;
-    const record = await auth().createUser({
+    const record = await auth.createUser({
       email,
       emailVerified: false,
       displayName: input.displayName ?? undefined,
@@ -156,7 +156,7 @@ export async function sendInviteEmail(
   invitedBy: string | null
 ): Promise<boolean> {
   try {
-    const link = await auth().generatePasswordResetLink(email, {
+    const link = await auth.generatePasswordResetLink(email, {
       url: `${adminPortalUrl}/portal/login`,
       handleCodeInApp: false,
     });

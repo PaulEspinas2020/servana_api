@@ -75,7 +75,7 @@ export function invalidatePermissionCache(adminUid: string): void {
 
 // ── Permission seed list ───────────────────────────────────────────────────────
 
-const PERMISSION_SEEDS: PermissionSeed[] = [
+export const PERMISSION_SEEDS: PermissionSeed[] = [
   // Dashboard
   { key: 'dashboard.view', module: 'dashboard', group_label: 'Dashboard', label: 'View Admin Dashboard', description: 'Access the admin dashboard', action_type: 'view', risk_level: 'low', requires: [], display_order: 100 },
   { key: 'dashboard.operations_metrics.view', module: 'dashboard', group_label: 'Dashboard', label: 'View Operations Metrics', description: '', action_type: 'view', risk_level: 'low', requires: ['dashboard.view'], display_order: 110 },
@@ -247,6 +247,7 @@ const PERMISSION_SEEDS: PermissionSeed[] = [
   { key: 'refunds.approve', module: 'finance', group_label: 'Payments / Finance', label: 'Approve Refund', description: '', action_type: 'approve', risk_level: 'critical', requires: ['refunds.review.open'], display_order: 1800 },
   { key: 'refunds.reject', module: 'finance', group_label: 'Payments / Finance', label: 'Reject Refund', description: '', action_type: 'reject', risk_level: 'high', requires: ['refunds.review.open'], display_order: 1810 },
   { key: 'refunds.mark_processed', module: 'finance', group_label: 'Payments / Finance', label: 'Mark Refund Processed', description: '', action_type: 'edit', risk_level: 'high', requires: ['refunds.approve'], display_order: 1820 },
+  { key: 'refunds.mark_failed', module: 'finance', group_label: 'Payments / Finance', label: 'Mark Refund Failed', description: '', action_type: 'edit', risk_level: 'high', requires: ['refunds.approve'], display_order: 1825 },
   { key: 'revenue_ledger.view', module: 'finance', group_label: 'Payments / Finance', label: 'View Revenue Ledger', description: '', action_type: 'sensitive', risk_level: 'medium', requires: ['finance.dashboard.view'], display_order: 1830 },
   { key: 'internal_fixer_revenue.view', module: 'finance', group_label: 'Payments / Finance', label: 'View Internal Fixer Revenue', description: '', action_type: 'sensitive', risk_level: 'medium', requires: ['revenue_ledger.view'], display_order: 1840 },
   { key: 'payment_exceptions.view', module: 'finance', group_label: 'Payments / Finance', label: 'View Payment Exceptions', description: '', action_type: 'view', risk_level: 'low', requires: ['payments.view'], display_order: 1850 },

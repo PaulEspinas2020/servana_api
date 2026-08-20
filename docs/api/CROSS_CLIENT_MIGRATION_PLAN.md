@@ -59,10 +59,10 @@ though they are the reason the canonical namespace exists.
 The surface as it stands:
 
 <!-- BEGIN GENERATED: v1-surface -->
-- **105 canonical endpoints live**, each driven end to end by `tests/v1-router.test.ts`.
-- **4 planned**, documented and not mounted — see §11 of [`API_V1_CONTRACT.md`](API_V1_CONTRACT.md).
+- **113 canonical endpoints live**, each driven end to end by `tests/v1-router.test.ts`.
+- **0 planned**, documented and not mounted — see §11 of [`API_V1_CONTRACT.md`](API_V1_CONTRACT.md).
 - **94 legacy aliases** counted by telemetry, derived from the contract.
-- **520 routes** mounted outside `/api/v1`, every one classified in the matrix.
+- **518 routes** mounted outside `/api/v1`, every one classified in the matrix.
 <!-- END GENERATED: v1-surface -->
 
 Each phase below opens with a generated table of what that client can move
@@ -78,7 +78,7 @@ set today — its surface is `/api/admin/*`, which this command classifies
 `CANONICALIZE` and leaves to the admin-bookings domain command.
 
 <!-- BEGIN GENERATED: v1-moves:admin -->
-**15** canonical capabilities are live that this client still reaches by a legacy route.
+**20** canonical capabilities are live that this client still reaches by a legacy route.
 
 | Move to (canonical) | Legacy routes it supersedes |
 |---|---|
@@ -95,6 +95,11 @@ set today — its surface is `/api/admin/*`, which this command classifies
 | `POST /api/v1/conversations/:conversationId/read` | `POST /api/chat/conversations/:id/read` |
 | `POST /api/v1/bookings/:bookingId/reschedule` | `POST /api/admin/bookings/:id/reschedule` |
 | `POST /api/v1/bookings/:bookingId/disputes` | `POST /api/admin/bookings/:id/escalate` |
+| `POST /api/v1/admin/refunds/:refundId/mark-failed` | `POST /api/admin/finance/refunds/:refundId/mark-failed` |
+| `GET /api/v1/admin/bookings` | `GET /api/admin/bookings` |
+| `GET /api/v1/admin/bookings/:bookingId/assignment-candidates` | `GET /api/admin/bookings/:id/assignment-candidates` |
+| `POST /api/v1/admin/bookings/:bookingId/assign` | `POST /api/admin/bookings/:id/assign` |
+| `POST /api/v1/admin/bookings/:bookingId/reassign` | `POST /api/admin/bookings/:id/reassign` |
 | `POST /api/v1/bookings/:bookingId/refunds` | `POST /api/admin/finance/refunds` |
 | `GET /api/v1/admin/finance/reconciliation` | `GET /api/admin/finance/reconciliation/exceptions` |
 
@@ -121,30 +126,12 @@ shows `admin=` counts.
 The cheapest real migration, and the one that proves the contract under load.
 
 <!-- BEGIN GENERATED: v1-moves:providerWeb -->
-**52** canonical capabilities are live that this client still reaches by a legacy route.
+**17** canonical capabilities are live that this client still reaches by a legacy route.
 
 | Move to (canonical) | Legacy routes it supersedes |
 |---|---|
-| `GET /api/v1/me` | `GET /api/auth/me` |
-| `GET /api/v1/provider/jobs` | `GET /api/worker/job-cards`<br>`GET /api/workers/:workerId/job-cards` |
-| `GET /api/v1/provider/jobs/:bookingId` | `GET /api/worker/job-cards/:bookingId` |
-| `GET /api/v1/notifications` | `GET /api/user/notifications` |
-| `GET /api/v1/notifications/unread-count` | `GET /api/user/notifications/unread-count` |
-| `PATCH /api/v1/notifications/:key/read` | `PATCH /api/user/notifications/:key/read` |
-| `DELETE /api/v1/notifications/:key` | `DELETE /api/provider/notifications/:key` |
-| `POST /api/v1/notifications/read-all` | `POST /api/user/notifications/mark-all-read` |
-| `GET /api/v1/me/notification-preferences` | `GET /api/provider/notification-preferences` |
-| `PATCH /api/v1/me/notification-preferences` | `PUT /api/provider/notification-preferences` |
-| `POST /api/v1/me/devices` | `POST /api/provider/fcm-token`<br>`POST /api/user/fcm-token` |
-| `DELETE /api/v1/me/devices` | `DELETE /api/provider/fcm-token`<br>`DELETE /api/user/fcm-token` |
 | `PATCH /api/v1/me` | `PUT /api/user/updateprofile` |
-| `GET /api/v1/provider/profile` | `GET /api/provider/profile` |
-| `PATCH /api/v1/provider/profile` | `POST /api/provider/public-profile-revisions` |
-| `GET /api/v1/provider/documents` | `GET /api/provider/documents` |
 | `GET /api/v1/provider/document-types` | `GET /api/provider/document-types` |
-| `POST /api/v1/provider/documents` | `POST /api/provider/documents` |
-| `GET /api/v1/provider/documents/:documentId/preview` | `GET /api/provider/documents/:documentId/preview` |
-| `DELETE /api/v1/provider/documents/:documentId` | `DELETE /api/provider/documents/:documentId` |
 | `GET /api/v1/provider/availability` | `GET /api/worker/availability` |
 | `PATCH /api/v1/provider/availability` | `PUT /api/worker/availability` |
 | `GET /api/v1/provider/time-off` | `GET /api/worker/time-off` |
@@ -155,28 +142,11 @@ The cheapest real migration, and the one that proves the contract under load.
 | `POST /api/v1/auth/register` | `POST /api/auth/signup`<br>`POST /api/auth/provider/register` |
 | `POST /api/v1/auth/login` | `POST /api/auth/signin`<br>`POST /api/auth/admin-signin`<br>`POST /api/auth/firebase-login` |
 | `POST /api/v1/auth/refresh` | `POST /api/auth/refresh` |
-| `POST /api/v1/auth/logout` | `POST /api/auth/logout` |
 | `POST /api/v1/auth/forgot-password` | `POST /api/auth/forgot-password` |
 | `POST /api/v1/auth/reset-password` | `POST /api/auth/reset-password` |
 | `POST /api/v1/auth/resend-verification` | `POST /api/auth/resend-email-otp`<br>`GET /api/auth/resendverification` |
-| `POST /api/v1/conversations` | `GET /api/bookings/:bookingId/conversation` |
-| `GET /api/v1/conversations` | `GET /api/chat/conversations` |
-| `GET /api/v1/conversations/:conversationId` | `GET /api/chat/conversations/:id` |
-| `GET /api/v1/conversations/:conversationId/messages` | `GET /api/chat/conversations/:id/messages` |
-| `POST /api/v1/conversations/:conversationId/messages` | `POST /api/chat/conversations/:id/messages` |
-| `POST /api/v1/conversations/:conversationId/read` | `POST /api/chat/conversations/:id/read` |
-| `POST /api/v1/provider/jobs/:bookingId/accept` | `PUT /api/worker/bookings/:bookingId/accept` |
-| `POST /api/v1/provider/jobs/:bookingId/decline` | `PUT /api/worker/bookings/:bookingId/decline` |
-| `POST /api/v1/provider/jobs/:bookingId/en-route` | `PUT /api/worker/bookings/:bookingId/en-route` |
-| `POST /api/v1/provider/jobs/:bookingId/arrived` | `PUT /api/worker/bookings/:bookingId/arrived` |
 | `POST /api/v1/provider/jobs/:bookingId/start` | `PUT /api/worker/bookings/:bookingId/start` |
-| `POST /api/v1/provider/jobs/:bookingId/complete` | `PUT /api/worker/bookings/:bookingId/complete` |
-| `POST /api/v1/provider/jobs/:bookingId/cancel` | `POST /api/provider/bookings/:bookingId/cancel` |
-| `POST /api/v1/bookings/:bookingId/additional-work` | `POST /api/additional/request/:userId` |
 | `GET /api/v1/bookings/:bookingId/additional-work` | `GET /api/additional/booking/:bookingId` |
-| `GET /api/v1/provider/earnings/summary` | `GET /api/provider/earnings/summary` |
-| `GET /api/v1/provider/earnings/transactions` | `GET /api/provider/earnings`<br>`GET /api/provider/ledger` |
-| `GET /api/v1/provider/earnings/payouts` | `GET /api/provider/payouts` |
 
 Caller state is recorded **per capability**, not per legacy path: this client calls one or more of the routes on the right, not all of them. `ROLE_SPECIFIC` routes are excluded — those are the ones that must not be collapsed.
 <!-- END GENERATED: v1-moves:providerWeb -->
@@ -266,20 +236,17 @@ tap today.
 First Flutter client.
 
 <!-- BEGIN GENERATED: v1-moves:providerMobile -->
-**43** canonical capabilities are live that this client still reaches by a legacy route.
+**33** canonical capabilities are live that this client still reaches by a legacy route.
 
 | Move to (canonical) | Legacy routes it supersedes |
 |---|---|
 | `GET /api/v1/bookings/:bookingId` | `GET /api/:id` |
-| `GET /api/v1/provider/jobs` | `GET /api/worker/job-cards`<br>`GET /api/workers/:workerId/job-cards` |
 | `GET /api/v1/notifications` | `GET /api/user/notifications` |
 | `GET /api/v1/notifications/unread-count` | `GET /api/user/notifications/unread-count` |
 | `PATCH /api/v1/notifications/:key/read` | `PATCH /api/user/notifications/:key/read` |
 | `POST /api/v1/notifications/read-all` | `POST /api/user/notifications/mark-all-read` |
 | `GET /api/v1/me/notification-preferences` | `GET /api/provider/notification-preferences` |
 | `PATCH /api/v1/me/notification-preferences` | `PUT /api/provider/notification-preferences` |
-| `POST /api/v1/me/devices` | `POST /api/provider/fcm-token`<br>`POST /api/user/fcm-token` |
-| `DELETE /api/v1/me/devices` | `DELETE /api/provider/fcm-token`<br>`DELETE /api/user/fcm-token` |
 | `PATCH /api/v1/me` | `PUT /api/user/updateprofile` |
 | `GET /api/v1/provider/profile` | `GET /api/provider/profile` |
 | `PATCH /api/v1/provider/profile` | `POST /api/provider/public-profile-revisions` |
@@ -303,13 +270,6 @@ First Flutter client.
 | `GET /api/v1/conversations/:conversationId/messages` | `GET /api/chat/conversations/:id/messages` |
 | `POST /api/v1/conversations/:conversationId/messages` | `POST /api/chat/conversations/:id/messages` |
 | `POST /api/v1/conversations/:conversationId/read` | `POST /api/chat/conversations/:id/read` |
-| `POST /api/v1/provider/jobs/:bookingId/accept` | `PUT /api/worker/bookings/:bookingId/accept` |
-| `POST /api/v1/provider/jobs/:bookingId/decline` | `PUT /api/worker/bookings/:bookingId/decline` |
-| `POST /api/v1/provider/jobs/:bookingId/en-route` | `PUT /api/worker/bookings/:bookingId/en-route` |
-| `POST /api/v1/provider/jobs/:bookingId/arrived` | `PUT /api/worker/bookings/:bookingId/arrived` |
-| `POST /api/v1/provider/jobs/:bookingId/start` | `PUT /api/worker/bookings/:bookingId/start` |
-| `POST /api/v1/provider/jobs/:bookingId/complete` | `PUT /api/worker/bookings/:bookingId/complete` |
-| `POST /api/v1/provider/jobs/:bookingId/cancel` | `POST /api/provider/bookings/:bookingId/cancel` |
 | `GET /api/v1/provider/earnings/summary` | `GET /api/provider/earnings/summary` |
 | `GET /api/v1/provider/earnings/transactions` | `GET /api/provider/earnings`<br>`GET /api/provider/ledger` |
 | `GET /api/v1/provider/earnings/payouts` | `GET /api/provider/payouts` |

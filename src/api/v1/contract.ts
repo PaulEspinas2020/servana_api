@@ -30,6 +30,10 @@
  */
 
 import { V1ErrorCode } from './errors';
+// `import type` — erased at compile time, so naming the capability set here
+// cannot create a runtime cycle between the contract and the services it
+// describes. One source for the names; a typo fails the build.
+import type { Capabilities } from '../../services/providerAccountStateService';
 
 export const V1_PREFIX = '/api/v1';
 
@@ -84,6 +88,43 @@ export interface LegacyMapping {
   note: string;
 }
 
+/**
+ * How a replay is stopped from doing damage. Closed on purpose: a free-form tag
+ * would drift back into prose, and the point of this field is that a gate can
+ * enumerate it.
+ *
+ * Derived by reading all 34 non-idempotent entries, not invented in advance.
+ */
+export type ReplayMechanism =
+  /** The handler reads the caller's `Idempotency-Key` and replays the stored result. */
+  | 'client-idempotency-key'
+  /** A key is DERIVED for a downstream processor. The caller's own key is not read. */
+  | 'processor-idempotency-key'
+  /** A caller-supplied `clientRequestId` / `clientMsgId` deduplicates the write. */
+  | 'client-request-id'
+  /** A unique or partial-unique index collapses the repeat. */
+  | 'unique-constraint'
+  /** The write is an upsert on the primary key, so a repeat updates one row. */
+  | 'upsert-primary-key'
+  /** The UPDATE's own WHERE clause matches nothing on the second run. */
+  | 'state-predicate'
+  /** The booking state machine refuses the repeat: the entity has left that state. */
+  | 'state-machine'
+  /** A postgres advisory lock serialises concurrent attempts. */
+  | 'advisory-lock'
+  /** A row lock (`FOR UPDATE`) serialises concurrent attempts. */
+  | 'row-lock'
+  /** The credential is consumed on first use (oobCode, compare-and-swap OTP). */
+  | 'single-use-token'
+  /** An external identity provider owns the outcome and refuses or repeats it safely. */
+  | 'external-authority'
+  /** A cooldown, issue ceiling or attempt budget bounds the repeat. */
+  | 'rate-limit'
+  /** Arithmetic refuses it: the remaining ceiling computes to zero. */
+  | 'arithmetic-ceiling'
+  /** NONE, deliberately. A replay creates a second effect and that is accepted, with a reason. */
+  | 'none-accepted';
+
 export interface ContractEntry {
   /** Stable handler key. Never reused, never renamed. */
   id: string;
@@ -93,6 +134,96 @@ export interface ContractEntry {
   path: string;
   summary: string;
   auth: AuthMode;
+  /**
+   * The named permission this endpoint additionally demands.
+   *
+   * REQUIRED for every `auth: 'admin'` entry. `register.ts` throws at import
+   * time when one is missing, so this cannot be a field somebody forgot.
+   *
+   * ## Why it is on the contract and not only in register.ts
+   *
+   * It used to live only in a `V1_PERMISSIONS` map inside `register.ts`, whose
+   * docblock made a fair objection to putting it here: *a permission key
+   * sitting unused in a data file reads as protection that is not mounted*.
+   *
+   * That objection is answered by making "unused" impossible rather than by
+   * moving the data. `register.ts` now builds its permission middleware FROM
+   * this field and refuses to start if an admin entry declares none — the same
+   * discipline it already applies to handlers, where a key naming no
+   * implemented entry is a throw and not a silent no-op.
+   *
+   * With that in place, the contract is the better home. `auth: 'admin'` proves
+   * role 1 and nothing else, and the legacy admin routes gate on a named
+   * permission as well. A v1 successor that dropped it would be a QUIETER route
+   * to the same data — privilege escalation arriving as a migration. Declaring
+   * it beside the route it guards is what lets a test compare the two surfaces
+   * without reading Express middleware chains.
+   */
+  permission?: string;
+  /**
+   * A provider CAPABILITY the caller must also hold, beyond the role in `auth`.
+   *
+   * The provider-side twin of `permission` above, and it exists for the reason
+   * that field's docblock already names: a v1 successor that drops a check the
+   * legacy route enforces is *privilege escalation arriving as a migration*.
+   *
+   * ## The measured case
+   *
+   * The legacy earnings routes carry
+   * `requireCapability("canViewEarnings")` on top of `requireProviderRole`,
+   * because a provider whose application is not APPROVED holds the role but must
+   * not read earnings. The contract had no way to say that, so the three v1
+   * earnings successors were mounted with the role check alone. Both trees are
+   * live and the legacy mappings are `ALIAS_TEMPORARILY`, so `/api/v1/provider/
+   * earnings/summary` was a strictly weaker route to the same data than
+   * `/api/provider/earnings/summary`.
+   *
+   * ## Why no gate caught it
+   *
+   * `scripts/legacy-authz-inventory.ts` derives the legacy rule from middleware
+   * NAMES, and its ladder knows only `verifyRoles`, `requireProviderRole` and
+   * `verifyAuth`. A chain carrying `requireCapability` resolved to plain
+   * `provider`, which equals the v1 entry's `provider`, so the strictness
+   * comparison short-circuited and reported parity. The gate had no word for the
+   * thing that was removed. `capabilityLoosenings()` now compares this field
+   * against the mounted chain and fails when a supersession drops one.
+   *
+   * Orthogonal to `auth` rather than another rung on it: a request can be
+   * required to be a provider AND to hold a capability, and folding them
+   * together would lose which capability was demanded.
+   */
+  capability?: keyof Capabilities;
+  /**
+   * The caller must additionally survive `middleware/requireActiveProvider`.
+   *
+   * ## Why this is not a capability
+   *
+   * The first version of this fix declared `capability: 'canAcceptJobs'` on the
+   * job actions, reasoning that it was the capability the legacy chain enforced.
+   * It is not, and the difference denies real providers.
+   *
+   *   `requireActiveProvider` reads ONE column, `user_credentials.account_status`,
+   *   and is deliberately permissive: a null, undefined or blank status calls
+   *   `next()`, because "it means nothing was ever written, and yesterday that
+   *   account worked". Only an explicitly blocked status refuses.
+   *
+   *   `canAcceptJobs` is `fullyActive && complianceCurrent`, where `fullyActive`
+   *   is `activation === 'ACTIVE' && operational === 'ACTIVE'`. A provider whose
+   *   status column is blank, or who is mid-activation, or who has zero active
+   *   services — `operational === 'NO_ACTIVE_SERVICE'` — fails that and passes
+   *   the middleware.
+   *
+   * So the capability is STRICTER than the route it was meant to restore, and
+   * this TAB puts widening the model out of scope: the fix declares parity with
+   * the legacy chain, not a new policy. Silently adding an enforcement point is
+   * the same class of error as silently removing one, and this one would refuse
+   * providers their work.
+   *
+   * The fix is to call the production predicate rather than reassemble it.
+   * `register.ts` appends the real `requireActiveProvider`, so there is one
+   * definition of "may this provider work" and it cannot drift from itself.
+   */
+  activeProvider?: true;
   /**
    * `true` when a repeat of the identical request produces the identical
    * end state. GETs are idempotent by definition; a mutation must say so
@@ -110,6 +241,27 @@ export interface ContractEntry {
    * with no guard named, so a new one cannot slip in unexamined.
    */
   replayGuard?: string;
+
+  /**
+   * The SAME guarantee as `replayGuard`, in a closed vocabulary a gate can read.
+   *
+   * ## Why prose was not enough
+   *
+   * `replayGuard` is the honest explanation and must stay — a reviewer needs the
+   * reasoning, not a tag. But no static check can read it. An attempt to build
+   * that gate from the prose flagged **10 of 11 entries wrongly**, and the reason
+   * is visible in the strings themselves: `auth.login` and
+   * `bookings.payments.intent` both contain the words "Idempotency-Key", and
+   * NEITHER honours a client-supplied one. The first says it would be theatre on
+   * a read-shaped operation; the second derives a key for the PROCESSOR from the
+   * payment row. Keyword-matching cannot tell those from the nine that really do
+   * replay a caller's key, and a gate with that false-positive rate gets deleted.
+   *
+   * Two fields, one truth: the prose says why, the vocabulary says what, and
+   * `tests/v1-replay-mechanism.test.ts` fails when they disagree about the one
+   * thing that is machine-checkable — whether the handler reads the header.
+   */
+  replayMechanism?: readonly ReplayMechanism[];
   /** Name of the response DTO in `openapi.ts`'s component schemas. */
   responseSchema: string;
   /** Every failure code this endpoint can return, beyond the auth defaults. */
@@ -181,6 +333,86 @@ export const V1_CONTRACT: ContractEntry[] = [
     ],
     callers: { ...ALL_PLANNED, admin: 'n/a', providerMobile: 'n/a', providerWeb: 'n/a' },
     observability: 'catalog',
+  },
+  {
+    id: 'telemetry.ingest',
+    domain: 'telemetry',
+    method: 'post',
+    path: '/telemetry',
+    summary: 'Accept a small, closed set of scrubbed worker-app events. No free text, ever.',
+    auth: 'authenticated',
+    idempotent: false,
+    replayGuard:
+      'NONE, and accepted deliberately. A replayed batch double-counts an event in a chart, '
+      + 'which is the cheapest failure in this contract. The alternative — an idempotency key '
+      + 'per batch, stored and compared — would cost a write and a lookup on every telemetry '
+      + 'call to protect a number nobody bills from. The events carry no money, no state '
+      + 'transition and no side effect beyond a row.',
+    replayMechanism: ['none-accepted'],
+    responseSchema: 'TelemetryIngestResult',
+    requestSchema: 'TelemetryIngestRequest',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/telemetryService.recordTelemetryEvents',
+    legacy: [],
+    callers: { ...ALL_PLANNED, customerMobile: 'n/a', customerWeb: 'n/a', admin: 'n/a' },
+    observability: 'platform',
+    notes:
+      'FIRST-PARTY by decision, not by default — see docs/TELEMETRY_DECISION.md. The worker '
+      + 'app scrubs to an allowlist carrying no name, phone, location or token, but it still '
+      + 'carries bookingRef, and RA 10173 s3(g) makes information personal when identity can be '
+      + '"reasonably and directly ascertained by the entity holding the information". Servana '
+      + 'holds the bookings table. So the scrubbed payload is still personal data in our hands, '
+      + 'and a foreign sink would be a cross-border transfer engaging s21 accountability, NPC '
+      + 'model contractual clauses, and registration above 1,000 data subjects. The server '
+      + 're-scrubs from its own allowlist rather than trusting the client: a server that trusts '
+      + 'a client\'s scrubbing has one control, not two.',
+  },
+  {
+    id: 'clientConfig.read',
+    domain: 'health',
+    method: 'get',
+    path: '/client-config',
+    summary: 'The minimum client version that may run, per platform. The only recall a released mobile build has.',
+    auth: 'public',
+    idempotent: true,
+    responseSchema: 'ClientConfig',
+    errors: [],
+    status: 'implemented',
+    domainService: 'api/v1/domains/clientConfig.readClientConfig',
+    legacy: [],
+    callers: { ...ALL_PLANNED, customerWeb: 'n/a', providerWeb: 'n/a', admin: 'n/a' },
+    observability: 'platform',
+    notes:
+      'Public because the client being recalled may be too old to authenticate, and a kill '
+      + 'switch reachable only with a credential cannot kill the builds that most need it. '
+      + 'Served from a JSON file, not the database: a recall is pulled during an incident, '
+      + 'and the incident this platform actually had was every database-backed read '
+      + 'returning 500 for six days. Editing the file takes effect within ~2 minutes with '
+      + 'no restart and no deploy. The server fails OPEN — a missing or malformed file '
+      + 'serves a permissive 0.0.0 floor — because the client fails CLOSED, and two closed '
+      + 'halves would let one deleted file brick every installed app at once.',
+  },
+  {
+    id: 'health.build',
+    domain: 'health',
+    method: 'get',
+    path: '/health',
+    summary: 'The commit this build was made from. Public, and carries nothing else.',
+    auth: 'public',
+    idempotent: true,
+    responseSchema: 'BuildInfo',
+    errors: [],
+    status: 'implemented',
+    domainService: 'api/v1/domains/health.readBuildInfo',
+    legacy: [],
+    callers: { ...ALL_PLANNED, customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'n/a', providerWeb: 'n/a', admin: 'n/a' },
+    observability: 'platform',
+    notes:
+      'Reads dist/BUILD_INFO.json, which deploy.yml stamps on every deploy. It answers '
+      + 'the one question a deploy cannot otherwise be asked from outside: which commit '
+      + 'is actually serving. A deploy whose migration step fails stops short of the PM2 '
+      + 'restart, so the old code keeps serving and nothing outward says so.',
   },
   {
     id: 'catalog.summary',
@@ -277,7 +509,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'domain command, not here.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'legacy', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'planned' },
     observability: 'identity',
   },
 
@@ -411,7 +643,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'Retirement gated on a ServanaWorker release.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
     notes:
       'Three paths, one domain service. This is the clearest centralization case in the ' +
@@ -433,7 +665,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     legacy: [
       { method: 'get', path: '/api/worker/job-cards/:bookingId', disposition: 'ALIAS_TEMPORARILY', note: 'Provider Web. Same service and view function.' },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
   },
 
@@ -460,7 +692,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     legacy: [
       { method: 'get', path: '/api/user/notifications', disposition: 'ALIAS_TEMPORARILY', note: 'Customer clients call this today.' },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'planned' },
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'planned' },
     observability: 'notifications',
   },
   {
@@ -486,7 +718,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'shadow test now enforces it.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'planned' },
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'planned' },
     observability: 'notifications',
   },
   {
@@ -512,7 +744,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'which named the caller rather than the resource.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'planned' },
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'planned' },
     observability: 'notifications',
   },
   {
@@ -544,7 +776,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'for the first time.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'notifications',
   },
   {
@@ -562,7 +794,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     legacy: [
       { method: 'post', path: '/api/user/notifications/mark-all-read', disposition: 'ALIAS_TEMPORARILY', note: 'Same service; v1 uses the resource-shaped path.' },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'planned' },
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'planned' },
     observability: 'notifications',
   },
 
@@ -589,7 +821,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'notifications they were already receiving.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'planned' },
     observability: 'notifications',
     notes:
       'Returns every category declared in `domainEvents.NOTIFICATION_CATEGORIES`, filled from ' +
@@ -619,7 +851,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'has not migrated keeps the exact behaviour they have.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'planned' },
     observability: 'notifications',
     notes:
       'PATCH rather than PUT, deliberately. A full replace means a client that knows about ' +
@@ -634,6 +866,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Registers this device for push, for the authenticated account.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['upsert-primary-key'],
     replayGuard:
       'The device token is the primary key and the write is an upsert, so a repeat updates ' +
       'the same row rather than adding a second. Re-registering is the normal case - clients ' +
@@ -662,7 +895,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'gives customers the multi-device behaviour providers already had.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'notifications',
     notes:
       'Account-scoped by construction: the row is upserted ON THE TOKEN, so registering a ' +
@@ -697,7 +930,7 @@ export const V1_CONTRACT: ContractEntry[] = [
         note: 'Same operation for customers, against the single legacy column.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'notifications',
     notes:
       'Omitting the token releases EVERY device, which is what a sign-out-everywhere wants. ' +
@@ -763,7 +996,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     status: 'implemented',
     domainService: 'services/account/accountSettingsService.getSettings',
     legacy: [],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'planned', admin: 'planned' },
     observability: 'account',
     notes:
       'There was no server-side settings store before this. Locale and privacy choices were held ' +
@@ -785,7 +1018,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     status: 'implemented',
     domainService: 'services/account/accountSettingsService.patchSettings',
     legacy: [],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'planned', admin: 'planned' },
     observability: 'account',
     notes:
       'PATCH rather than PUT: a full replace means a client that knows about four settings ' +
@@ -838,7 +1071,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'active-eligible and missing a photo.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'planned', admin: 'n/a' },
     observability: 'account',
     notes:
       '`percent` counts every requirement including the cosmetic ones, because that is what a ' +
@@ -945,6 +1178,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Saves a new address. The first one becomes the default.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['none-accepted'],
     replayGuard:
       'None beyond validation, and that is stated rather than claimed: a repeated POST creates a ' +
       'second address. Two identical addresses is a cosmetic problem a customer can fix, and an ' +
@@ -1086,7 +1320,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'entry projects from.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'planned' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'planned' },
     observability: 'account',
     notes:
       '`visibleFields` is on the wire, so a client can tell a public view from its own rather ' +
@@ -1100,6 +1334,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Proposes a change to a reviewable public profile field.',
     auth: 'provider',
     idempotent: false,
+    replayMechanism: ['client-request-id'],
     replayGuard:
       'A REQUIRED clientRequestId, which the compliance service dedupes revisions on. Without ' +
       'it a provider on a flaky connection would queue three copies of one biography change for ' +
@@ -1117,7 +1352,7 @@ export const V1_CONTRACT: ContractEntry[] = [
         note: 'The live revision submit. IDENTICAL domain call - this is a second URL onto one workflow.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'account',
     notes:
       'Not a write. A provider does not edit their public profile; they propose a change and it ' +
@@ -1169,7 +1404,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'that provider_documents must not be invented, and it does not exist.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'account',
     notes:
       'Driven by the document CATALOG rather than by the stored rows, so a required document ' +
@@ -1197,7 +1432,7 @@ export const V1_CONTRACT: ContractEntry[] = [
         note: 'The same static catalog constant. No per-caller data of any kind.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'legacy', admin: 'n/a' },
     observability: 'account',
     notes:
       'Provider-scoped rather than public even though the payload is static policy: the ' +
@@ -1212,6 +1447,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Submits one document for review.',
     auth: 'provider',
     idempotent: false,
+    replayMechanism: ['client-request-id'],
     replayGuard:
       'A REQUIRED clientRequestId, unique per provider. A retried submit returns the ORIGINAL ' +
       'row rather than queueing a second copy of the same passport for review.',
@@ -1232,7 +1468,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'endpoint that stored the file without re-evaluating would leave them blocked.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'account',
     notes:
       'The file is a data URI validated by SIGNATURE against an allowlist and a size ceiling, ' +
@@ -1263,7 +1499,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'route, so they travel with the only v1 response that contains a private storage URL.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'account',
     notes:
       'A malformed id and an id belonging to another provider answer the SAME 404. A 422 for ' +
@@ -1293,7 +1529,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'skipping it would leave someone online against a document they just removed.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'account',
   },
   {
@@ -1373,7 +1609,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'commitment and appears in neither.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'legacy', admin: 'n/a' },
     observability: 'account',
   },
   {
@@ -1384,6 +1620,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Books time off, and reports the confirmed bookings it collides with.',
     auth: 'provider',
     idempotent: false,
+    replayMechanism: ['none-accepted'],
     replayGuard:
       'None, and the honest reason is that the engine offers none. A repeat creates a second ' +
       'overlapping period, which is visible and cancellable - and harmless next to the ' +
@@ -1406,7 +1643,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'not say so would leave them assuming leave cancels their jobs.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'legacy', admin: 'n/a' },
     observability: 'account',
     notes:
       'The response reports what was STORED, never the request. A response assembled from the ' +
@@ -1435,7 +1672,7 @@ export const V1_CONTRACT: ContractEntry[] = [
         note: 'IDENTICAL engine call. Cancels rather than deletes; the row survives as history.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'legacy', admin: 'n/a' },
     observability: 'account',
     notes:
       'A malformed id answers 404, the same as one belonging to another provider - a 422 for ' +
@@ -1474,7 +1711,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'endpoints exist to tell apart.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'planned', admin: 'n/a' },
     observability: 'account',
     notes:
       'Keyed on `services.id` - the Catalog V2 canonical specific-service identity - never on a ' +
@@ -1560,6 +1797,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Reviews a completed booking. The provider comes from the assignment.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['advisory-lock', 'client-request-id', 'state-predicate'],
     replayGuard:
       'An advisory transaction lock on (customer, booking), a clientRequestId replay inside ' +
       'that transaction, and an existing-review check in the same transaction. Two devices ' +
@@ -1633,6 +1871,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Raises a support case about a concluded booking.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['advisory-lock', 'client-request-id', 'unique-constraint'],
     replayGuard:
       'An advisory transaction lock on (customer, booking) plus a partial unique index on ' +
       '(customer_uid, client_request_id). A retry on a flaky connection returns the original ' +
@@ -1751,6 +1990,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Creates an account from an email + password, or from a Firebase ID token.',
     auth: 'public',
     idempotent: false,
+    replayMechanism: ['external-authority'],
     replayGuard:
       'Firebase enforces one account per identifier, so a replayed registration collides with the identity it just created rather than making a second account. The 409 is the guard.',
     requestSchema: 'RegisterRequest',
@@ -1800,6 +2040,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'One sign-in for every identifier and every surface: email or mobile + password, or a Firebase ID token.',
     auth: 'public',
     idempotent: false,
+    replayMechanism: ['external-authority', 'rate-limit'],
     replayGuard:
       'A replay re-authenticates the same credential and mints another session. Nothing accumulates, and the per-account limiter bounds the rate — an Idempotency-Key here would be theatre on a read-shaped operation that happens to issue a token.',
     requestSchema: 'LoginRequest',
@@ -1866,6 +2107,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Exchanges a refresh token for a fresh session.',
     auth: 'public',
     idempotent: false,
+    replayMechanism: ['external-authority'],
     replayGuard:
       'Google owns the exchange and decides whether a refresh token is still redeemable. A replay yields another ID token or a refusal; nothing on this side accumulates.',
     requestSchema: 'RefreshRequest',
@@ -1907,7 +2149,7 @@ export const V1_CONTRACT: ContractEntry[] = [
         note: 'Same effect; both now go through the one session service so the side-effect set is decided once.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'legacy' },
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'legacy' },
     observability: 'auth',
     notes:
       'Ends ALL sessions, not this device only. Firebase has no per-session revocation, and a ' +
@@ -1949,6 +2191,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Completes a password reset and ends every existing session.',
     auth: 'public',
     idempotent: false,
+    replayMechanism: ['single-use-token'],
     replayGuard:
       'The oobCode is SINGLE-USE and consumed by Firebase on the first successful call. A replay finds it spent and answers RESET_TOKEN_INVALID.',
     requestSchema: 'ResetPasswordRequest',
@@ -1977,6 +2220,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Verifies an email address with a one-time code issued for registration.',
     auth: 'public',
     idempotent: false,
+    replayMechanism: ['single-use-token'],
     replayGuard:
       'The code is consumed by a compare-and-swap UPDATE (services/otpService.consumeOtp), so two concurrent verifications of one code cannot both succeed.',
     requestSchema: 'VerifyEmailRequest',
@@ -2043,7 +2287,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     status: 'implemented',
     domainService: 'services/identityVerificationSync.provenFrom + recordProvenIdentifiers, guarded by services/accountLinkGuard',
     legacy: [],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'planned', admin: 'n/a' },
     observability: 'auth',
     notes:
       'There is no server-side SMS OTP and this does not add one. The proof is a Firebase ID ' +
@@ -2333,6 +2577,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: "Opens, or resolves, the conversation for a booking.",
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['unique-constraint'],
     replayGuard:
       'One conversation per booking, enforced by a unique constraint on booking_id and an ' +
       'ON CONFLICT insert. A repeat returns the SAME conversation rather than opening a ' +
@@ -2357,7 +2602,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'confirmed, not because somebody opened a screen.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'legacy' },
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'legacy' },
     observability: 'messaging',
     notes:
       'Support may open a conversation on a booking with no provider; the parties may not. ' +
@@ -2396,7 +2641,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'same conversation ids; a genuinely different question.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'legacy' },
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'legacy' },
     observability: 'messaging',
     notes:
       'An admin receives the oversight list from the same handler and gets no unread counts — ' +
@@ -2436,7 +2681,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'Different fields, different authorization, same conversation id.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'legacy' },
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'legacy' },
     observability: 'messaging',
     notes:
       'Participant contact columns are never published. `listParticipants` joins ' +
@@ -2482,7 +2727,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'trail is the point — where this route applies the caller\'s own read floor.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'legacy' },
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'legacy' },
     observability: 'messaging',
     notes:
       'A replacement provider reads from THEIR assignment forward, never the previous ' +
@@ -2498,6 +2743,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Sends a message. The sender is the authenticated caller.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['client-request-id', 'unique-constraint'],
     replayGuard:
       'A REQUIRED clientMsgId, unique per (conversation, sender) by partial index. A retried ' +
       'send returns the ORIGINAL message rather than creating a second one, and the pre-read ' +
@@ -2531,7 +2777,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'validation and attachment rules as anyone else\'s.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'legacy' },
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'legacy' },
     observability: 'messaging',
     notes:
       'Nothing in the body names a sender. `sender_uid` is written from the actor the handler ' +
@@ -2546,6 +2792,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Stores one attachment for a conversation the caller may write to.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['none-accepted'],
     replayGuard:
       'None, and none is claimed: a repeat stores a SECOND object under a fresh uuid key. ' +
       'That is wasted storage, not damage — an attachment is inert until a message ' +
@@ -2587,6 +2834,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Reports one message in this conversation to moderation.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['none-accepted'],
     replayGuard:
       'None. A second report by the same reporter files a second row, which is a moderation ' +
       'queue concern rather than a correctness one — the alternative, silently swallowing a ' +
@@ -2646,7 +2894,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'what its badge should now say.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'legacy' },
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'legacy' },
     observability: 'messaging',
     notes:
       'A POST that is genuinely idempotent: the pointer is a monotonic high-water mark, only ' +
@@ -2681,6 +2929,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: "Cancels the caller's own booking.",
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, a second ' +
       'cancel finds the booking already terminal and is refused, so a retry ' +
@@ -2736,7 +2985,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'agree on what happened.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'planned', admin: 'planned' },
     observability: 'bookings',
     notes:
       'Preserves a reassigned provider\'s full progression — accepted, en route, ' +
@@ -2749,7 +2998,9 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/accept',
     summary: 'Accepts the assignment.',
     auth: 'provider',
+    activeProvider: true,
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
       'refuses the repeat because the booking has already left ASSIGNED.',
@@ -2775,7 +3026,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'the provider from the token and check the CURRENT assignment.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
   },
   {
@@ -2785,7 +3036,9 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/decline',
     summary: 'Declines the assignment, returning the booking to the pool.',
     auth: 'provider',
+    activeProvider: true,
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
       'refuses the repeat because the booking has already left ASSIGNED.',
@@ -2811,7 +3064,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'the provider from the token and check the CURRENT assignment.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
   },
   {
@@ -2821,7 +3074,9 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/en-route',
     summary: 'Marks the provider on the way.',
     auth: 'provider',
+    activeProvider: true,
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
       'refuses the repeat because the booking has already left ACCEPTED.',
@@ -2847,7 +3102,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'the provider from the token and check the CURRENT assignment.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
   },
   {
@@ -2857,7 +3112,9 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/arrived',
     summary: 'Marks the provider at the address.',
     auth: 'provider',
+    activeProvider: true,
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
       'refuses the repeat because the booking has already left EN_ROUTE.',
@@ -2883,7 +3140,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'the provider from the token and check the CURRENT assignment.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
   },
   {
@@ -2893,7 +3150,9 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/start',
     summary: 'Starts the job. Requires the customer worker code.',
     auth: 'provider',
+    activeProvider: true,
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
       'refuses the repeat because the booking has already left ARRIVED.',
@@ -2919,7 +3178,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'the provider from the token and check the CURRENT assignment.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'legacy', admin: 'n/a' },
     observability: 'provider-jobs',
     notes:
       'The worker code is the six-digit secret the CUSTOMER reads out. It is the only '
@@ -2933,7 +3192,9 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/complete',
     summary: 'Completes the job.',
     auth: 'provider',
+    activeProvider: true,
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the machine ' +
       'refuses the repeat because the booking has already left IN_PROGRESS.',
@@ -2959,7 +3220,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'the provider from the token and check the CURRENT assignment.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
   },
   {
@@ -2969,7 +3230,9 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/jobs/:bookingId/cancel',
     summary: 'Cancels a job the provider had already accepted, subject to the notice policy.',
     auth: 'provider',
+    activeProvider: true,
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the repeat ' +
       'finds the booking back at AWAITING_ASSIGNMENT with no assignment for this ' +
@@ -3008,7 +3271,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'question is the availableActions block on GET /bookings/:id/transitions.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
     notes:
       'Completes the cancellation triad. Customer, provider and admin cancellation are ' +
@@ -3054,7 +3317,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'This entry adds the state and time-window rules §64 requires.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'planned' },
     observability: 'booking-experiences',
     notes:
       'A withheld position is a 200 with visibility.reason, never a 403: the caller is ' +
@@ -3072,6 +3335,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Issues a booking code for one purpose. The code is never in the response.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['rate-limit', 'state-machine'],
     replayGuard:
       'A resend cooldown, an issue ceiling per booking and purpose, and a state ' +
       'rule. A replay inside the cooldown is refused with the seconds remaining ' +
@@ -3109,6 +3373,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Presents a booking code. Success is a state transition performed by the executor.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['client-idempotency-key', 'state-machine', 'rate-limit'],
     replayGuard:
       'An Idempotency-Key replays the original result. Without one, the attempt ' +
       'budget bounds it and the machine refuses a repeat because the booking has ' +
@@ -3138,7 +3403,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'too. Accepts the code in the query string for builds that cannot be changed.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'migrated', admin: 'planned' },
     observability: 'booking-experiences',
     notes:
       'Purpose-scoped. BOOKING_CONFIRMATION is presented by the customer and checked ' +
@@ -3164,7 +3429,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     status: 'implemented',
     domainService: 'services/booking/bookingOtpService.readCredentialState',
     legacy: [],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'planned' },
     observability: 'booking-experiences',
     notes:
       'Exists so a client renders "resend in 42s" and "2 attempts left" from the backend ' +
@@ -3179,6 +3444,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Moves a booking. One endpoint for the customer and the admin.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['state-predicate'],
     replayGuard:
       'The write carries `schedule IS NOT DISTINCT FROM <expected>`, so a repeat ' +
       'of an applied move finds the schedule already changed and is refused with ' +
@@ -3226,7 +3492,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     status: 'implemented',
     domainService: 'services/booking/bookingRescheduleService.listRescheduleRequests',
     legacy: [],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'migrated', admin: 'planned' },
     observability: 'booking-experiences',
     notes:
       'What makes "no silent overwrite" observable to a client rather than only true in ' +
@@ -3239,7 +3505,9 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/bookings/:bookingId/additional-work',
     summary: 'Raises a change order against the booking, as a child request awaiting approval.',
     auth: 'provider',
+    activeProvider: true,
     idempotent: false,
+    replayMechanism: ['none-accepted'],
     replayGuard:
       'The write requires an IN_PROGRESS assignment row held under FOR UPDATE, ' +
       'and each accepted request is a distinct priced child record — a repeat ' +
@@ -3265,7 +3533,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'call the same additionalService instance.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'booking-experiences',
     notes:
       'Additional work was ALREADY a child-request model (booking_additional_requests + ' +
@@ -3295,7 +3563,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'only in living under the booking it belongs to, which is what §60 asks for.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'legacy', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'legacy', admin: 'planned' },
     observability: 'booking-experiences',
   },
   {
@@ -3306,6 +3574,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Opens a dispute against the booking, with the service and financial state at that moment.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['unique-constraint', 'state-predicate'],
     replayGuard:
       'At most one unresolved escalation per booking, enforced by a partial ' +
       'unique index as well as by the policy check — so two simultaneous reports ' +
@@ -3340,7 +3609,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'answers "may I open one" for a live client that has no other way to ask.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'legacy' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'legacy' },
     observability: 'booking-experiences',
     notes:
       'One record for all three actors. A second dispute table would have given admin, ' +
@@ -3361,12 +3630,70 @@ export const V1_CONTRACT: ContractEntry[] = [
     status: 'implemented',
     domainService: 'services/booking/bookingDisputeService.listDisputes',
     legacy: [],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'planned' },
     observability: 'booking-experiences',
     notes:
       '`reason`, `assigned_team` and `actor_uid` are withheld from every caller: free text ' +
       'one party typed about another, internal routing, and a person. Only `openedByYou` ' +
       'varies by caller.',
+  },
+  {
+    id: 'admin.refunds.markFailed',
+    domain: 'admin-finance',
+    method: 'post',
+    path: '/admin/refunds/:refundId/mark-failed',
+    summary: 'Record that an approved refund did not go through.',
+    auth: 'admin',
+    /**
+     * The same named permission the legacy twin demands.
+     *
+     * `auth: 'admin'` proves role 1 and nothing more. Its `requires` chain is
+     * `refunds.mark_failed -> refunds.approve -> refunds.review.open`, which is
+     * also why the approver-is-not-the-requester rule cannot be a permission:
+     * the closure GUARANTEES that everybody who can approve can also request.
+     * That rule lives in the executor, as a predicate in the write.
+     */
+    permission: 'refunds.mark_failed',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      'The state predicate, in the write itself: the UPDATE matches only ' +
+      '`status = \'approved\'`, so a replay finds the row already `failed` and ' +
+      'affects nothing. That is a stronger bound than an idempotency key here, ' +
+      'because it also refuses a SECOND operator submitting a different reason ' +
+      'for the same refund minutes later — which a per-client key would happily ' +
+      'let through as a distinct request. No payments row is written on this ' +
+      'path, so a replay cannot move money even in principle.',
+    requestSchema: 'RefundFailureRequest',
+    responseSchema: 'RefundTransitionResult',
+    errors: ['PERMISSION_REQUIRED', 'VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [{ name: 'refundId', type: 'integer', description: 'finance_refund_reviews.id' }],
+    status: 'implemented',
+    domainService: 'services/adminFinanceService.markRefundFailed',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/admin/finance/refunds/:refundId/mark-failed',
+        disposition: 'CANONICALIZE',
+        note:
+          'Mounted in the same change as this entry rather than inherited. The transition ' +
+          'did not exist before — an approved refund the processor refused had no terminal, ' +
+          'so it stayed `approved` and BLOCKED every retry for that booking, because ' +
+          'openRefundReview refuses a second review while one is requested or approved. ' +
+          'Both surfaces call the same executor; neither carries a copy of the rule.',
+      },
+    ],
+    callers: {
+      customerMobile: 'n/a',
+      customerWeb: 'n/a',
+      providerMobile: 'n/a',
+      providerWeb: 'n/a',
+      admin: 'legacy',
+    },
+    observability: 'admin-finance',
+    notes:
+      'Distinct from reject: rejected means a human decided against the refund, failed means ' +
+      'everyone agreed and the money did not move. Only the second is worth retrying.',
   },
   {
     id: 'admin.bookings.list',
@@ -3375,10 +3702,11 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/admin/bookings',
     summary: 'Admin booking operations list.',
     auth: 'admin',
+    permission: 'bookings.view',
     idempotent: true,
     responseSchema: 'AdminBookingList',
     errors: ['PERMISSION_REQUIRED'],
-    status: 'planned',
+    status: 'implemented',
     domainService: 'services/adminBookingService.listBookings',
     legacy: [
       {
@@ -3415,11 +3743,12 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/admin/bookings/:bookingId/assignment-candidates',
     summary: 'Providers who could take this booking, ranked, each with its blocking reasons — and a diagnosis of the pool itself.',
     auth: 'admin',
+    permission: 'bookings.assign_provider',
     idempotent: true,
     responseSchema: 'AssignmentCandidatePool',
     errors: ['PERMISSION_REQUIRED', 'VALIDATION_FAILED', 'NOT_FOUND'],
     params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
-    status: 'planned',
+    status: 'implemented',
     domainService: 'services/providerEligibilityEngine.listAssignmentCandidatePool',
     legacy: [
       {
@@ -3446,7 +3775,9 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/admin/bookings/:bookingId/assign',
     summary: 'Assign a provider to an unassigned booking.',
     auth: 'admin',
+    permission: 'bookings.assign_provider',
     idempotent: false,
+    replayMechanism: ['row-lock', 'advisory-lock', 'state-machine'],
     replayGuard:
       'The executor locks the booking row and takes a provider-scoped advisory lock, then ' +
       'revalidates the commit-critical stages. A replayed assign of the SAME provider is ' +
@@ -3455,7 +3786,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     requestSchema: 'AdminAssignRequest',
     errors: ['PERMISSION_REQUIRED', 'VALIDATION_FAILED', 'NOT_FOUND', 'BOOKING_STATE_CONFLICT', 'CONFLICT'],
     params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
-    status: 'planned',
+    status: 'implemented',
     domainService: 'services/booking/transitionExecutor.transitionBooking (ADMIN_ASSIGN)',
     legacy: [
       {
@@ -3481,7 +3812,9 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/admin/bookings/:bookingId/reassign',
     summary: 'Move an assigned booking from one provider to another, with an audited reason.',
     auth: 'admin',
+    permission: 'bookings.reassign_provider',
     idempotent: false,
+    replayMechanism: ['row-lock', 'advisory-lock', 'state-machine'],
     replayGuard:
       'Same two locks as assign. The outgoing assignment row is closed inside the transaction ' +
       'and stamped with when it closed, so a replay finds no open assignment for the previous ' +
@@ -3490,7 +3823,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     requestSchema: 'AdminReassignRequest',
     errors: ['PERMISSION_REQUIRED', 'VALIDATION_FAILED', 'NOT_FOUND', 'BOOKING_STATE_CONFLICT', 'CONFLICT'],
     params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
-    status: 'planned',
+    status: 'implemented',
     domainService: 'services/booking/transitionExecutor.transitionBooking (ADMIN_REASSIGN)',
     legacy: [
       {
@@ -3528,6 +3861,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Starts or resumes the customer checkout for a booking.',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['advisory-lock', 'processor-idempotency-key'],
     replayGuard:
       'An advisory transaction lock on the booking, plus reuse of a live session for the same ' +
       'return origin instead of minting a second, plus a processor Idempotency-Key derived from ' +
@@ -3584,7 +3918,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'permission. Both now read the same underlying capture events.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'planned', admin: 'planned' },
     observability: 'finance-payments',
     notes:
       'One endpoint, three explicit DTOs. The provider is shown the gross their share is a ' +
@@ -3600,6 +3934,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'Requests a refund (customer) or issues one (admin).',
     auth: 'authenticated',
     idempotent: false,
+    replayMechanism: ['arithmetic-ceiling', 'state-predicate'],
     replayGuard:
       'Eligibility is evaluated against captured-minus-already-refunded, so a second full ' +
       'refund computes a ceiling of zero and is refused by arithmetic. A customer repeat ' +
@@ -3640,6 +3975,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/earnings/summary',
     summary: "The provider's own earnings totals, with pending split from failed and estimated.",
     auth: 'provider',
+    capability: 'canViewEarnings',
     idempotent: true,
     responseSchema: 'ProviderEarningsSummary',
     errors: ['EARNINGS_RANGE_INVALID'],
@@ -3659,7 +3995,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'paths return identical figures during migration rather than merely similar ones.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'finance-earnings',
     notes:
       'Totalled from the SAME per-booking calculator the transaction list uses, not from a ' +
@@ -3674,6 +4010,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/earnings/transactions',
     summary: "One row per completed job with its gross, the provider's share and its payout state.",
     auth: 'provider',
+    capability: 'canViewEarnings',
     idempotent: true,
     responseSchema: 'ProviderEarningsTransactions',
     errors: ['EARNINGS_RANGE_INVALID'],
@@ -3710,7 +4047,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'this entry replaces; delete once telemetry confirms zero traffic.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'finance-earnings',
     notes:
       'The gross includes PAID additional work, which is charged through its own checkout and ' +
@@ -3724,6 +4061,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/provider/earnings/payouts',
     summary: "The provider's own payouts, with the 72-hour window's expected arrival date.",
     auth: 'provider',
+    capability: 'canViewEarnings',
     idempotent: true,
     responseSchema: 'ProviderPayouts',
     errors: [],
@@ -3739,7 +4077,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'processor id, servana_share, payout_error and the admin hold fields by projection.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'finance-payouts',
     notes:
       'The expected arrival date is computed by the backend from the SAME constant the release ' +
@@ -3753,6 +4091,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     path: '/admin/finance/reconciliation',
     summary: 'Ledger reconciliation: every check, its open breaks, and the platform money totals.',
     auth: 'admin',
+    permission: 'reconciliation.view',
     idempotent: true,
     responseSchema: 'FinanceReconciliation',
     errors: ['PERMISSION_REQUIRED'],

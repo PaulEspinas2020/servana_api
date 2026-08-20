@@ -50,20 +50,86 @@ const suiteFiles = (): string[] =>
     .sort();
 
 /**
- * The number of suites jest is expected to run.
+ * The FLOOR below which the suite inventory must not fall.
  *
- * Raise it in the same commit that adds a suite. Never lower it without
- * naming, in the commit message, which suite went and why.
+ * ## Why a floor, and not the exact count it used to be
+ *
+ * The exact pin did its job for one writer and failed for two. It is a shared
+ * mutable counter, and incrementing it is not commutative: two agents each
+ * adding a suite from the same base both compute base+1, and whichever lands
+ * second is wrong — the suite goes red on a tree where nothing is actually
+ * missing. That happened repeatedly on 2026-08-19, and the comment this replaces
+ * records an earlier instance of the same thing at the origin/main merge, where
+ * two branches held 295 and 278 and both were correct for themselves.
+ *
+ * A red gate that everybody has learned to fix by editing the number is not a
+ * gate. It is a chore that trains people to change the assertion.
+ *
+ * ## What a floor still catches
+ *
+ * The purpose was never the exact number — it was noticing a suite that
+ * DISAPPEARS. A deletion, an accidental rename, a file that stops matching the
+ * pattern: every one of those drops the count and goes red against a floor
+ * exactly as it did against a pin.
+ *
+ * What a floor tolerates is addition, which is the only direction two writers
+ * ever collide on.
+ *
+ * ## Raising it
+ *
+ * Deliberately, when it has drifted meaningfully behind — not in every commit
+ * that adds a suite. Never lower it without naming, in the commit message,
+ * which suite went and why.
+ *
+ * A swap — one suite removed and another added in the same change — keeps the
+ * count level and passes. That is not new: an exact pin passed it too. The
+ * named-fixture assertion below is what guards the suites that matter most.
  */
-const EXPECTED_SUITE_COUNT = 278;
+const MINIMUM_SUITE_COUNT = 300;
 
 describe('the suite inventory is pinned', () => {
   const files = suiteFiles();
 
-  it(`runs exactly ${EXPECTED_SUITE_COUNT} suites`, () => {
-    // The message carries the delta, because "expected 181, got 180" without
-    // the names is the start of a search rather than the end of one.
-    expect({ count: files.length, files }).toMatchObject({ count: EXPECTED_SUITE_COUNT });
+  it(`runs at least ${MINIMUM_SUITE_COUNT} suites`, () => {
+    // The message carries the names, because "expected 300, got 299" without
+    // them is the start of a search rather than the end of one.
+    if (files.length < MINIMUM_SUITE_COUNT) {
+      expect({
+        count: files.length,
+        floor: MINIMUM_SUITE_COUNT,
+        missing: MINIMUM_SUITE_COUNT - files.length,
+        files,
+      }).toMatchObject({ count: MINIMUM_SUITE_COUNT });
+    }
+    expect(files.length).toBeGreaterThanOrEqual(MINIMUM_SUITE_COUNT);
+  });
+
+  /**
+   * The FROZEN INVENTORY — the half of this guard that actually catches a loss.
+   *
+   * Measured 2026-08-19: deleting an entire suite file left every assertion in
+   * this describe GREEN. The floor above is 300 and the tree holds 304, so a
+   * deletion is absorbed by headroom. The comment on MINIMUM_SUITE_COUNT claims
+   * "a deletion ... goes red against a floor exactly as it did against a pin";
+   * that is true only in the instant the count sits exactly on the floor, which
+   * is never, because the floor is raised deliberately and rarely.
+   *
+   * Names fix it without reintroducing the shared-counter collision that made
+   * the exact pin unworkable for two writers. ADDING a suite touches nothing
+   * here — a new name simply is not in the list. REMOVING one is red until the
+   * name is deleted from the JSON, which is the reviewable line in the diff
+   * that the exact pin was there to produce.
+   *
+   * Renaming is a delete plus an add, and reads correctly as such.
+   */
+  it('every suite that was frozen still exists', () => {
+    const frozen = JSON.parse(
+      fs.readFileSync(path.join(TESTS, 'suite-inventory.frozen.json'), 'utf8'),
+    ) as string[];
+    // Guard the guard: an empty or unreadable list must not pass vacuously.
+    expect(frozen.length).toBeGreaterThan(100);
+    const gone = frozen.filter((name) => !files.includes(name));
+    expect(gone).toEqual([]);
   });
 
   it('finds suites at all (positive fixture)', () => {

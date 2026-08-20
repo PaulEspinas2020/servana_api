@@ -271,6 +271,28 @@ export const V1_ERROR_STATUS = {
   // ── Provider ───────────────────────────────────────────────────────────────
   PROVIDER_ROLE_REQUIRED: 403,
 
+  /**
+   * Provider ACCOUNT STATE denials, emitted by `requireCapability`.
+   *
+   * Four codes rather than one, and that is the whole point. A suspended
+   * provider and an unapproved one both fail `canViewEarnings` and need
+   * different screens: one is temporary and has a status to watch, the other is
+   * a step to complete. `middleware/requireCapability.ts` already chooses
+   * between them in `denialFor`, and collapsing them onto `FORBIDDEN` here would
+   * throw that away at the last step — which is how a client ends up telling
+   * someone whose account is on hold that their session expired.
+   *
+   * They exist here because the v1 capability rung had no v1 vocabulary for what
+   * it denies with. `LEGACY_TO_V1_CODE` found no mapping, so the wrapper fell
+   * through to `originalJson` and answered in the LEGACY envelope — the exact
+   * defect removed from the other 85 non-public routes. Codes are append-only,
+   * so naming them is the additive fix rather than a breaking one.
+   */
+  PROVIDER_NOT_APPROVED: 403,
+  PROVIDER_SUSPENDED: 403,
+  PROVIDER_REJECTED: 403,
+  PROVIDER_DISABLED: 403,
+
   // ── Auth and identity ──────────────────────────────────────────────────────
   //
   // These mirror `src/errors/authErrors.ts`, which the legacy routes emit and

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { staticPageCspMiddleware } from "../middleware/securityHeaders";
 import { rateLimit } from "express-rate-limit";
 import { rateLimitBody } from "../helpers/rateLimitBody";
 import verifyAuth from "../middleware/verifyAuth";
@@ -141,6 +142,21 @@ const PAGE_HTML = `<!doctype html>
 </body>
 </html>`;
 
-accountDeletionPageRouter.get("/account-deletion", (_req, res) => {
-  res.type("html").send(PAGE_HTML);
-});
+/**
+ * The one HTML document this API serves gets a real CSP (TAB 05).
+ *
+ * The API itself sends none — a policy on a JSON body protects nothing and
+ * misleads the next reader. This page is different: it is opened directly in a
+ * browser by a Google Play reviewer, it carries an inline script, and it is the
+ * only surface here where script injection would mean anything.
+ *
+ * The hashes are computed from `PAGE_HTML` itself, so editing the page cannot
+ * leave the policy behind — see `staticPageCsp`.
+ */
+accountDeletionPageRouter.get(
+  "/account-deletion",
+  staticPageCspMiddleware(PAGE_HTML),
+  (_req, res) => {
+    res.type("html").send(PAGE_HTML);
+  },
+);

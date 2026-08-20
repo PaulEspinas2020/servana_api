@@ -35,6 +35,7 @@ import { handlers as actionHandlers } from '../src/api/v1/domains/bookingActions
 import { EXPERIENCE_CAPABILITIES } from '../src/services/booking/experiencePolicy';
 import { staleFiles } from '../scripts/generate-booking-docs';
 import { buildMountedRoutes } from '../scripts/lib/routeTable';
+import { loadManifests } from '../scripts/reconcile-client-manifests';
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 
@@ -312,12 +313,23 @@ describe('the caller matrix and its live aliases', () => {
     expect(retiring).toEqual([]);
   });
 
-  it('no experience endpoint claims a client is migrated before it is', () => {
-    // A `migrated` marking is a promise to a client team. Nothing in this tab
-    // has shipped to a client yet, so every surface is legacy, planned or n/a.
+  it('claims a migration only for a client that published a manifest', () => {
+    /**
+     * A `migrated` marking is a promise to a client team, and this asserted that
+     * no experience endpoint made one — correct while no client repository was
+     * in scope (TAB 04 changed that).
+     *
+     * Provider Web now publishes a generated manifest with a file:line per call
+     * site, and it genuinely calls several of these endpoints. The promise is
+     * still guarded: a client with no manifest cannot be marked migrated, because
+     * nothing in this repository has verified it.
+     */
+    const proven = new Set(loadManifests().map((m) => m.client));
     for (const id of EXPERIENCE_IDS) {
       const entry = V1_CONTRACT.find((e) => e.id === id)!;
-      expect(Object.values(entry.callers)).not.toContain('migrated');
+      for (const [client, state] of Object.entries(entry.callers)) {
+        if (state === 'migrated') expect(proven.has(client)).toBe(true);
+      }
     }
   });
 

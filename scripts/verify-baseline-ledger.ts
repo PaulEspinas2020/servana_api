@@ -39,7 +39,7 @@
 import { migrationInputs, baselineInput } from './lib/schemaBaseline';
 import { replay, splitStatements, type SchemaCatalog } from './lib/schemaModel';
 
-import { declaresDestructive } from './lib/migrationSafety';
+import { declaresDestructive, provesRemoval, REMOVES_MARKER } from './lib/migrationSafety';
 type Verdict = 'present' | 'ABSENT' | 'no-schema-effect';
 
 interface MigrationCheck {
@@ -149,7 +149,37 @@ export const checkAll = (): MigrationCheck[] => {
      * ABSENT, which is the honest answer: its effect is not in the baseline.
      */
     if (declaresDestructive(sql)) {
-      return { file, verdict: 'ABSENT' as Verdict, expects, missing: ['(removal — not provable from the baseline)'] };
+      /**
+       * A removal can prove itself, if it says what it removed.
+       *
+       * The blanket ABSENT this replaced was the safe answer while the baseline
+       * still carried the objects 037 drops. Once the baseline was recaptured
+       * from a production that HAD applied it (2026-08-19, 132 tables), ABSENT
+       * became permanently wrong: no recapture could ever clear it, so the live
+       * fresh-database gate reported "migrations still pending: 1" on every run
+       * and could not go green again. A gate that cannot be satisfied is not a
+       * gate.
+       *
+       * `provesRemoval` asks the opposite question — are the declared objects
+       * GONE while the declared anchors are PRESENT — and fails closed on every
+       * ambiguity: no declaration, no anchor, an unparseable pattern, or one
+       * still matching all resolve to ABSENT with the reason attached.
+       */
+      const proof = provesRemoval(sql, baseline.sql);
+      if (proof.proven) {
+        return {
+          file,
+          verdict: 'present' as Verdict,
+          expects: [`(removal proven absent from the baseline)`],
+          missing: [],
+        };
+      }
+      return {
+        file,
+        verdict: 'ABSENT' as Verdict,
+        expects,
+        missing: proof.reasons.length ? proof.reasons : [`(removal — declare ${REMOVES_MARKER} to make it provable)`],
+      };
     }
 
     if (!expects.length) {

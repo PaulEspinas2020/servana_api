@@ -273,4 +273,46 @@ describe('the log schema is a schema', () => {
     expect(statusClass(404)).toBe('4xx');
     expect(statusClass(503)).toBe('5xx');
   });
+
+  /**
+   * TAB 10 names FOUR classes that must never reach a log: token, signed URL,
+   * phone number and document identifier. Two of them — token and phone — were
+   * already pinned above. Signed URLs and document identifiers were not, and
+   * they are the two that matter most for a provider surface: the document
+   * preview endpoint mints short-lived signed URLs and marks the response
+   * no-store, and a document identifier names a piece of somebody's identity
+   * paperwork.
+   *
+   * Both are handled correctly today, but only BY ACCIDENT of the allow-list:
+   * they are absent from SAFE_ENTITY_KEYS, so `redact` drops them. Nothing
+   * asserted it. Adding `documentId` or `previewUrl` to SAFE_ENTITY_KEYS — a
+   * plausible thing to do while debugging a document flow — would have leaked
+   * them with no test going red.
+   */
+  it('never logs a signed URL, under any of the key names one arrives as', () => {
+    const signed = 'https://storage.googleapis.com/servana/doc-1.jpg'
+      + '?X-Goog-Signature=abc123&X-Goog-Expires=900';
+    for (const key of ['signedUrl', 'previewUrl', 'fileUrl', 'downloadUrl', 'url']) {
+      const out = redact({ [key]: signed });
+      expect(JSON.stringify(out)).not.toContain('X-Goog-Signature');
+      expect(JSON.stringify(out)).not.toContain(signed);
+    }
+  });
+
+  it('never logs a document identifier', () => {
+    for (const key of ['documentId', 'requirementId', 'evidenceId', 'attachmentId']) {
+      const out = redact({ [key]: 'doc-8813' });
+      expect(out[key]).toBeUndefined();
+      expect(JSON.stringify(out)).not.toContain('doc-8813');
+    }
+  });
+
+  it('still lets the safe identifiers through (positive fixture)', () => {
+    // Without this, a `redact` that returned {} for everything would satisfy
+    // every assertion above while making the logs useless.
+    const out = redact({ bookingId: 84213, conversationId: 'c-77', documentId: 'doc-1' });
+    expect(out.bookingId).toBe(84213);
+    expect(out.conversationId).toBe('c-77');
+    expect(out.documentId).toBeUndefined();
+  });
 });

@@ -2,6 +2,7 @@
 import { db } from '../config';
 import { providerShareOf, servanaShareOf, SERVANA_COMMISSION_RATE } from './revenueSplit';
 import { auditFire } from './adminAuditService';
+import { approveRefundSql } from './finance/refundApprovalSql';
 import { toCamel } from '../helpers/idGenerator';
 import {
   ensureFinanceLedgerSchema,
@@ -9,6 +10,10 @@ import {
   recordLedgerEventBestEffort,
 } from './finance/financeLedger';
 import { LEDGER_INTEGRITY_CHECKS } from './finance/financeReconciliationService';
+import {
+  processPendingDisbursements,
+  type DuePayoutRunSummary,
+} from './disbursement.service';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -744,6 +749,93 @@ export async function releasePayoutHold(
   });
 }
 
+/**
+ * The due-payout batch, run by an admin on demand — with a name and a record.
+ *
+ * ## Why this exists (TAB 01, F-01)
+ *
+ * `POST /api/admin/disbursements/trigger` called
+ * `disbursementService.processPendingDisbursements()` behind
+ * `verifyAuth + verifyRoles([1])` and nothing else. It releases every payout
+ * that is due. No named permission was consulted and no audit record was
+ * written, so the single most consequential money action on the platform was
+ * also the only one that left nothing behind naming who did it.
+ *
+ * The sharpest part is that the control had already been designed. The
+ * permission catalogue has carried
+ *
+ *   payouts.trigger_due_run — "Trigger Due Payout Run",
+ *   action_type 'system', risk_level 'critical', is_dangerous: true
+ *
+ * since it was written. No route ever asked for it. Somebody identified this
+ * capability as dangerous, named it, flagged it, and the route that performs it
+ * never consulted the flag — which is why F-01 is a bypass rather than an
+ * absence, and why the fix is to connect an existing control rather than to
+ * invent one.
+ *
+ * ## Why it lives here and not in disbursement.service.ts
+ *
+ * `adminFinanceService` is the canonical ADMIN money surface: permissioned,
+ * audited, and the one the portal calls. `disbursement.service` owns the
+ * mechanics and is shared with the hourly cron, which has no admin actor to
+ * name. Putting the audit here keeps one actor-bearing entry point without
+ * making the scheduler pretend to be a person.
+ */
+export async function runDuePayoutBatch(
+  adminUid: string,
+  adminName: string | null,
+  requestId: string | null
+): Promise<DuePayoutRunSummary> {
+  let summary: DuePayoutRunSummary;
+
+  try {
+    summary = await processPendingDisbursements();
+  } catch (err) {
+    /**
+     * A failed run is audited too.
+     *
+     * An audit trail that records only the runs that worked answers "who moved
+     * money" and cannot answer "who tried". For a batch that walks every due
+     * payout, a half-completed run is exactly the event an investigation needs
+     * to find, so the attempt is recorded before the error is re-raised.
+     */
+    auditFire({
+      action: 'finance_payout_due_run_triggered',
+      actionCategory: 'payment',
+      outcome: 'failed',
+      actorUid: adminUid,
+      actorType: 'admin',
+      actorDisplayName: adminName,
+      entityType: 'disbursement',
+      entityId: 'due-run',
+      requestId,
+      source: 'admin_portal',
+      metadata: { error: err instanceof Error ? err.message : String(err) },
+    });
+    throw err;
+  }
+
+  auditFire({
+    action: 'finance_payout_due_run_triggered',
+    actionCategory: 'payment',
+    outcome: 'success',
+    actorUid: adminUid,
+    actorType: 'admin',
+    actorDisplayName: adminName,
+    entityType: 'disbursement',
+    entityId: 'due-run',
+    requestId,
+    source: 'admin_portal',
+    metadata: {
+      selected: summary.selected,
+      attempted: summary.attempted,
+      threw: summary.threw,
+    },
+  });
+
+  return summary;
+}
+
 export async function retryPayout(
   disbursementId: number,
   adminUid: string,
@@ -961,20 +1053,84 @@ export async function getRefundReview(refundId: number): Promise<unknown> {
   return r.rows[0] ? toCamel(r.rows[0]) : null;
 }
 
+/**
+ * May one admin both request and approve the same refund?
+ *
+ * ## Why this cannot be expressed as a permission
+ *
+ * `refunds.approve` declares `requires: ['refunds.review.open']`, so the
+ * permission closure GUARANTEES that everyone who can approve a refund can also
+ * open one. `refunds.mark_processed` in turn requires `refunds.approve`. A
+ * single admin therefore holds open -> approve -> processed by construction, and
+ * no arrangement of grants can separate them: the `requires` chain, which exists
+ * to stop somebody holding a power without its prerequisites, here forces the
+ * segregation-of-duties failure rather than preventing it.
+ *
+ * That is why the rule lives in the executor. It is not a button to hide — the
+ * portal is one of several ways to reach this service, and a control that only
+ * exists in a template is a control that does not exist.
+ *
+ * ## Default enforced, with an escape hatch that announces itself
+ *
+ * Money leaving the platform on one person's say-so is the case this prevents,
+ * so the safe default is to refuse. But a refusal nobody anticipated can also
+ * strand a customer's refund out of hours, and a redeploy is not an incident
+ * response. `REFUND_ALLOW_SELF_APPROVAL=true` lifts it, and every approval taken
+ * under it is audited as such — an escape hatch that leaves no trace is
+ * indistinguishable from an absent control.
+ */
+export function selfApprovalAllowed(): boolean {
+  return String(process.env.REFUND_ALLOW_SELF_APPROVAL ?? '').toLowerCase() === 'true';
+}
+
 export async function approveRefund(
   refundId: number,
   adminUid: string,
   adminName: string | null,
   requestId: string | null
 ): Promise<void> {
-  const res = await dbQuery.query(
-    `UPDATE ${s}.finance_refund_reviews
-     SET status='approved', reviewed_by=$2, reviewed_at=NOW(), updated_at=NOW()
-     WHERE id=$1 AND status='requested'
-     RETURNING id, booking_id, amount, payout_reversal_needed`,
-    [refundId, adminUid]
-  );
+  const enforceSegregation = !selfApprovalAllowed();
+
+  /**
+   * The segregation guard is part of the UPDATE, not a read before it.
+   *
+   * A SELECT-then-UPDATE would leave a window in which the row changes between
+   * the two, and the check would pass against a state that no longer holds.
+   * Putting `requested_by <> $2` in the WHERE clause makes the refusal and the
+   * write the same atomic act.
+   *
+   * The cost is that zero rows no longer says WHY, so the diagnostic read below
+   * runs only on failure — where the row is no longer being written and a
+   * second look is free of consequence.
+   */
+  const res = await dbQuery.query(approveRefundSql(s, enforceSegregation), [refundId, adminUid]);
   if (!res.rows.length) {
+    const diagnostic = await dbQuery.query(
+      `SELECT status, requested_by FROM ${s}.finance_refund_reviews WHERE id=$1 LIMIT 1`,
+      [refundId]
+    );
+    const row = diagnostic.rows[0];
+    if (enforceSegregation && row && row.status === 'requested' && row.requested_by === adminUid) {
+      // Recorded, not merely refused. An admin trying to approve their own
+      // refund request is a thing somebody should be able to look up later,
+      // whether it was a misunderstanding or an attempt.
+      auditFire({
+        action: 'finance_refund_self_approval_refused',
+        actionCategory: 'payment',
+        outcome: 'failed',
+        actorUid: adminUid,
+        actorDisplayName: adminName,
+        entityType: 'refund_review',
+        entityId: String(refundId),
+        requestId,
+        source: 'admin_portal',
+        metadata: { requestedBy: row.requested_by },
+      });
+      throw Object.assign(
+        new Error('A refund must be approved by someone other than the admin who requested it'),
+        { code: 'FORBIDDEN' }
+      );
+    }
     throw Object.assign(new Error('Refund review not found or not in requested status'), { code: 'BUSINESS_RULE' });
   }
   const rr = res.rows[0];
@@ -989,7 +1145,15 @@ export async function approveRefund(
     entityId: String(refundId),
     requestId,
     source: 'admin_portal',
-    metadata: { bookingId: rr.booking_id, amount: rr.amount, payoutReversalNeeded: rr.payout_reversal_needed },
+    metadata: {
+      bookingId: rr.booking_id,
+      amount: rr.amount,
+      payoutReversalNeeded: rr.payout_reversal_needed,
+      // Present only when the control was lifted, so a reader scanning
+      // approvals sees the exceptional ones rather than having to know which
+      // configuration was live at the time.
+      ...(enforceSegregation ? {} : { selfApprovalAllowedByConfig: true }),
+    },
   });
 }
 
@@ -1072,6 +1236,82 @@ export async function markRefundProcessed(
     requestId,
     source: 'admin_portal',
     metadata: { bookingId: rr.booking_id, amount: rr.amount, refundReference },
+  });
+}
+
+/**
+ * The terminal this lifecycle did not have.
+ *
+ * `requested -> approved -> processed` was the only path out. A refund the
+ * processor refuses — a closed GCash wallet, a reversed card, a bank that
+ * rejects the transfer — had nowhere to go, so the row stayed `approved`
+ * indefinitely. That is worse than untidy:
+ *
+ *   * `openRefundReview` refuses a second review while one is `requested` or
+ *     `approved`, so a stuck row BLOCKS any retry for that booking. The
+ *     customer's refund cannot be re-opened by anyone.
+ *   * the finance summary counts `requested` and `approved` as open work, so a
+ *     dead row is indistinguishable from one awaiting action.
+ *
+ * `failed` is deliberately terminal and separate from `rejected`. Rejected
+ * means a human decided against the refund; failed means everyone agreed and
+ * the money did not move. Collapsing them would lose the only distinction that
+ * tells an operator whether to try again.
+ */
+export async function markRefundFailed(
+  refundId: number,
+  failureReason: string,
+  adminUid: string,
+  adminName: string | null,
+  requestId: string | null
+): Promise<void> {
+  const res = await dbQuery.query(
+    `UPDATE ${s}.finance_refund_reviews
+     SET status='failed', rejection_reason=$2, reviewed_by=COALESCE(reviewed_by,$3), updated_at=NOW()
+     WHERE id=$1 AND status='approved'
+     RETURNING id, booking_id, amount`,
+    [refundId, failureReason, adminUid]
+  );
+  if (!res.rows.length) {
+    /**
+     * Missing and wrong-status are different answers, so they are separated.
+     *
+     * A single "not found or not in approved status" forces the caller to guess,
+     * and forces the transport layer to pick one HTTP code for two situations —
+     * which is how a stale refund ends up reported as a 404 that sends an
+     * operator looking for a row that is sitting right there. The read happens
+     * only on the failure path, where nothing is being written and a second look
+     * costs nothing.
+     */
+    const diagnostic = await dbQuery.query(
+      `SELECT status FROM ${s}.finance_refund_reviews WHERE id=$1 LIMIT 1`,
+      [refundId]
+    );
+    if (!diagnostic.rows.length) {
+      throw Object.assign(new Error('Refund review not found'), { code: 'NOT_FOUND' });
+    }
+    throw Object.assign(
+      new Error(`Only an approved refund can be marked failed; this one is ${diagnostic.rows[0].status}`),
+      { code: 'CONFLICT' }
+    );
+  }
+  const rr = res.rows[0];
+
+  // No payments row is touched. Nothing was refunded, so recording a refunded
+  // amount here would state that money moved when it did not — the defect this
+  // transition exists to make recordable rather than one to introduce.
+  auditFire({
+    action: 'finance_refund_failed',
+    actionCategory: 'payment',
+    outcome: 'failed',
+    actorUid: adminUid,
+    actorDisplayName: adminName,
+    entityType: 'refund_review',
+    entityId: String(refundId),
+    reason: failureReason,
+    requestId,
+    source: 'admin_portal',
+    metadata: { bookingId: rr.booking_id, amount: rr.amount },
   });
 }
 

@@ -1,12 +1,12 @@
 import { Request, Response, NextFunction } from "express";
-import { getFirebaseAdmin } from "./firebaseApp";
+import { firebaseAdmin } from "./firebaseApp";
+import { lazyValue } from "./lazyValue";
 import { tempId } from "../config";
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
 
-// Lazy: resolving the Auth service at module scope made importing this file
-// require a live Admin credential. getAuth() memoises per app internally and
-// getFirebaseAdmin() memoises the app, so calling this per request is cheap.
-const defaultAuthAdmin = () => getAuthAdmin(getFirebaseAdmin());
+// Deferred: `getAuthAdmin` resolves the credential eagerly, which made
+// importing this module — and so the composed app — require a live key.
+const defaultAuthAdmin = lazyValue(() => getAuthAdmin(firebaseAdmin));
 
 /**
  * Soft auth middleware: if an Authorization header or __session cookie is present,
@@ -37,7 +37,7 @@ const verifyAuthOptional = async (req: Request, _res: Response, next: NextFuncti
   if (!idToken) return next();
 
   try {
-    const decoded = await defaultAuthAdmin().verifyIdToken(idToken);
+    const decoded = await defaultAuthAdmin.verifyIdToken(idToken);
     req.user = decoded;
   } catch {
     // Invalid / expired token — treat as unauthenticated (don't reject)

@@ -105,6 +105,74 @@ describe('the composed application serves /api/v1', () => {
     }
   });
 
+  /**
+   * TAB 02's gate: the recall lever answers with NO credential.
+   *
+   * Asserted through the composed application rather than the isolated router
+   * because the thing being proven is that nothing mounted in app.ts — an
+   * authentication middleware running before routing, a parity rewrite, a proxy
+   * shim — stands between a credential-less client and this answer. The client
+   * this exists for may be too old to authenticate, and it fails closed: if this
+   * request does not come back readable, the app blocks itself.
+   */
+  it('serves the client recall lever with no credential at all', async () => {
+    const res = await request(base, 'GET', '/api/v1/client-config');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toMatch(/max-age=\d+/);
+
+    const data = (res.body as { data: Record<string, any> }).data;
+    for (const platform of ['ios', 'android']) {
+      // Parseable by the client's own check, which is the whole contract.
+      expect(data.platforms[platform].minimumSupported).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(data.platforms[platform].latestAvailable).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(typeof data.platforms[platform].message).toBe('string');
+    }
+  });
+
+  it('sends an Authorization header nowhere near the recall lever', async () => {
+    // A garbage credential must not turn a 200 into a 401. An endpoint that
+    // refuses a BAD token still refuses the client being recalled, which
+    // commonly holds a stale one.
+    const res = await request(base, 'GET', '/api/v1/client-config', {
+      headers: { Authorization: 'Bearer not-a-real-token' },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  /**
+   * TAB 04: the root `/health` that used to 404.
+   *
+   * That 404 produced a wrong finding — a hand-over read it as "the
+   * build-provenance endpoint is not deployed", when provenance was answering
+   * at /api/v1/health the whole time. It was also an operational hazard on its
+   * own: uptime checkers and load balancers default to /health, so one left on
+   * its defaults reports this service down while it serves perfectly.
+   */
+  it('answers /health at the root, and points at where provenance lives', async () => {
+    const res = await request(base, 'GET', '/health');
+    expect(res.status).toBe(200);
+    const body = res.body as Record<string, string>;
+    expect(body.status).toBe('alive');
+    // The pointer is the part that stops the misreading recurring: the next
+    // person probing /health for a commit is told the address rather than
+    // meeting a 404 and concluding something from it.
+    expect(body.provenance).toBe('/api/v1/health');
+    expect(body.liveness).toBe('/healthz');
+    expect(body.readiness).toBe('/readyz');
+  });
+
+  it('serves provenance only at /api/v1/health, not duplicated at the root', async () => {
+    // Provenance is contract-governed — declared in V1_CONTRACT, shaped by the
+    // BuildInfo schema, generated into the docs. A second copy outside that
+    // namespace would be contract data with none of the machinery that keeps it
+    // honest.
+    const root = await request(base, 'GET', '/health');
+    expect(root.body).not.toHaveProperty('commit');
+    const v1 = await request(base, 'GET', '/api/v1/health');
+    expect(v1.status).toBe(200);
+    expect((v1.body as { data: Record<string, unknown> }).data).toHaveProperty('commit');
+  });
+
   it('stamps a request id on the response, for every route', async () => {
     // correlationMiddleware is mounted in app.ts and nowhere near the v1
     // router, so this is only observable through the composed application.

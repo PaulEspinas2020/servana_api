@@ -1,0 +1,310 @@
+{
+  "client": "providerWeb",
+  "repository": "PaulEspinas2020/servana_service-provider",
+  "generatedBy": "scripts/generate-canonical-call-manifest.mjs",
+  "note": "Generated from source. Every entry is a canonical /api/v1 path this portal calls, with the file:line of each call site. The backend derives callers.providerWeb from this file rather than maintaining it by hand.",
+  "endpoints": [
+    {
+      "method": "post",
+      "path": "/v1/auth/logout",
+      "cites": [
+        "src/app/core/api/provider-auth-api.service.ts:283"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/bookings/:param/additional-work",
+      "cites": [
+        "src/app/core/api/provider-additional-work-api.service.ts:261"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/bookings/:param/disputes",
+      "cites": [
+        "src/app/core/api/provider-jobs-api.service.ts:542"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/bookings/:param/disputes",
+      "cites": [
+        "src/app/core/api/provider-jobs-api.service.ts:586"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/bookings/:param/otp/status",
+      "cites": [
+        "src/app/core/api/provider-jobs-api.service.ts:365"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/bookings/:param/otp/verify",
+      "cites": [
+        "src/app/core/api/provider-jobs-api.service.ts:341"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/bookings/:param/reschedule",
+      "cites": [
+        "src/app/core/api/provider-jobs-api.service.ts:516"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/bookings/:param/tracking",
+      "cites": [
+        "src/app/core/api/provider-jobs-api.service.ts:485"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/conversations",
+      "cites": [
+        "src/app/core/api/provider-chat-api.service.ts:202",
+        "src/app/core/api/provider-chat-api.service.ts:221"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/conversations",
+      "cites": [
+        "src/app/core/api/provider-chat-api.service.ts:273"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/conversations/:param",
+      "cites": [
+        "src/app/core/api/provider-chat-api.service.ts:239"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/conversations/:param/messages",
+      "cites": [
+        "src/app/core/api/provider-chat-api.service.ts:294",
+        "src/app/core/api/provider-chat-api.service.ts:323"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/conversations/:param/messages",
+      "cites": [
+        "src/app/core/api/provider-chat-api.service.ts:394"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/conversations/:param/read",
+      "cites": [
+        "src/app/core/api/provider-chat-api.service.ts:467"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/me",
+      "cites": [
+        "src/app/core/api/provider-auth-api.service.ts:232"
+      ]
+    },
+    {
+      "method": "delete",
+      "path": "/v1/me/devices",
+      "cites": [
+        "src/app/core/api/provider-settings-api.service.ts:107",
+        "src/app/core/api/provider-settings-api.service.ts:120"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/me/devices",
+      "cites": [
+        "src/app/core/api/provider-settings-api.service.ts:92"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/me/notification-preferences",
+      "cites": [
+        "src/app/core/api/provider-notification-preferences-api.service.ts:64"
+      ]
+    },
+    {
+      "method": "patch",
+      "path": "/v1/me/notification-preferences",
+      "cites": [
+        "src/app/core/api/provider-notification-preferences-api.service.ts:93"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/notifications",
+      "cites": [
+        "src/app/core/api/provider-notifications-api.service.ts:484"
+      ]
+    },
+    {
+      "method": "delete",
+      "path": "/v1/notifications/:param",
+      "cites": [
+        "src/app/core/api/provider-notifications-api.service.ts:564"
+      ]
+    },
+    {
+      "method": "patch",
+      "path": "/v1/notifications/:param/read",
+      "cites": [
+        "src/app/core/api/provider-notifications-api.service.ts:536"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/notifications/read-all",
+      "cites": [
+        "src/app/core/api/provider-notifications-api.service.ts:552"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/notifications/unread-count",
+      "cites": [
+        "src/app/core/api/provider-notifications-api.service.ts:505"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/documents",
+      "cites": [
+        "src/app/core/api/provider-requirements-api.service.ts:193",
+        "src/app/core/api/provider-requirements-api.service.ts:216"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/documents",
+      "cites": [
+        "src/app/core/api/provider-upload-api.service.ts:146"
+      ]
+    },
+    {
+      "method": "delete",
+      "path": "/v1/provider/documents/:param",
+      "cites": [
+        "src/app/core/api/provider-upload-api.service.ts:228"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/documents/:param/preview",
+      "cites": [
+        "src/app/core/api/provider-upload-api.service.ts:204"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/earnings/payouts",
+      "cites": [
+        "src/app/core/api/provider-earnings-api.service.ts:282",
+        "src/app/core/api/provider-earnings-api.service.ts:297"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/earnings/summary",
+      "cites": [
+        "src/app/core/api/provider-earnings-api.service.ts:225"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/earnings/transactions",
+      "cites": [
+        "src/app/core/api/provider-earnings-api.service.ts:128",
+        "src/app/core/api/provider-earnings-api.service.ts:148",
+        "src/app/core/api/provider-earnings-api.service.ts:254"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/jobs",
+      "cites": [
+        "src/app/core/api/provider-jobs-api.service.ts:186",
+        "src/app/core/api/provider-jobs-api.service.ts:604"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/jobs/:param",
+      "cites": [
+        "src/app/core/api/provider-jobs-api.service.ts:207",
+        "src/app/core/api/provider-live-job-api.service.ts:49"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/jobs/:param/accept",
+      "cites": [
+        "src/app/core/api/provider-jobs-api.service.ts:257"
+      ],
+      "expandedFrom": "/v1/provider/jobs/:param/:param"
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/jobs/:param/arrived",
+      "cites": [
+        "src/app/core/api/provider-jobs-api.service.ts:257"
+      ],
+      "expandedFrom": "/v1/provider/jobs/:param/:param"
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/jobs/:param/cancel",
+      "cites": [
+        "src/app/core/api/provider-jobs-api.service.ts:435"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/jobs/:param/complete",
+      "cites": [
+        "src/app/core/api/provider-jobs-api.service.ts:257",
+        "src/app/core/api/provider-live-job-api.service.ts:71"
+      ],
+      "expandedFrom": "/v1/provider/jobs/:param/:param"
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/jobs/:param/decline",
+      "cites": [
+        "src/app/core/api/provider-jobs-api.service.ts:257"
+      ],
+      "expandedFrom": "/v1/provider/jobs/:param/:param"
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/jobs/:param/en-route",
+      "cites": [
+        "src/app/core/api/provider-jobs-api.service.ts:257"
+      ],
+      "expandedFrom": "/v1/provider/jobs/:param/:param"
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/profile",
+      "cites": [
+        "src/app/core/api/provider-profile-api.service.ts:123"
+      ]
+    },
+    {
+      "method": "patch",
+      "path": "/v1/provider/profile",
+      "cites": [
+        "src/app/core/api/provider-profile-api.service.ts:170"
+      ]
+    }
+  ]
+}

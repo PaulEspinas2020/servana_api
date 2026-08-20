@@ -1,14 +1,19 @@
 import express from 'express';
 import verifyAuth from '../middleware/verifyAuth';
 import verifyRoles from '../middleware/verifyRoles';
+import { adminRateLimit } from '../middleware/adminRateLimit';
 import { requirePermission, requireSuperAdmin } from '../middleware/requirePermission';
 import * as ctrl from '../controllers/adminPermissionController';
 
 const router = express.Router();
-const adminOnly = [verifyAuth, verifyRoles([1])];
+const adminOnly = [verifyAuth, verifyRoles([1]), adminRateLimit];
 
 // ── Own permissions (no permission check — every admin can call this) ─────────
-router.get('/admin/me/permissions', verifyAuth, ctrl.getMyPermissions);
+//  but no : every admin may read their OWN
+// grants, so there is no permission to demand. A throttle is still warranted —
+// it is an authenticated admin endpoint, and the deny-by-default question for a
+// new admin route is "why is this NOT limited".
+router.get('/admin/me/permissions', verifyAuth, adminRateLimit, ctrl.getMyPermissions);
 
 // ── Permission definitions (all admins can view) ──────────────────────────────
 router.get('/admin/permission-definitions', ...adminOnly, ctrl.getPermissionDefinitions);
@@ -31,8 +36,14 @@ router.post('/admin/admin-users/:adminUid/resend-invite',
   ...adminOnly, requireSuperAdmin, ctrl.resendAdminInvite);
 
 // ── Bootstrap Super Admin (any authenticated user; service enforces first-caller-wins) ───
+// STRICTEST tier, and it is not merely an admin route: this grants SUPER ADMIN
+// to whoever calls it first. The service enforces first-caller-wins, so the
+// window is narrow — but an unthrottled endpoint whose prize is total
+// authority is one an attacker can race for free, and the throttle is what
+// makes racing it cost something. Its path is /admin/admin-users, which is why
+// that prefix is on ADMIN_SENSITIVE_PREFIXES.
 router.post('/admin/admin-users/bootstrap-super-admin',
-  verifyAuth, ctrl.bootstrapSuperAdmin);
+  verifyAuth, adminRateLimit, ctrl.bootstrapSuperAdmin);
 
 // ── Admin user detail ─────────────────────────────────────────────────────────
 router.get('/admin/admin-users/:adminUid',

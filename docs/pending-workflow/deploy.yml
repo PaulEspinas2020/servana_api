@@ -1,0 +1,393 @@
+name: Deploy Servana API (Prod)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  # THE GATE, AS A JOB (TAB 03, F-03).
+  #
+  # `release-gate.yml` used to run as an independent workflow on the same
+  # trigger. Two workflows firing on one push run in parallel and cannot express
+  # a dependency, so on d4b0150 the gate FAILED (run 32119165094) and this
+  # deploy SUCCEEDED (run 32119165101) — the red gate shipped to production and
+  # nothing in the pipeline objected.
+  #
+  # Calling it as a job is what makes `needs:` below meaningful. A failed gate
+  # now leaves `deploy` SKIPPED rather than merely embarrassed.
+  # DISABLED AT THE origin/main MERGE, and this is the half of TAB 03 that the
+  # merge could not keep. The wiring above was written when release-gate.yml ran
+  # on every push. origin/main 463f963 then made it MANUAL ONLY, because this
+  # repo's GitHub Actions credit is exhausted and is not being topped up (owner
+  # decision, 2026-08-19).
+  #
+  # Both halves are individually correct and together they stop production
+  # deploying: `release-gate.yml` is `runs-on: ubuntu-latest`, so calling it here
+  # queues a GitHub-hosted job that cannot start, and `needs: [release-gate]`
+  # then leaves `deploy` SKIPPED. Every push to main is a production deploy on
+  # the self-hosted runner, so the merged pipeline would have deployed nothing at
+  # all — while origin/main's own note states "deploy.yml is unaffected and still
+  # deploys on push to main". Honouring that is why this is commented and not
+  # deleted.
+  #
+  # The gate has NOT gone away, it moved: scripts/hooks/pre-push runs the full
+  # `npm run verify` before a push to main leaves the machine. That is weaker in
+  # one specific way, named in the hook itself — it passes with credentials
+  # present, where 4 suites fail without them.
+  #
+  # RESTORE BOTH LINES TOGETHER, and only once Actions credit exists. The other
+  # half is the `workflow_call:` trigger kept in release-gate.yml for this.
+  #
+  # RE-SUSPENDED 2026-08-19 on the owner's direct confirmation that the account
+  # is out of Actions credit. `release-gate.yml` is `runs-on: ubuntu-latest`, so
+  # calling it here queues a GitHub-hosted job that will not start, and the
+  # `needs:` below would then leave `deploy` SKIPPED — i.e. no production deploy
+  # at all. RESTORE BOTH LINES TOGETHER, and only once credit exists.
+  #
+  # release-gate:
+  #   uses: ./.github/workflows/release-gate.yml
+  #   secrets: inherit
+
+  deploy:
+    # needs: [release-gate]   <- restore with the job above, not on its own.
+    runs-on: [self-hosted, Linux, x64]
+    timeout-minutes: 12
+
+    # Binds the deploy to a named GitHub environment so each run produces a
+    # deployment record. The REQUIRED REVIEWER is configured in repository
+    # settings, not here — declaring the environment is the half that lives in
+    # the repo; approving it is the half that lives in GitHub. Until the
+    # reviewer is added this changes nothing about who can deploy, and that is
+    # stated rather than implied. See docs/MASTER_TODO_MANUAL_TASKS.md 03.2.
+    environment: production
+
+    steps:
+      - name: Fix workspace permissions
+        run: |
+          sudo chown -R github-runner:github-runner "$GITHUB_WORKSPACE" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Copy secrets
+        run: |
+          cp /home/github-runner/env/servana_api.env .env
+          chmod 600 .env
+          cp /home/github-runner/env/servana-serviceAccountKey.json servana-serviceAccountKey.json
+          chmod 600 servana-serviceAccountKey.json
+          # Document uploads must have an operational scanner. Until a managed
+          # scanner is configured, explicitly enable the repository's built-in
+          # signature/content scanner instead of letting every upload fail 503.
+          if ! grep -q '^PROVIDER_DOCUMENT_SCANNER_URL=.' .env || ! grep -q '^PROVIDER_DOCUMENT_SCANNER_TOKEN=.' .env; then
+            grep -q '^ALLOW_BASELINE_DOCUMENT_SCAN=true$' .env || echo 'ALLOW_BASELINE_DOCUMENT_SCAN=true' >> .env
+            echo '::warning::Managed document scanner is not configured; using the built-in scanner.'
+          fi
+
+      # Fails loudly rather than silently authenticating with a burned password.
+      # The literal fallback that used to live on the PGPASSWORD line below was
+      # the production Postgres password in plaintext, committed and pushed.
+      # 9e06a73 ("fallback DB_PASSWORD so migrations run before secret is
+      # configured") added it, undoing ce92fb5 ("DB password to secret") — so
+      # the hardening was reverted for convenience and then forgotten.
+      - name: Require DB_PASSWORD secret
+        run: |
+          if [ -z "${{ secrets.DB_PASSWORD }}" ]; then
+            echo "::error::DB_PASSWORD repo secret is not set."
+            echo "Set it under Settings > Secrets and variables > Actions."
+            echo "There is deliberately no fallback: the previous literal was"
+            echo "the production password in plaintext and is now rotated."
+            exit 1
+          fi
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "npm"
+
+      - name: Install dependencies
+        # --include=dev explicitly: jest and typescript are devDependencies, and
+        # if the runner's environment carries NODE_ENV=production then `npm ci`
+        # silently omits them — the verify step below would then fail on a
+        # missing binary and read as a broken test suite rather than a missing
+        # install. Harmless when NODE_ENV is unset, which it is today.
+        run: npm ci --prefer-offline --include=dev
+
+      # The 1344 tests in this repo had never gated a deploy. The pipeline went
+      # checkout -> secrets -> migrations -> build -> restart, so a change that
+      # broke every test still shipped, and schema changes were applied to
+      # production before the code was even compiled.
+      #
+      # `verify` is typecheck + jest --runInBand --ci: ~18s, deterministic, no
+      # database and no network. Cheap enough that there is no argument for
+      # skipping it, and it runs BEFORE the migration step below so a failure
+      # leaves production completely untouched.
+      # The FULL gate does not run here, and that is deliberate.
+      #
+      # `npm run verify` died twice on this host with exit 134 — SIGABRT, which
+      # for Node means the V8 heap gave out. 5,924 tests across 275 suites run
+      # `--runInBand`, so they accumulate in ONE process, and this box has 961 MB
+      # of RAM. Adding 2 GB of swap did not help: swap raises system memory, not
+      # the heap ceiling.
+      #
+      # More to the point, running it here is the wrong place. A gate exists to
+      # stop bad code REACHING the host. By the time this step runs the code is
+      # already checked out on the production machine — and the same suite has
+      # already run locally before the push and in release-gate.yml. Running it a
+      # third time, on the smallest machine in the stack, buys nothing.
+      #
+      # What DOES stay are the checks that are cheap and specific to this host:
+      # typechecking (catches a broken build before it is built) and the
+      # protected-contract guard (catches a legacy route being removed, which is
+      # the failure this deploy could actually cause). Both run in seconds.
+      #
+      # If you want the full suite gating deploys again, run it in CI on a runner
+      # with memory, not here.
+      - name: Typecheck (source and tests)
+        run: npm run typecheck && npm run typecheck:tests
+
+      - name: Generated document drift
+        run: npm run api:docs:check
+
+      - name: Secret scan
+        run: npm run security:secrets
+
+      # Separate from the suite on purpose. This asserts the admin route
+      # contracts other portals depend on, and a failure here means a breaking
+      # change to a published surface rather than an ordinary test failure.
+      - name: Guard protected route contracts
+        run: npm run guard:protected-contracts
+
+      # THE SNAPSHOT MOVED TO THE END OF THIS FILE, AND HERE IS WHY.
+      #
+      # A step here used to copy the running `dist/` to $RELEASES/previous
+      # before `npm run build` overwrote it. It could never have worked, and
+      # would have failed silently on every single deploy:
+      #
+      #   - `dist` is gitignored (.gitignore:109)
+      #   - `actions/checkout@v4` above defaults to `clean: true`, which runs
+      #     `git clean -ffdx`, and `-x` removes ignored files. Verified:
+      #     `git clean -ffdxn -- dist` prints "Would remove dist/".
+      #
+      # So by the time that step ran there was no dist/ to copy. It would have
+      # taken its `::warning::no dist/ to snapshot` branch every time, and the
+      # rollback further down would have found "NO previous build to restore"
+      # every time it was ever needed. A rollback that reads as present and is
+      # absent is worse than a missing one, because nobody goes looking.
+      #
+      # Retention now happens AFTER the post-deploy probe passes, so what is
+      # kept is a build known to have served traffic. See the final step.
+      #
+      # The cost, stated plainly: the FIRST deploy after this lands has no
+      # snapshot and therefore no rollback. A known-good build has to be proven
+      # once before it can be kept.
+
+      - name: Build
+        run: npm run build
+
+      # THE HAND-WRITTEN STAMP STEP WAS REMOVED.
+      #
+      # `npm run build` now stamps dist/BUILD_INFO.json itself
+      # (scripts/stamp-build-info.mjs) and then refuses to finish if the stamp
+      # is absent, malformed, or disagrees with GITHUB_SHA
+      # (scripts/verify-build-info.mjs). A printf here would overwrite the
+      # build's own stamp with one written by hand on the host, which is exactly
+      # what TAB 04 refuses: the stamp must come from the build that produced
+      # the artefact, not from the deploy that shipped it.
+      #
+      # It also stamps a manual `git pull && npm run build && pm2 restart` on the
+      # host, which is how production was last assembled and which no
+      # deploy-time step can cover.
+
+      # MOVED. This used to be the fifth step — it ran before Node was even
+      # installed, so schema changes were applied to the production database
+      # before the code that needs them had been compiled, let alone tested. A
+      # failed build left production running old code against a migrated
+      # schema, and nothing in the pipeline would have said so.
+      #
+      # Its position is now load-bearing: after verify and build, before the
+      # restart. A failing test touches nothing; a failing migration stops
+      # short of the restart, so the old code keeps serving.
+      # Applied by the repository's own runner, not by a bash loop.
+      #
+      # The loop this replaces kept its own ledger: `.done` marker FILES under
+      # /home/github-runner/migrations-done. `servana.schema_migrations` was
+      # created in the database in August and records what has actually been
+      # applied. Two ledgers for one question is one too many, and they had
+      # already diverged — 030-035 were applied by hand through the table, so
+      # the runner host has no markers for them and the loop would have re-run
+      # all six.
+      #
+      # scripts/run-migrations.ts is what TAB 02 asks for and the loop was not:
+      #   - pg_advisory_lock('servana-controlled-migrations') so two deploys
+      #     cannot migrate concurrently
+      #   - sha256 per migration, refusing to proceed if an APPLIED migration's
+      #     content has changed since
+      #   - one transaction per migration, with the ledger insert inside it, so
+      #     a failure cannot leave a migration applied but unrecorded
+      #   - servana.schema_migrations as the single source of truth
+      #
+      # It also refuses any migration marked SERVANA:DESTRUCTIVE unless
+      # SERVANA_APPLY_DESTRUCTIVE names it. 037 drops 39 constraints; without
+      # that guard this step would have applied it on the next push, with nobody
+      # having decided to.
+      #
+      # Position is unchanged and still load-bearing: after verify and build,
+      # before the restart. A failing test touches nothing; a failing migration
+      # stops short of the restart, so the old code keeps serving.
+      - name: Plan pending DB migrations
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        # Printed before anything is applied, so the deploy log records what was
+        # about to change even when the apply step then fails.
+        run: npm run migrations:plan
+
+      - name: Run pending DB migrations
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          # Name a migration here ONLY for a deploy that intends it, with a
+          # backup taken. Leaving it set permanently would authorise every
+          # future destructive migration too, which is the accident the guard
+          # exists to prevent.
+          SERVANA_APPLY_DESTRUCTIVE: ${{ vars.SERVANA_APPLY_DESTRUCTIVE }}
+        run: npm run migrations:apply
+
+      # Deliberately stop/delete/start rather than `pm2 reload`, which was
+      # considered on 2026-08-19 and rejected on measurement:
+      #
+      #  - `pm2 reload` is only zero-downtime in CLUSTER mode. There is no
+      #    ecosystem config here and the app is started with plain args, so it
+      #    runs in fork mode, where reload degrades to a restart and the gap
+      #    remains. It would buy nothing.
+      #  - Moving to cluster mode would run startScheduler() (src/app.ts) in
+      #    every instance, and src/scheduler.ts has no single-instance guard —
+      #    no NODE_APP_INSTANCE check, no advisory lock, no leader election. Two
+      #    instances means every cron tick fires twice, which is far worse than
+      #    the short 502 window this sequence costs.
+      #  - The delete step is load-bearing: it exists because a previous deploy
+      #    left an EADDRINUSE crash loop.
+      #
+      # Closing the 502 window properly means guarding the scheduler first, then
+      # cluster mode. Until then this sequence is the correct trade.
+      - name: Restart PM2
+        run: |
+          APP="$(pwd)/dist/app.js"
+          sudo /usr/bin/pm2 stop servana-prod 2>/dev/null || true
+          sudo /usr/bin/pm2 delete servana-prod 2>/dev/null || true
+          sudo /usr/bin/pm2 start "$APP" --name servana-prod
+          sudo /usr/bin/pm2 save --force
+
+      - name: Reload NGINX
+        run: sudo systemctl reload nginx
+
+      # POST-DEPLOY VERIFICATION (TAB 03).
+      #
+      # A deploy that reports success while the process is crash-looping, or
+      # while the build serving traffic is not the one just shipped, is a deploy
+      # that lied. Every assertion here is read-only and local to the host —
+      # 127.0.0.1, never the public origin, so this probes the process rather
+      # than the CDN, the proxy, or DNS.
+      #
+      # The unknown-path assertion is the specific one worth keeping: production
+      # once answered 401 to EVERY path including nonexistent ones, which proved
+      # auth was running before routing and that the deployed build did not serve
+      # v1 at all. A 404 there is the cheapest possible proof that the router is
+      # the thing answering.
+      - name: Verify the deployed build actually serves
+        id: probe
+        run: |
+          set -u
+          PORT=$(grep -E '^PORT=' .env | head -1 | cut -d= -f2- | tr -d '"'"'"' \r' || true)
+          PORT=${PORT:-3000}
+          BASE="http://127.0.0.1:${PORT}"
+          echo "probing $BASE"
+
+          # PM2 has just restarted; give the process a bounded chance to bind
+          # rather than racing it and calling the race a failure.
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$BASE/healthz" || echo 000)
+            [ "$code" = "200" ] && break
+            echo "  attempt $i: /healthz -> $code"
+            sleep 3
+          done
+
+          fail=0
+          check () { # name expected url
+            actual=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$3" || echo 000)
+            if [ "$actual" = "$2" ]; then
+              echo "  OK   $1 -> $actual"
+            else
+              echo "::error::$1 expected $2, got $actual"
+              fail=1
+            fi
+          }
+
+          check "liveness"          200 "$BASE/healthz"
+          check "v1 is mounted"     200 "$BASE/api/v1/catalog"
+          check "v1 requires auth"  401 "$BASE/api/v1/bookings"
+          check "routing precedes auth" 404 "$BASE/zzz-nonexistent-path"
+
+          # The running build is the commit this run built.
+          DEPLOYED=$(node -e 'try{process.stdout.write(require("./dist/BUILD_INFO.json").commit)}catch(e){process.stdout.write("MISSING")}')
+          if [ "$DEPLOYED" != "$GITHUB_SHA" ]; then
+            echo "::error::the build serving traffic is $DEPLOYED, expected $GITHUB_SHA"
+            fail=1
+          else
+            echo "  OK   running commit -> $DEPLOYED"
+          fi
+
+          exit $fail
+
+      # AUTOMATIC ROLLBACK.
+      #
+      # Runs only when the probe failed, so a half-shipped release is restored
+      # rather than left serving. Deliberately re-runs the probe afterwards: a
+      # rollback nobody verified is a second unverified deploy.
+      #
+      # NOT YET REHEARSED ON THE HOST. It is written against the deploy shape
+      # this file describes and has never been executed, because this repository
+      # is worked on without production access. Rehearse it before relying on
+      # it — docs/MASTER_TODO_MANUAL_TASKS.md 03.5.
+      - name: Roll back to the previous build
+        if: failure() && steps.probe.outcome == 'failure'
+        env:
+          RELEASES: /home/github-runner/releases
+          PM2: sudo /usr/bin/pm2
+          PM2_NAME: servana-prod
+        # Calls the script rather than restating it. The inline version could
+        # never be rehearsed — rehearsing it meant deploying a deliberately
+        # broken build to production — so it was written, never executed, and
+        # carried a snapshot bug that made it inoperative.
+        #
+        # scripts/rollback.sh HAS been rehearsed: broken build serving 503 ->
+        # restore -> healthy on the previous commit, verified by asking the
+        # running process rather than reading a file. It also refuses, without
+        # touching the running process, when there is nothing to restore.
+        run: |
+          scripts/rollback.sh
+          # The run still fails. A rollback is a recovered incident, not a
+          # successful deploy, and a green tick here would hide it.
+          exit 1
+
+      # The schema is NOT rolled back, and pretending otherwise would be worse
+      # than saying so. Migrations run before the restart and are additive by
+      # policy; the previous build tolerates the newer schema, which is the
+      # whole reason that ordering was chosen. A migration that is not
+      # backward-tolerable must not ship in the same deploy as code that needs
+      # it — that is a two-deploy change, and this file cannot enforce it.
+      - name: Note the rollback boundary
+        if: always()
+        run: echo "Rollback restores the BUILD only. Applied migrations stay applied — see docs/audits/TAB03_DEPLOY_GATING.md"
+
+      # RETENTION, last, and only when everything above succeeded.
+      #
+      # `if: success()` is load-bearing. Retaining a build the probe rejected
+      # would make the next rollback restore the very build this deploy just
+      # rolled back from, and it would look like a recovery.
+      - name: Retain this build, so the NEXT deploy can roll back to it
+        if: success()
+        env:
+          RELEASES: /home/github-runner/releases
+          KEEP: '3'
+        run: scripts/snapshot-build.sh

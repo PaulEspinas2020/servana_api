@@ -353,15 +353,15 @@ route can only be documented as superseded if it is also being measured.
 | Capability | Customer Mobile | Customer Web | Provider Mobile | Provider Web | Admin Web |
 | --- | --- | --- | --- | --- | --- |
 | Read and change my account record | legacy | legacy | legacy | legacy | planned |
-| Read and change my settings | planned | planned | planned | planned | planned |
+| Read and change my settings | planned | planned | migrated | planned | planned |
 | Read my security posture | planned | planned | planned | planned | planned |
 | Read and change my customer profile | legacy | legacy | — | — | planned |
 | Manage my saved addresses | legacy | legacy | — | — | — |
-| Read and change my provider profile | — | — | legacy | legacy | planned |
+| Read and change my provider profile | — | — | legacy | migrated | planned |
 | Submit, read, preview and withdraw my documents | — | — | legacy | legacy | — |
 | Read and change my availability, and book time off | — | — | legacy | legacy | — |
-| Read the services I am approved for | — | — | planned | planned | — |
-| What is left before my account is usable | planned | planned | planned | planned | — |
+| Read the services I am approved for | — | — | migrated | planned | — |
+| What is left before my account is usable | planned | planned | migrated | planned | — |
 
 No client is `migrated` yet: the platform application repositories are out of scope
 until the backend Master Command completes. Every legacy route above stays mounted and

@@ -20,7 +20,7 @@ import fs from 'fs';
 import path from 'path';
 import { generateAll, safetyDrift, staleFiles } from '../scripts/generate-release-safety-docs';
 import { BLOCKING_GATES, RELEASE_GATES, RELEASE_PROHIBITIONS } from '../src/observability/releaseGate';
-import { METRICS, P0_ALERTS, SAFE_ENTITY_KEYS } from '../src/observability/observabilityPolicy';
+import { ALERTS, METRICS, P0_ALERTS, SAFE_ENTITY_KEYS } from '../src/observability/observabilityPolicy';
 import { OWNERSHIP_RULES, matrixSummary } from '../src/api/v1/authzMatrix';
 import { SMOKE_ACCOUNTS } from '../src/api/v1/routeHealth';
 import { NO_REMOVAL_RULE } from '../src/api/v1/deprecation';
@@ -278,5 +278,49 @@ describe('the checklist is runnable', () => {
   it('tells the reader not to smoke against live records', () => {
     expect(doc).toContain('Do not run a production smoke against live records');
     expect(doc).toContain('treats a 401 as a FAILURE');
+  });
+
+  /**
+   * The alert TAB 02's failure needed and nothing provided.
+   *
+   * On 2026-08-18 production answered 401 to every path, including ones that do
+   * not exist, because authentication ran before routing. Nothing paged:
+   * `api-error-rate` counts 5xx only, so a 401 storm is invisible to it, and
+   * `auth-failure-spike` is relative to a 24h median — once the broken state
+   * persists past a day it BECOMES the median and the alert falls silent while
+   * production stays broken.
+   *
+   * So the condition is asserted to be ABSOLUTE. That is the property under
+   * test, not merely the alert's existence: a relative threshold here would
+   * reproduce the original silence.
+   */
+  it('pages on ANY public-path auth failure, absolutely rather than relatively', () => {
+    const alert = ALERTS.find((a) => a.name === 'public-path-auth-failure');
+    expect(alert).toBeDefined();
+    expect(alert!.severity).toBe('P0');
+    expect(alert!.metric).toBe('public_path_auth_failures_total');
+
+    // Structural, not keyword-hunting. The first draft of this assertion forbade
+    // the word "baseline" anywhere in the condition and failed on a condition
+    // that says it is NOT relative to a baseline — a substring test where an
+    // exact one was meant, which is the very hazard this repository has been
+    // bitten by before.
+    //
+    // So: the rule must LEAD with the absolute clause, and must carry no numeric
+    // threshold. A rate condition cannot satisfy both.
+    expect(alert!.condition.trim()).toMatch(/^ANY occurrence\b/);
+    expect(alert!.condition).not.toMatch(/>\s*\d/);
+
+    // The playbook must not send the responder to credentials, which is where
+    // an auth-shaped alert naturally points and where the answer was not.
+    expect(alert!.firstAction).toMatch(/router|routing/i);
+  });
+
+  it('declares the metric that alert fires on', () => {
+    const metric = METRICS.find((m) => m.name === 'public_path_auth_failures_total');
+    expect(metric).toBeDefined();
+    // Anonymous by definition, so no client or uid label — and bounded labels
+    // only, per the cardinality rule this file already enforces.
+    expect(metric!.labels).toEqual(['route', 'namespace']);
   });
 });

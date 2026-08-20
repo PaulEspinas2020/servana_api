@@ -98,6 +98,49 @@ export const SURFACE_CORRECTION_COST: Readonly<Record<ClientSurface, {
   customerMobile: { order: 5, cost: 'days–weeks', deploys: 'Play review; the largest installed base', retirementDays: RETIREMENT_CRITERIA.mobileZeroTrafficDays },
 });
 
+/**
+ * Whether a surface has actually shipped to real users.
+ *
+ * ## Why retirement needs this and `callers` cannot supply it
+ *
+ * `callers.<client>` is derived from that client's published manifest, which is
+ * generated from that client's own source. It answers "does this client's CODE
+ * call the canonical route?" — and that is the only question a client can
+ * answer about itself.
+ *
+ * Retiring a legacy route asks a different question: "is anything in the FIELD
+ * still calling it?" Those come apart precisely when a client has rewritten its
+ * calls but not shipped them, and the party asserting the migration is then not
+ * the party who knows what is installed. A client should not be able to license
+ * the deletion of a route by publishing a manifest about its own unreleased
+ * code.
+ *
+ * ## The measured case
+ *
+ * Landing the worker app's manifest moved 32 entries to
+ * `providerMobile: 'migrated'` and, with nothing else changed, made **13 legacy
+ * aliases retirable** — `GET /api/worker/job-cards`, the five job-transition
+ * routes, the provider document routes. The client that licensed that is a
+ * greenfield repository recorded in its own manifest as
+ * `"local-only (no remote)"`, with no UI, no release, and its own certification
+ * returning NOT_CERTIFIED. Meanwhile the ServanaWorker build those legacy routes
+ * were written for publishes no manifest at all — which is exactly the case the
+ * migration plan warns about: do not retire a route because no manifest lists
+ * it, without checking the clients that publish none.
+ *
+ * So this is a platform fact, held here, and a manifest cannot assert it.
+ */
+export const SURFACE_RELEASED: Readonly<Record<ClientSurface, boolean>> = Object.freeze({
+  admin: true,
+  providerWeb: true,
+  // Angular, never deployed — SURFACE_CORRECTION_COST says as much.
+  customerWeb: false,
+  // The greenfield worker app. Its manifest is real and its calls are real; it
+  // has never been released, so it cannot speak for what is installed.
+  providerMobile: false,
+  customerMobile: true,
+});
+
 /** Surfaces in migration order: cheapest to correct first, mobile last. */
 export const MIGRATION_ORDER: readonly ClientSurface[] = Object.freeze(
   [...CLIENT_SURFACES].sort(
@@ -204,6 +247,55 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'function, which is what stops them ranking differently.',
   },
   {
+    key: 'buildProvenance',
+    title: 'Ask which commit is serving',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['health.build'],
+    domainModule: 'api/v1/domains/health.readBuildInfo',
+    surfaces: CLIENT_SURFACES,
+    roleSplitRationale:
+      'No role split, and no role at all. The endpoint is public because a provenance check ' +
+      'that needs a credential can only be run by somebody who already has one, which is the ' +
+      'situation it exists to fix — a deploy whose migration step fails stops short of the PM2 ' +
+      'restart, so the old code keeps serving and nothing outward says so. Every surface reads ' +
+      'the same four fields from the same stamp; there is no projection to differ on.',
+  },
+  {
+    key: 'workerTelemetry',
+    title: 'Report that the product is working',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['telemetry.ingest'],
+    domainModule: 'services/telemetryService.recordTelemetryEvents',
+    surfaces: Object.freeze(['providerMobile'] as ClientSurface[]),
+    roleSplitRationale:
+      'Role-specific, and the narrowest capability in this registry. The worker app is the only '
+      + 'client whose failures are silent by nature — a job offer that never arrives produces no '
+      + 'error anywhere, so its working-ness cannot be inferred from the request log the way a '
+      + 'browser surface\'s can, because a browser retries in front of a person who reports it. '
+      + 'There is deliberately NO CUSTOMER equivalent and no admin one: the customer app is not '
+      + 'in this programme, publishes no manifest, and giving it an ingest here would be '
+      + 'inventing a client\'s requirements on its behalf — the same error the caller matrix was '
+      + 'built to stop. Opening this to every surface would also turn a seven-event product '
+      + 'signal into a general analytics endpoint, which docs/TELEMETRY_DECISION.md explicitly '
+      + 'refuses. A second surface wanting this is a new decision, not a new entry in an array.',
+  },
+  {
+    key: 'clientRecall',
+    title: 'Ask whether this client build may still run',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['clientConfig.read'],
+    domainModule: 'api/v1/domains/clientConfig.readClientConfig',
+    surfaces: CLIENT_SURFACES,
+    roleSplitRationale:
+      'No role split, and no role at all — the caller is a BUILD, not a person. The endpoint ' +
+      'is public because the client being recalled may be too old to authenticate, and a kill ' +
+      'switch reachable only with a credential cannot kill the builds that most need it. ' +
+      'Every surface reads the same floor from the same file and applies the same comparison; ' +
+      'a per-surface answer would let two clients disagree about whether the same version is ' +
+      'supported. The web surfaces are listed because they reload and so are never stranded — ' +
+      'they may read it, and it will never block them.',
+  },
+  {
     key: 'bookingRead',
     title: 'Read a booking',
     source: 'api/v1/convergence (core)',
@@ -264,6 +356,23 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'eligible-provider pool are operator actions with no customer or provider equivalent, ' +
       'behind role 1. The ASSIGN action they lead to is not separate: it is in ' +
       '`bookingTransitions` above, over the shared state machine.',
+  },
+  {
+    key: 'refundLifecycle',
+    title: 'Resolve a refund review',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['admin.refunds.markFailed'],
+    domainModule: 'services/adminFinanceService',
+    surfaces: Object.freeze(['admin'] as ClientSurface[]),
+    roleSplitRationale:
+      'Genuinely operator-only, and deliberately narrow for now. A customer requests a ' +
+      'refund through the booking surface; deciding one is an operator action behind role 1 ' +
+      'and a named permission. Only the `failed` terminal is canonical so far: the rest of ' +
+      'the lifecycle (open, approve, reject, mark-processed) stays legacy until the ' +
+      'disbursement surface is unified, because canonicalising a refund before its payout ' +
+      'twin would fix the duplicate rather than remove it. `failed` came first because it ' +
+      'did not exist at all — an approved refund the processor rejected had no terminal, so ' +
+      'it stayed `approved` and blocked every retry for that booking.',
   },
   {
     key: 'providerPublicProfile',
@@ -674,6 +783,28 @@ export const deprecationPlan = (): DeprecationRow[] => {
         blockedBy.push(
           `${blockingSurfaces.map((s) => SURFACE_LABEL[s]).join(', ')} ` +
             `${blockingSurfaces.length === 1 ? 'has' : 'have'} not migrated`,
+        );
+      }
+
+      /**
+       * A `migrated` mark from a surface that has never shipped does not clear
+       * the route for retirement — see SURFACE_RELEASED. The code has moved; the
+       * installed base has not, because there is no installed base yet, and the
+       * previous build of that client is still whatever it was.
+       *
+       * Separate from the check above on purpose: "has not migrated" and "has
+       * migrated but has not shipped" are different states needing different
+       * work, and collapsing them would tell a client team to redo a migration
+       * they have already done.
+       */
+      const unreleasedMigrated = CLIENT_SURFACES.filter(
+        (s) => entry.callers[s] === 'migrated' && !SURFACE_RELEASED[s],
+      );
+      if (unreleasedMigrated.length) {
+        blockedBy.push(
+          `${unreleasedMigrated.map((s) => SURFACE_LABEL[s]).join(', ')} ` +
+            `${unreleasedMigrated.length === 1 ? 'has' : 'have'} migrated in code but ` +
+            'not shipped, so nothing yet proves the legacy path is unused in the field',
         );
       }
       if (legacy.disposition === 'CANONICALIZE') {

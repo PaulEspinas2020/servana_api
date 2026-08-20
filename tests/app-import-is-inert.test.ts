@@ -34,6 +34,19 @@ describe('importing src/app.ts is inert', () => {
   afterAll(() => {
     if (before === undefined) delete process.env.MONGO_URI;
     else process.env.MONGO_URI = before;
+    /**
+     * Release the module registry this suite populated.
+     *
+     * Measured with `--logHeapUsage` and `scripts/jest-heap-guard.js`: this
+     * suite retained **599 MB** — six times the next worst — because requiring
+     * `src/app.ts` pulls the entire application module graph into Jest's
+     * registry, and under `--runInBand` every later suite inherits it. On the
+     * 961 MB self-hosted runner that single figure is the whole OOM.
+     *
+     * Importing the app is the point of this suite, so the cost is not
+     * avoidable; holding it for the remaining 275 suites is.
+     */
+    jest.resetModules();
   });
 
   it('imports without a MONGO_URI and exports the composed app', () => {
@@ -47,9 +60,26 @@ describe('importing src/app.ts is inert', () => {
   it('opens no listening socket', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     require('../src/app');
+    /**
+     * LISTENING is the property, not merely "a Server object exists".
+     *
+     * `_getActiveHandles()` is process-wide, and under `--runInBand` a sibling
+     * suite's server can still be in that list after it has been closed —
+     * `tests/support/httpTestServer.ts` closes correctly, but reaping is not
+     * synchronous with `close()`'s callback. Filtering on the object's
+     * constructor alone therefore made this assertion depend on suite ORDER:
+     * measured failing after `v1-composed-app.test.ts` and passing in
+     * isolation, from the same command.
+     *
+     * `listening` is what the test name has always claimed to check, and it is
+     * strictly the harder question — a server app.ts bound at import reads
+     * `listening === true` and still fails this. A closed server left over from
+     * a neighbour reads false, which is the correct answer to "did importing
+     * app.ts open a socket".
+     */
     const servers = (process as any)
       ._getActiveHandles()
-      .filter((h: any) => h && h.constructor && h.constructor.name === 'Server');
+      .filter((h: any) => h && h.constructor && h.constructor.name === 'Server' && h.listening);
     expect(servers).toHaveLength(0);
   });
 

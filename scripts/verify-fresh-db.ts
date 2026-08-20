@@ -50,9 +50,39 @@ import {
 } from './lib/schemaBaseline';
 import { residualTransactionControl } from './lib/migrationSafety';
 
+
 import { migrationChecksum } from './lib/migrationChecksum';
 const args = process.argv.slice(2);
 const liveArg = args.find((a) => a.startsWith('--live='))?.slice('--live='.length) ?? '';
+
+/**
+ * The number of tables a fresh database must converge on (TAB 04, §158).
+ *
+ * ## Why a declared number and not just a printed one
+ *
+ * Both the embedded and live paths already REPORTED a final table count, and
+ * neither ASSERTED it. A count that is printed and not checked is a number
+ * somebody reads once — so a migration that quietly created one table fewer, or
+ * a baseline restored against the wrong schema, produced a green gate and an
+ * accurate-looking log. The whole point of the zero-to-current gate is that a
+ * fresh database and production agree, and agreement has to be an assertion to
+ * be a gate.
+ *
+ * ## Why the number is written down rather than derived
+ *
+ * Deriving it from the migrations would compare the chain against itself and
+ * pass by construction. 132 is what production reached after 036 and 037 were
+ * applied, and what `db:verify:embedded` independently reaches from
+ * baseline + pending. Writing it down makes a change to the schema's SHAPE
+ * appear in a diff, on the commit that causes it — the same discipline
+ * `EXPECTED_SUITE_COUNT` applies to the test inventory.
+ *
+ * **When this fails:** adding tables is the expected, frequent case — raise the
+ * number in the commit that adds the migration. A DROP is the one to stop and
+ * think about.
+ */
+const EXPECTED_TABLE_COUNT = 132;
+
 
 // ─── Static gate ──────────────────────────────────────────────────────────────
 
@@ -395,9 +425,22 @@ const runEmbedded = async (): Promise<boolean> => {
       const failure = applied.outcomes.find((o) => !o.ok);
       console.log(`    ${failure?.error}`);
     }
-    console.log(`  final table count        ${applied.tablesReached.length}`);
+    const reached = applied.tablesReached.length;
+    const converged = reached === EXPECTED_TABLE_COUNT;
+    console.log(
+      `  final table count        ${reached}` +
+        (converged ? ` (converged on ${EXPECTED_TABLE_COUNT})` : ` — EXPECTED ${EXPECTED_TABLE_COUNT}`),
+    );
+    if (!converged) {
+      console.log(
+        `\n  DIVERGENCE: a fresh database reaches ${reached} tables, production and this\n` +
+          `  repository declare ${EXPECTED_TABLE_COUNT}. Either a migration stopped creating\n` +
+          `  something, or the declared number is stale. Do not raise the number\n` +
+          `  without knowing which.`,
+      );
+    }
 
-    const ok = restored && ledgerIdempotent && allApplied;
+    const ok = restored && ledgerIdempotent && allApplied && converged;
     console.log(`\n  EMBEDDED RESULT: ${ok ? 'PASS' : 'FAIL'}`);
     if (ok) {
       console.log('  A fresh database reaches the current schema from this repository.');

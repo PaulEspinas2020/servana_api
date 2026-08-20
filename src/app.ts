@@ -1,3 +1,8 @@
+// MUST be the first import: dotenv.config() below runs after every import
+// has already executed, so anything reading process.env at module scope
+// would see an unpopulated environment. See src/env/loadEnv.ts.
+import "./env/loadEnv";
+
 import express, { NextFunction, Request, Response } from "express";
 import { assertFirebaseAdminCredentials } from './middleware/firebaseApp';
 import http from "http";
@@ -43,6 +48,21 @@ const corsOptionsDelegate = function (req: any, callback: any) {
 const port = process.env.PORT;
 app.disable("x-powered-by");
 app.set("trust proxy", 1); // trust first hop (Nginx on same server) only — prevents IP spoofing
+
+/**
+ * Security headers, BEFORE the CORS delegate (TAB 05, F-06).
+ *
+ * The order is load-bearing, not stylistic. `corsOptionsDelegate` answers a
+ * request from an origin that is not on the whitelist by disabling CORS for it —
+ * the request is still served, it is the browser that refuses to hand the
+ * response to the page. Mounting helmet after CORS would leave those responses,
+ * and every error response produced before the CORS layer, without HSTS or
+ * `nosniff`. The headers that matter most on a refused request are the ones
+ * that say how to treat the bytes anyway.
+ */
+import { apiSecurityHeaders } from "./middleware/securityHeaders";
+app.use(apiSecurityHeaders);
+
 app.use(cors(corsOptionsDelegate))
 app.use(cookieParser());
 
@@ -155,6 +175,9 @@ export const CANONICAL_CONTRACT_PREFIXES = [
   '/api/catalog',
   '/healthz',
   '/readyz',
+  // Same reason as the two above: an operational probe, not client API. Note
+  // this prefix also covers '/healthz', which is harmless — both are exempt.
+  '/health',
 ];
 app.use((req: Request, res: Response, next: NextFunction) => {
     if (CANONICAL_CONTRACT_PREFIXES.some((p) => req.path.startsWith(p))) return next();
@@ -441,6 +464,42 @@ app.get("/healthz", (_req: Request, res: Response) => {
 
 app.get("/readyz", (_req: Request, res: Response) => {
   res.status(isReady() ? 200 : 503).json(readinessSnapshot());
+});
+
+/**
+ * `/health` at the root, because everything looks there first.
+ *
+ * ## The 404 that produced a wrong finding
+ *
+ * Build provenance is served at `/api/v1/health`. The root `/health` answered
+ * 404, and a backend hand-over concluded from that 404 that "the
+ * build-provenance endpoint is not deployed". It was deployed and answering the
+ * whole time. A later measurement corrected it, having cost a round of analysis
+ * on the wrong problem.
+ *
+ * Uptime checkers and load balancers default to `/health`, not to `/healthz`,
+ * so the 404 was also an operational hazard on its own: a checker left on its
+ * defaults reports this service down while it is serving perfectly.
+ *
+ * ## Why this is liveness and not a second provenance route
+ *
+ * Provenance stays at `/api/v1/health` alone. It is declared in `V1_CONTRACT`,
+ * shaped by the `BuildInfo` schema, generated into the docs and covered by the
+ * v1 gates; a duplicate outside that namespace would be a second path to
+ * contract-governed data with none of the machinery that keeps it honest.
+ *
+ * What this returns instead is the liveness answer a probe actually wants — a
+ * status code — plus the addresses of the other three, so the next person who
+ * probes `/health` looking for a commit is told where it lives rather than
+ * meeting a 404 and drawing a conclusion from it.
+ */
+app.get("/health", (_req: Request, res: Response) => {
+  res.status(isLive() ? 200 : 503).json({
+    status: isLive() ? "alive" : "shutting_down",
+    liveness: "/healthz",
+    readiness: "/readyz",
+    provenance: "/api/v1/health",
+  });
 });
 
 assertContinueUrlsAreUsable();

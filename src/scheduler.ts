@@ -11,6 +11,15 @@ import { withJobLease } from './services/scheduler/jobLease';
 
 const dbSchema = db.schema;
 
+/**
+ * The actor recorded for a sweep nobody triggered.
+ *
+ * A uid-shaped literal rather than an empty string: the support-case event row
+ * takes an actor, and an empty actor reads in a timeline as missing data rather
+ * than as "the system did this".
+ */
+export const SLA_SWEEP_SYSTEM_ACTOR = 'system:sla-sweep';
+
 // ---------------------------------------------------------------------------
 // JOB 1 — Disbursement release (every hour at :00)
 // Releases worker payouts for bookings completed 72+ hours ago.
@@ -212,6 +221,57 @@ export interface ScheduledJob {
   duplicateEffect: string;
 }
 
+/**
+ * JOB — support-case SLA sweep (every 15 minutes).
+ *
+ * ## Why this is a cron and not a button (TAB 09)
+ *
+ * `POST /api/admin/support/cases/sla-sweep` existed with a permission and no
+ * caller and no schedule. The book asks which it should be. It is a cron, and
+ * the reason is in what the sweep actually does rather than in convention:
+ *
+ *   - An SLA breach is created by the PASSAGE OF TIME. Nothing an operator does
+ *     causes it and nothing they do reveals it. A control that only fires when
+ *     somebody remembers to press it is not an SLA control, it is a report.
+ *   - The sweep writes a PROVIDER-VISIBLE event — "Review target delayed". That
+ *     is a commitment to the provider about their own case. Delivering it only
+ *     when an admin happens to click is worse than never promising it, because
+ *     the provider learns the delay at a moment unrelated to the delay.
+ *   - It also raises priority NORMAL → HIGH, which is how a breached case
+ *     reaches the top of a queue. Left unswept, the case that most needs
+ *     attention is the one least likely to get it.
+ *
+ * ## Duplicate-safe by construction, not by luck
+ *
+ * The UPDATE carries `AND escalation_state <> 'SLA_BREACHED'` and only RETURNS
+ * rows it actually moved, so the event insert and the realtime emit are driven
+ * by the transition rather than by the query. A second pass finds nothing and
+ * writes nothing. That is what makes it safe to run every fifteen minutes and
+ * safe to run manually at the same time.
+ *
+ * ## The manual route stays
+ *
+ * It is permissioned (`support.sla.manage`) and it is genuinely useful — after
+ * an incident, or when an operator wants the queue correct now rather than
+ * within fifteen minutes. Scheduled by default, triggerable on demand, and the
+ * same function either way (§9).
+ */
+const runSupportSlaSweep = async () => {
+  console.log('[scheduler] Sweeping breached support-case SLAs…');
+  try {
+    const { sweepBreachedCases } = await import('./services/adminSupportCaseService');
+    // No admin performed this. The event row already records actor_type
+    // 'SYSTEM'; naming the job in the uid means an operator reading the case
+    // timeline can tell a sweep from a person without cross-referencing.
+    const result = await sweepBreachedCases(SLA_SWEEP_SYSTEM_ACTOR);
+    if (result.processed) {
+      console.log(`[scheduler] SLA sweep marked ${result.processed} case(s) breached.`);
+    }
+  } catch (err) {
+    console.error('[scheduler] SLA sweep error:', err);
+  }
+};
+
 export const SCHEDULED_JOBS: ScheduledJob[] = [
   {
     name: 'disbursement-release',
@@ -266,6 +326,18 @@ export const SCHEDULED_JOBS: ScheduledJob[] = [
       'DUPLICATE ADMIN NOTIFICATIONS. Guarded by notificationKey, but that idempotency is ' +
       'currently defeated in production by 39 stale global unique constraints (migration 037), ' +
       'so the key cannot be relied on until that is applied.',
+  },
+  {
+    name: 'support-sla-sweep',
+    // Every fifteen minutes. An SLA measured in hours does not need a tighter
+    // loop, and a breach discovered up to an hour late partly defeats the point
+    // of measuring it.
+    schedule: '*/15 * * * *',
+    run: runSupportSlaSweep,
+    duplicateEffect:
+      'None. The UPDATE excludes rows already SLA_BREACHED and only RETURNS rows it moved, ' +
+      'so the provider-visible event and the realtime emit are driven by the transition ' +
+      'rather than by the query. A second pass writes nothing.',
   },
 ];
 

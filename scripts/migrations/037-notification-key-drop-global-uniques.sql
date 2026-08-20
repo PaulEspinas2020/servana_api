@@ -1,6 +1,31 @@
 -- SERVANA:DESTRUCTIVE — drops 39 unique constraints. The runner refuses this
 -- unless SERVANA_APPLY_DESTRUCTIVE names it, so a routine deploy cannot apply
 -- it by side effect. Requires an approved backup and change window.
+--
+-- ── Proving this against a captured baseline ─────────────────────────────────
+--
+-- The removal is performed by a catalog-driven DO block, so no static reader
+-- can tell what it dropped, and a presence check finds nothing because it
+-- creates nothing. The two markers below let `verify-baseline-ledger` answer
+-- the only question that matters for the ledger — has production already had
+-- this? — from the captured schema, without contacting a database.
+--
+-- The REMOVES marker asserts the constraints are GONE. It matches `pg_dump`'s
+-- rendering of exactly what this migration drops: a UNIQUE constraint on the
+-- single column notification_key, on either notification table, whatever
+-- numeric suffix the engine gave it. It deliberately does NOT match
+-- admin_notifications' `(admin_uid, notification_key)`, which is composite,
+-- on a third table, and correctly out of scope.
+--
+-- The ANCHOR marker asserts the context EXISTS. Absence alone proves nothing —
+-- a constraint is equally missing from a database that never had the table.
+-- These two indexes are re-asserted by this migration and are present in
+-- production, so finding them while the constraints are gone is the signature
+-- of a database that has been through this migration, not one that predates it.
+--
+-- SERVANA:REMOVES ADD CONSTRAINT\s+(provider|customer)_notifications_notification_key_key\d*\s+UNIQUE\s*\(\s*notification_key\s*\)
+-- SERVANA:ANCHOR CREATE UNIQUE INDEX uq_provider_notifications_owner_key ON servana.provider_notifications USING btree (worker_uid, notification_key);
+-- SERVANA:ANCHOR CREATE UNIQUE INDEX uq_customer_notifications_owner_key ON servana.customer_notifications USING btree (user_uid, notification_key);
 -- 037 · Drop the redundant GLOBAL unique constraints on notification_key (TAB 02)
 --
 -- ── The defect ───────────────────────────────────────────────────────────────

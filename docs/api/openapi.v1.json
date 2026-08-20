@@ -88,6 +88,226 @@
         }
       }
     },
+    "/api/v1/telemetry": {
+      "post": {
+        "operationId": "telemetry.ingest",
+        "summary": "Accept a small, closed set of scrubbed worker-app events. No free text, ever.",
+        "tags": [
+          "telemetry"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/telemetryService.recordTelemetryEvents",
+        "x-legacy": [],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "platform",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelemetryIngestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/TelemetryIngestResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "FIRST-PARTY by decision, not by default — see docs/TELEMETRY_DECISION.md. The worker app scrubs to an allowlist carrying no name, phone, location or token, but it still carries bookingRef, and RA 10173 s3(g) makes information personal when identity can be \"reasonably and directly ascertained by the entity holding the information\". Servana holds the bookings table. So the scrubbed payload is still personal data in our hands, and a foreign sink would be a cross-border transfer engaging s21 accountability, NPC model contractual clauses, and registration above 1,000 data subjects. The server re-scrubs from its own allowlist rather than trusting the client: a server that trusts a client's scrubbing has one control, not two."
+      }
+    },
+    "/api/v1/client-config": {
+      "get": {
+        "operationId": "clientConfig.read",
+        "summary": "The minimum client version that may run, per platform. The only recall a released mobile build has.",
+        "tags": [
+          "health"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "api/v1/domains/clientConfig.readClientConfig",
+        "x-legacy": [],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "platform",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ClientConfig"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Public because the client being recalled may be too old to authenticate, and a kill switch reachable only with a credential cannot kill the builds that most need it. Served from a JSON file, not the database: a recall is pulled during an incident, and the incident this platform actually had was every database-backed read returning 500 for six days. Editing the file takes effect within ~2 minutes with no restart and no deploy. The server fails OPEN — a missing or malformed file serves a permissive 0.0.0 floor — because the client fails CLOSED, and two closed halves would let one deleted file brick every installed app at once."
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "operationId": "health.build",
+        "summary": "The commit this build was made from. Public, and carries nothing else.",
+        "tags": [
+          "health"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "api/v1/domains/health.readBuildInfo",
+        "x-legacy": [],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "platform",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BuildInfo"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Reads dist/BUILD_INFO.json, which deploy.yml stamps on every deploy. It answers the one question a deploy cannot otherwise be asked from outside: which commit is actually serving. A deploy whose migration step fails stops short of the PM2 restart, so the old code keeps serving and nothing outward says so."
+      }
+    },
     "/api/v1/catalog/summary": {
       "get": {
         "operationId": "catalog.summary",
@@ -346,8 +566,8 @@
         "x-callers": {
           "customerMobile": "planned",
           "customerWeb": "planned",
-          "providerMobile": "planned",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "planned"
         },
         "x-observability-owner": "identity",
@@ -913,8 +1133,8 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "provider-jobs",
@@ -1025,8 +1245,8 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "planned",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "provider-jobs",
@@ -1148,7 +1368,7 @@
           "customerMobile": "legacy",
           "customerWeb": "legacy",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "planned"
         },
         "x-observability-owner": "notifications",
@@ -1258,7 +1478,7 @@
           "customerMobile": "legacy",
           "customerWeb": "legacy",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "planned"
         },
         "x-observability-owner": "notifications",
@@ -1339,7 +1559,7 @@
           "customerMobile": "legacy",
           "customerWeb": "legacy",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "planned"
         },
         "x-observability-owner": "notifications",
@@ -1461,7 +1681,7 @@
           "customerMobile": "planned",
           "customerWeb": "planned",
           "providerMobile": "planned",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "notifications",
@@ -1583,7 +1803,7 @@
           "customerMobile": "legacy",
           "customerWeb": "legacy",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "planned"
         },
         "x-observability-owner": "notifications",
@@ -1664,7 +1884,7 @@
           "customerMobile": "planned",
           "customerWeb": "planned",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "planned"
         },
         "x-observability-owner": "notifications",
@@ -1744,7 +1964,7 @@
           "customerMobile": "planned",
           "customerWeb": "planned",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "planned"
         },
         "x-observability-owner": "notifications",
@@ -1850,8 +2070,8 @@
         "x-callers": {
           "customerMobile": "legacy",
           "customerWeb": "planned",
-          "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "notifications",
@@ -1955,8 +2175,8 @@
         "x-callers": {
           "customerMobile": "legacy",
           "customerWeb": "planned",
-          "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "notifications",
@@ -2041,7 +2261,7 @@
         "x-callers": {
           "customerMobile": "planned",
           "customerWeb": "planned",
-          "providerMobile": "planned",
+          "providerMobile": "migrated",
           "providerWeb": "planned",
           "admin": "planned"
         },
@@ -2115,7 +2335,7 @@
         "x-callers": {
           "customerMobile": "planned",
           "customerWeb": "planned",
-          "providerMobile": "planned",
+          "providerMobile": "migrated",
           "providerWeb": "planned",
           "admin": "planned"
         },
@@ -2303,7 +2523,7 @@
         "x-callers": {
           "customerMobile": "planned",
           "customerWeb": "planned",
-          "providerMobile": "planned",
+          "providerMobile": "migrated",
           "providerWeb": "planned",
           "admin": "n/a"
         },
@@ -3144,7 +3364,7 @@
           "customerMobile": "n/a",
           "customerWeb": "n/a",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "planned"
         },
         "x-observability-owner": "account",
@@ -3244,7 +3464,7 @@
           "customerMobile": "n/a",
           "customerWeb": "n/a",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "account",
@@ -3473,7 +3693,7 @@
           "customerMobile": "n/a",
           "customerWeb": "n/a",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "account",
@@ -3562,8 +3782,8 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "planned",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "account",
@@ -3694,7 +3914,7 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "planned",
+          "providerMobile": "migrated",
           "providerWeb": "legacy",
           "admin": "n/a"
         },
@@ -3786,8 +4006,8 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "planned",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "account",
@@ -3899,8 +4119,8 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "planned",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "account",
@@ -4233,7 +4453,7 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "planned",
+          "providerMobile": "migrated",
           "providerWeb": "legacy",
           "admin": "n/a"
         },
@@ -4322,7 +4542,7 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "planned",
+          "providerMobile": "migrated",
           "providerWeb": "legacy",
           "admin": "n/a"
         },
@@ -4434,7 +4654,7 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "planned",
+          "providerMobile": "migrated",
           "providerWeb": "legacy",
           "admin": "n/a"
         },
@@ -4552,7 +4772,7 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "planned",
+          "providerMobile": "migrated",
           "providerWeb": "planned",
           "admin": "n/a"
         },
@@ -5895,7 +6115,7 @@
           "customerMobile": "legacy",
           "customerWeb": "legacy",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "legacy"
         },
         "x-observability-owner": "auth",
@@ -6374,7 +6594,7 @@
         "x-callers": {
           "customerMobile": "planned",
           "customerWeb": "planned",
-          "providerMobile": "planned",
+          "providerMobile": "migrated",
           "providerWeb": "planned",
           "admin": "n/a"
         },
@@ -7329,7 +7549,7 @@
           "customerMobile": "legacy",
           "customerWeb": "legacy",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "legacy"
         },
         "x-observability-owner": "messaging",
@@ -7464,7 +7684,7 @@
           "customerMobile": "legacy",
           "customerWeb": "legacy",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "legacy"
         },
         "x-observability-owner": "messaging",
@@ -7551,7 +7771,7 @@
           "customerMobile": "legacy",
           "customerWeb": "legacy",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "legacy"
         },
         "x-observability-owner": "messaging",
@@ -7669,7 +7889,7 @@
           "customerMobile": "legacy",
           "customerWeb": "legacy",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "legacy"
         },
         "x-observability-owner": "messaging",
@@ -7803,7 +8023,7 @@
           "customerMobile": "legacy",
           "customerWeb": "legacy",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "legacy"
         },
         "x-observability-owner": "messaging",
@@ -8271,7 +8491,7 @@
           "customerMobile": "legacy",
           "customerWeb": "legacy",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "legacy"
         },
         "x-observability-owner": "messaging",
@@ -8545,7 +8765,7 @@
         "x-callers": {
           "customerMobile": "planned",
           "customerWeb": "planned",
-          "providerMobile": "planned",
+          "providerMobile": "migrated",
           "providerWeb": "planned",
           "admin": "planned"
         },
@@ -8668,8 +8888,8 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "provider-jobs",
@@ -8810,8 +9030,8 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "provider-jobs",
@@ -8952,8 +9172,8 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "provider-jobs",
@@ -9094,8 +9314,8 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "provider-jobs",
@@ -9236,7 +9456,7 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "legacy",
+          "providerMobile": "migrated",
           "providerWeb": "legacy",
           "admin": "n/a"
         },
@@ -9379,8 +9599,8 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "provider-jobs",
@@ -9526,8 +9746,8 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "provider-jobs",
@@ -9684,8 +9904,8 @@
         "x-callers": {
           "customerMobile": "legacy",
           "customerWeb": "legacy",
-          "providerMobile": "planned",
-          "providerWeb": "planned",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "planned"
         },
         "x-observability-owner": "booking-experiences",
@@ -9960,7 +10180,7 @@
           "customerMobile": "legacy",
           "customerWeb": "planned",
           "providerMobile": "planned",
-          "providerWeb": "planned",
+          "providerWeb": "migrated",
           "admin": "planned"
         },
         "x-observability-owner": "booking-experiences",
@@ -10116,8 +10336,8 @@
         "x-callers": {
           "customerMobile": "planned",
           "customerWeb": "planned",
-          "providerMobile": "planned",
-          "providerWeb": "planned",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "planned"
         },
         "x-observability-owner": "booking-experiences",
@@ -10394,7 +10614,7 @@
           "customerMobile": "planned",
           "customerWeb": "planned",
           "providerMobile": "planned",
-          "providerWeb": "planned",
+          "providerWeb": "migrated",
           "admin": "planned"
         },
         "x-observability-owner": "booking-experiences",
@@ -10516,8 +10736,8 @@
         "x-callers": {
           "customerMobile": "n/a",
           "customerWeb": "n/a",
-          "providerMobile": "planned",
-          "providerWeb": "legacy",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "booking-experiences",
@@ -10657,7 +10877,7 @@
         "x-callers": {
           "customerMobile": "planned",
           "customerWeb": "planned",
-          "providerMobile": "planned",
+          "providerMobile": "migrated",
           "providerWeb": "legacy",
           "admin": "planned"
         },
@@ -10784,8 +11004,8 @@
         "x-callers": {
           "customerMobile": "planned",
           "customerWeb": "planned",
-          "providerMobile": "planned",
-          "providerWeb": "planned",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "legacy"
         },
         "x-observability-owner": "booking-experiences",
@@ -10929,8 +11149,8 @@
         "x-callers": {
           "customerMobile": "planned",
           "customerWeb": "planned",
-          "providerMobile": "planned",
-          "providerWeb": "planned",
+          "providerMobile": "migrated",
+          "providerWeb": "migrated",
           "admin": "planned"
         },
         "x-observability-owner": "booking-experiences",
@@ -11032,6 +11252,149 @@
         "description": "`reason`, `assigned_team` and `actor_uid` are withheld from every caller: free text one party typed about another, internal routing, and a person. Only `openedByYou` varies by caller."
       }
     },
+    "/api/v1/admin/refunds/{refundId}/mark-failed": {
+      "post": {
+        "operationId": "admin.refunds.markFailed",
+        "summary": "Record that an approved refund did not go through.",
+        "tags": [
+          "admin-finance"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/adminFinanceService.markRefundFailed",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/admin/finance/refunds/:refundId/mark-failed",
+            "disposition": "CANONICALIZE"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "legacy"
+        },
+        "x-observability-owner": "admin-finance",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "refundId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "finance_refund_reviews.id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefundFailureRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RefundTransitionResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PERMISSION_REQUIRED | ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Distinct from reject: rejected means a human decided against the refund, failed means everyone agreed and the money did not move. Only the second is worth retrying."
+      }
+    },
     "/api/v1/admin/bookings": {
       "get": {
         "operationId": "admin.bookings.list",
@@ -11039,9 +11402,7 @@
         "tags": [
           "admin-bookings"
         ],
-        "deprecated": false,
-        "x-status": "planned",
-        "x-implemented": false,
+        "x-implemented": true,
         "x-idempotent": true,
         "x-domain-service": "services/adminBookingService.listBookings",
         "x-legacy": [
@@ -11132,9 +11493,7 @@
         "tags": [
           "admin-bookings"
         ],
-        "deprecated": false,
-        "x-status": "planned",
-        "x-implemented": false,
+        "x-implemented": true,
         "x-idempotent": true,
         "x-domain-service": "services/providerEligibilityEngine.listAssignmentCandidatePool",
         "x-legacy": [
@@ -11257,9 +11616,7 @@
         "tags": [
           "admin-bookings"
         ],
-        "deprecated": false,
-        "x-status": "planned",
-        "x-implemented": false,
+        "x-implemented": true,
         "x-idempotent": false,
         "x-domain-service": "services/booking/transitionExecutor.transitionBooking (ADMIN_ASSIGN)",
         "x-legacy": [
@@ -11402,9 +11759,7 @@
         "tags": [
           "admin-bookings"
         ],
-        "deprecated": false,
-        "x-status": "planned",
-        "x-implemented": false,
+        "x-implemented": true,
         "x-idempotent": false,
         "x-domain-service": "services/booking/transitionExecutor.transitionBooking (ADMIN_REASSIGN)",
         "x-legacy": [
@@ -11713,7 +12068,7 @@
         "x-callers": {
           "customerMobile": "planned",
           "customerWeb": "planned",
-          "providerMobile": "planned",
+          "providerMobile": "migrated",
           "providerWeb": "planned",
           "admin": "planned"
         },
@@ -11990,7 +12345,7 @@
           "customerMobile": "n/a",
           "customerWeb": "n/a",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "finance-earnings",
@@ -12122,7 +12477,7 @@
           "customerMobile": "n/a",
           "customerWeb": "n/a",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "finance-earnings",
@@ -12244,7 +12599,7 @@
           "customerMobile": "n/a",
           "customerWeb": "n/a",
           "providerMobile": "legacy",
-          "providerWeb": "legacy",
+          "providerWeb": "migrated",
           "admin": "n/a"
         },
         "x-observability-owner": "finance-payouts",
@@ -12535,7 +12890,11 @@
                   "PAYMENT_PROCESSOR_UNAVAILABLE",
                   "PAYMENT_STATE_CONFLICT",
                   "PERMISSION_REQUIRED",
+                  "PROVIDER_DISABLED",
+                  "PROVIDER_NOT_APPROVED",
+                  "PROVIDER_REJECTED",
                   "PROVIDER_ROLE_REQUIRED",
+                  "PROVIDER_SUSPENDED",
                   "RATE_LIMITED",
                   "READ_POINTER_INVALID",
                   "REFRESH_TOKEN_INVALID",
@@ -12602,6 +12961,183 @@
             "description": "null when the total is not cheaply knowable."
           },
           "hasMore": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TelemetryIngestRequest": {
+        "type": "object",
+        "description": "A batch of scrubbed events. Unknown keys are DROPPED server-side rather than rejected, so one bad key in a batch does not cost the batch. There is deliberately no free-text field: a reporter that accepts a stack trace accepts whatever the strings in it happen to contain, which on this app includes addresses and signed URLs.",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "required": [
+                "event"
+              ],
+              "properties": {
+                "event": {
+                  "type": "string",
+                  "enum": [
+                    "activationStarted",
+                    "activationCompleted",
+                    "jobOffered",
+                    "jobAccepted",
+                    "jobStarted",
+                    "jobCompleted",
+                    "actionFailed"
+                  ]
+                },
+                "flavor": {
+                  "type": "string"
+                },
+                "appVersion": {
+                  "type": "string"
+                },
+                "buildNumber": {
+                  "type": "string"
+                },
+                "bookingRef": {
+                  "type": "string",
+                  "description": "An opaque reference. Never a customer name or address."
+                },
+                "failureClass": {
+                  "type": "string"
+                },
+                "httpStatus": {
+                  "type": "integer"
+                },
+                "attempt": {
+                  "type": "integer"
+                },
+                "durationMs": {
+                  "type": "integer"
+                },
+                "jobState": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "TelemetryIngestResult": {
+        "type": "object",
+        "required": [
+          "accepted",
+          "dropped",
+          "rejected"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "description": "Events stored."
+          },
+          "dropped": {
+            "type": "integer",
+            "description": "Keys the server refused. Names are counted; values never leave the request."
+          },
+          "rejected": {
+            "type": "integer",
+            "description": "Events discarded whole — unknown name, wrong shape, or over the batch cap."
+          }
+        }
+      },
+      "ClientConfig": {
+        "type": "object",
+        "description": "The client recall lever. `minimumSupported` is the version below which a client must refuse to run; `latestAvailable` never blocks. `source` is `default` when the configuration file was absent or unusable, which means the permissive 0.0.0 floor is in force and any configured recall is NOT being applied.",
+        "required": [
+          "platforms",
+          "source"
+        ],
+        "properties": {
+          "platforms": {
+            "type": "object",
+            "required": [
+              "ios",
+              "android"
+            ],
+            "properties": {
+              "ios": {
+                "$ref": "#/components/schemas/ClientPlatformConfig"
+              },
+              "android": {
+                "$ref": "#/components/schemas/ClientPlatformConfig"
+              }
+            }
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "config",
+              "default"
+            ]
+          }
+        }
+      },
+      "ClientPlatformConfig": {
+        "type": "object",
+        "required": [
+          "minimumSupported",
+          "latestAvailable",
+          "message"
+        ],
+        "properties": {
+          "minimumSupported": {
+            "type": "string",
+            "description": "MAJOR.MINOR.PATCH. A client at exactly this version is supported."
+          },
+          "latestAvailable": {
+            "type": "string",
+            "description": "MAJOR.MINOR.PATCH. Informational; never a reason to block."
+          },
+          "message": {
+            "type": "string",
+            "description": "Shown verbatim when the client blocks."
+          }
+        }
+      },
+      "BuildInfo": {
+        "type": "object",
+        "description": "Build provenance. Four fields and nothing else — no environment, no dependency liveness, no internal versions. `available` is false when no stamp was found, which happens on a first deploy or a cleaned workspace; the other fields are then null and the response is still 200, because absence is an answer.",
+        "required": [
+          "commit",
+          "ref",
+          "builtAt",
+          "run",
+          "available"
+        ],
+        "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "builtAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "available": {
             "type": "boolean"
           }
         }
@@ -17504,6 +18040,41 @@
         "type": "object",
         "description": "PLANNED — providerUid and a REQUIRED reason; the override is audited."
       },
+      "RefundFailureRequest": {
+        "type": "object",
+        "required": [
+          "failureReason"
+        ],
+        "description": "Why the approved refund did not go through. Required: \"failed\" with no explanation leaves the next operator unable to tell a retriable processor timeout from a closed account.",
+        "properties": {
+          "failureReason": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Recorded verbatim on the review."
+          }
+        }
+      },
+      "RefundTransitionResult": {
+        "type": "object",
+        "required": [
+          "refundId",
+          "status"
+        ],
+        "description": "The transition that was applied. Deliberately not the whole review — a caller that needs the record reads it back, rather than this becoming a second and subtly different source for it.",
+        "properties": {
+          "refundId": {
+            "type": "integer",
+            "description": "finance_refund_reviews.id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "failed"
+            ],
+            "description": "The terminal reached."
+          }
+        }
+      },
       "AdminBookingActionResult": {
         "type": "object",
         "description": "PLANNED — the canonical booking projection after the transition."
@@ -17516,6 +18087,9 @@
     },
     {
       "name": "admin-bookings"
+    },
+    {
+      "name": "admin-finance"
     },
     {
       "name": "auth"
@@ -17534,6 +18108,9 @@
     },
     {
       "name": "finance"
+    },
+    {
+      "name": "health"
     },
     {
       "name": "home"
@@ -17555,9 +18132,12 @@
     },
     {
       "name": "settings"
+    },
+    {
+      "name": "telemetry"
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 105,
-  "x-total-count": 109
+  "x-implemented-count": 113,
+  "x-total-count": 113
 }

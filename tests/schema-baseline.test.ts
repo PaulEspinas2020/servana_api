@@ -46,7 +46,7 @@ import {
   resolveTableName,
   splitStatements,
 } from '../scripts/lib/schemaModel';
-import { residualTransactionControl } from '../scripts/lib/migrationSafety';
+import { residualTransactionControl, stripSqlComments } from '../scripts/lib/migrationSafety';
 import {
   CATALOG_QUERIES,
   checkSource,
@@ -389,7 +389,9 @@ describe('the chain can be replayed', () => {
      */
     const unguarded: string[] = [];
     for (const input of migrationInputs()) {
-      for (const match of input.sql.matchAll(/CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?(?:servana\.)?(\w+)/gi)) {
+      // stripSqlComments: a comment quoting DDL does not create anything, and
+      // reading it as though it did fails a migration for its documentation.
+      for (const match of stripSqlComments(input.sql).matchAll(/CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?(?:servana\.)?(\w+)/gi)) {
         if (!match[1]) unguarded.push(`${input.file}: ${match[2]}`);
       }
     }
@@ -399,7 +401,7 @@ describe('the chain can be replayed', () => {
   it('creates every index with IF NOT EXISTS too', () => {
     const unguarded: string[] = [];
     for (const input of migrationInputs()) {
-      for (const match of input.sql.matchAll(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+(CONCURRENTLY\s+)?(IF\s+NOT\s+EXISTS\s+)?(\w+)/gi)) {
+      for (const match of stripSqlComments(input.sql).matchAll(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+(CONCURRENTLY\s+)?(IF\s+NOT\s+EXISTS\s+)?(\w+)/gi)) {
         if (!match[2]) unguarded.push(`${input.file}: ${match[3]}`);
       }
     }

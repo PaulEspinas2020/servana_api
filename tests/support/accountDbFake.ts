@@ -74,11 +74,23 @@ export const seedUser = (uid: string, role: number, o: Partial<Row> = {}): void 
     gender: null,
     photo_url: null,
     public_display_name: null,
-    public_biography: null,
+    public_bio: null,
     public_skills: null,
     public_languages: null,
     public_experience_summary: null,
   });
+};
+
+/**
+ * Set public provider-profile columns on an already-seeded user.
+ *
+ * Separate from `seedUser` because `seedUser`'s options object applies to
+ * `user_credentials`; the public profile lives in `user_profile` and its column
+ * names are the ones a projection bug hides behind.
+ */
+export const seedProviderProfile = (uid: string, o: Partial<Row> = {}): void => {
+  const row = store.profiles.find((x) => x.uid === uid);
+  if (row) Object.assign(row, o);
 };
 
 export const seedAddress = (uid: string, o: Partial<Row> = {}): Row => {
@@ -116,7 +128,13 @@ export const seedRequirement = (uid: string, type: string, status: string): void
 };
 
 export const seedService = (uid: string, serviceId: number, status = 'active'): void => {
-  store.employeeServices.push({ worker_uid: uid, service_id: serviceId, status, name: `Service ${serviceId}` });
+  // Keyed on `employee_uid` because that is the column `servana.employee_services`
+  // actually declares (scripts/baseline/000-baseline.sql). This fake previously
+  // stored `worker_uid` — the same name the service wrongly queried — so the fake
+  // and the defect agreed with each other and the suite stayed green while every
+  // provider got an empty list in production. A fake that mirrors the bug proves
+  // the bug.
+  store.employeeServices.push({ employee_uid: uid, service_id: serviceId, status, name: `Service ${serviceId}` });
 };
 
 export const addressesFor = (uid: string): Row[] =>
@@ -157,6 +175,37 @@ const rollbackTx = () => {
 // ─── The router ───────────────────────────────────────────────────────────────
 
 const done = (rows: Row[]) => ({ rows, rowCount: rows.length });
+
+/**
+ * Return only the columns a SELECT list names.
+ *
+ * The fake stores whole rows, so without this it answers every question with
+ * every column — and a query asking for a column that does not exist gets a
+ * usable row anyway. Real PostgreSQL raises 42703 instead. Projecting narrows
+ * the fake to what was asked, so a wrong column name surfaces as an absent key
+ * rather than as a silently correct answer.
+ *
+ * Anything the parser cannot resolve to a bare `alias.column`, `column`, or
+ * `... AS name` falls back to the whole row. Over-supplying is the previous
+ * behaviour and is safe; guessing at an expression would drop a column a suite
+ * legitimately needs.
+ */
+const projectSelected = (sql: string, row: Row): Row => {
+  const list = /^SELECT\s+([\s\S]*?)\s+FROM\s/i.exec(sql)?.[1];
+  if (!list || list.includes('*')) return row;
+  const wanted: string[] = [];
+  for (const part of list.split(',')) {
+    const term = part.trim();
+    const aliased = /\bAS\s+(\w+)$/i.exec(term);
+    const simple = /^(?:\w+\.)?(\w+)$/.exec(term);
+    if (aliased) wanted.push(aliased[1]);
+    else if (simple) wanted.push(simple[1]);
+    else return row;
+  }
+  const out: Row = {};
+  for (const key of wanted) out[key] = row[key];
+  return out;
+};
 
 export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCount: number } => {
   const flat = sql.replace(/\s+/g, ' ').trim();
@@ -224,7 +273,14 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
     const u = store.users.find((x) => x.uid === params[0]);
     if (!u) return done([]);
     const p = store.profiles.find((x) => x.uid === params[0]) ?? {};
-    return done([{ ...u, ...p }]);
+    // PROJECT what the SELECT list actually names. Returning the whole merged row
+    // meant a query could name a column that does not exist and still receive a
+    // populated row, because the caller then read the key it wanted from a row
+    // the fake had over-supplied. That is how `up.public_biography` — a column no
+    // migration has ever created — passed here while raising 42703 on a real
+    // server. A fake that answers questions it was not asked cannot catch a
+    // question that was asked wrongly.
+    return done([projectSelected(flat, { ...u, ...p })]);
   }
   if (/FROM servana\.worker_requirements WHERE worker_uid = \$1 AND COALESCE/i.test(flat)) {
     const accepted = store.requirements.filter(
@@ -236,8 +292,14 @@ export const run = (sql: string, params: unknown[] = []): { rows: Row[]; rowCoun
   if (/^SELECT id, requirement_type, status, created_at, expiry_date, review_note/i.test(flat)) {
     return done(store.requirements.filter((r) => r.worker_uid === params[0]));
   }
-  if (/^SELECT es\.service_id, es\.status, sv\.name/i.test(flat)) {
-    return done(store.employeeServices.filter((e) => e.worker_uid === params[0]));
+  // The WHERE column is part of the match, deliberately. Matching on the SELECT
+  // list alone accepted `WHERE es.worker_uid = $1`, which PostgreSQL answers with
+  // 42703 — so the fake was strictly more permissive than the server it stands in
+  // for, and a wider predicate passes while production is broken. Anything that
+  // does not match falls through to the unrouted-SQL throw at the end.
+  if (/^SELECT es\.service_id, es\.status, sv\.name/i.test(flat)
+      && /WHERE es\.employee_uid = \$1/i.test(flat)) {
+    return done(store.employeeServices.filter((e) => e.employee_uid === params[0]));
   }
 
   // ── addresses ─────────────────────────────────────────────────────────────

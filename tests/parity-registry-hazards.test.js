@@ -158,7 +158,13 @@ describe('parity registry — hazards', function () {
 var COPIES = [
   ['customer web', path.join(__dirname, '..', '..', 'servana_Customer_WebPortal',
     'src', 'app', 'core', 'utils', 'servana-field-parity.util.ts')],
-  ['worker web', path.join(__dirname, '..', '..', 'Servana.com.ph',
+  // NOT 'Servana.com.ph'. That directory does not exist on any checkout this
+  // suite has ever run on, so both worker-web assertions below returned without
+  // asserting anything — a silent skip of the one copy this programme is about.
+  // Measured 2026-08-19: 4 of this file's tests made ZERO assertions, and two of
+  // them were these. The repo is ServanaWorkerWeb, and it carries the registry
+  // at exactly the sub-path already expected here.
+  ['worker web', path.join(__dirname, '..', '..', 'ServanaWorkerWeb',
     'src', 'app', 'core', 'utils', 'servana-field-parity.util.ts')],
   ['admin portal', path.join(__dirname, '..', '..', 'servana_adminportal',
     'src', 'app', 'shared', 'utils', 'servana-field-parity.util.ts')],
@@ -206,5 +212,27 @@ describe('parity registry — the Angular copies', function () {
         }
       });
     });
+  });
+
+  /**
+   * The per-copy tests return early when a repo is not checked out beside this
+   * one, which is correct — a contributor with one repo cloned should not get a
+   * red suite. What is NOT correct is that behaviour being indistinguishable
+   * from every copy passing. Renaming all three directories would have left
+   * this whole describe green while checking nothing.
+   *
+   * This is the floor: at least one copy must be readable, and the ones that
+   * were skipped are named in the run output so a silent skip has to be read.
+   */
+  it('finds at least one Angular copy beside this repo', function () {
+    var found = COPIES.filter(function (e) { return fs.existsSync(e[1]); });
+    var missing = COPIES.filter(function (e) { return !fs.existsSync(e[1]); });
+    if (missing.length) {
+      console.warn(
+        '[parity-registry] copies NOT checked out beside this repo, assertions skipped: ' +
+          missing.map(function (e) { return e[0]; }).join(', '),
+      );
+    }
+    expect(found.map(function (e) { return e[0]; })).not.toEqual([]);
   });
 });

@@ -237,14 +237,10 @@ Each names the legacy route it will replace and why it was not adapted here.
 quietly become "half-built".
 
 <!-- BEGIN GENERATED: v1-planned -->
-**4 planned entries today**, against 105 implemented.
+**0 planned entries today**, against 113 implemented.
 
 | Path | Domain | Successor to | Why it is not built here |
 |---|---|---|---|
-| `/api/v1/admin/bookings` | admin-bookings | `GET /api/admin/bookings` | The admin portal is the only caller and deploys from git on every push, so it is the cheapest client to migrate — but it is also the only one whose list carries permission-scoped columns, so the DTO needs the permission model resolved first. |
-| `/api/v1/admin/bookings/:bookingId/assignment-candidates` | admin-bookings | `GET /api/admin/bookings/:id/assignment-candidates` | Read-only, but it is the preview of a mutation, so it must qualify providers with the predicate the assign call commits with. It does: both run PROVIDER_CAPABILITY_SQL. A preview narrower than its committer does not fail safe — it hides assignable providers. |
-| `/api/v1/admin/bookings/:bookingId/assign` | admin-bookings | `POST /api/admin/bookings/:id/assign` | Role-specific by AUTHORIZATION, not by truth: only an admin may name another actor as the provider. A provider accepting their own job goes through provider.jobs.accept, which derives identity from the token and can never name somebody else. |
-| `/api/v1/admin/bookings/:bookingId/reassign` | admin-bookings | `POST /api/admin/bookings/:id/reassign` | The override record — actor, reason, previous provider, new provider — is written by the executor, not by the controller, so it cannot be skipped by a caller that forgets to audit. Reassignment preserves the outgoing provider's progression rather than erasing it. |
 <!-- END GENERATED: v1-planned -->
 
 The count moves as domain commands land — `/auth/refresh` and `/search` were

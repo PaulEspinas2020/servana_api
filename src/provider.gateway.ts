@@ -1,17 +1,17 @@
 import { Server, Socket } from "socket.io";
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
 
-import { getFirebaseAdmin } from "./middleware/firebaseApp";
+import { firebaseAdmin } from "./middleware/firebaseApp";
+import { lazyValue } from "./middleware/lazyValue";
 import { tempId, db } from "./config";
 import { setProviderIo, providerRoomKey } from "./provider.realtime";
 import * as repo from "./chat/chat.repository";
 import dbQuery from "./db/dbQuery";
 import { isProviderRole } from "./constants/providerRoles";
 
-// Lazy: resolving the Auth service at module scope made importing this file
-// require a live Admin credential. getAuth() memoises per app internally and
-// getFirebaseAdmin() memoises the app, so calling this per request is cheap.
-const defaultAuthAdmin = () => getAuthAdmin(getFirebaseAdmin());
+// Deferred: `getAuthAdmin` resolves the credential eagerly, which made
+// importing this module — and so the composed app — require a live key.
+const defaultAuthAdmin = lazyValue(() => getAuthAdmin(firebaseAdmin));
 
 interface SocketActor {
   uid: string;
@@ -49,7 +49,7 @@ export const initProviderSocket = (io: Server): void => {
 
       if (!token) return next(new Error("Unauthorized"));
 
-      const decoded = await defaultAuthAdmin().verifyIdToken(token);
+      const decoded = await defaultAuthAdmin.verifyIdToken(token);
       const role = await repo.getUserRole(decoded.uid);
       if (!isProviderRole(role)) return next(new Error("Unauthorized"));
       (socket as any).actor = { uid: decoded.uid, role };

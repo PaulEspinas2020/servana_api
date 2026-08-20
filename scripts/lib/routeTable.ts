@@ -211,6 +211,26 @@ export function parseMountOrder(appTsPath = path.join(REPO_ROOT, 'src', 'app.ts'
   let order = 0;
 
   while ((um = useRe.exec(src)) !== null) {
+    /**
+     * A COMMENTED-OUT mount is not a mount.
+     *
+     * Measured 2026-08-19: commenting out `app.use("/api", cors(...), providerRoutes)`
+     * left this table reporting all 39 `/worker/` routes as mounted, and every
+     * consumer believed it — the protected-contract guard, the orphan ratchet,
+     * the authorization inventory and the API docs generator are all built on
+     * this function. Deleting the same line correctly dropped 628 routes to 493.
+     *
+     * Commenting a router out is the ordinary way a router gets disabled, so
+     * the one edit most likely to remove a route was the one edit this table
+     * could not see.
+     *
+     * Line comments only. A mount inside a block comment would need brace
+     * tracking, and claiming more precision than the check has is how the
+     * previous version of the protected-contract guard came to be believed.
+     */
+    const lineStart = src.lastIndexOf('\n', um.index) + 1;
+    if (/^\s*\/\//.test(src.slice(lineStart, um.index + 1))) continue;
+
     const close = matchingParen(src, useRe.lastIndex);
     const args = splitTopLevelArgs(src.slice(useRe.lastIndex, close));
     if (!args.length) continue;
@@ -288,6 +308,25 @@ export function buildMountedRoutes(): MountedRoute[] {
     for (const row of rows) {
       if (row.verb === 'use') continue;
       if (wantedRouter && row.router !== wantedRouter) continue;
+      /**
+       * A route with NO handler is not a route.
+       *
+       * The parser keys on `.get('…')`, and `req.get('x-servana-client')` has
+       * that exact shape. Three header reads in `api/v1/legacyTelemetry.ts` were
+       * being emitted as mounted GET routes — `/user-agent`,
+       * `/x-servana-client`, `/x-servana-client-version` — inflating every count
+       * derived from this table.
+       *
+       * That is not cosmetic. `authOf` classifies a chain by the middleware
+       * NAMES in it, so an empty chain matches no rung and resolves to `public`,
+       * the weakest. Three phantom public routes sat in the authorization
+       * inventory, and an orphan ratchet built on this table would have frozen
+       * them as real surface to drain.
+       *
+       * Discriminating rather than blunt: every genuine route carries at least
+       * one handler, and a header read carries none.
+       */
+      if (!row.handlers || row.handlers.length === 0) continue;
       const joined = `${mount.prefix}${row.path.startsWith('/') ? '' : '/'}${row.path}`;
       out.push({
         ...row,

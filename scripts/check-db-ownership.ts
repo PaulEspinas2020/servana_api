@@ -60,7 +60,10 @@ async function main() {
       [SCHEMA],
     );
 
-    const bad = tables.rowCount + sequences.rowCount;
+    // pg types rowCount as `number | null`. It is null for statements that
+    // return no result set, never for a SELECT — but `null + null` is 0 and
+    // would report a clean ownership check on a query that returned nothing.
+    const bad = (tables.rowCount ?? 0) + (sequences.rowCount ?? 0);
     if (bad === 0) {
       console.log(`check-db-ownership: OK — all ${total.rows[0].n} tables and every sequence in "${SCHEMA}" are owned by "${APP_ROLE}".`);
       return 0;

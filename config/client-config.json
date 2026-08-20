@@ -1,0 +1,16 @@
+{
+  "_comment": "The client recall lever. Editing this file takes effect within ~2 minutes with no restart and no deploy. See docs/CLIENT_RECALL_RUNBOOK.md before raising a minimum - it blocks every installed build below it, and there is no way to unblock a worker except a store release.",
+  "_note_on_the_shipped_floor": "minimumSupported is 1.0.0, which BLOCKS any pre-1.0 build. That is deliberate for a first release, but if a beta ships as 0.x it will be blocked on launch with the message below. Lower this to 0.0.0 before any pre-1.0 field test. In production, point CLIENT_CONFIG_PATH at a file outside the checkout so a deploy cannot overwrite an active recall with this shipped default.",
+  "platforms": {
+    "ios": {
+      "minimumSupported": "1.0.0",
+      "latestAvailable": "1.0.0",
+      "message": "This version of Servana Worker is no longer supported. Please update from the App Store to keep receiving jobs."
+    },
+    "android": {
+      "minimumSupported": "1.0.0",
+      "latestAvailable": "1.0.0",
+      "message": "This version of Servana Worker is no longer supported. Please update from Google Play to keep receiving jobs."
+    }
+  }
+}

@@ -35,7 +35,7 @@
  * in a log, and masking invites someone to widen it later.
  */
 
-export type EnvRequirement = 'required' | 'degraded';
+export type EnvRequirement = 'required' | 'degraded' | 'optional';
 
 export interface EnvVarSpec {
   name: string;
@@ -43,6 +43,41 @@ export interface EnvVarSpec {
   /** What breaks without it. Written for whoever reads the boot failure. */
   purpose: string;
 }
+
+/**
+ * Read by the code, has a working default, and its absence is not a problem.
+ *
+ * ## Why this tier exists rather than filing such variables under `degraded`
+ *
+ * `tests/env-schema-completeness.test.ts` requires every `process.env` read to
+ * be declared, and it is right to: a variable whose absence nothing can report
+ * is how a missing `API_KEY` silently broke token refresh for every client.
+ *
+ * But the only two tiers available said something false about
+ * `CLIENT_CONFIG_PATH`. `required` would make production refuse to boot without
+ * an override nobody needs; `degraded` prints it at boot under the banner "the
+ * features these serve will not work", and that is simply untrue — unset, the
+ * recall lever reads `config/client-config.json` and works exactly as intended.
+ *
+ * A boot log that cries wolf about a variable that does not matter is a boot log
+ * people stop reading, and the degraded list is the one place this application
+ * announces genuinely missing integrations. Keeping it true is worth a third
+ * tier.
+ *
+ * So: declared and discoverable, never reported missing. If a variable here has
+ * no safe default, it is in the wrong tier.
+ */
+export const OPTIONAL_ENV: readonly EnvVarSpec[] = Object.freeze([
+  {
+    name: 'CLIENT_CONFIG_PATH',
+    requirement: 'optional',
+    purpose:
+      'absolute path to the client recall configuration. Unset, the server reads '
+      + 'config/client-config.json. Set it to a path OUTSIDE the checkout so a deploy that '
+      + 'replaces the working directory cannot replace the recall lever with whatever the '
+      + 'release happened to ship. See docs/CLIENT_RECALL_RUNBOOK.md',
+  },
+]);
 
 /**
  * Variables whose absence would already have broken production.
@@ -102,6 +137,27 @@ export const DEGRADED_ENV: readonly EnvVarSpec[] = Object.freeze([
   { name: 'MONGO_HOST', requirement: 'degraded', purpose: 'chat and notification storage' },
   { name: 'MONGO_DB', requirement: 'degraded', purpose: 'chat and notification storage' },
   { name: 'SEMAPHORE_API_KEY', requirement: 'degraded', purpose: 'SMS/OTP delivery' },
+  /**
+   * The Firebase Web API key, used ONLY to redeem a refresh token at Google's
+   * secure-token endpoint.
+   *
+   * It was in no list at all until 2026-08-19, and its absence is not quiet:
+   * `refreshIdToken` answers 502 REFRESH_UNAVAILABLE for every client — admin
+   * portal, both mobile apps, provider web — so no session can ever be renewed.
+   * The symptom is not an error anybody reports as one. Users are simply signed
+   * out when their token reaches its hour, because the client correctly refuses
+   * to discard a session on a 502 and then presents a token the server rejects.
+   *
+   * Measured on production that day: POST /api/auth/refresh and
+   * POST /api/v1/auth/refresh both returned
+   * `502 {"code":"REFRESH_UNAVAILABLE"}` for any token.
+   *
+   * `degraded` rather than `required`: the server genuinely can serve without
+   * it, and making it fatal would turn a broken-refresh incident into a
+   * won't-boot incident. What was missing was not severity — it was VISIBILITY.
+   * Nothing named this variable, so nothing could report it unset.
+   */
+  { name: 'API_KEY', requirement: 'degraded', purpose: 'redeeming refresh tokens — without it NO session can be renewed' },
   { name: 'GOOGLE_PLACES_SERVER_API_KEY', requirement: 'degraded', purpose: 'address lookup' },
   { name: 'APP_URL', requirement: 'degraded', purpose: 'links in email and payment return URLs' },
 ]);
@@ -109,6 +165,9 @@ export const DEGRADED_ENV: readonly EnvVarSpec[] = Object.freeze([
 export const ENV_SCHEMA: readonly EnvVarSpec[] = Object.freeze([
   ...REQUIRED_ENV,
   ...DEGRADED_ENV,
+  // Declared so the completeness gate can see the read, and so a reader can
+  // discover the override. Never reported missing — see OPTIONAL_ENV.
+  ...OPTIONAL_ENV,
 ]);
 
 const isSet = (name: string): boolean => {

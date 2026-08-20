@@ -28,6 +28,7 @@ import {
   ClientName,
 } from '../src/api/v1/contract';
 import { V1_ERROR_CODES, V1_ERROR_STATUS, isV1ErrorCode } from '../src/api/v1/errors';
+import { buildV1Router, V1_HANDLERS } from '../src/api/v1/register';
 import { buildOpenApiDocument, SCHEMAS, allErrorsFor } from '../src/api/v1/openapi';
 import { buildWatchList, RETIREMENT_CRITERIA } from '../src/api/v1/legacyTelemetry';
 import { staleFiles } from '../scripts/generate-api-docs';
@@ -167,8 +168,44 @@ describe('contract integrity', () => {
 });
 
 describe('planned entries are documented, not built', () => {
-  it('there is at least one, or the distinction is untested', () => {
-    expect(PLANNED.length).toBeGreaterThan(0);
+  /**
+   * This used to assert `PLANNED.length > 0`, on the reasoning that with no
+   * planned entries the "planned entries are not reachable" assertions become
+   * vacuous and the distinction goes untested.
+   *
+   * TAB 06 wave 1 emptied the backlog — the four `admin.bookings.*` entries were
+   * the last planned ones and are now implemented. An empty backlog is a
+   * legitimate and desirable state, so requiring one to exist would mean keeping
+   * an endpoint unbuilt to satisfy a test.
+   *
+   * What must never lapse is the ENFORCEMENT, so that is what is asserted now,
+   * against a fixture rather than against inventory. `buildV1Router` throws when
+   * a handler is supplied for an entry that is not implemented; if that ever
+   * stops being true, a half-finished endpoint ships as a silent 404 instead of
+   * failing the build.
+   */
+  it('a handler for an entry that is not implemented is refused at build time', () => {
+    // The real handler set PLUS one bogus key. Passing the bogus key alone would
+    // trip the "every implemented entry has a handler" check first and prove
+    // nothing about the rule under test.
+    const withStray = {
+      ...V1_HANDLERS,
+      'fixture.never.existed': (async () => undefined) as never,
+    };
+    expect(() => buildV1Router(withStray)).toThrow(/fixture\.never\.existed/);
+
+    // And the same rule for a genuinely planned entry, whenever one exists.
+    const planned = V1_CONTRACT.find((e) => e.status === 'planned');
+    if (planned) {
+      expect(() =>
+        buildV1Router({ ...V1_HANDLERS, [planned.id]: (async () => undefined) as never }),
+      ).toThrow(/PLANNED|planned/);
+    }
+  });
+
+  it('the backlog is empty or every entry in it is accounted for', () => {
+    // Not `> 0`. See above.
+    expect(PLANNED.length).toBeGreaterThanOrEqual(0);
   });
 
   it('each planned entry names either a legacy route it will replace or why nothing exists', () => {

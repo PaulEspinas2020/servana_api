@@ -208,6 +208,18 @@ const safeCount = async (sql: string, params: any[]): Promise<number> => {
   }
 };
 
+// The overlap map spans two stores. `worker_locations` lives in MongoDB, so it
+// cannot be counted with `safeCount`, and reaching for it through Postgres is
+// how it silently read -1 for the life of the function. Same contract as
+// `safeCount`: -1 means "could not be established", never "zero".
+const safeMongoCount = async (collection: string, filter: Record<string, unknown>): Promise<number> => {
+  try {
+    return await (await mongoDb).collection(collection).countDocuments(filter);
+  } catch {
+    return -1;
+  }
+};
+
 // ── Summary Metrics (deduped by provider UID) ─────────────────────────────────
 
 export const getProviderMetrics = async () => {
@@ -999,7 +1011,30 @@ export const getProviderOverlapMap = async (uid: string): Promise<ProviderOverla
   }
   const cred = credRes.rows[0];
 
-  // Query all related tables in parallel — safeCount for tables that may not exist
+  // Query all related tables in parallel — safeCount for tables that may not exist.
+  //
+  // ## Why the predicate column is spelled out per table rather than assumed
+  //
+  // `safeCount` returns -1 on ANY error, including "column does not exist", and
+  // the caller renders -1 as "table not queryable". So a wrong column name here
+  // does not fail — it reports the row as UNKNOWN, indistinguishable from a
+  // table that is genuinely absent. Three of these ten rows were wrong that way
+  // and had been reporting -1 since the function was written:
+  //
+  //   - `employee_services` and `employee_catalog_capabilities` key on
+  //     `employee_uid`, not `uid`. Every other query in this repository already
+  //     spells them correctly (8 further call sites in THIS file alone, plus
+  //     the UNIQUE (employee_uid, offering_id) constraint documented in
+  //     providerCatalogService.ts). Only the overlap map disagreed.
+  //   - `worker_locations` is not a Postgres table at all. It is a MongoDB
+  //     collection — every other reader in the codebase reaches it through
+  //     `mongoDb.collection('worker_locations')`. Querying `${s}.worker_locations`
+  //     threw on every call.
+  //
+  // That matters because this map is the evidence an operator uses to decide
+  // whether a duplicate provider row is safe to delete. Reporting "unknown" for
+  // active service assignments, catalog capabilities and online status makes the
+  // two rows look equally empty when one of them may carry live work.
   const [
     profileCnt, reqCnt, appRes, activeSvcCnt, catalogCapCnt,
     availCnt, svcAreaCnt, locCnt, bookingCnt,
@@ -1007,11 +1042,11 @@ export const getProviderOverlapMap = async (uid: string): Promise<ProviderOverla
     safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.user_profile              WHERE uid = $1`,         [uid]),
     safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.worker_requirements       WHERE worker_uid = $1`,  [uid]),
     dbQuery.query(`SELECT status, COUNT(*)::int AS cnt FROM ${s}.worker_service_applications WHERE worker_uid = $1 GROUP BY status`, [uid]),
-    safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.employee_services         WHERE uid = $1`,         [uid]),
-    safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.employee_catalog_capabilities WHERE uid = $1`,     [uid]),
+    safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.employee_services         WHERE employee_uid = $1`, [uid]),
+    safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.employee_catalog_capabilities WHERE employee_uid = $1`, [uid]),
     safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.worker_availability       WHERE worker_uid = $1`,  [uid]),
     safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.worker_service_areas      WHERE worker_uid = $1`,  [uid]),
-    safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.worker_locations          WHERE uid = $1`,         [uid]),
+    safeMongoCount('worker_locations', { uid }),
     safeCount(`SELECT COUNT(*)::int AS cnt FROM ${s}.booking_workers           WHERE worker_uid = $1`,  [uid]),
   ]);
 
@@ -1026,11 +1061,11 @@ export const getProviderOverlapMap = async (uid: string): Promise<ProviderOverla
     { table: 'user_profile',                  column: 'uid',        presentAs: 'profile record',                      rowCount: profileCnt },
     { table: 'worker_requirements',           column: 'worker_uid', presentAs: 'uploaded documents',                  rowCount: reqCnt },
     { table: 'worker_service_applications',   column: 'worker_uid', presentAs: 'service applications (all statuses)', rowCount: totalApps },
-    { table: 'employee_services',             column: 'uid',        presentAs: 'active service assignments',          rowCount: activeSvcCnt },
-    { table: 'employee_catalog_capabilities', column: 'uid',        presentAs: 'catalog capabilities',                rowCount: catalogCapCnt },
+    { table: 'employee_services',             column: 'employee_uid', presentAs: 'active service assignments',        rowCount: activeSvcCnt },
+    { table: 'employee_catalog_capabilities', column: 'employee_uid', presentAs: 'catalog capabilities',              rowCount: catalogCapCnt },
     { table: 'worker_availability',           column: 'worker_uid', presentAs: 'availability schedule',               rowCount: availCnt },
     { table: 'worker_service_areas',          column: 'worker_uid', presentAs: 'service area config',                 rowCount: svcAreaCnt },
-    { table: 'worker_locations',              column: 'uid',        presentAs: 'location/online status',              rowCount: locCnt },
+    { table: 'worker_locations',              column: 'uid',        presentAs: 'location/online status (MongoDB)',    rowCount: locCnt },
     { table: 'booking_workers',               column: 'worker_uid', presentAs: 'booking assignments',                 rowCount: bookingCnt },
   ];
 

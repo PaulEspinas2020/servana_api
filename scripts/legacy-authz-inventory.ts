@@ -37,6 +37,8 @@
  * Run: npm run authz:legacy
  */
 
+import fs from 'fs';
+import path from 'path';
 import { buildMountedRoutes, type MountedRoute } from './lib/routeTable';
 import { V1_CONTRACT, V1_PREFIX, type AuthMode } from '../src/api/v1/contract';
 import { objectScopedEntries } from '../src/api/v1/authzMatrix';
@@ -105,8 +107,76 @@ const STRICTNESS: Record<AuthMode, number> = {
   admin: 3,
 };
 
-export const authOf = (route: MountedRoute): AuthMode => {
+/**
+ * Inline a spread middleware alias before reading the chain.
+ *
+ * ## The measured defect
+ *
+ * `authOf` matches middleware by NAME in the handler text. 224 of 520 legacy
+ * routes are declared as `router.get(path, ...adminOnly, handler)`, and
+ * `adminOnly` is `[verifyAuth, verifyRoles([1]), adminRateLimit]` defined in the
+ * same file. The literal `...adminOnly` contains none of the ladder's names, so
+ * every one of those routes was classified `public` — the WEAKEST rung.
+ *
+ * That is not merely a wrong label. `loosenings()` reports only when the legacy
+ * route is STRICTER than its v1 successor, so a legacy route mis-read as
+ * `public` can never produce a finding. The gate was silently blind across 43%
+ * of the legacy surface, and its own "public" bucket was 83% wrong.
+ *
+ * Resolution is per-FILE and deliberately not global: `technician.routes.ts`
+ * defines `adminOnly` as `verifyRoles([0, 1])`, not `[1]`, so a single shared
+ * definition would have reported role 0 as admin. The alias means whatever the
+ * file it appears in says it means.
+ *
+ * Only aliases the file actually defines are inlined; anything unresolved is
+ * left as written, so this can widen the read chain but never invent one.
+ */
+const REPO_ROOT = path.resolve(__dirname, '..');
+const aliasCache = new Map<string, Map<string, string>>();
+
+const aliasesIn = (file: string): Map<string, string> => {
+  const cached = aliasCache.get(file);
+  if (cached) return cached;
+  const found = new Map<string, string>();
+  try {
+    const text = fs.readFileSync(path.resolve(REPO_ROOT, file), 'utf8');
+    // Bracket-BALANCED, not `[^\]]*`. `[verifyAuth, verifyRoles([1]), adminRateLimit]`
+    // contains a nested `]`, so a naive scan stops inside `verifyRoles([1` and
+    // silently drops everything after it — including, in principle, a
+    // `requireCapability` at the end of the array. A chain truncated mid-alias
+    // reads as weaker than it is, which is the defect this resolution exists to
+    // remove, reintroduced one level down.
+    for (const m of text.matchAll(/const\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=\s*\[/g)) {
+      const open = m.index! + m[0].length - 1;
+      let depth = 0;
+      let close = -1;
+      for (let i = open; i < text.length; i += 1) {
+        const ch = text[i];
+        if (ch === '[') depth += 1;
+        else if (ch === ']') {
+          depth -= 1;
+          if (depth === 0) { close = i; break; }
+        }
+      }
+      if (close !== -1) found.set(m[1], text.slice(open + 1, close));
+    }
+  } catch {
+    // A route file that cannot be read resolves no aliases. The chain is then
+    // read as written, which is the previous behaviour.
+  }
+  aliasCache.set(file, found);
+  return found;
+};
+
+export const resolvedChain = (route: MountedRoute): string => {
   const chain = route.handlers.join(' ');
+  if (!chain.includes('...')) return chain;
+  const aliases = aliasesIn(route.file);
+  return chain.replace(/\.\.\.([A-Za-z_][A-Za-z0-9_]*)/g, (whole, name) => aliases.get(name) ?? whole);
+};
+
+export const authOf = (route: MountedRoute): AuthMode => {
+  const chain = resolvedChain(route);
   for (const rung of LADDER) if (rung.matches.test(chain)) return rung.mode;
   return 'public';
 };
@@ -193,6 +263,178 @@ export const loosenings = (): Loosening[] => {
   return found;
 };
 
+/**
+ * Capabilities the legacy chain demands, by NAME.
+ *
+ * ## Why the ladder alone could not see this
+ *
+ * `authOf` reports a chain at its strictest ROLE rung, and its vocabulary is
+ * `verifyRoles`, `requireProviderRole`, `verifyAuth`. `requireCapability` is not
+ * in it, so a chain of
+ *
+ *   [verifyAuth, requireProviderRole, requireCapability("canViewEarnings")]
+ *
+ * resolves to `provider` — indistinguishable from a v1 entry declaring
+ * `auth: 'provider'` and nothing else. `STRICTNESS[legacy] <= STRICTNESS[v1]`
+ * is then true, the comparison short-circuits, and a removed enforcement point
+ * reads as parity.
+ *
+ * That is not a hypothetical: the three v1 earnings endpoints were mounted
+ * without the capability their live legacy aliases require, and this gate
+ * reported zero loosenings throughout.
+ *
+ * A capability is ORTHOGONAL to the role ladder rather than another rung on it —
+ * a request can be required to be a provider AND to hold a capability — so it is
+ * compared as its own dimension instead of being folded into STRICTNESS, which
+ * would have lost which capability was dropped.
+ */
+const CAPABILITY_CALL = /\brequireCapability\s*\(\s*["'`]([A-Za-z0-9_]+)["'`]/g;
+
+/**
+ * `requireActiveProvider` is a THIRD dimension the ladder cannot see.
+ *
+ * It is not a role rung and not a named capability, so a chain carrying it
+ * resolves to plain `provider` — identical to a v1 entry declaring
+ * `auth: 'provider'`. Its own docblock states what it exists to prevent: a
+ * suspended provider's Firebase token stays valid, `verifyAuth` keeps passing,
+ * and "anyone holding that token, including the suspended provider with any HTTP
+ * client, could still accept bookings, start jobs and move their location."
+ *
+ * All seven legacy provider job actions carry it. Their v1 successors carried no
+ * active-status check at all — not in the chain, not in `domains/bookingActions`,
+ * not in `transitionExecutor` — so the v1 surface reopened exactly the hole this
+ * middleware was written to close, on a WRITE path that assigns real work.
+ *
+ * It is compared as its OWN dimension and deliberately NOT mapped onto a
+ * capability. `canAcceptJobs` looks equivalent and is not: the middleware reads
+ * `account_status` alone and treats a blank one as working, while the capability
+ * is `fullyActive && complianceCurrent` and refuses a provider who is
+ * mid-activation or has zero active services. Mapping one to the other made the
+ * v1 contract STRICTER than the route it supersedes, which is the same class of
+ * error as making it weaker.
+ */
+const ACTIVE_PROVIDER_CALL = /\brequireActiveProvider\b/;
+/** Read as its OWN dimension. It is not equivalent to any capability — see below. */
+/**
+ * Named admin permissions the legacy chain demands.
+ *
+ * The FIFTH dimension, and it was never compared. `ContractEntry.permission`
+ * exists — `register.ts` builds admin permission middleware from it and refuses
+ * to start if an `auth: 'admin'` entry declares none — but nothing checked it
+ * against the legacy route being superseded. `auth: 'admin'` proves role 1 and
+ * nothing else, while the legacy admin routes gate on a NAMED permission as
+ * well, so a v1 successor that dropped one would be a quieter route to the same
+ * data and every existing check would have reported parity.
+ *
+ * Same failure shape as the capability blindness: the ladder reads roles, the
+ * chain carries more than roles, and what it carries has no word in the
+ * comparison.
+ */
+const PERMISSION_CALL = /\brequirePermission\s*\(\s*["'`]([A-Za-z0-9_.]+)["'`]/g;
+
+export const permissionsOf = (route: MountedRoute): string[] => {
+  const found = new Set<string>();
+  for (const match of resolvedChain(route).matchAll(PERMISSION_CALL)) found.add(match[1]);
+  return [...found].sort();
+};
+
+export const requiresActiveProvider = (route: MountedRoute): boolean =>
+  ACTIVE_PROVIDER_CALL.test(resolvedChain(route));
+
+export const capabilitiesOf = (route: MountedRoute): string[] => {
+  const chain = resolvedChain(route);
+  const found = new Set<string>();
+  for (const match of chain.matchAll(CAPABILITY_CALL)) found.add(match[1]);
+  return [...found].sort();
+};
+
+export interface CapabilityLoosening {
+  legacyPath: string;
+  legacyCapabilities: string[];
+  v1Id: string;
+  v1Path: string;
+  v1Capability: string | null;
+  dropped: string[];
+}
+
+/**
+ * v1 entries whose superseded legacy route demanded a capability they do not.
+ *
+ * The same supersession rule as `loosenings()`: `ROLE_SPECIFIC` and `KEEP` are
+ * not supersessions, so they are not compared.
+ */
+export const capabilityLoosenings = (): CapabilityLoosening[] => {
+  const mounted = buildMountedRoutes();
+  const byPath = new Map<string, MountedRoute>();
+  for (const route of mounted) {
+    const key = `${route.verb.toUpperCase()} ${normalise(route.fullPath)}`;
+    if (!byPath.has(key)) byPath.set(key, route);
+  }
+
+  const found: CapabilityLoosening[] = [];
+  for (const entry of V1_CONTRACT) {
+    for (const legacy of entry.legacy ?? []) {
+      if (legacy.disposition === 'ROLE_SPECIFIC' || legacy.disposition === 'KEEP') continue;
+
+      const route = byPath.get(`${legacy.method.toUpperCase()} ${normalise(legacy.path)}`);
+      if (!route) continue;
+
+      const legacyCapabilities = capabilitiesOf(route);
+      // `requireActiveProvider` is its own dimension, matched against the
+      // contract's `activeProvider` flag rather than against a capability.
+      const legacyActive = requiresActiveProvider(route);
+      const declaredActive = (entry as { activeProvider?: true }).activeProvider === true;
+      const activeDropped = legacyActive && !declaredActive;
+
+      /**
+       * The fifth dimension. `auth: 'admin'` proves role 1 and nothing else,
+       * and the legacy admin routes gate on a NAMED permission as well.
+       *
+       * Exempt when the successor is OBJECT-SCOPED, on the same reasoning the
+       * role ladder is exempted a few lines below: `bookings.reschedule`,
+       * `bookings.disputes.open` and `bookings.refunds.create` are single
+       * endpoints serving a customer and an admin, and the decision is made by
+       * `assertBookingAccess` / `actorFor` against the BOOKING rather than by a
+       * role or a permission. Demanding an admin permission there would refuse
+       * a customer their own booking.
+       *
+       * That exemption is not a loophole, and `4335378` is why: where merging
+       * the surfaces would collapse a separation of duties, this repository
+       * REMOVES the capability from v1 rather than permissioning it. The refund
+       * endpoint no longer refunds — every actor opens a review, and refunds
+       * complete through the reviewed, permissioned admin surface. Declaring a
+       * permission there would have "closed the privilege hole and quietly
+       * blessed the collapse".
+       */
+      const legacyPermissions = permissionsOf(route);
+      const declaredPermission = (entry as { permission?: string }).permission ?? null;
+      const permissionExempt = OBJECT_SCOPED_IDS.has(entry.id)
+        || entry.path.startsWith('/me/') || entry.path === '/me';
+      const permissionsDropped = permissionExempt
+        ? []
+        : legacyPermissions.filter((p) => p !== declaredPermission);
+
+      if (!legacyCapabilities.length && !activeDropped && !permissionsDropped.length) continue;
+
+      const declared = (entry as { capability?: string }).capability ?? null;
+      const dropped = legacyCapabilities.filter((c) => c !== declared);
+      if (activeDropped) dropped.push('requireActiveProvider');
+      for (const p of permissionsDropped) dropped.push(`requirePermission(${p})`);
+      if (!dropped.length) continue;
+
+      found.push({
+        legacyPath: `${legacy.method.toUpperCase()} ${legacy.path}`,
+        legacyCapabilities,
+        v1Id: entry.id,
+        v1Path: `${entry.method.toUpperCase()} /api/v1${entry.path}`,
+        v1Capability: declared,
+        dropped,
+      });
+    }
+  }
+  return found;
+};
+
 if (require.main === module) {
   const mounted = buildMountedRoutes();
   const counts = new Map<AuthMode, number>();
@@ -218,5 +460,13 @@ if (require.main === module) {
     log(`      -> ${l.v1Path}  (${l.v1Auth})   [${l.v1Id}]`);
   }
 
-  process.exitCode = loose.length ? 1 : 0;
+  const capLoose = capabilityLoosenings();
+  log(`\n  v1 successors that DROPPED a capability the legacy route requires: ${capLoose.length}`);
+  for (const l of capLoose) {
+    log(`    ${l.legacyPath}  requires ${l.legacyCapabilities.join(', ')}`);
+    log(`      -> ${l.v1Path}  declares ${l.v1Capability ?? 'none'}   [${l.v1Id}]`);
+    log(`         DROPPED: ${l.dropped.join(', ')}`);
+  }
+
+  process.exitCode = loose.length || capLoose.length ? 1 : 0;
 }

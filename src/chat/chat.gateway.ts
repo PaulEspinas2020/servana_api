@@ -2,7 +2,8 @@ import { Server as HttpServer } from "http";
 import { Server, Socket } from "socket.io";
 import { getAuth as getAuthAdmin } from "firebase-admin/auth";
 
-import { getFirebaseAdmin } from "../middleware/firebaseApp";
+import { firebaseAdmin } from "../middleware/firebaseApp";
+import { lazyValue } from "../middleware/lazyValue";
 import { tempId } from "../config";
 import { setIo, roomName } from "./chat.realtime";
 import * as chatService from "./chat.service";
@@ -14,10 +15,9 @@ import {
 } from "../services/messaging/messagingTelemetry";
 import { withRealtimeEnvelope } from "../services/messaging/conversationDto";
 
-// Lazy: resolving the Auth service at module scope made importing this file
-// require a live Admin credential. getAuth() memoises per app internally and
-// getFirebaseAdmin() memoises the app, so calling this per request is cheap.
-const defaultAuthAdmin = () => getAuthAdmin(getFirebaseAdmin());
+// Deferred: `getAuthAdmin` resolves the credential eagerly, which made
+// importing this module — and so the composed app — require a live key.
+const defaultAuthAdmin = lazyValue(() => getAuthAdmin(firebaseAdmin));
 
 /**
  * Initialize Socket.IO on the /chat namespace.
@@ -69,7 +69,7 @@ export const initChatSocket = (httpServer: HttpServer) => {
 
       if (!token) return next(new Error("Unauthorized"));
 
-      const decoded = await defaultAuthAdmin().verifyIdToken(token);
+      const decoded = await defaultAuthAdmin.verifyIdToken(token);
       const role = (await repo.getUserRole(decoded.uid)) ?? 3;
       (socket as any).actor = { uid: decoded.uid, role };
       return next();

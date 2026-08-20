@@ -5,6 +5,7 @@ import requireProviderRole from "../middleware/requireProviderRole";
 import requireCapability from "../middleware/requireCapability";
 import verifyAuth from "../middleware/verifyAuth";
 import verifyRoles from "../middleware/verifyRoles";
+import { adminRateLimit } from "../middleware/adminRateLimit";
 import * as provider from "../controllers/providerController";
 import * as locationAccess from "../controllers/providerLocationAccessController";
 import * as accountState from "../controllers/providerAccountStateController";
@@ -254,7 +255,7 @@ router.get("/worker/services", verifyAuth, requireProviderRole, provider.getWork
 router.delete("/worker/services/:serviceId", verifyAuth, requireProviderRole, provider.removeWorkerService);
 
 // ─── Admin diagnostics (role=1 only) ─────────────────────────────────────────
-router.get("/admin/provider/reconciliation", verifyAuth, verifyRoles([1]), provider.getProviderReconciliationReport);
+router.get("/admin/provider/reconciliation", verifyAuth, verifyRoles([1]), adminRateLimit, provider.getProviderReconciliationReport);
 
 // ─── Authenticated booking detail + tracking (LEAK-BE-P0-01 / P0-05 web-portal equivalents) ──
 // These are NEW authenticated endpoints for the provider web portal.

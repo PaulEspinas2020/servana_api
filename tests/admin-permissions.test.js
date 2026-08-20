@@ -492,7 +492,16 @@ describe('adminPermission.routes.ts', () => {
 
   test('mounts GET /admin/me/permissions with verifyAuth only', () => {
     expect(src).toContain("'/admin/me/permissions'");
-    expect(src).toContain('verifyAuth, ctrl.getMyPermissions');
+    // The property is "no permission check on your OWN grants", not "exactly two
+    // tokens on the line". TAB 05 added `adminRateLimit` to this route — every
+    // admin endpoint is throttled — which does not weaken the claim, and a
+    // text-equality assertion on a middleware chain fails on every legitimate
+    // addition.
+    const line = src.split('\n').find((l) => l.includes("'/admin/me/permissions'"));
+    expect(line).toBeTruthy();
+    expect(line).toContain('verifyAuth');
+    expect(line).toContain('ctrl.getMyPermissions');
+    expect(line).not.toContain('requirePermission');
   });
 
   test('mounts GET /admin/permission-definitions', () => {

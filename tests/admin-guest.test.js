@@ -13,6 +13,38 @@
 const fs   = require('fs');
 const path = require('path');
 
+/**
+ * The elements of `const adminOnly = [ … ]`, split on top-level commas.
+ *
+ * Bracket-aware on purpose: the chain contains `verifyRoles([1])`, whose `]`
+ * would end a naive `[^\]]*` match early and silently truncate the answer.
+ */
+function adminOnlyChain(src) {
+  const decl = /const\s+adminOnly\s*=\s*\[/.exec(src);
+  if (!decl) return [];
+  const open = decl.index + decl[0].length;
+  let depth = 1;
+  let i = open;
+  for (; i < src.length && depth > 0; i += 1) {
+    const c = src[i];
+    if (c === '[' || c === '(') depth += 1;
+    else if (c === ']' || c === ')') depth -= 1;
+  }
+  const inner = src.slice(open, i - 1);
+  const parts = [];
+  let buf = '';
+  let d = 0;
+  for (const c of inner) {
+    if (c === '[' || c === '(') d += 1;
+    if (c === ']' || c === ')') d -= 1;
+    if (c === ',' && d === 0) { if (buf.trim()) parts.push(buf.trim()); buf = ''; continue; }
+    buf += c;
+  }
+  if (buf.trim()) parts.push(buf.trim());
+  return parts;
+}
+
+
 const SVC_PATH    = path.resolve(__dirname, '../src/services/adminGuestService.ts');
 const CTRL_PATH   = path.resolve(__dirname, '../src/controllers/adminGuestController.ts');
 const ROUTE_PATH  = path.resolve(__dirname, '../src/routes/adminCustomer.routes.ts');
@@ -155,7 +187,11 @@ describe('adminCustomer.routes — security middleware', () => {
   });
 
   test('adminOnly uses verifyAuth + verifyRoles([1])', () => {
-    expect(routes).toContain('const adminOnly = [verifyAuth, verifyRoles([1])]');
+    // Contains, not equals — see the note in admin-provider360.test.js. The
+    // guards this test protects are still asserted; the brittleness is not.
+    expect(adminOnlyChain(routes)).toEqual(
+      expect.arrayContaining(['verifyAuth', 'verifyRoles([1])']),
+    );
   });
 
   test('GET /admin/customers requires customers.read', () => {

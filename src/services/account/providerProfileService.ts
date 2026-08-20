@@ -87,12 +87,22 @@ export interface ProviderProfileDto {
  * `providerProfileComplianceService` already owns as the reviewed, publishable
  * copy — the private originals are never the source of a customer-visible value.
  */
+// `up.public_bio` is the column name, not `public_biography`. Migration
+// 009-provider-profile-compliance.sql creates `public_bio TEXT` and the captured
+// baseline agrees; nothing in this repository has ever created
+// `public_biography`. This query named it anyway, so it raised 42703 on every
+// call — and `getProviderProfile` does not catch, so the provider profile read
+// failed outright rather than degrading. It survived because
+// `tests/support/accountDbFake.ts` matched this query on its SELECT-list prefix
+// and seeded `public_biography` to match the defect: the fake was written from
+// this SQL instead of from the schema, so it agreed with the code rather than
+// checking it. Same root cause as D-014 two functions below.
 const loadProviderRow = async (uid: string) => {
   const { rows } = await dbQuery.query(
     `SELECT uc.uid, uc.email, uc.first_name, uc.last_name, uc.phone_number,
             uc.account_status, uc.is_email_verified, uc.role,
             up.photo_url, up.birthdate,
-            up.public_display_name, up.public_biography, up.public_skills,
+            up.public_display_name, up.public_bio, up.public_skills,
             up.public_languages, up.public_experience_summary
        FROM ${s}.user_credentials uc
        LEFT JOIN ${s}.user_profile up ON up.uid = uc.uid
@@ -127,7 +137,7 @@ const fieldValue = (fieldId: string, row: any): unknown => {
     case 'displayName': return row.public_display_name
       ?? ([row.first_name, row.last_name].filter(Boolean).join(' ') || null);
     case 'photo': return row.photo_url ?? null;
-    case 'biography': return row.public_biography ?? null;
+    case 'biography': return row.public_bio ?? null;
     case 'skills': return safeList(row.public_skills);
     case 'languages': return safeList(row.public_languages);
     case 'experienceSummary': return row.public_experience_summary ?? null;
@@ -342,6 +352,26 @@ export const getAvailability = async (uid: string): Promise<ProviderAvailability
 
 // ─── Services (§105) ──────────────────────────────────────────────────────────
 
+/**
+ * PostgreSQL error classes that mean THIS REPOSITORY is wrong, not the database.
+ *
+ * Class 42 is `syntax_error_or_access_rule_violation`. A query naming a column
+ * or table that does not exist cannot succeed on a retry, on another host, or
+ * tomorrow — it is a defect in the source text. Absorbing one converts a bug
+ * into an empty result set, which is indistinguishable from a legitimate empty
+ * result and therefore invisible.
+ *
+ * Deliberately NOT included: connection failures, timeouts and admin shutdowns.
+ * Those are transient, the caller can do nothing about them, and a provider
+ * surface that collapses because the pool blipped is a worse outcome than a
+ * momentarily short list.
+ */
+const SCHEMA_PROGRAMMING_ERROR_CODES = new Set(['42703', '42P01', '42601']);
+
+const isSchemaProgrammingError = (error: unknown): boolean =>
+  typeof (error as { code?: unknown })?.code === 'string'
+  && SCHEMA_PROGRAMMING_ERROR_CODES.has((error as { code: string }).code);
+
 export interface ProviderServiceDto {
   /** `services.id` — the Catalog V2 canonical specific-service identity. */
   serviceId: number;
@@ -367,7 +397,7 @@ export const listServices = async (uid: string): Promise<ProviderServiceDto[]> =
       `SELECT es.service_id, es.status, sv.name
          FROM ${s}.employee_services es
          LEFT JOIN ${s}.services sv ON sv.id = es.service_id
-        WHERE es.worker_uid = $1
+        WHERE es.employee_uid = $1
         ORDER BY sv.name ASC NULLS LAST`,
       [uid],
     );
@@ -377,10 +407,25 @@ export const listServices = async (uid: string): Promise<ProviderServiceDto[]> =
       status: String(row.status ?? 'active'),
       isActive: String(row.status ?? 'active').toLowerCase() === 'active',
     }));
-  } catch {
-    // Same reasoning as documents: a service list that cannot be read must not
-    // fail the provider surface, and an empty list under-claims rather than
-    // over-claims what the provider is qualified for.
+  } catch (error) {
+    // A service list that cannot be read must not fail the provider surface, and
+    // an empty list under-claims rather than over-claims what the provider is
+    // qualified for. That reasoning holds for a database that is briefly
+    // unreachable. It does NOT hold for a query this repository got wrong.
+    //
+    // This catch used to swallow everything, and that is how D-014 survived: the
+    // column was `es.worker_uid` where `employee_services` declares
+    // `employee_uid`, so every call raised 42703, returned [], and answered 200
+    // with an empty list FOR EVERY PROVIDER. `profileCompletionService` derives
+    // `hasServices` from the same call, so it also reported every provider
+    // permanently incomplete. Nothing was logged and nothing went red.
+    //
+    // So a PROGRAMMING error is rethrown and a transient one is absorbed. The
+    // distinction is the error's own class, not a guess: 42703 undefined_column,
+    // 42P01 undefined_table and 42601 syntax_error are deterministic — they fail
+    // identically on every call, on every environment, forever. Degrading
+    // gracefully around one only buys silence.
+    if (isSchemaProgrammingError(error)) throw error;
     return [];
   }
 };

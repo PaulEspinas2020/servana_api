@@ -38,6 +38,32 @@ describe('payment method integrity', () => {
     expect(query.mock.calls[0][0]).toContain("AND method='GCASH'");
   });
 
+  test('manual GCash approval preserves the original payment time on a replay', async () => {
+    // Same shape and same gap as the cash path. Both set status='PAID' with no
+    // status guard, so a repeat moved `paid_at` forward on a row that was already
+    // paid. Fixing only the path the worker app calls would leave the identical
+    // defect for the next reader to find.
+    query.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+    await expect(approvePayment(12)).rejects.toThrow('Only a GCash');
+    const [sql] = query.mock.calls[0];
+    expect(sql).toContain('COALESCE(paid_at, NOW())');
+    expect(sql).not.toMatch(/paid_at\s*=\s*NOW\(\)/);
+  });
+
+  test('cash settlement preserves the original collection time on a replay', async () => {
+    // This is money, and `paid_at` is the answer to "when was the cash taken".
+    // The unguarded form re-ran against an already-PAID row and moved the
+    // timestamp forward, so a double tap on a slow connection silently rewrote
+    // it. COALESCE makes a repeat produce the identical end state, which is the
+    // contract's own definition of idempotent and what lets this path name a
+    // replay guard when it gains a v1 entry.
+    query.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+    await expect(markCashPaid(11)).rejects.toThrow('not configured for cash');
+    const [sql] = query.mock.calls[0];
+    expect(sql).toContain('COALESCE(paid_at, NOW())');
+    expect(sql).not.toMatch(/paid_at\s*=\s*NOW\(\)/);
+  });
+
   test('cash settlement cannot rewrite a PayMongo booking', async () => {
     query.mockResolvedValueOnce({ rowCount: 0, rows: [] });
     await expect(markCashPaid(9)).rejects.toThrow('not configured for cash');

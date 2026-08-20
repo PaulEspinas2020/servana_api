@@ -110,6 +110,44 @@ export interface OwnershipRule {
 }
 
 export const OWNERSHIP_RULES: readonly OwnershipRule[] = Object.freeze([
+  /**
+   * `admin-bookings` — and the honest answer is that there is NO ownership
+   * relationship (TAB 06).
+   *
+   * The other rules in this list scope an object to a person: the customer who
+   * booked it, the provider assigned to it. An admin is neither. Authority here
+   * comes from role 1 plus a named permission, which is a different kind of
+   * claim entirely — not "this is yours" but "you are allowed to act on anyone's".
+   *
+   * §145 still requires the rule to exist, and it is right to. An endpoint that
+   * addresses `:bookingId` and declares nothing is indistinguishable, to every
+   * later reader and to `safetyDrift()`, from one whose ownership check was
+   * simply forgotten. Saying "none, and here is what replaces it" is the
+   * difference between a considered exemption and an omission.
+   *
+   * `distinguishesAbsentFromForbidden: false` is TRUE here, and for a reason
+   * worth stating rather than inheriting: `requirePermission` runs BEFORE the
+   * handler reads anything, so an admin lacking the permission gets 403 whether
+   * the booking exists or not. There is no oracle because the object is never
+   * consulted. That is a stronger position than the 404-for-everything the
+   * relationship-scoped rules rely on.
+   */
+  {
+    domain: 'admin-bookings',
+    parameter: 'bookingId',
+    predicate:
+      'none — an admin is not scoped to a booking by relationship. Authority is role 1 ' +
+      'plus the named permission on the contract entry (bookings.view, ' +
+      'bookings.assign_provider, bookings.reassign_provider), mounted by ' +
+      'api/v1/register from ContractEntry.permission.',
+    enforcedBy: 'middleware/requirePermission',
+    provenBy:
+      'tests/v1-admin-permission-parity.test.ts, tests/v1-router.test.ts, tests/authz-parity.test.ts',
+    refusal:
+      '403 PERMISSION_REQUIRED, decided before the booking is read — so it is identical ' +
+      'for a booking that does not exist',
+    distinguishesAbsentFromForbidden: false,
+  },
   {
     domain: 'bookings',
     parameter: 'bookingId',

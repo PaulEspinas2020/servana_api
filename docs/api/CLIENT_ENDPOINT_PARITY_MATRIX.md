@@ -18,26 +18,23 @@
 
 | | |
 | --- | --- |
-| Capabilities | 57 |
-| Canonical endpoints mounted | 105 |
-| Canonical endpoints planned | 4 |
-| Legacy mappings tracked | 124 |
-| Converged (one route family) | 51 |
+| Capabilities | 61 |
+| Canonical endpoints mounted | 113 |
+| Canonical endpoints planned | 0 |
+| Legacy mappings tracked | 125 |
+| Converged (one route family) | 53 |
 | Role-split over ONE service | 4 |
-| Single-surface | 2 |
+| Single-surface | 4 |
 | **Divergent (forked truth)** | **0** |
 | Broken (names a missing endpoint) | 0 |
-| Surface × capability cells on canonical | 0 |
-| Surface × capability cells still legacy | 112 |
+| Surface × capability cells on canonical | 35 |
+| Surface × capability cells still legacy | 91 |
 
 **0 divergent capabilities.** Every capability whose
 endpoints span more than one route family names exactly one domain service — the
 role split is a permission boundary, never a second implementation.
 
-**0 cells on canonical.** No client has migrated. The v1
-namespace is mounted, tested and documented, and it is unpushed — nothing can migrate
-against a contract that is not serving. That is a deployment gap, not a design gap, and
-the matrix says so rather than showing optimistic cells.
+**35 cells on canonical.** Each one is derived from that client's published manifest — the endpoints it calls, generated from its own source with a file:line per call site — and never asserted here by hand. A client with no manifest reads legacy, planned or n/a regardless of what it may already have shipped, because nothing in this repository has verified it; see src/api/v1/client-manifests/.
 
 ## 2. Legend
 
@@ -66,57 +63,61 @@ direction of whoever wrote it.
 | Capability | Verdict | Customer Mobile | Customer Web | Provider Mobile | Provider Web | Admin Web |
 | --- | --- | --- | --- | --- | --- | --- |
 | Manage my saved addresses | SHARED | legacy | legacy | — | — | — |
-| What is left before my account is usable | SHARED | planned | planned | planned | planned | — |
+| What is left before my account is usable | SHARED | planned | planned | **migrated** | planned | — |
 | Read and change my customer profile | SHARED | legacy | legacy | — | — | planned |
-| Read and change my account record | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | legacy | planned |
+| Read and change my account record | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | ⚠ mixed | planned |
 | Read and change my availability, and book time off | SHARED | — | — | ⚠ mixed | legacy | — |
-| Submit, read, preview and withdraw my documents | SHARED | — | — | ⚠ mixed | legacy | — |
-| Read and change my provider profile | SHARED | — | — | legacy | legacy | planned |
-| Read the services I am approved for | SHARED | — | — | planned | planned | — |
+| Submit, read, preview and withdraw my documents | SHARED | — | — | ⚠ mixed | ⚠ mixed | — |
+| Read and change my provider profile | SHARED | — | — | legacy | **migrated** | planned |
+| Read the services I am approved for | SHARED | — | — | **migrated** | planned | — |
 | Read my security posture | SHARED | planned | planned | planned | planned | planned |
-| Read and change my settings | SHARED | planned | planned | planned | planned | planned |
+| Read and change my settings | SHARED | planned | planned | **migrated** | planned | planned |
 | Operate the booking queue | SINGLE_SURFACE | — | — | — | — | legacy |
-| Register, sign in, and end a session | SHARED | legacy | ⚠ mixed | legacy | legacy | legacy |
+| Register, sign in, and end a session | SHARED | legacy | ⚠ mixed | legacy | ⚠ mixed | legacy |
 | Recover an account and verify a contact | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | ⚠ mixed | legacy |
-| Read booking-code state | SHARED | planned | planned | planned | planned | planned |
+| Read booking-code state | SHARED | planned | planned | **migrated** | **migrated** | planned |
 | Read a booking | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | planned | planned |
-| Move a booking through its state machine | ROLE_SPLIT_SHARED_SERVICE | — | — | legacy | legacy | legacy |
+| Move a booking through its state machine | ROLE_SPLIT_SHARED_SERVICE | — | — | **migrated** | ⚠ mixed | legacy |
+| Ask which commit is serving | SHARED | — | — | — | — | — |
 | Browse the service catalog | SHARED | ⚠ mixed | planned | legacy | — | — |
 | Search services | ROLE_SPLIT_SHARED_SERVICE | ⚠ mixed | planned | — | — | — |
+| Ask whether this client build may still run | SHARED | planned | — | planned | — | — |
 | Read the support cases I raised on a booking | SHARED | planned | planned | — | — | — |
-| A provider's own job queue | SHARED | — | — | ⚠ mixed | legacy | — |
+| A provider's own job queue | SHARED | — | — | **migrated** | **migrated** | — |
 | Read a provider's public profile | SHARED | planned | planned | — | — | planned |
-| Read the reschedule history of a booking | SHARED | planned | planned | planned | planned | planned |
-| Register and release this device for push | SHARED | legacy | planned | legacy | legacy | — |
-| Dismiss one notification | SHARED | planned | planned | planned | legacy | — |
-| Read my notification inbox | SHARED | legacy | legacy | legacy | legacy | planned |
-| Mark everything read | SHARED | legacy | legacy | legacy | legacy | planned |
-| Mark one notification read | SHARED | legacy | legacy | legacy | legacy | planned |
-| Read and change my notification preferences | ROLE_SPLIT_SHARED_SERVICE | planned | planned | legacy | legacy | planned |
-| How many unread I have | SHARED | legacy | legacy | legacy | legacy | planned |
-| Additional work | SHARED | planned | planned | planned | legacy | planned |
-| Cancellation | ROLE_SPLIT_SHARED_SERVICE | legacy | legacy | legacy | legacy | — |
-| Disputes | SHARED | planned | planned | planned | planned | ⚠ mixed |
-| Booking codes (OTP) | SHARED | legacy | planned | planned | planned | planned |
+| Resolve a refund review | SINGLE_SURFACE | — | — | — | — | legacy |
+| Read the reschedule history of a booking | SHARED | planned | planned | planned | **migrated** | planned |
+| Report that the product is working | SINGLE_SURFACE | — | — | planned | — | — |
+| Register and release this device for push | SHARED | legacy | planned | **migrated** | **migrated** | — |
+| Dismiss one notification | SHARED | planned | planned | planned | **migrated** | — |
+| Read my notification inbox | SHARED | legacy | legacy | legacy | **migrated** | planned |
+| Mark everything read | SHARED | legacy | legacy | legacy | **migrated** | planned |
+| Mark one notification read | SHARED | legacy | legacy | legacy | **migrated** | planned |
+| Read and change my notification preferences | ROLE_SPLIT_SHARED_SERVICE | planned | planned | legacy | ⚠ mixed | planned |
+| How many unread I have | SHARED | legacy | legacy | legacy | **migrated** | planned |
+| Additional work | SHARED | planned | planned | **migrated** | ⚠ mixed | planned |
+| Cancellation | ROLE_SPLIT_SHARED_SERVICE | legacy | legacy | **migrated** | **migrated** | — |
+| Disputes | SHARED | planned | planned | **migrated** | **migrated** | ⚠ mixed |
+| Booking codes (OTP) | SHARED | legacy | planned | planned | **migrated** | planned |
 | Reschedule | SHARED | planned | planned | — | — | legacy |
-| Tracking | SHARED | legacy | legacy | planned | planned | planned |
-| Provider earnings summary | SHARED | — | — | legacy | legacy | — |
-| Provider earnings transactions | SHARED | — | — | legacy | legacy | — |
+| Tracking | SHARED | legacy | legacy | **migrated** | **migrated** | planned |
+| Provider earnings summary | SHARED | — | — | legacy | **migrated** | — |
+| Provider earnings transactions | SHARED | — | — | legacy | **migrated** | — |
 | Start or resume a booking payment | SHARED | legacy | legacy | — | — | planned |
-| Read a booking's payment and price breakdown | SHARED | planned | planned | planned | planned | planned |
-| Provider payouts | SHARED | — | — | legacy | legacy | — |
+| Read a booking's payment and price breakdown | SHARED | planned | planned | **migrated** | planned | planned |
+| Provider payouts | SHARED | — | — | legacy | **migrated** | — |
 | Admin ledger reconciliation | SINGLE_SURFACE | — | — | — | — | legacy |
 | Refund a booking payment | SHARED | planned | planned | — | — | legacy |
 | The composed home surface | SHARED | planned | planned | — | — | — |
 | Which sections exist and what owns each | SHARED | planned | planned | — | — | planned |
 | Attach a file to a conversation | SHARED | planned | planned | planned | planned | planned |
-| Read one conversation and its participants | SHARED | legacy | legacy | legacy | legacy | legacy |
-| List my conversations with unread counts | SHARED | legacy | legacy | legacy | legacy | legacy |
-| Advance the read pointer | SHARED | legacy | legacy | legacy | legacy | legacy |
-| Open (or resolve) a booking conversation | SHARED | legacy | legacy | legacy | legacy | legacy |
+| Read one conversation and its participants | SHARED | legacy | legacy | legacy | **migrated** | legacy |
+| List my conversations with unread counts | SHARED | legacy | legacy | legacy | **migrated** | legacy |
+| Advance the read pointer | SHARED | legacy | legacy | legacy | **migrated** | legacy |
+| Open (or resolve) a booking conversation | SHARED | legacy | legacy | legacy | **migrated** | legacy |
 | Report a message to moderation | SHARED | planned | planned | planned | planned | — |
-| Send a message | SHARED | legacy | legacy | legacy | legacy | legacy |
-| Page through a conversation transcript | SHARED | legacy | legacy | legacy | legacy | legacy |
+| Send a message | SHARED | legacy | legacy | legacy | **migrated** | legacy |
+| Page through a conversation transcript | SHARED | legacy | legacy | legacy | **migrated** | legacy |
 | Raise a support case about a completed booking | SHARED | planned | planned | — | — | — |
 | Read a provider's published reviews | SHARED | planned | planned | — | — | — |
 | A provider's rating summary | SHARED | planned | planned | — | — | — |
@@ -442,6 +443,20 @@ Legacy still aliased for this capability:
 
 ROLE-SPLIT, and deliberately so — but over ONE state machine. Eight endpoints across the /provider and /admin families all call `transitionExecutor.transitionBooking` with a different actor verb. The split is real because the AUTHORIZATION differs (a provider may accept a job assigned to them; an admin may assign one to somebody else) and because the actions are different verbs, not one verb behind two doors. What must never differ is the machine, and `convergenceOf` proves it does not by comparing the declared service. The customer side of the same machine is `experiencePolicy:cancel`, which spans /bookings and /provider over the same executor.
 
+### Ask which commit is serving
+
+- key: `core:buildProvenance` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `api/v1/domains/health`
+- route families: `/health`
+
+Canonical:
+  - `GET /api/v1/health`
+
+Legacy still aliased for this capability:
+  - none
+
+No role split, and no role at all. The endpoint is public because a provenance check that needs a credential can only be run by somebody who already has one, which is the situation it exists to fix — a deploy whose migration step fails stops short of the PM2 restart, so the old code keeps serving and nothing outward says so. Every surface reads the same four fields from the same stamp; there is no projection to differ on.
+
 ### Browse the service catalog
 
 - key: `core:catalogBrowse` · declared in `api/v1/convergence (core)`
@@ -485,6 +500,20 @@ Legacy still aliased for this capability:
   - `GET /api/services/full`
 
 No role split. Two paths, ONE service: /api/v1/search is the top-level entry a client expects and /api/v1/catalog/search is its in-domain twin. Both delegate to the same function, which is what stops them ranking differently.
+
+### Ask whether this client build may still run
+
+- key: `core:clientRecall` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `api/v1/domains/clientConfig`
+- route families: `/client-config`
+
+Canonical:
+  - `GET /api/v1/client-config`
+
+Legacy still aliased for this capability:
+  - none
+
+No role split, and no role at all — the caller is a BUILD, not a person. The endpoint is public because the client being recalled may be too old to authenticate, and a kill switch reachable only with a credential cannot kill the builds that most need it. Every surface reads the same floor from the same file and applies the same comparison; a per-surface answer would let two clients disagree about whether the same version is supported. The web surfaces are listed because they reload and so are never stranded — they may read it, and it will never block them.
 
 ### Read the support cases I raised on a booking
 
@@ -531,6 +560,20 @@ Legacy still aliased for this capability:
 
 No role split. One public projection, and the disclosure rules are the provider disclosure policy — not a per-caller decision made at the route.
 
+### Resolve a refund review
+
+- key: `core:refundLifecycle` · declared in `api/v1/convergence (core)`
+- verdict: **SINGLE_SURFACE** · domain service: `services/adminFinanceService`
+- route families: `/admin`
+
+Canonical:
+  - `POST /api/v1/admin/refunds/:refundId/mark-failed`
+
+Legacy still aliased for this capability:
+  - `POST /api/admin/finance/refunds/:refundId/mark-failed`
+
+Genuinely operator-only, and deliberately narrow for now. A customer requests a refund through the booking surface; deciding one is an operator action behind role 1 and a named permission. Only the `failed` terminal is canonical so far: the rest of the lifecycle (open, approve, reject, mark-processed) stays legacy until the disbursement surface is unified, because canonicalising a refund before its payout twin would fix the duplicate rather than remove it. `failed` came first because it did not exist at all — an approved refund the processor rejected had no terminal, so it stayed `approved` and blocked every retry for that booking.
+
 ### Read the reschedule history of a booking
 
 - key: `core:rescheduleHistory` · declared in `api/v1/convergence (core)`
@@ -544,6 +587,20 @@ Legacy still aliased for this capability:
   - none
 
 No role split. One booking-scoped read; the requesting and deciding endpoints beside it are in EXPERIENCE_CAPABILITIES over the same service.
+
+### Report that the product is working
+
+- key: `core:workerTelemetry` · declared in `api/v1/convergence (core)`
+- verdict: **SINGLE_SURFACE** · domain service: `services/telemetryService`
+- route families: `/telemetry`
+
+Canonical:
+  - `POST /api/v1/telemetry`
+
+Legacy still aliased for this capability:
+  - none
+
+Role-specific, and the narrowest capability in this registry. The worker app is the only client whose failures are silent by nature — a job offer that never arrives produces no error anywhere, so its working-ness cannot be inferred from the request log the way a browser surface's can, because a browser retries in front of a person who reports it. There is deliberately NO CUSTOMER equivalent and no admin one: the customer app is not in this programme, publishes no manifest, and giving it an ingest here would be inventing a client's requirements on its behalf — the same error the caller matrix was built to stop. Opening this to every surface would also turn a seven-event product signal into a general analytics endpoint, which docs/TELEMETRY_DECISION.md explicitly refuses. A second surface wanting this is a new decision, not a new entry in an array.
 
 ### Register and release this device for push
 

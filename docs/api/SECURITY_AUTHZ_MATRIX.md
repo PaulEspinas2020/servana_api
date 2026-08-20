@@ -15,13 +15,13 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 105 |
-| `public` | 20 |
-| `authenticated` | 58 |
+| Mounted endpoints | 113 |
+| `public` | 22 |
+| `authenticated` | 59 |
 | `provider` | 26 |
-| `admin` | 1 |
-| Object-scoped | 40 |
-| Object-scoped WITH an ownership rule | 40 |
+| `admin` | 6 |
+| Object-scoped | 43 |
+| Object-scoped WITH an ownership rule | 43 |
 | **Unguarded** | **0** |
 
 ## 2. Role access, by declared mode
@@ -46,6 +46,14 @@ role; the whole point is that one customer must not read another's booking.
 A booking carries an address and a time when somebody will be at home. A leak of
 it is not a data-protection abstraction — it is telling a stranger where a person
 lives and when they will be there. OWASP puts this first in the API top ten.
+
+### `admin-bookings` — `:bookingId`
+
+- predicate: none — an admin is not scoped to a booking by relationship. Authority is role 1 plus the named permission on the contract entry (bookings.view, bookings.assign_provider, bookings.reassign_provider), mounted by api/v1/register from ContractEntry.permission.
+- enforced by: `middleware/requirePermission`
+- proven by: `tests/v1-admin-permission-parity.test.ts, tests/v1-router.test.ts, tests/authz-parity.test.ts`
+- a non-owner receives: 403 PERMISSION_REQUIRED, decided before the booking is read — so it is identical for a booking that does not exist
+- distinguishes absent from forbidden: **no**
 
 ### `bookings` — `:bookingId`
 
@@ -123,7 +131,12 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 
 | Endpoint | Route | Mode | A C P A | Object rule |
 | --- | --- | --- | --- | --- |
+| `admin.bookings.assign` | POST /admin/bookings/:bookingId/assign | `admin` | · · · ● | ✔ bookingId |
+| `admin.bookings.assignmentCandidates` | GET /admin/bookings/:bookingId/assignment-candidates | `admin` | · · · ● | ✔ bookingId |
+| `admin.bookings.list` | GET /admin/bookings | `admin` | · · · ● | — |
+| `admin.bookings.reassign` | POST /admin/bookings/:bookingId/reassign | `admin` | · · · ● | ✔ bookingId |
 | `admin.finance.reconciliation` | GET /admin/finance/reconciliation | `admin` | · · · ● | — |
+| `admin.refunds.markFailed` | POST /admin/refunds/:refundId/mark-failed | `admin` | · · · ● | — |
 | `auth.forgotPassword` | POST /auth/forgot-password | `public` | ● ● ● ● | — |
 | `auth.login` | POST /auth/login | `public` | ● ● ● ● | — |
 | `auth.logout` | POST /auth/logout | `authenticated` | · ● ● ● | — |
@@ -165,6 +178,7 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `catalog.subcategories.get` | GET /catalog/subcategories/:subcategoryId | `public` | ● ● ● ● | — |
 | `catalog.subcategories.services` | GET /catalog/subcategories/:subcategoryId/services | `public` | ● ● ● ● | — |
 | `catalog.summary` | GET /catalog/summary | `public` | ● ● ● ● | — |
+| `clientConfig.read` | GET /client-config | `public` | ● ● ● ● | — |
 | `conversations.attachments.create` | POST /conversations/:conversationId/attachments | `authenticated` | · ● ● ● | ✔ conversationId |
 | `conversations.create` | POST /conversations | `authenticated` | · ● ● ● | — |
 | `conversations.get` | GET /conversations/:conversationId | `authenticated` | · ● ● ● | ✔ conversationId |
@@ -180,6 +194,7 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `customer.addresses.update` | PATCH /customer/addresses/:addressId | `authenticated` | · ● ● ● | ✔ addressId |
 | `customer.profile.get` | GET /customer/profile | `authenticated` | · ● ● ● | — |
 | `customer.profile.patch` | PATCH /customer/profile | `authenticated` | · ● ● ● | — |
+| `health.build` | GET /health | `public` | ● ● ● ● | — |
 | `home.feed` | GET /home | `authenticated` | · ● ● ● | — |
 | `home.sections` | GET /home/sections | `authenticated` | · ● ● ● | — |
 | `identity.me` | GET /me | `authenticated` | · ● ● ● | — |
@@ -228,6 +243,7 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `search.query` | GET /search | `public` | ● ● ● ● | — |
 | `settings.notificationPreferences.get` | GET /settings/notification-preferences | `authenticated` | · ● ● ● | — |
 | `settings.notificationPreferences.put` | PUT /settings/notification-preferences | `authenticated` | · ● ● ● | — |
+| `telemetry.ingest` | POST /telemetry | `authenticated` | · ● ● ● | — |
 
 ## 5. What counts as proof that a route is protected (§143)
 
@@ -251,8 +267,8 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-54 of 105 endpoints are probeable; the other
-51 are writes and are never probed, because a POST to
+58 of 113 endpoints are probeable; the other
+55 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.
 

@@ -107,6 +107,8 @@ const runChain = async (mode: AuthMode, role: Role): Promise<'allow' | 'deny'> =
     statusCode: 0,
     headersSent: false,
     status(code: number) { this.statusCode = code; denied = code >= 400; return this; },
+    // Express always has `set`; the v1 envelope stamps X-Request-Id through it.
+    set() { return this; },
     json() { this.headersSent = true; return this; },
     send() { this.headersSent = true; return this; },
   };
@@ -156,6 +158,7 @@ describe('the check would notice if the chain were widened', () => {
     let denied = false;
     const res: any = {
       status(code: number) { denied = code >= 400; return this; },
+      set() { return this; },
       json() { return this; },
     };
     for (const handler of chain) {

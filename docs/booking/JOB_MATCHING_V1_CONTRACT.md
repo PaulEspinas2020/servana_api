@@ -23,18 +23,18 @@ endpoint remains, §3 states why the authorization differs — never the truth.
 
 | Endpoint | Status | Customer Mobile | Customer Web | Provider Mobile | Provider Web | Admin |
 |---|---|---|---|---|---|---|
-| `GET /api/v1/provider/jobs` | implemented | · | · | `legacy` | `legacy` | · |
-| `GET /api/v1/provider/jobs/:bookingId` | implemented | · | · | `planned` | `legacy` | · |
-| `POST /api/v1/provider/jobs/:bookingId/accept` | implemented | · | · | `legacy` | `legacy` | · |
-| `POST /api/v1/provider/jobs/:bookingId/decline` | implemented | · | · | `legacy` | `legacy` | · |
-| `POST /api/v1/provider/jobs/:bookingId/en-route` | implemented | · | · | `legacy` | `legacy` | · |
-| `POST /api/v1/provider/jobs/:bookingId/arrived` | implemented | · | · | `legacy` | `legacy` | · |
-| `POST /api/v1/provider/jobs/:bookingId/start` | implemented | · | · | `legacy` | `legacy` | · |
-| `POST /api/v1/provider/jobs/:bookingId/complete` | implemented | · | · | `legacy` | `legacy` | · |
-| `POST /api/v1/provider/jobs/:bookingId/cancel` | implemented | · | · | `legacy` | `legacy` | · |
-| `GET /api/v1/admin/bookings/:bookingId/assignment-candidates` | planned | · | · | · | · | `legacy` |
-| `POST /api/v1/admin/bookings/:bookingId/assign` | planned | · | · | · | · | `legacy` |
-| `POST /api/v1/admin/bookings/:bookingId/reassign` | planned | · | · | · | · | `legacy` |
+| `GET /api/v1/provider/jobs` | implemented | · | · | `migrated` | `migrated` | · |
+| `GET /api/v1/provider/jobs/:bookingId` | implemented | · | · | `migrated` | `migrated` | · |
+| `POST /api/v1/provider/jobs/:bookingId/accept` | implemented | · | · | `migrated` | `migrated` | · |
+| `POST /api/v1/provider/jobs/:bookingId/decline` | implemented | · | · | `migrated` | `migrated` | · |
+| `POST /api/v1/provider/jobs/:bookingId/en-route` | implemented | · | · | `migrated` | `migrated` | · |
+| `POST /api/v1/provider/jobs/:bookingId/arrived` | implemented | · | · | `migrated` | `migrated` | · |
+| `POST /api/v1/provider/jobs/:bookingId/start` | implemented | · | · | `migrated` | `legacy` | · |
+| `POST /api/v1/provider/jobs/:bookingId/complete` | implemented | · | · | `migrated` | `migrated` | · |
+| `POST /api/v1/provider/jobs/:bookingId/cancel` | implemented | · | · | `migrated` | `migrated` | · |
+| `GET /api/v1/admin/bookings/:bookingId/assignment-candidates` | implemented | · | · | · | · | `legacy` |
+| `POST /api/v1/admin/bookings/:bookingId/assign` | implemented | · | · | · | · | `legacy` |
+| `POST /api/v1/admin/bookings/:bookingId/reassign` | implemented | · | · | · | · | `legacy` |
 
 `legacy` means the client is still on the pre-v1 path listed in §5 and the
 alias is live. Shared surfaces move additively until every client has migrated.

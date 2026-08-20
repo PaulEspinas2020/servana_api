@@ -63,6 +63,27 @@ jest.mock('../src/middleware/requireProviderRole', () => ({
 }));
 
 /**
+ * The active-provider gate, wired as a pass-through.
+ *
+ * `requireActiveProvider` reads `user_credentials.account_status` from the
+ * database. This suite drives the router with a fake identity and no database,
+ * so leaving it real means every provider action stops at the middleware and
+ * the executor is never reached — which is what happened when the job actions
+ * first declared `activeProvider: true`.
+ *
+ * Mocked open rather than removed from the chain: whether the middleware is
+ * MOUNTED is asserted by `tests/legacy-authz-parity.test.ts`, which compares the
+ * contract's `activeProvider` flag against the legacy route's own chain, and
+ * whether it REFUSES is asserted by the middleware's own suite. What this suite
+ * is for is routing and executor wiring, and a real gate here would only test
+ * the database fixture.
+ */
+jest.mock('../src/middleware/requireActiveProvider', () => ({
+  __esModule: true,
+  default: (_req: any, _res: any, next: any) => next(),
+}));
+
+/**
  * The admin permission gate. TAB 07's reconciliation route carries
  * `requirePermission('reconciliation.view')` on top of its role check, so this
  * suite has to have it WIRED for the route to answer at all — which is the
@@ -297,6 +318,65 @@ jest.mock('../src/services/finance/providerEarningsService', () => {
     listProviderPayouts: jest.fn(async () => []),
   };
 });
+/**
+ * TAB 06 wave 1 — the admin booking domain.
+ *
+ * Stubbed at the DOMAIN SERVICE, never at the handler. The point of this suite
+ * is that the real router, the real auth chain and the real permission
+ * middleware are exercised over a real socket; replacing the handler would
+ * leave the wiring untested, which is the only thing this file can actually
+ * prove.
+ */
+/**
+ * The refund executor, faked to a bare success.
+ *
+ * This suite tests ROUTING: does the path reach the handler, is the declared
+ * auth mode actually mounted, does the envelope come back in the v1 shape. The
+ * executor's own rules — the approved-only state guard, the missing-versus-
+ * wrong-status distinction, the audit — are proven against a real PostgreSQL in
+ * `npm run refunds:segregation` and against a fake engine in
+ * `tests/refund-segregation-of-duties.test.ts`.
+ *
+ * Left unmocked it reached the blanket dbQuery fake, got zero rows and answered
+ * 404, which is the executor behaving correctly and this suite asking the wrong
+ * question.
+ */
+jest.mock('../src/services/adminFinanceService', () => ({
+  __esModule: true,
+  markRefundFailed: async () => undefined,
+}));
+
+jest.mock('../src/services/adminBookingService', () => ({
+  __esModule: true,
+  isBookingState: (s: string) => ['PENDING', 'ASSIGNED', 'COMPLETED'].includes(s),
+  getAdminBookings: async () => ({ bookings: [], total: 0, page: 1, limit: 25 }),
+  adminAssignProvider: async (bookingId: number, providerUid: string) => ({
+    bookingId,
+    providerUid,
+    state: 'ASSIGNED',
+  }),
+  adminReassignProvider: async (bookingId: number, toProviderUid: string) => ({
+    bookingId,
+    providerUid: toProviderUid,
+    state: 'ASSIGNED',
+  }),
+  ensureBookingOpsSchema: async () => undefined,
+}));
+
+jest.mock('../src/services/providerEligibilityEngine', () => ({
+  __esModule: true,
+  listAssignmentCandidatePool: async () => ({
+    candidates: [{ uid: 'provider-under-test', eligible: true }],
+    diagnostics: { poolSize: 1, blockedBy: {} },
+  }),
+}));
+
+jest.mock('../src/services/adminAuditService', () => ({
+  __esModule: true,
+  auditFire: () => undefined,
+  ensureAuditSchema: async () => undefined,
+}));
+
 jest.mock('../src/services/finance/financeReconciliationService', () => ({
   LEDGER_INTEGRITY_CHECKS: [],
   getReconciliationReport: jest.fn(async () => ({
@@ -818,6 +898,13 @@ describe('every implemented contract entry is reachable at its declared path', (
    */
   const CASES: Record<string, () => Promise<Call>> = {
     'catalog.browse': () => call('GET', '/api/v1/catalog', { auth: false }),
+    'health.build': () => call('GET', '/api/v1/health', { auth: false }),
+    // auth: false is the assertion, not a convenience. The client this answers
+    // may be too old to authenticate — it is the one being recalled.
+    'clientConfig.read': () => call('GET', '/api/v1/client-config', { auth: false }),
+    // A minimal well-formed batch. The scrubbing is asserted in
+    // tests/telemetry-ingest.test.ts; this only proves the route is reachable.
+    'telemetry.ingest': () => call('POST', '/api/v1/telemetry', { body: { events: [{ event: 'jobOffered' }] } }),
     'catalog.summary': () => call('GET', '/api/v1/catalog/summary', { auth: false }),
     'catalog.services.list': () => call('GET', '/api/v1/catalog/services', { auth: false }),
     'catalog.services.get': () => call('GET', '/api/v1/catalog/services/15', { auth: false }),
@@ -921,6 +1008,37 @@ describe('every implemented contract entry is reachable at its declared path', (
     'admin.finance.reconciliation': () =>
       call('GET', '/api/v1/admin/finance/reconciliation', {
         role: 'admin', permission: 'reconciliation.view',
+      }),
+
+    // -- TAB 06 wave 1: the v1 admin booking domain --
+    //
+    // Each carries the SAME named permission its legacy twin demands. Passing
+    // the permission header here is not a convenience: it is what proves the
+    // route actually consults one, because omitting it must 403.
+    'admin.bookings.list': () =>
+      call('GET', '/api/v1/admin/bookings', {
+        role: 'admin', permission: 'bookings.view',
+      }),
+    'admin.bookings.assignmentCandidates': () =>
+      call('GET', '/api/v1/admin/bookings/7/assignment-candidates', {
+        role: 'admin', permission: 'bookings.assign_provider',
+      }),
+    'admin.bookings.assign': () =>
+      call('POST', '/api/v1/admin/bookings/7/assign', {
+        role: 'admin', permission: 'bookings.assign_provider',
+        body: { providerUid: 'provider-under-test' },
+      }),
+    'admin.bookings.reassign': () =>
+      call('POST', '/api/v1/admin/bookings/7/reassign', {
+        role: 'admin', permission: 'bookings.reassign_provider',
+        body: { toProviderUid: 'provider-under-test', reason: 'operator override' },
+      }),
+
+    // -- refund lifecycle --
+    'admin.refunds.markFailed': () =>
+      call('POST', '/api/v1/admin/refunds/7/mark-failed', {
+        role: 'admin', permission: 'refunds.mark_failed',
+        body: { failureReason: 'gcash wallet closed' },
       }),
 
     // -- TAB 08 messaging --
@@ -1133,6 +1251,23 @@ describe('declared auth mode is the mounted auth mode', () => {
 // ─── Planned entries are documented, not mounted ──────────────────────────────
 
 describe('planned entries are not reachable', () => {
+  /**
+   * TAB 06 wave 1 emptied the backlog: the four `admin.bookings.*` entries were
+   * the last `planned` ones and are now implemented.
+   *
+   * `it.each([])` is a Jest error rather than a vacuous pass, which is the right
+   * default — but here an empty backlog is the desired state, not a missing
+   * fixture. The rule itself is asserted at build time in
+   * `tests/v1-contract.test.ts`: supplying a handler for an entry that is not
+   * implemented throws, so an endpoint cannot half-ship as a documented 404.
+   */
+  if (!PLANNED.length) {
+    it('the backlog is empty — every documented entry is built', () => {
+      expect(PLANNED).toEqual([]);
+    });
+    return;
+  }
+
   it.each(PLANNED.map((e) => [e.id, e.method.toUpperCase(), fullPath(e)]))(
     '%s — %s %s is documented but returns 404',
     async (_id, method, path) => {

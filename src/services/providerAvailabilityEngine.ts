@@ -280,11 +280,45 @@ export const saveWeeklySchedule = async (
     maxJobs:     sl.maxJobs ?? null,
   }));
 
+  /**
+   * ZERO MEANS "I DO NOT HAVE ONE" (TAB 06 mandate 2).
+   *
+   * The two branches of the statement below disagreed about that, and the two
+   * clients disagreed with each other on top of it:
+   *
+   *   - Provider Web sends `expectedVersion: this._state$.value.version`, whose
+   *     initial value is 0 and whose loader falls back to `?? 0`. So a web save
+   *     with no known version sends 0.
+   *   - Provider Mobile omits the field entirely.
+   *
+   * The INSERT branch already allowed `$5 = 0` through. The ON CONFLICT branch
+   * did not — it compared 0 against the stored version. Stored versions start at
+   * 1 (this INSERT hardcodes it) and only rise, so 0 can never match an existing
+   * row: every such save answered 409 "This schedule changed on another device.
+   * Reload it and try again." when nothing had changed on any device, and
+   * reloading could not fix it.
+   *
+   * That is not concurrency protection. It is a guaranteed failure for one
+   * client and no check at all for the other, from the same user action.
+   *
+   * ## The rule, written down
+   *
+   * A MISSING version SKIPS the check, and 0 counts as missing. Chosen over
+   * "always enforce" because enforcement needs a value to compare and there is
+   * none — "always enforce" could only mean rejecting the write, which would
+   * require every client to send the field. Mobile does not, five clients
+   * consume this backend, and the standing rule is additive only.
+   *
+   * A client that HAS a version still gets full protection; this changes nothing
+   * for the path that was working. The client-side half — not inventing a 0 in
+   * the first place — is the portal's `provider-availability.facade.ts`.
+   */
+  const enforcedVersion = expectedVersion && expectedVersion > 0 ? expectedVersion : null;
+
   const res = await dbQuery.query(
     `INSERT INTO ${s}.worker_availability (worker_uid, schedule, timezone, updated_at, updated_by, version)
      SELECT $1, $2::jsonb, $3, NOW(), $4, 1
       WHERE $5::integer IS NULL
-         OR $5::integer = 0
          OR EXISTS (
               SELECT 1 FROM ${s}.worker_availability current
                WHERE current.worker_uid = $1
@@ -299,7 +333,7 @@ export const saveWeeklySchedule = async (
        WHERE $5::integer IS NULL
           OR ${s}.worker_availability.version = $5::integer
      RETURNING updated_at, version`,
-    [providerUid, JSON.stringify(normalized), timezone, actorUid, expectedVersion ?? null]
+    [providerUid, JSON.stringify(normalized), timezone, actorUid, enforcedVersion]
   );
 
   if (!res.rowCount) {

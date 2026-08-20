@@ -8,6 +8,38 @@
 const fs   = require('fs');
 const path = require('path');
 
+/**
+ * The elements of `const adminOnly = [ … ]`, split on top-level commas.
+ *
+ * Bracket-aware on purpose: the chain contains `verifyRoles([1])`, whose `]`
+ * would end a naive `[^\]]*` match early and silently truncate the answer.
+ */
+function adminOnlyChain(src) {
+  const decl = /const\s+adminOnly\s*=\s*\[/.exec(src);
+  if (!decl) return [];
+  const open = decl.index + decl[0].length;
+  let depth = 1;
+  let i = open;
+  for (; i < src.length && depth > 0; i += 1) {
+    const c = src[i];
+    if (c === '[' || c === '(') depth += 1;
+    else if (c === ']' || c === ')') depth -= 1;
+  }
+  const inner = src.slice(open, i - 1);
+  const parts = [];
+  let buf = '';
+  let d = 0;
+  for (const c of inner) {
+    if (c === '[' || c === '(') d += 1;
+    if (c === ']' || c === ')') d -= 1;
+    if (c === ',' && d === 0) { if (buf.trim()) parts.push(buf.trim()); buf = ''; continue; }
+    buf += c;
+  }
+  if (buf.trim()) parts.push(buf.trim());
+  return parts;
+}
+
+
 const ROUTES  = path.resolve(__dirname, '../src/routes/adminProvider.routes.ts');
 const CTRL    = path.resolve(__dirname, '../src/controllers/adminProviderController.ts');
 const SVC     = path.resolve(__dirname, '../src/services/adminProviderService.ts');
@@ -54,7 +86,15 @@ describe('adminProvider.routes — PROVIDER360ADMIN route registration', () => {
 
   test('all 3 new routes gate with verifyAuth + verifyRoles([1])', () => {
     // adminOnly spread is used on every route — verify it is defined
-    expect(src).toContain('const adminOnly = [verifyAuth, verifyRoles([1])]');
+    // Asserts the CHAIN CONTAINS the guards, rather than matching the array
+    // literal character for character. The literal form broke the day
+    // `adminRateLimit` was added to it (TAB 05) even though every guard this
+    // test cares about was still there — a text-equality assertion on a
+    // middleware array fails on every legitimate addition, which trains people
+    // to edit the test rather than read it.
+    expect(adminOnlyChain(src)).toEqual(
+      expect.arrayContaining(['verifyAuth', 'verifyRoles([1])']),
+    );
   });
 });
 

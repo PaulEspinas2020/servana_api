@@ -25,7 +25,7 @@ alias is live. Shared surfaces move additively until every client has migrated.
 
 | Endpoint | Status | Customer Mobile | Customer Web | Provider Mobile | Provider Web | Admin |
 |---|---|---|---|---|---|---|
-| `GET /api/v1/bookings/:bookingId/tracking` | implemented | `legacy` | `legacy` | `planned` | `planned` | `planned` |
+| `GET /api/v1/bookings/:bookingId/tracking` | implemented | `legacy` | `legacy` | `migrated` | `migrated` | `planned` |
 
 **Role split:** No role split. One booking-scoped endpoint answers all three actors; the provider position is withheld or disclosed by the SAME visibility rule regardless of who asks, so a provider reading their own job and a customer watching it see one authorization decision.
 
@@ -36,7 +36,7 @@ alias is live. Shared surfaces move additively until every client has migrated.
 | Endpoint | Status | Customer Mobile | Customer Web | Provider Mobile | Provider Web | Admin |
 |---|---|---|---|---|---|---|
 | `POST /api/v1/bookings/:bookingId/otp/request` | implemented | `legacy` | `planned` | · | · | `planned` |
-| `POST /api/v1/bookings/:bookingId/otp/verify` | implemented | `legacy` | `planned` | `planned` | `planned` | `planned` |
+| `POST /api/v1/bookings/:bookingId/otp/verify` | implemented | `legacy` | `planned` | `planned` | `migrated` | `planned` |
 
 **Role split:** No role split. One request endpoint and one verify endpoint, both scoped by `purpose`. The actor rules differ PER PURPOSE, not per client: only the holder of a code may verify it, and a provider may never request the code they are required to be told.
 
@@ -47,7 +47,7 @@ alias is live. Shared surfaces move additively until every client has migrated.
 | Endpoint | Status | Customer Mobile | Customer Web | Provider Mobile | Provider Web | Admin |
 |---|---|---|---|---|---|---|
 | `POST /api/v1/bookings/:bookingId/cancel` | implemented | `legacy` | `legacy` | · | · | · |
-| `POST /api/v1/provider/jobs/:bookingId/cancel` | implemented | · | · | `legacy` | `legacy` | · |
+| `POST /api/v1/provider/jobs/:bookingId/cancel` | implemented | · | · | `migrated` | `migrated` | · |
 
 **Role split:** Role-specific endpoints, one state machine. Customer, provider and admin cancellation are three different ACTIONS with three different guards and three different notification fan-outs — but all three are `transitionBooking` calls against the same transition whitelist, so no client can cancel from a state another client could not.
 
@@ -67,8 +67,8 @@ alias is live. Shared surfaces move additively until every client has migrated.
 
 | Endpoint | Status | Customer Mobile | Customer Web | Provider Mobile | Provider Web | Admin |
 |---|---|---|---|---|---|---|
-| `POST /api/v1/bookings/:bookingId/additional-work` | implemented | · | · | `planned` | `legacy` | · |
-| `GET /api/v1/bookings/:bookingId/additional-work` | implemented | `planned` | `planned` | `planned` | `legacy` | `planned` |
+| `POST /api/v1/bookings/:bookingId/additional-work` | implemented | · | · | `migrated` | `migrated` | · |
+| `GET /api/v1/bookings/:bookingId/additional-work` | implemented | `planned` | `planned` | `migrated` | `legacy` | `planned` |
 
 **Role split:** Creation is provider-only because only the provider on site can observe work the booking did not cover; the READ is shared. Approval and payment remain on the legacy `/api/additional/*` family, which Provider Web calls today, and both families call the same `additionalService` instance.
 
@@ -78,8 +78,8 @@ alias is live. Shared surfaces move additively until every client has migrated.
 
 | Endpoint | Status | Customer Mobile | Customer Web | Provider Mobile | Provider Web | Admin |
 |---|---|---|---|---|---|---|
-| `POST /api/v1/bookings/:bookingId/disputes` | implemented | `planned` | `planned` | `planned` | `planned` | `legacy` |
-| `GET /api/v1/bookings/:bookingId/disputes` | implemented | `planned` | `planned` | `planned` | `planned` | `planned` |
+| `POST /api/v1/bookings/:bookingId/disputes` | implemented | `planned` | `planned` | `migrated` | `migrated` | `legacy` |
+| `GET /api/v1/bookings/:bookingId/disputes` | implemented | `planned` | `planned` | `migrated` | `migrated` | `planned` |
 
 **Role split:** No role split. One open endpoint for all three actors writing one `booking_escalations` row, so admin, provider and customer cannot disagree about whether a booking is disputed. What each actor may READ back differs; what is RECORDED does not.
 

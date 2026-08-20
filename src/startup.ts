@@ -55,11 +55,32 @@ import { seedBuiltInOfferings } from './services/providerCatalogService';
 import { seedReasonCodes, seedRequirementDefinitions } from './services/adminOnboardingService';
 import { seedAdminPermissions } from './services/adminPermissionService';
 import { ensureReviewTables } from './services/customerReviewService';
+import { getFirebaseAdmin } from './middleware/firebaseApp';
 
 /** Generous, but bounded. A hung bootstrap must not hold the boot open. */
 const SCHEMA_TIMEOUT_MS = 30_000;
 
 export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
+  {
+    name: 'firebase-admin',
+    kind: 'required',
+    // Local: resolves a file or an env var and constructs an SDK client. It
+    // makes no network call, so it needs no generous allowance.
+    timeoutMs: 5_000,
+    start: async () => { getFirebaseAdmin(); },
+    why:
+      'IDENTITY. Every authenticated request verifies its bearer token through ' +
+      'the Admin SDK, so an uninitialised credential means the API can ' +
+      'authenticate nobody. It is declared here because `middleware/firebaseApp.ts` ' +
+      'is now lazy: the credential used to be resolved at IMPORT time, which made ' +
+      'the composed app un-importable without a production key and left the ' +
+      'hermetic release gate permanently red. Moving it here keeps the failure at ' +
+      'boot — where it was — while letting a test import the app. Required rather ' +
+      'than optional because an identity dependency must not be silently ' +
+      'downgraded, and required withholds READINESS rather than killing the ' +
+      'process, so an operator still has /readyz to ask why.',
+  },
+
   {
     name: 'admin-permission-seed',
     kind: 'required',

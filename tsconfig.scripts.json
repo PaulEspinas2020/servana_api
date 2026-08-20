@@ -1,0 +1,29 @@
+{
+  // Typecheck for the SCRIPTS tree.
+  //
+  // `tsconfig.json` includes only `src/**/*.ts`, and `tsconfig.tests.json`
+  // added `tests/`. Nothing covered `scripts/` — so `npm run typecheck` was
+  // green while a script would not compile at all.
+  //
+  // That is not academic. `scripts/` holds the fresh-database gate, the
+  // migration-safety scanner, the deploy verifier and the schema/code skew
+  // check: the tools that decide whether a deploy is safe. A gate that does not
+  // compile does not fail loudly — it throws at the moment it is invoked, which
+  // is during a deploy, which is the worst time to discover it.
+  //
+  // Found by writing `scripts/diagnose-production.ts`: `tsc -p tsconfig.json`
+  // reported exit 0 on a file with a generic-constraint error that `ts-node`
+  // then rejected outright. The typecheck was not wrong, it simply was not
+  // looking.
+  //
+  // Separate config for the same reason the tests one is separate: `scripts/`
+  // must not enter `rootDir`, the build output, or the shipped artefact.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "scripts/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

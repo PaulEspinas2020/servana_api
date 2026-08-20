@@ -59,6 +59,101 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  TelemetryIngestRequest: {
+    type: 'object',
+    description:
+      'A batch of scrubbed events. Unknown keys are DROPPED server-side rather than rejected, '
+      + 'so one bad key in a batch does not cost the batch. There is deliberately no free-text '
+      + 'field: a reporter that accepts a stack trace accepts whatever the strings in it happen '
+      + 'to contain, which on this app includes addresses and signed URLs.',
+    required: ['events'],
+    properties: {
+      events: {
+        type: 'array',
+        maxItems: 50,
+        items: {
+          type: 'object',
+          required: ['event'],
+          properties: {
+            event: {
+              type: 'string',
+              enum: [
+                'activationStarted', 'activationCompleted', 'jobOffered', 'jobAccepted',
+                'jobStarted', 'jobCompleted', 'actionFailed',
+              ],
+            },
+            flavor: { type: 'string' },
+            appVersion: { type: 'string' },
+            buildNumber: { type: 'string' },
+            bookingRef: { type: 'string', description: 'An opaque reference. Never a customer name or address.' },
+            failureClass: { type: 'string' },
+            httpStatus: { type: 'integer' },
+            attempt: { type: 'integer' },
+            durationMs: { type: 'integer' },
+            jobState: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
+
+  TelemetryIngestResult: {
+    type: 'object',
+    required: ['accepted', 'dropped', 'rejected'],
+    properties: {
+      accepted: { type: 'integer', description: 'Events stored.' },
+      dropped: { type: 'integer', description: 'Keys the server refused. Names are counted; values never leave the request.' },
+      rejected: { type: 'integer', description: 'Events discarded whole — unknown name, wrong shape, or over the batch cap.' },
+    },
+  },
+
+  ClientConfig: {
+    type: 'object',
+    description:
+      'The client recall lever. `minimumSupported` is the version below which a client must '
+      + 'refuse to run; `latestAvailable` never blocks. `source` is `default` when the '
+      + 'configuration file was absent or unusable, which means the permissive 0.0.0 floor is '
+      + 'in force and any configured recall is NOT being applied.',
+    required: ['platforms', 'source'],
+    properties: {
+      platforms: {
+        type: 'object',
+        required: ['ios', 'android'],
+        properties: {
+          ios: { $ref: '#/components/schemas/ClientPlatformConfig' },
+          android: { $ref: '#/components/schemas/ClientPlatformConfig' },
+        },
+      },
+      source: { type: 'string', enum: ['config', 'default'] },
+    },
+  },
+
+  ClientPlatformConfig: {
+    type: 'object',
+    required: ['minimumSupported', 'latestAvailable', 'message'],
+    properties: {
+      minimumSupported: { type: 'string', description: 'MAJOR.MINOR.PATCH. A client at exactly this version is supported.' },
+      latestAvailable: { type: 'string', description: 'MAJOR.MINOR.PATCH. Informational; never a reason to block.' },
+      message: { type: 'string', description: 'Shown verbatim when the client blocks.' },
+    },
+  },
+
+  BuildInfo: {
+    type: 'object',
+    description:
+      'Build provenance. Four fields and nothing else — no environment, no dependency '
+      + 'liveness, no internal versions. `available` is false when no stamp was found, '
+      + 'which happens on a first deploy or a cleaned workspace; the other fields are '
+      + 'then null and the response is still 200, because absence is an answer.',
+    required: ['commit', 'ref', 'builtAt', 'run', 'available'],
+    properties: {
+      commit: { type: ['string', 'null'] },
+      ref: { type: ['string', 'null'] },
+      builtAt: { type: ['string', 'null'] },
+      run: { type: ['string', 'null'] },
+      available: { type: 'boolean' },
+    },
+  },
   CatalogSummary: {
     type: 'object',
     properties: {
@@ -2428,6 +2523,23 @@ export const SCHEMAS: Record<string, unknown> = {
   },
   AdminAssignRequest: { type: 'object', description: 'PLANNED — providerUid and an optional reason.' },
   AdminReassignRequest: { type: 'object', description: 'PLANNED — providerUid and a REQUIRED reason; the override is audited.' },
+  RefundFailureRequest: {
+    type: 'object',
+    required: ['failureReason'],
+    description: 'Why the approved refund did not go through. Required: "failed" with no explanation leaves the next operator unable to tell a retriable processor timeout from a closed account.',
+    properties: {
+      failureReason: { type: 'string', minLength: 1, description: 'Recorded verbatim on the review.' },
+    },
+  },
+  RefundTransitionResult: {
+    type: 'object',
+    required: ['refundId', 'status'],
+    description: 'The transition that was applied. Deliberately not the whole review — a caller that needs the record reads it back, rather than this becoming a second and subtly different source for it.',
+    properties: {
+      refundId: { type: 'integer', description: 'finance_refund_reviews.id' },
+      status: { type: 'string', enum: ['failed'], description: 'The terminal reached.' },
+    },
+  },
   AdminBookingActionResult: { type: 'object', description: 'PLANNED — the canonical booking projection after the transition.' },
 };
 

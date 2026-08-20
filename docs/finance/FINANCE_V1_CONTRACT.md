@@ -290,11 +290,11 @@ a property of the code rather than an agreement between two implementations.
 | Capability | Customer Mobile | Customer Web | Provider Mobile | Provider Web | Admin Web | Canonical endpoint(s) |
 | --- | --- | --- | --- | --- | --- | --- |
 | Start or resume a booking payment | legacy | legacy | n/a | n/a | planned | `bookings.payments.intent` |
-| Read a booking's payment and price breakdown | planned | planned | planned | planned | planned | `bookings.payments.get` |
+| Read a booking's payment and price breakdown | planned | planned | migrated | planned | planned | `bookings.payments.get` |
 | Refund a booking payment | planned | planned | n/a | n/a | legacy | `bookings.refunds.create` |
-| Provider earnings summary | n/a | n/a | legacy | legacy | n/a | `provider.earnings.summary` |
-| Provider earnings transactions | n/a | n/a | legacy | legacy | n/a | `provider.earnings.transactions` |
-| Provider payouts | n/a | n/a | legacy | legacy | n/a | `provider.earnings.payouts` |
+| Provider earnings summary | n/a | n/a | legacy | migrated | n/a | `provider.earnings.summary` |
+| Provider earnings transactions | n/a | n/a | legacy | migrated | n/a | `provider.earnings.transactions` |
+| Provider payouts | n/a | n/a | legacy | migrated | n/a | `provider.earnings.payouts` |
 | Admin ledger reconciliation | n/a | n/a | n/a | n/a | legacy | `admin.finance.reconciliation` |
 
 No client is `migrated` yet: the platform application repositories are out of scope until the

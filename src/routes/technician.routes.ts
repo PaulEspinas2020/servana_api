@@ -2,6 +2,7 @@ import { Router } from "express";
 import * as technicianController from "../controllers/technicianController";
 import verifyAuth from "../middleware/verifyAuth";
 import verifyRoles from "../middleware/verifyRoles";
+import { adminRateLimit } from '../middleware/adminRateLimit';
 import verifyOwnership from "../middleware/verifyOwnership";
 import { legacyRouteTelemetry } from "../middleware/legacyRouteTelemetry";
 import requireProviderRole from "../middleware/requireProviderRole";
@@ -70,7 +71,7 @@ router.use("/workers", legacyRouteTelemetry);
 // (servana_api_client.dart:338, ServanaWorker servana_api.dart:310) have zero
 // call sites, so no shipped screen depends on it and no release is needed.
 // /workers/all has no caller in any of the four clients.
-const adminOnly = [verifyAuth, verifyRoles([0, 1])];
+const adminOnly = [verifyAuth, verifyRoles([0, 1]), adminRateLimit];
 router.get("/workers/role/:role", ...adminOnly, technicianController.listByRole);
 router.get("/workers/all", ...adminOnly, technicianController.list);
 // EXCEPTION to the blanket note that used to head the block above.
@@ -145,7 +146,7 @@ router.put("/workers/bookings/:bookingId/complete", verifyAuth, requireProviderR
 // source in any of the five consumer repos calls it, and nginx logs covering
 // 2026-07-28 to 2026-08-11 record zero requests to it while containing other
 // /api/admin/bookings traffic. Use the canonical POST route.
-router.patch("/admin/workers/:uid/archive", verifyAuth, verifyRoles([1]), technicianController.setArchiveStatus);
+router.patch("/admin/workers/:uid/archive", verifyAuth, verifyRoles([1]), adminRateLimit, technicianController.setArchiveStatus);
 
 // Employee ↔ Services — admin surface only.
 //

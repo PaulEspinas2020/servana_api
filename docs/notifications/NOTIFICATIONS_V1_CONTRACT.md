@@ -94,13 +94,13 @@ re-fetch to learn its badge or decrement a number it guessed.
 
 | Capability | Customer Mobile | Customer Web | Provider Mobile | Provider Web | Admin Web |
 | --- | --- | --- | --- | --- | --- |
-| Read my notification inbox | legacy | legacy | legacy | legacy | planned |
-| How many unread I have | legacy | legacy | legacy | legacy | planned |
-| Mark one notification read | legacy | legacy | legacy | legacy | planned |
-| Mark everything read | legacy | legacy | legacy | legacy | planned |
-| Dismiss one notification | planned | planned | planned | legacy | — |
+| Read my notification inbox | legacy | legacy | legacy | migrated | planned |
+| How many unread I have | legacy | legacy | legacy | migrated | planned |
+| Mark one notification read | legacy | legacy | legacy | migrated | planned |
+| Mark everything read | legacy | legacy | legacy | migrated | planned |
+| Dismiss one notification | planned | planned | planned | migrated | — |
 | Read and change my notification preferences | planned | planned | legacy | legacy | planned |
-| Register and release this device for push | legacy | planned | legacy | legacy | — |
+| Register and release this device for push | legacy | planned | migrated | migrated | — |
 
 No client is `migrated` yet: the platform application repositories are out of scope until the
 backend Master Command completes. Every legacy route above stays mounted and reaches the same
