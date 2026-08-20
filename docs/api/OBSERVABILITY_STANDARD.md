@@ -199,6 +199,27 @@ Notification projections attempted, by channel and outcome.
 - labels: `channel`, `outcome`
 - **why:** Distinguishes suppressed-by-preference from failed-to-send, which an aggregate count conflates into "notifications are down".
 
+### `worker_telemetry_events_total` (counter)
+
+Scrubbed worker-app events accepted by the ingest endpoint, by event name and build flavor.
+
+- labels: `event`, `flavor`
+- **why:** The worker app's failures are silent by nature. A job offer that never arrives produces no error anywhere — the provider simply does not get the work, and the first report is somebody asking why they had a quiet week. This is the only series that can notice it.
+
+### `worker_telemetry_dropped_keys_total` (counter)
+
+Payload keys the server refused. Names are counted, values never leave the request.
+
+- labels: 
+- **why:** The client scrubs and the server scrubs again, from separately maintained lists. A rising value is not an attack — it is the two lists having drifted, which means a client is sending something nobody will be able to query. Better as a number than as a surprise.
+
+### `worker_telemetry_write_failures_total` (counter)
+
+Telemetry rows that could not be stored. The request still succeeded.
+
+- labels: 
+- **why:** Ingest deliberately swallows write failures, because telemetry that can 500 a client gets switched off in the build that most needed it. Swallowed is not the same as unnoticed, and this is the difference.
+
 ## 5. Alerts (§151)
 
 4 P0 signals. A P0 wakes somebody; the rest wait for the morning.
@@ -211,6 +232,7 @@ Notification projections attempted, by channel and outcome.
 | P0 | `auth-failure-spike` | `auth_failures_total` | rate > 10× the 24h median over 10 minutes | Group by client. One client version is a bad release; many clients is credential stuffing. |
 | P0 | `booking-transitions-failing` | `booking_transition_failures_total` | any refusal other than a normal guard exceeds 5/minute | Group by action and fromState. A provider who cannot complete leaves a customer waiting at home. |
 | P1 | `zero-candidate-matching` | `matching_zero_candidates_total` | > 20% of assignment attempts in an hour | Check provider availability and the eligibility pipeline before assuming demand moved. |
+| P1 | `worker-activation-stall` | `worker_telemetry_events_total` | activationStarted > 0 and activationCompleted == 0 over 24 hours. Absolute rather than a rate: at launch the denominator is single digits, and a percentage of three providers is noise. What matters is the SHAPE — people beginning activation and nobody finishing. | Walk the activation path yourself against production before touching code. Every endpoint in it returns 200 and none had been carried end to end by a person as of 2026-08-20, so the likely failure is a step that refuses with a message a provider cannot act on rather than a route that errors. Compare activationStarted against the completion checklist. |
 | P1 | `p99-latency` | `http_request_duration_ms` | p99 > 5s for any route over 15 minutes | Compare against p50. A moved p99 with a flat p50 is a slow query on a subset of rows. |
 | P1 | `notification-delivery-failure` | `notification_delivery_total` | failure outcome > 10% over 15 minutes | Check the FCM credential first; a rotated key fails every send identically. |
 | P2 | `legacy-traffic-regression` | `legacy_route_hits_total` | a route recorded zero for 7 days starts reporting again | A client rolled back, or an old build woke up. Do NOT retire that alias. |

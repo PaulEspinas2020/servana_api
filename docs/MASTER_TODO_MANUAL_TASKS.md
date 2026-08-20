@@ -242,3 +242,19 @@ which an earlier note had recorded as absent.
 ## Closed
 
 *(none yet)*
+
+## Telemetry retention sweep (TAB 06)
+
+`servana.telemetry_events` has a **stated retention of 90 days** and **no sweep installed**.
+
+The migration deliberately does not ship one. A scheduled `DELETE` that nobody has watched run
+is the same species of unwatched machinery this programme keeps finding — the metrics registry
+nothing scrapes, the portal telemetry allowlist with zero call sites, the rollback that could
+never have restored anything. Shipping a fourth would be the same mistake with a new name.
+
+**Owner:** backend on-call engineer.
+**Task:** install the sweep, run it once against real rows, and record the row count it
+removed. A retention policy nobody has seen delete anything is a retention policy in name only.
+
+Until then the stated period is an intention, not a control, and
+`docs/TELEMETRY_DECISION.md` says so.

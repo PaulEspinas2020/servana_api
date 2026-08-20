@@ -335,6 +335,40 @@ export const V1_CONTRACT: ContractEntry[] = [
     observability: 'catalog',
   },
   {
+    id: 'telemetry.ingest',
+    domain: 'telemetry',
+    method: 'post',
+    path: '/telemetry',
+    summary: 'Accept a small, closed set of scrubbed worker-app events. No free text, ever.',
+    auth: 'authenticated',
+    idempotent: false,
+    replayGuard:
+      'NONE, and accepted deliberately. A replayed batch double-counts an event in a chart, '
+      + 'which is the cheapest failure in this contract. The alternative — an idempotency key '
+      + 'per batch, stored and compared — would cost a write and a lookup on every telemetry '
+      + 'call to protect a number nobody bills from. The events carry no money, no state '
+      + 'transition and no side effect beyond a row.',
+    replayMechanism: ['none-accepted'],
+    responseSchema: 'TelemetryIngestResult',
+    requestSchema: 'TelemetryIngestRequest',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/telemetryService.recordTelemetryEvents',
+    legacy: [],
+    callers: { ...ALL_PLANNED, customerMobile: 'n/a', customerWeb: 'n/a', admin: 'n/a' },
+    observability: 'platform',
+    notes:
+      'FIRST-PARTY by decision, not by default — see docs/TELEMETRY_DECISION.md. The worker '
+      + 'app scrubs to an allowlist carrying no name, phone, location or token, but it still '
+      + 'carries bookingRef, and RA 10173 s3(g) makes information personal when identity can be '
+      + '"reasonably and directly ascertained by the entity holding the information". Servana '
+      + 'holds the bookings table. So the scrubbed payload is still personal data in our hands, '
+      + 'and a foreign sink would be a cross-border transfer engaging s21 accountability, NPC '
+      + 'model contractual clauses, and registration above 1,000 data subjects. The server '
+      + 're-scrubs from its own allowlist rather than trusting the client: a server that trusts '
+      + 'a client\'s scrubbing has one control, not two.',
+  },
+  {
     id: 'clientConfig.read',
     domain: 'health',
     method: 'get',

@@ -88,6 +88,102 @@
         }
       }
     },
+    "/api/v1/telemetry": {
+      "post": {
+        "operationId": "telemetry.ingest",
+        "summary": "Accept a small, closed set of scrubbed worker-app events. No free text, ever.",
+        "tags": [
+          "telemetry"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/telemetryService.recordTelemetryEvents",
+        "x-legacy": [],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "platform",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelemetryIngestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/TelemetryIngestResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "FIRST-PARTY by decision, not by default — see docs/TELEMETRY_DECISION.md. The worker app scrubs to an allowlist carrying no name, phone, location or token, but it still carries bookingRef, and RA 10173 s3(g) makes information personal when identity can be \"reasonably and directly ascertained by the entity holding the information\". Servana holds the bookings table. So the scrubbed payload is still personal data in our hands, and a foreign sink would be a cross-border transfer engaging s21 accountability, NPC model contractual clauses, and registration above 1,000 data subjects. The server re-scrubs from its own allowlist rather than trusting the client: a server that trusts a client's scrubbing has one control, not two."
+      }
+    },
     "/api/v1/client-config": {
       "get": {
         "operationId": "clientConfig.read",
@@ -12869,6 +12965,89 @@
           }
         }
       },
+      "TelemetryIngestRequest": {
+        "type": "object",
+        "description": "A batch of scrubbed events. Unknown keys are DROPPED server-side rather than rejected, so one bad key in a batch does not cost the batch. There is deliberately no free-text field: a reporter that accepts a stack trace accepts whatever the strings in it happen to contain, which on this app includes addresses and signed URLs.",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "required": [
+                "event"
+              ],
+              "properties": {
+                "event": {
+                  "type": "string",
+                  "enum": [
+                    "activationStarted",
+                    "activationCompleted",
+                    "jobOffered",
+                    "jobAccepted",
+                    "jobStarted",
+                    "jobCompleted",
+                    "actionFailed"
+                  ]
+                },
+                "flavor": {
+                  "type": "string"
+                },
+                "appVersion": {
+                  "type": "string"
+                },
+                "buildNumber": {
+                  "type": "string"
+                },
+                "bookingRef": {
+                  "type": "string",
+                  "description": "An opaque reference. Never a customer name or address."
+                },
+                "failureClass": {
+                  "type": "string"
+                },
+                "httpStatus": {
+                  "type": "integer"
+                },
+                "attempt": {
+                  "type": "integer"
+                },
+                "durationMs": {
+                  "type": "integer"
+                },
+                "jobState": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "TelemetryIngestResult": {
+        "type": "object",
+        "required": [
+          "accepted",
+          "dropped",
+          "rejected"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "description": "Events stored."
+          },
+          "dropped": {
+            "type": "integer",
+            "description": "Keys the server refused. Names are counted; values never leave the request."
+          },
+          "rejected": {
+            "type": "integer",
+            "description": "Events discarded whole — unknown name, wrong shape, or over the batch cap."
+          }
+        }
+      },
       "ClientConfig": {
         "type": "object",
         "description": "The client recall lever. `minimumSupported` is the version below which a client must refuse to run; `latestAvailable` never blocks. `source` is `default` when the configuration file was absent or unusable, which means the permissive 0.0.0 floor is in force and any configured recall is NOT being applied.",
@@ -17953,9 +18132,12 @@
     },
     {
       "name": "settings"
+    },
+    {
+      "name": "telemetry"
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 112,
-  "x-total-count": 112
+  "x-implemented-count": 113,
+  "x-total-count": 113
 }

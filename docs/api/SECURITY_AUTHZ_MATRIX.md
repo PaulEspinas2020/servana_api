@@ -15,9 +15,9 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 112 |
+| Mounted endpoints | 113 |
 | `public` | 22 |
-| `authenticated` | 58 |
+| `authenticated` | 59 |
 | `provider` | 26 |
 | `admin` | 6 |
 | Object-scoped | 43 |
@@ -243,6 +243,7 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `search.query` | GET /search | `public` | ● ● ● ● | — |
 | `settings.notificationPreferences.get` | GET /settings/notification-preferences | `authenticated` | · ● ● ● | — |
 | `settings.notificationPreferences.put` | PUT /settings/notification-preferences | `authenticated` | · ● ● ● | — |
+| `telemetry.ingest` | POST /telemetry | `authenticated` | · ● ● ● | — |
 
 ## 5. What counts as proof that a route is protected (§143)
 
@@ -266,8 +267,8 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-58 of 112 endpoints are probeable; the other
-54 are writes and are never probed, because a POST to
+58 of 113 endpoints are probeable; the other
+55 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.
 

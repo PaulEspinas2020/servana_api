@@ -315,6 +315,36 @@ export const METRICS: readonly MetricSpec[] = Object.freeze([
     labels: Object.freeze(['channel', 'outcome']),
     why: 'Distinguishes suppressed-by-preference from failed-to-send, which an aggregate count conflates into "notifications are down".',
   },
+  {
+    name: 'worker_telemetry_events_total',
+    kind: 'counter',
+    description: 'Scrubbed worker-app events accepted by the ingest endpoint, by event name and build flavor.',
+    labels: Object.freeze(['event', 'flavor']),
+    why:
+      'The worker app\'s failures are silent by nature. A job offer that never arrives produces '
+      + 'no error anywhere — the provider simply does not get the work, and the first report is '
+      + 'somebody asking why they had a quiet week. This is the only series that can notice it.',
+  },
+  {
+    name: 'worker_telemetry_dropped_keys_total',
+    kind: 'counter',
+    description: 'Payload keys the server refused. Names are counted, values never leave the request.',
+    labels: Object.freeze([]),
+    why:
+      'The client scrubs and the server scrubs again, from separately maintained lists. A rising '
+      + 'value is not an attack — it is the two lists having drifted, which means a client is '
+      + 'sending something nobody will be able to query. Better as a number than as a surprise.',
+  },
+  {
+    name: 'worker_telemetry_write_failures_total',
+    kind: 'counter',
+    description: 'Telemetry rows that could not be stored. The request still succeeded.',
+    labels: Object.freeze([]),
+    why:
+      'Ingest deliberately swallows write failures, because telemetry that can 500 a client gets '
+      + 'switched off in the build that most needed it. Swallowed is not the same as unnoticed, '
+      + 'and this is the difference.',
+  },
 ]);
 
 export const METRIC_NAMES: readonly string[] = Object.freeze(METRICS.map((m) => m.name));
@@ -390,6 +420,22 @@ export const ALERTS: readonly AlertSpec[] = Object.freeze([
     severity: 'P1',
     condition: '> 20% of assignment attempts in an hour',
     firstAction: 'Check provider availability and the eligibility pipeline before assuming demand moved.',
+  },
+  {
+    name: 'worker-activation-stall',
+    metric: 'worker_telemetry_events_total',
+    severity: 'P1',
+    // OWNER: the backend on-call engineer. Named in docs/TELEMETRY_DECISION.md,
+    // because an alert with no owner is a log line.
+    condition:
+      'activationStarted > 0 and activationCompleted == 0 over 24 hours. Absolute rather than a '
+      + 'rate: at launch the denominator is single digits, and a percentage of three providers '
+      + 'is noise. What matters is the SHAPE — people beginning activation and nobody finishing.',
+    firstAction:
+      'Walk the activation path yourself against production before touching code. Every endpoint '
+      + 'in it returns 200 and none had been carried end to end by a person as of 2026-08-20, so '
+      + 'the likely failure is a step that refuses with a message a provider cannot act on rather '
+      + 'than a route that errors. Compare activationStarted against the completion checklist.',
   },
   {
     name: 'p99-latency',

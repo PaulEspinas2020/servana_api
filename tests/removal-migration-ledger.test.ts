@@ -183,10 +183,22 @@ describe('the fix did not reclassify anything else', () => {
     }
   });
 
-  it('nothing is ABSENT — every migration is either proven or demonstrably reflected', () => {
-    // Stated as an exact list so a NEW genuinely-undeployed migration cannot
-    // hide in this bucket unnoticed.
-    expect(checks.filter((c) => c.verdict === 'ABSENT').map((c) => c.file)).toEqual([]);
+  it('the only ABSENT migration is the one this repository knows is undeployed', () => {
+    /**
+     * Stated as an exact list so a NEW genuinely-undeployed migration cannot
+     * hide in this bucket unnoticed — which is exactly what it just caught.
+     *
+     * `038-telemetry-events.sql` creates the worker-app telemetry table (TAB
+     * 06). It is ABSENT from the captured baseline because it has never been
+     * applied: nothing from this programme has been deployed. That is the
+     * honest state, and naming it here is the mechanism working rather than
+     * being worked around.
+     *
+     * It comes OFF this list the moment production runs it, and the assertion
+     * then goes red until somebody says so.
+     */
+    expect(checks.filter((c) => c.verdict === 'ABSENT').map((c) => c.file))
+      .toEqual(['038-telemetry-events.sql']);
   });
 
   it('everything the baseline demonstrably has is still "present"', () => {

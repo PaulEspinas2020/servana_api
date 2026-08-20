@@ -59,6 +59,54 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  TelemetryIngestRequest: {
+    type: 'object',
+    description:
+      'A batch of scrubbed events. Unknown keys are DROPPED server-side rather than rejected, '
+      + 'so one bad key in a batch does not cost the batch. There is deliberately no free-text '
+      + 'field: a reporter that accepts a stack trace accepts whatever the strings in it happen '
+      + 'to contain, which on this app includes addresses and signed URLs.',
+    required: ['events'],
+    properties: {
+      events: {
+        type: 'array',
+        maxItems: 50,
+        items: {
+          type: 'object',
+          required: ['event'],
+          properties: {
+            event: {
+              type: 'string',
+              enum: [
+                'activationStarted', 'activationCompleted', 'jobOffered', 'jobAccepted',
+                'jobStarted', 'jobCompleted', 'actionFailed',
+              ],
+            },
+            flavor: { type: 'string' },
+            appVersion: { type: 'string' },
+            buildNumber: { type: 'string' },
+            bookingRef: { type: 'string', description: 'An opaque reference. Never a customer name or address.' },
+            failureClass: { type: 'string' },
+            httpStatus: { type: 'integer' },
+            attempt: { type: 'integer' },
+            durationMs: { type: 'integer' },
+            jobState: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
+
+  TelemetryIngestResult: {
+    type: 'object',
+    required: ['accepted', 'dropped', 'rejected'],
+    properties: {
+      accepted: { type: 'integer', description: 'Events stored.' },
+      dropped: { type: 'integer', description: 'Keys the server refused. Names are counted; values never leave the request.' },
+      rejected: { type: 'integer', description: 'Events discarded whole — unknown name, wrong shape, or over the batch cap.' },
+    },
+  },
+
   ClientConfig: {
     type: 'object',
     description:

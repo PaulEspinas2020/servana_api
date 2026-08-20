@@ -18,13 +18,13 @@
 
 | | |
 | --- | --- |
-| Capabilities | 60 |
-| Canonical endpoints mounted | 112 |
+| Capabilities | 61 |
+| Canonical endpoints mounted | 113 |
 | Canonical endpoints planned | 0 |
 | Legacy mappings tracked | 125 |
 | Converged (one route family) | 53 |
 | Role-split over ONE service | 4 |
-| Single-surface | 3 |
+| Single-surface | 4 |
 | **Divergent (forked truth)** | **0** |
 | Broken (names a missing endpoint) | 0 |
 | Surface × capability cells on canonical | 35 |
@@ -87,6 +87,7 @@ direction of whoever wrote it.
 | Read a provider's public profile | SHARED | planned | planned | — | — | planned |
 | Resolve a refund review | SINGLE_SURFACE | — | — | — | — | legacy |
 | Read the reschedule history of a booking | SHARED | planned | planned | planned | **migrated** | planned |
+| Report that the product is working | SINGLE_SURFACE | — | — | planned | — | — |
 | Register and release this device for push | SHARED | legacy | planned | **migrated** | **migrated** | — |
 | Dismiss one notification | SHARED | planned | planned | planned | **migrated** | — |
 | Read my notification inbox | SHARED | legacy | legacy | legacy | **migrated** | planned |
@@ -586,6 +587,20 @@ Legacy still aliased for this capability:
   - none
 
 No role split. One booking-scoped read; the requesting and deciding endpoints beside it are in EXPERIENCE_CAPABILITIES over the same service.
+
+### Report that the product is working
+
+- key: `core:workerTelemetry` · declared in `api/v1/convergence (core)`
+- verdict: **SINGLE_SURFACE** · domain service: `services/telemetryService`
+- route families: `/telemetry`
+
+Canonical:
+  - `POST /api/v1/telemetry`
+
+Legacy still aliased for this capability:
+  - none
+
+Role-specific, and the narrowest capability in this registry. The worker app is the only client whose failures are silent by nature — a job offer that never arrives produces no error anywhere, so its working-ness cannot be inferred from the request log the way a browser surface's can, because a browser retries in front of a person who reports it. There is deliberately NO CUSTOMER equivalent and no admin one: the customer app is not in this programme, publishes no manifest, and giving it an ingest here would be inventing a client's requirements on its behalf — the same error the caller matrix was built to stop. Opening this to every surface would also turn a seven-event product signal into a general analytics endpoint, which docs/TELEMETRY_DECISION.md explicitly refuses. A second surface wanting this is a new decision, not a new entry in an array.
 
 ### Register and release this device for push
 

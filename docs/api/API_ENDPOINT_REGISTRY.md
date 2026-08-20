@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**112 implemented** · **0 planned** · 112 total.
+**113 implemented** · **0 planned** · 113 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -140,6 +140,23 @@ The Services of one Subcategory.
 - **Legacy it replaces**
   - `GET /api/services/:serviceId/options-with-addons` — **CANONICALIZE** — The legacy shape. Its `:serviceId` is a service_families.id and it returns level_2 / level_3 option groups, not Services. ServanaWorker calls the un-prefixed twin instead, which is the only catalog route without the /services/ prefix its neighbours use.
   - `GET /api/:serviceId/options-with-addons` — **ALIAS_TEMPORARILY** — The original un-prefixed form, and what ServanaWorker calls in production. It cannot be retired until that app moves; the customer app followed the convention instead of the exception and 404d for months as a result.
+
+## telemetry
+
+| Method | Path | Status | Auth | Request | Response | Idem | Owner |
+|---|---|---|---|---|---|---|---|
+| `POST` | `/api/v1/telemetry` | **live** | any signed-in | `TelemetryIngestRequest` | `TelemetryIngestResult` | no | platform |
+
+### `POST /api/v1/telemetry`
+
+Accept a small, closed set of scrubbed worker-app events. No free text, ever.
+
+> FIRST-PARTY by decision, not by default — see docs/TELEMETRY_DECISION.md. The worker app scrubs to an allowlist carrying no name, phone, location or token, but it still carries bookingRef, and RA 10173 s3(g) makes information personal when identity can be "reasonably and directly ascertained by the entity holding the information". Servana holds the bookings table. So the scrubbed payload is still personal data in our hands, and a foreign sink would be a cross-border transfer engaging s21 accountability, NPC model contractual clauses, and registration above 1,000 data subjects. The server re-scrubs from its own allowlist rather than trusting the client: a server that trusts a client's scrubbing has one control, not two.
+
+- **Domain service** — `services/telemetryService.recordTelemetryEvents`
+- **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces** — none; new capability.
 
 ## health
 
@@ -1568,6 +1585,7 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | Endpoint | Cust Mobile | Cust Web | Prov Mobile | Prov Web | Admin |
 |---|---|---|---|---|---|
 | `GET /api/v1/catalog` | · | · | — | — | — |
+| `POST /api/v1/telemetry` | — | — | · | · | — |
 | `GET /api/v1/client-config` | · | — | · | — | — |
 | `GET /api/v1/health` | — | — | — | — | — |
 | `GET /api/v1/catalog/summary` | · | · | — | — | — |

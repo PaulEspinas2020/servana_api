@@ -902,6 +902,9 @@ describe('every implemented contract entry is reachable at its declared path', (
     // auth: false is the assertion, not a convenience. The client this answers
     // may be too old to authenticate — it is the one being recalled.
     'clientConfig.read': () => call('GET', '/api/v1/client-config', { auth: false }),
+    // A minimal well-formed batch. The scrubbing is asserted in
+    // tests/telemetry-ingest.test.ts; this only proves the route is reachable.
+    'telemetry.ingest': () => call('POST', '/api/v1/telemetry', { body: { events: [{ event: 'jobOffered' }] } }),
     'catalog.summary': () => call('GET', '/api/v1/catalog/summary', { auth: false }),
     'catalog.services.list': () => call('GET', '/api/v1/catalog/services', { auth: false }),
     'catalog.services.get': () => call('GET', '/api/v1/catalog/services/15', { auth: false }),

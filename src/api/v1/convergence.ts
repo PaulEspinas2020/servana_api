@@ -261,6 +261,25 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'the same four fields from the same stamp; there is no projection to differ on.',
   },
   {
+    key: 'workerTelemetry',
+    title: 'Report that the product is working',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['telemetry.ingest'],
+    domainModule: 'services/telemetryService.recordTelemetryEvents',
+    surfaces: Object.freeze(['providerMobile'] as ClientSurface[]),
+    roleSplitRationale:
+      'Role-specific, and the narrowest capability in this registry. The worker app is the only '
+      + 'client whose failures are silent by nature — a job offer that never arrives produces no '
+      + 'error anywhere, so its working-ness cannot be inferred from the request log the way a '
+      + 'browser surface\'s can, because a browser retries in front of a person who reports it. '
+      + 'There is deliberately NO CUSTOMER equivalent and no admin one: the customer app is not '
+      + 'in this programme, publishes no manifest, and giving it an ingest here would be '
+      + 'inventing a client\'s requirements on its behalf — the same error the caller matrix was '
+      + 'built to stop. Opening this to every surface would also turn a seven-event product '
+      + 'signal into a general analytics endpoint, which docs/TELEMETRY_DECISION.md explicitly '
+      + 'refuses. A second surface wanting this is a new decision, not a new entry in an array.',
+  },
+  {
     key: 'clientRecall',
     title: 'Ask whether this client build may still run',
     source: 'api/v1/convergence (core)',
