@@ -196,8 +196,24 @@ describe('raising the minimum takes effect without a deploy or a restart', () =>
   });
 
   it('prefers an operator-supplied path over anything the release shipped', () => {
-    process.env.CLIENT_CONFIG_PATH = '/etc/servana/client-config.json';
-    expect(configCandidates()[0]).toBe('/etc/servana/client-config.json');
+    // The path is built for the host rather than written as a POSIX literal.
+    // `path.resolve('/etc/servana/client-config.json')` answers
+    // `C:\etc\servana\client-config.json` on Windows, so the literal asserted
+    // which machine the suite ran on, not what the function does — and with CI
+    // off, the machine it runs on is a developer's. See the three deploy gates
+    // that failed the same way.
+    const operatorPath = path.join(tmp, 'operator-client-config.json');
+    process.env.CLIENT_CONFIG_PATH = operatorPath;
+
+    const candidates = configCandidates();
+
+    // Authoritative, not a first preference. The fall-through version of this
+    // was a real defect: with the operator's file malformed the search carried
+    // on to the config the RELEASE shipped and still reported `source: 'config'`.
+    // Asserting only `[0]` left that regression uncovered.
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toBe(operatorPath);
+    expect(candidates).not.toContain(path.resolve(process.cwd(), 'config', 'client-config.json'));
   });
 });
 
