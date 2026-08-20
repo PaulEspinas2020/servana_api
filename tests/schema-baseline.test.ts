@@ -130,6 +130,11 @@ describe('the repository cannot build the database from zero', () => {
       'email_otps',
       'employee_services',
       'payments',
+      // Added by 041, which inserts the offering->family mappings the seed's
+      // name lookup silently skipped. The chain has never created this table
+      // either — like the eighteen around it, it can only come from the
+      // baseline.
+      'provider_catalog_offering_mappings',
       'provider_catalog_offerings',
       'provider_onboarding_cases',
       'provider_onboarding_drafts',

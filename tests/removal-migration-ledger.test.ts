@@ -171,7 +171,7 @@ describe('the fix did not reclassify anything else', () => {
      * reference.
      */
     const noEffect = checks.filter((c) => c.verdict === 'no-schema-effect');
-    expect(noEffect.length).toBe(16);
+    expect(noEffect.length).toBe(18);
     expect(noEffect.map((c) => c.file)).toEqual(
       expect.arrayContaining([
         '002-massage-specific-services.sql',
@@ -194,6 +194,12 @@ describe('the fix did not reclassify anything else', () => {
         // otherwise reach production having never run. `npm run
         // migration:040:rehearse` runs it on PGlite.
         '040-retire-duplicate-massage-subcategory.sql',
+        // 17th and 18th. 041 inserts offering mappings, a draft subcategory and
+        // coverage rows; 042 sets `deleted_at` on four families. Both are pure
+        // DML, both are executed only by
+        // `npm run migration:041-042:rehearse`.
+        '041-home-maintenance-plumbing-carpentry.sql',
+        '042-retire-duplicate-service-families.sql',
       ]),
     );
   });
