@@ -9,15 +9,23 @@ ROLLBACK_REHEARSED: PARTIAL — the procedure has been executed and timed locall
 
 ## The measured state
 
-| | |
-|---|---|
-| rollback references in `.github/workflows/deploy.yml` (the workflow that runs) | **0** |
-| rollback references in `docs/pending-workflow/deploy.yml` (parked) | 10 |
-| retained previous build on the host | **none** |
-| blocker | the PAT lacks the `workflow` scope |
+**Updated 2026-08-20 — the blocker is gone.**
 
-The rollback is **absent from production, not merely unrehearsed.** "Unrehearsed" invites
-*"risky, but there if we need it."* There is none.
+| | Then (2026-08-19) | Now |
+|---|---|---|
+| rollback references in the thing that actually deploys | **0** (`deploy.yml`) | **wired** (`scripts/deploy-prod.sh`) |
+| retained previous build on the host | **none** | produced by the deploy's final step, once it has run at least twice |
+| blocker | the PAT lacks the `workflow` scope | **none** — a script needs no `workflow` scope |
+
+The rollback used to be **absent from production, not merely unrehearsed** —
+"unrehearsed" invites *"risky, but there if we need it,"* and there was none.
+Deleting CI is what fixed it: the deploy became a script, and a script can call
+`scripts/rollback.sh`.
+
+**One caveat that has not changed.** The retention step only runs after a
+successful deploy, so until `scripts/deploy-prod.sh` has completed once there is
+still nothing to restore. `rollback.sh` refuses in that case without stopping the
+running process, which is the safe direction.
 
 ## What rehearsal found: the parked rollback was inoperative
 

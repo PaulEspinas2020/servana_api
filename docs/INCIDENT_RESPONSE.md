@@ -146,13 +146,16 @@ ref, built-at, run. Three answers, three meanings:
 
 * **404** — the running build predates the endpoint. Production is older than
   you think, and that is the answer.
-* **200 with `available: false`** — `dist/BUILD_INFO.json` is missing, and as of
-  2026-08-19 that tells you **nothing about how the build was made**, because
-  the live `.github/workflows/deploy.yml` has no stamping step. The step that
-  writes it sits in the parked copy at `docs/pending-workflow/deploy.yml`, held
-  back with the other workflow edits the PAT cannot push. Until that lands, this
-  endpoint answers `available: false` after every deploy, and **"what commit is
-  serving?" is unanswerable from outside**. Use the Actions run list instead.
+* **200 with `available: false`** — `dist/BUILD_INFO.json` is missing. It means
+  the running artefact was built before the stamper existed, or by something
+  other than `npm run build`. As of 2026-08-20 production still answers this,
+  so **"what commit is serving?" is not answerable from outside yet**. There is
+  no Actions run list to fall back on either: CI is gone. Ask the box —
+  `ssh root@192.46.224.126 'cd /var/www/servana_api && git rev-parse HEAD'` —
+  and note that this tells you what is CHECKED OUT, not what the live process
+  loaded, which is exactly the ambiguity the stamp exists to remove.
+  The next run of `scripts/deploy-prod.sh` fixes it: it builds, and the build
+  stamps.
 * **200 with a commit** — believe it, and compare it to `origin/main`.
 
 The middle case is worth naming because it is the one that looks like a working

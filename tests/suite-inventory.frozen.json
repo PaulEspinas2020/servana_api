@@ -120,7 +120,6 @@
   "cross-platform-convergence.test.ts",
   "cross-platform-parity.test.ts",
   "customer-firebase-login-collision.test.ts",
-  "deploy-gating.test.ts",
   "deprecation-successor-signpost.test.ts",
   "destructive-migration-guard.test.ts",
   "eligibility-pipeline.test.ts",
@@ -299,6 +298,5 @@
   "v1-refund-no-money-path.test.ts",
   "v1-router.test.ts",
   "verification-code-entropy.test.ts",
-  "worker-code-rate-limit.test.ts",
-  "workflow-startup-validity.test.ts"
+  "worker-code-rate-limit.test.ts"
 ]

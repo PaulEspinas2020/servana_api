@@ -33,11 +33,10 @@ Last updated: 2026-08-18 (TAB 16 — terminal)
 
 | # | Task | Why blocked | Closes when |
 | --- | --- | --- | --- |
-| 00.1 | Re-run `gh run list --repo PaulEspinas2020/servana_api --limit 8` and confirm deploy run `32119165101` succeeded | `NO-TOOL`, `REMOTE-OP` | Run list captured showing the deploy success and the release-gate failure on the same commit |
 | 00.2 | Probe production: `/api/v1/catalog` → 200, `/api/v1/bookings` → 401, `/zzz-nope` → 404, `/healthz` → 200 | `PROD-ACCESS` | Four status codes captured and pasted into `docs/LAUNCH_BASELINE.md` §4 |
 | 00.3 | Clone `servana_adminportal` onto this machine (or grant access) so TABs 02, 07, 12, 15 and the portal half of 08–11, 13–16 can execute | `NO-REPO` | `servana_adminportal` present, `npm ci && npm run verify:release` green from a clean clone |
 | 00.4 | Clone the four client repos (Customer Mobile, Provider Mobile, Customer Web, Provider Web) so §4 additive-compatibility can be **proven by reading** rather than reasoned | `NO-REPO` | All four present and greppable for the routes each TAB touches |
-| 00.5 | Provide a real PostgreSQL (or `psql` + a scratch database) so `npm run db:verify` non-embedded, ownership checks and the `fresh` CI job can run as the runtime role | `NO-TOOL`, `NO-CRED` | `npm run db:verify` executes and reports; ownership separation observable |
+| 00.5 | Provide a real PostgreSQL (or `psql` + a scratch database) so `npm run db:verify -- --live` and its ownership checks can run as the runtime role. **This is the only place ownership is checkable** — `--embedded` is a single bundled superuser — and with no CI it has no automated runner at all | `NO-TOOL`, `NO-CRED` | `npm run db:verify` executes and reports; ownership separation observable |
 
 ## TAB 01 — Money authorization
 
@@ -61,13 +60,17 @@ Last updated: 2026-08-18 (TAB 16 — terminal)
 | 03.6 | Confirm `/home/github-runner/releases` is writable by the runner user and survives between runs, or the rollback snapshot silently does nothing | `PROD-ACCESS` | Directory exists after a deploy and contains `previous/` |
 | 03.7 | Confirm GitHub-hosted runners are available to this repo for the `release-gate` job (it runs `ubuntu-latest`; the deploy runs self-hosted) | `REMOTE-OP` | One green `release-gate` job in a run graph alongside `deploy` |
 
-## TAB 04 — CI integrity
+## TAB 04 — deploy integrity
 
-| # | Task | Why blocked | Closes when |
-| --- | --- | --- | --- |
-| 04.1 | Trigger `fresh-db.yml` on GitHub and confirm it produces a real run with real logs, not a 0s startup failure. **The `fresh` job — the only one that can catch an ownership defect — has still never executed** | `REMOTE-OP` | A run with logs; each job green or documented red-by-design; ownership assertion observed passing on a real engine |
-| 04.2 | Install `actionlint` and add it to CI, so a workflow parse fault is caught by a linter rather than by noticing an absent check | `NO-TOOL` | `actionlint` runs over `.github/workflows/` in the release gate |
-| 04.3 | Make `fresh-db.yml` a required status check feeding the deploy gate — **but not before three consecutive green runs**, or it becomes the cosmetic blocker TAB 03 describes | `REMOTE-OP` | Required check configured after three green runs |
+**Rewritten 2026-08-20.** This section used to be "CI integrity" and its three
+tasks were: trigger `fresh-db.yml`, add `actionlint` to CI, and make
+`fresh-db.yml` a required status check. All three are void — this platform runs
+no CI on any repository and every workflow file is deleted. They are not
+blocked; they are not to be done.
+
+What survives is the part that was never about CI: the fresh-database gate can
+only see ownership in `--live` mode, and nothing runs it automatically any more.
+That is task 00.5 above, and it is the real item.
 
 ## TAB 05 — API security baseline
 
@@ -184,7 +187,7 @@ Last updated: 2026-08-18 (TAB 16 — terminal)
 
 | # | Task | Why blocked | Closes when |
 | --- | --- | --- | --- |
-| V10.1 | Drop `--legacy-peer-deps` from `.github/workflows/admin-ci.yml` (line 28) and raise its `node-version` from `'20'` to `'20.19.5'`. Both are already done in `netlify.toml`, `.nvmrc` and `engines`; the workflow file cannot be pushed with this PAT. Bare `'20'` may resolve below Angular 20's `^20.19` floor | `NO-TOOL` (PAT lacks `workflow` scope) | `admin-ci.yml` runs `npm ci` with no flags on 20.19.5 |
+| V10.1 | Raise the Admin portal's Node to `20.19.5` wherever it is still bare `'20'`. `netlify.toml`, `.nvmrc` and `engines` are already correct, and **`admin-ci.yml` was deleted** along with every other workflow, so the half of this task that needed `workflow` scope is void. Bare `'20'` may resolve below Angular 20's `^20.19` floor | — | No bare `'20'` remains in the Admin portal |
 | V10.2 | **Schedule Angular 21 before 2026-10-31.** `latest` is 22.1.2; this repository is on `v20-lts`. Angular ships a major every ~6 months with 6 months active + 12 months LTS, putting 20's end of life at approximately late November 2026. Supported and unvulnerable today, on the last third of its life | `HUMAN-JUDGEMENT` | 21 landed with its own soak, or a dated decision to skip to 22 |
 | V10.3 | Confirm the Netlify build picked up `NODE_VERSION = "20.19.5"` and built with no NPM flags — **when the branch lands**, not before. A failed build leaves the previous deploy serving, so a silent failure looks like nothing happening | `PROD-ACCESS` | Netlify deploy log shows 20.19.5 and a clean `npm ci` |
 | V10.4 | **Merge and soak `angular-20-upgrade`.** Owner decision on 2026-08-19 was to hold the framework change back from the TAB 06-09 deploy so a failure stays attributable. The branch is complete and verified from a clean clone — 1592 tests, production build, zero advisories — and clears 9 high advisories once it lands | `HUMAN-JUDGEMENT` | Branch merged to `main` with a commit carrying NO `[skip ci]`, then a week of operator use with no framework-attributable defect |
