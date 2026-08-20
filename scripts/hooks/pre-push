@@ -19,8 +19,8 @@
 # So the check that CI used to perform now runs here, before the push leaves.
 #
 # Pushing main runs the full `npm run verify`. Anything else runs verify:quick,
-# because no other branch deploys and a two-minute wait would just train someone
-# to reach for --no-verify.
+# because production is never deployed from any other branch and a two-minute
+# wait would just train someone to reach for --no-verify.
 #
 # That caveat is now OUT OF DATE, and the correction matters because this hook is
 # currently the only gate.
@@ -57,11 +57,11 @@ done
 # leaving the push silently unlanded. Draining the list is fine (proved with a
 # trivial hook); it is handing the open pipe to npm that deadlocks.
 if [ "$remote_ref_is_main" -eq 1 ]; then
-  echo "pre-push: pushing main, which DEPLOYS TO PRODUCTION — running full npm run verify"
+  echo "pre-push: pushing main — the branch production is deployed FROM, and the last gate before it. Running full npm run verify"
   npm run verify < /dev/null
-  echo "pre-push: verify passed; allowing the push (and the deploy it triggers)"
+  echo "pre-push: verify passed; allowing the push. This push does NOT deploy — deploying is scripts/deploy-prod.sh, run by hand on the host."
 else
-  echo "pre-push: non-deploying branch — running npm run verify:quick"
+  echo "pre-push: not main — running npm run verify:quick"
   npm run verify:quick < /dev/null
   echo "pre-push: verify:quick passed"
 fi
