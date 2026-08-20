@@ -1142,8 +1142,40 @@ export const SCHEMAS: Record<string, unknown> = {
 
   MessageReport: {
     type: 'object',
-    description: 'The receipt for a message reported to moderation.',
-    properties: { reportId: { type: 'string' } },
+    required: ['reportId'],
+    description:
+      'The RECEIPT for a message reported to moderation — not the report itself, and not '
+      + 'a moderation queue row.'
+      + ' '
+      + 'TAB 07 reports that this name "describes a different object" from the admin '
+      + 'portal DTO of the same name, and that two objects are travelling under one name. '
+      + 'Both halves are true and neither side is wrong; they are describing DIFFERENT '
+      + 'ENDPOINTS ON DIFFERENT TREES.'
+      + ' '
+      + 'This schema is the 201 from POST /api/v1/conversations/{id}/messages/{id}/report, '
+      + 'and chat.service.reportMessage is typed `Promise<{ reportId: string }>` and returns '
+      + '`{ reportId: String(report.id) }`. One field is the whole answer: the filer needs a '
+      + 'handle, not the queue.'
+      + ' '
+      + 'What the portal holds is a MODERATION QUEUE ROW, from '
+      + 'GET /api/admin/communications/reports on the legacy admin tree — id, messageId, '
+      + 'reportedByUid, reason, messageBody, conversationId, status, resolvedByUid, '
+      + 'resolvedAt, resolutionNote, createdAt. That entity is published as '
+      + '`AdminMessageReport` in docs/api/openapi.admin.json so the collision cannot '
+      + 'persist. Note it answers camelCase from a mapper, while the PATCH on the same '
+      + 'entity returns the raw snake_case row — see TAB 01.'
+      + ' '
+      + 'reportId is REQUIRED: the service cannot return without it, and an optional field '
+      + 'that is always present teaches every client to null-check for nothing.',
+    properties: {
+      reportId: {
+        type: 'string',
+        description:
+          'A STRING — chat_message_reports.id wrapped in String() by the service. The '
+          + 'admin queue row exposes the same key as an INTEGER `id`, unstringified. Two '
+          + 'representations of one row, and the reason each is declared where it is used.',
+      },
+    },
   },
 
   NotificationPreferencePatch: {
@@ -2388,29 +2420,80 @@ export const SCHEMAS: Record<string, unknown> = {
 
   ProviderTimeOff: {
     type: 'object',
+    required: ['id', 'startDate', 'endDate', 'allDay', 'status', 'createdAt'],
     description:
-      'One period, as STORED. bookingConflicts is present on creation: time off does NOT ' +
-      'cancel accepted work, and a response silent about that would leave a provider ' +
-      'assuming it had.',
+      'One period, as STORED. bookingConflicts is present on creation: time off does NOT '
+      + 'cancel accepted work, and a response silent about that would leave a provider '
+      + 'assuming it had.'
+      + ' '
+      + 'CORRECTED IN TAB 07. `id` was declared `string` here and `number` in the admin '
+      + 'portal, and the portal deliberately did not change on a guess — correctly, because '
+      + 'the CONTRACT was the wrong one. `worker_time_off.id` is `integer NOT NULL`, '
+      + 'node-postgres parses int4 to a JS number, and this repository own '
+      + '`interface ProviderTimeOff` has always declared `id: number`. Three sources agreed '
+      + 'and the document disagreed with all of them. A client that had trusted the '
+      + 'contract and compared `id === "5"` would never have matched.',
     properties: {
-      id: { type: 'string' },
-      startDate: { type: 'string', format: 'date' },
+      id: {
+        type: 'integer',
+        description:
+          'A NUMBER. The column is integer and nothing stringifies it — contrast '
+          + 'NotificationTemplate.id and CommunicationEvent.id on the admin tree, which are '
+          + 'wrapped in String() by their mappers and really are strings.',
+      },
+      startDate: {
+        type: 'string',
+        format: 'date',
+        description: 'YYYY-MM-DD. A DATE column, deliberately left unparsed — a date has no zone.',
+      },
       endDate: { type: 'string', format: 'date' },
-      allDay: { type: 'boolean' },
-      startTime: { type: ['string', 'null'] },
-      endTime: { type: ['string', 'null'] },
-      reason: { type: 'string' },
+      allDay: {
+        type: 'boolean',
+        description: 'False only for a single-day window with explicit start and end times.',
+      },
+      startTime: { type: ['string', 'null'], description: 'HH:mm, null when allDay.' },
+      endTime: { type: ['string', 'null'], description: 'HH:mm, null when allDay.' },
+      reason: {
+        type: ['string', 'null'],
+        description: 'NULLABLE — the column is `reason text` with no NOT NULL.',
+      },
       note: { type: ['string', 'null'] },
-      createdAt: { type: ['string', 'null'], format: 'date-time' },
-      bookingConflicts: { type: 'array', items: { type: 'object', additionalProperties: true } },
+      status: {
+        type: 'string',
+        enum: ['active', 'cancelled'],
+        description:
+          'Cancelling does not delete the row, so a cancelled period is still returned by '
+          + 'the list. A client filtering for live time off must read this.',
+      },
+      createdAt: {
+        type: 'string',
+        format: 'date-time',
+        description: 'NOT NULL in the schema, so never null here.',
+      },
+      createdBy: { type: ['string', 'null'] },
+      cancelledAt: { type: ['string', 'null'], format: 'date-time' },
+      cancelledBy: { type: ['string', 'null'] },
+      bookingConflicts: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: true },
+        description:
+          'Present on CREATION only. Time off does not cancel accepted work; these are the '
+          + 'bookings that now overlap it and are still the provider responsibility.',
+      },
       conflictNotice: { type: ['string', 'null'] },
     },
   },
 
   ProviderTimeOffList: {
     type: 'object',
+    required: ['timeOff'],
     properties: {
-      timeOff: { type: 'array', items: { type: 'object', additionalProperties: true } },
+      timeOff: {
+        type: 'array',
+        items: { $ref: '#/components/schemas/ProviderTimeOff' },
+        description:
+          'Ordered by start_date ascending. Includes CANCELLED periods — read `status`.',
+      },
     },
   },
 
