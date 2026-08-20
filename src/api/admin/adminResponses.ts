@@ -269,6 +269,139 @@ export const ADMIN_RESPONSES: Record<string, AdminResponseSchema> = {
       'an already-resolved report is a 404, not a repeat.',
   },
 
+  // ── bookings ──────────────────────────────────────────────────────────────
+  // The operations surface. Assignment is how a job reaches a provider, which
+  // is why TAB 02 treated these five as the priority when they were empty.
+
+  'GET /api/admin/bookings/metrics': {
+    derivedFrom: 'adminBookingService.getAdminBookingMetrics',
+    schema: { $ref: '#/components/schemas/AdminBookingMetrics' },
+    note:
+      'TWO FIELDS ARE HARD-CODED ZEROS — paymentExceptions and lateJobs. They are constants, '
+      + 'not measurements. See the schema.',
+  },
+
+  'GET /api/admin/bookings/:id': {
+    derivedFrom: 'adminBookingService.getAdminBookingDetail',
+    schema: { $ref: '#/components/schemas/AdminBookingDetail' },
+    note: 'Returns null for an unknown id and the controller renders that as a 404.',
+  },
+
+  'GET /api/admin/bookings/:id/timeline': {
+    derivedFrom: 'adminBookingService.getBookingTimeline',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description:
+        'RAW rows from TWO tables merged — booking tracking plus admin timeline — and '
+        + 'sorted by created_at in JS. So the item shape is not uniform: a row from one '
+        + 'source does not carry the columns of the other. Snake_case, no mapper.',
+    },
+    note:
+      'Because the merge is done in memory, the sort is over the ROWS RETURNED, not over '
+      + 'the whole history — each side is fetched with its own limits first.',
+  },
+
+  'GET /api/admin/bookings/:id/notes': {
+    derivedFrom: 'adminBookingService.getBookingNotes — returns res.rows, RAW',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description: 'Raw note rows, SNAKE_CASE, no mapper.',
+    },
+  },
+
+  'POST /api/admin/bookings/:id/notes': {
+    derivedFrom: 'adminBookingService.addBookingNote — returns res.rows[0], the RAW inserted row',
+    schema: {
+      type: 'object',
+      additionalProperties: true,
+      description:
+        'The raw inserted row, SNAKE_CASE. Same shape as an item of the list above — which '
+        + 'is worth saying, because the equivalent pair on the onboarding cases and the '
+        + 'communications reports do NOT agree with each other.',
+    },
+  },
+
+  // ── admin-users ───────────────────────────────────────────────────────────
+  // Who may do anything at all. Eleven of these twelve require requireSuperAdmin
+  // rather than a named permission — the one exception is documented below and
+  // it is the reason a permission-only reading of this tree reports it as
+  // unguarded.
+
+  'GET /api/admin/admin-users': {
+    derivedFrom: 'adminPermissionService.listAdminUsers — typed `data: any[]`',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description: 'Row shape is `any[]` in the service signature, so it is not guessed here.',
+    },
+    note: 'total/page/limit ride in `meta`. Limit clamped to 1..100, default 25.',
+  },
+
+  'GET /api/admin/admin-users/:adminUid/permissions': {
+    derivedFrom: 'adminPermissionService.getAdminUserPermissions — typed in the service signature',
+    schema: {
+      type: 'object',
+      required: ['adminUid', 'isSuperAdmin', 'accountStatus', 'permissions', 'generatedAt'],
+      properties: {
+        adminUid: { type: 'string' },
+        isSuperAdmin: {
+          type: 'boolean',
+          description:
+            'When TRUE, `permissions` is the FULL set of active definitions rather than an '
+            + 'assigned list — a super admin holds everything by construction, not by grant. '
+            + 'Revoking one from that list would change nothing.',
+        },
+        accountStatus: { type: 'string' },
+        permissions: { type: 'array', items: { type: 'string' } },
+        generatedAt: {
+          type: 'string',
+          format: 'date-time',
+          description: 'Computed at read time. This is a snapshot, not a stored record.',
+        },
+      },
+    },
+  },
+
+  'POST /api/admin/admin-users/:adminUid/permissions/preview': {
+    derivedFrom: 'adminPermissionService.previewPermissionChange — typed in the service signature',
+    schema: { $ref: '#/components/schemas/PermissionChangePreview' },
+    note:
+      'A DRY RUN. Nothing is written. It exists so a super admin sees the dependency '
+      + 'closure and the risk classification BEFORE granting, rather than discovering them '
+      + 'in the audit trail afterwards.',
+  },
+
+  'GET /api/admin/admin-users/:adminUid/permission-history': {
+    derivedFrom: 'adminPermissionService.getPermissionHistory — returns res.rows, RAW',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description: 'Raw admin_permission_events rows, SNAKE_CASE, no mapper.',
+    },
+    note: 'The record of who granted what to whom. Append-only.',
+  },
+
+  'POST /api/admin/admin-users/bootstrap-super-admin': {
+    derivedFrom: 'adminPermissionService.bootstrapSuperAdmin',
+    schema: {
+      type: 'object',
+      required: ['adminUid', 'isSuperAdmin'],
+      properties: {
+        adminUid: { type: 'string' },
+        isSuperAdmin: { type: 'boolean', enum: [true] },
+      },
+    },
+    note:
+      'THE ONE ADMIN ROUTE WITH NO ROLE GATE, and that is correct rather than an oversight: '
+      + 'the first Super Admin cannot already be an admin. The service is fail-closed — one '
+      + 'transaction behind pg_advisory_xact_lock, refusing when ANY super-admin row exists '
+      + '(status-independent, so deactivating them all does not reopen it), and requiring '
+      + 'the caller to already be an admin whenever admin_users is non-empty. Refusals are '
+      + 'audited, because a denied attempt is the more interesting security event.',
+  },
+
   // ── finance ───────────────────────────────────────────────────────────────
   // 30 operations counting disbursements. The highest money-risk area, and
   // where TAB 10 found the refund-ceiling divergence.
@@ -282,9 +415,9 @@ export const ADMIN_RESPONSES: Record<string, AdminResponseSchema> = {
     derivedFrom: 'adminFinanceService.getFinanceSummary — typed in the service signature',
     schema: { $ref: '#/components/schemas/FinanceSummary' },
     note:
-      'READ THE TIMEZONE NOTE on paymentsToday. This route computes its day and month '
-      + "boundaries in Asia/Manila explicitly; the provider earnings route's thisMonthGross "
-      + 'does not. Two "todays" exist on this admin surface.',
+      'Day and month boundaries are Manila-bounded, and since the businessPeriod fix the '
+      + "provider earnings route's thisMonthGross agrees. Both now go through one "
+      + 'definition, so a third screen cannot quietly pick a different month.',
   },
 
   'GET /api/admin/finance/payments': {
@@ -2070,9 +2203,11 @@ export const ADMIN_SCHEMAS: Record<string, unknown> = {
       thisMonthGross: {
         type: 'number',
         description:
-          'Filtered by DATE_TRUNC month on the SESSION timezone, which the pool pins to UTC. '
-          + 'So "this month" is a UTC month, and Servana operates in Asia/Manila (+08): the '
-          + 'first eight hours of a Manila month fall in the previous UTC one.',
+          'The MANILA month. Bounded through services/sql/businessPeriod, so it agrees with '
+          + "getFinanceSummary's paymentsToday and revenueMtd rather than reporting a "
+          + 'different month from the next admin screen. It previously truncated on the '
+          + 'SESSION timezone, which the pool pins to UTC, so the first eight hours of every '
+          + 'Manila month were counted in the previous one.',
       },
       thisMonthProviderShare: { type: 'number' },
       providerSharePercent: {
@@ -2527,9 +2662,10 @@ export const ADMIN_SCHEMAS: Record<string, unknown> = {
           'Net of refunds — SUM(amount - refunded_amount) — and bounded by a day computed '
           + "AT TIME ZONE 'Asia/Manila' EXPLICITLY, not by the UTC session zone. That makes "
           + 'this "today" the operator\'s today. Contrast AdminProviderEarnings.thisMonthGross, '
-          + 'which uses the session zone and therefore a UTC month. Two different day '
-          + 'boundaries exist on this admin surface, and only one of them matches the '
-          + 'business. PHP major units.',
+          + 'which now uses the SAME definition via services/sql/businessPeriod. It '
+          + 'previously truncated on the session zone and therefore reported a UTC month, so '
+          + 'the two screens disagreed for the first eight hours of every Manila month. '
+          + 'PHP major units.',
       },
       revenueMtd: {
         type: 'number',
@@ -2574,6 +2710,145 @@ export const ADMIN_SCHEMAS: Record<string, unknown> = {
       + 'and for the same reason: the service returns void and the state is read back.',
     properties: {
       disbursementId: { type: 'integer' },
+    },
+  },
+
+  AdminBookingMetrics: {
+    type: 'object',
+    required: ['total', 'byCanonicalState'],
+    description: 'The operations dashboard counts.',
+    properties: {
+      total: { type: 'integer' },
+      byCanonicalState: {
+        type: 'object',
+        additionalProperties: { type: 'integer' },
+        description:
+          'Counts keyed by CANONICAL state. Additive — every legacy field below is '
+          + 'unchanged, so a portal that has not migrated reads exactly what it did. Prefer '
+          + 'this: the legacy fields cannot express EN_ROUTE or ARRIVED and collapse both '
+          + 'into `accepted`.',
+      },
+      new: { type: 'integer', description: 'LEGACY.' },
+      awaitingAssignment: { type: 'integer', description: 'LEGACY.' },
+      assigned: { type: 'integer', description: 'LEGACY.' },
+      accepted: {
+        type: 'integer',
+        description: 'LEGACY, and lossy: EN_ROUTE and ARRIVED are both counted here.',
+      },
+      inProgress: { type: 'integer', description: 'LEGACY.' },
+      completed: { type: 'integer', description: 'LEGACY.' },
+      cancelled: { type: 'integer', description: 'LEGACY.' },
+      disputed: { type: 'integer', description: 'LEGACY.' },
+      paymentExceptions: {
+        type: 'integer',
+        enum: [0],
+        description:
+          'ALWAYS ZERO. Hard-coded in the service, not computed. A constant, not a signal — '
+          + 'a client rendering "0 payment exceptions" is reporting a literal, and the real '
+          + 'answer lives on the finance summary as openExceptionCount.',
+      },
+      lateJobs: {
+        type: 'integer',
+        enum: [0],
+        description:
+          'ALWAYS ZERO. Also hard-coded. The admin bookings LIST computes isLate per row at '
+          + 'read time, so lateness is knowable — it is simply not aggregated here.',
+      },
+      needsAdminAction: {
+        type: 'integer',
+        description: 'Derived: new plus awaitingAssignment. Not a separate query.',
+      },
+    },
+  },
+
+  AdminBookingDetail: {
+    type: 'object',
+    required: ['bookingId', 'canonicalState', 'stateGroup', 'terminal', 'availableActions'],
+    description:
+      'One booking, assembled from the booking row plus the assignment, add-ons and '
+      + 'escalations. Grouped into sub-objects rather than flattened.',
+    properties: {
+      bookingId: { type: 'integer' },
+      rawStatus: { type: ['string', 'null'], description: 'The legacy column, unmapped.' },
+      operationsStatus: { type: 'string', description: 'LEGACY vocabulary. Cannot express EN_ROUTE or ARRIVED.' },
+      canonicalState: { type: 'string', description: 'The authoritative state.' },
+      stateGroup: { type: 'string' },
+      stateLabel: { type: 'string' },
+      stateIsCollapsedInLegacyField: {
+        type: 'boolean',
+        description: 'True when operationsStatus cannot express canonicalState.',
+      },
+      terminal: { type: 'boolean' },
+      availableActions: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'From the canonical projection, so an action never appears for a state the executor would refuse.',
+      },
+      customer: { type: 'object', additionalProperties: true },
+      adminCreated: { type: 'boolean', description: 'Coalesced to false.' },
+      serviceAddress: { type: ['object', 'null'], description: 'The jsonb column, passed through.' },
+      providerAssignment: {
+        type: ['object', 'null'],
+        additionalProperties: true,
+        description:
+          'NULL when unassigned. Built from the MOST RECENT booking_workers row — assigned_at '
+          + 'DESC LIMIT 1 — so a reassigned booking shows the current provider, not the history.',
+      },
+      service: { type: 'object', additionalProperties: true },
+      schedule: { type: 'object', additionalProperties: true },
+      address: { type: 'object', additionalProperties: true },
+      pricing: { type: 'object', additionalProperties: true },
+      payment: { type: 'object', additionalProperties: true },
+      branch: { type: 'object', additionalProperties: true },
+      escalations: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: true },
+        description: 'RAW rows, snake_case — the only unmapped collection in this object.',
+      },
+      pricingBreakdown: { type: ['object', 'null'] },
+      createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      updatedAt: {
+        type: 'null',
+        description:
+          'ALWAYS null, hard-coded — the same constant the admin bookings LIST carries. Not '
+          + '"never updated": simply not projected.',
+      },
+    },
+  },
+
+  PermissionChangePreview: {
+    type: 'object',
+    required: ['adminUid', 'current', 'proposed', 'toAdd', 'toRemove', 'isValid'],
+    description:
+      'A DRY RUN of a permission grant. Nothing is written. It exists so the dependency '
+      + 'closure and the risk classification are seen BEFORE the change, rather than found '
+      + 'in the audit trail afterwards.',
+    properties: {
+      adminUid: { type: 'string' },
+      current: { type: 'array', items: { type: 'string' } },
+      proposed: { type: 'array', items: { type: 'string' } },
+      toAdd: { type: 'array', items: { type: 'string' } },
+      toRemove: { type: 'array', items: { type: 'string' } },
+      dependenciesAdded: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'Permissions pulled in AUTOMATICALLY because a requested one requires them. These '
+          + 'are grants nobody asked for, which is exactly why the preview exists — the '
+          + 'effective grant is `toAdd` PLUS this.',
+      },
+      highRiskPermissions: { type: 'array', items: { type: 'string' } },
+      criticalPermissions: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'A stricter class than high-risk. Both are about the RESULT, not the delta.',
+      },
+      warnings: { type: 'array', items: { type: 'string' } },
+      isValid: {
+        type: 'boolean',
+        description: 'FALSE means the change would be refused. Check this before offering a confirm button.',
+      },
+      validationErrors: { type: 'array', items: { type: 'string' } },
     },
   },
 

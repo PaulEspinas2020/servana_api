@@ -40,7 +40,7 @@ successor for one of these must not be QUIETER than the route it replaces.
 
 ## Payload schemas
 
-Authored: **95** of 251.
+Authored: **105** of 251.
 
 The remainder publish their envelope, guard, permission and parity status, and declare
 the payload `UNSPECIFIED`. That is deliberate. A guessed schema is worse than an absent
@@ -154,17 +154,17 @@ only rise.
 
 | Method | Path | Guard | Permission | Envelope | Payload | Parity |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/admin/admin-users` | permission | `admin_users.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/admin-users` | permission | `admin_users.view` | `status-success` | ✅ authored | rewritten |
 | `POST` | `/api/admin/admin-users` | super-admin | — | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/admin-users/:adminUid` | permission | `admin_users.view` | `status-success` | — unspecified | rewritten |
 | `PATCH` | `/api/admin/admin-users/:adminUid` | super-admin | — | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/admin-users/:adminUid/permission-history` | super-admin | — | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/admin-users/:adminUid/permissions` | super-admin | — | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/admin-users/:adminUid/permission-history` | super-admin | — | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/admin-users/:adminUid/permissions` | super-admin | — | `status-success` | ✅ authored | rewritten |
 | `PATCH` | `/api/admin/admin-users/:adminUid/permissions` | super-admin | — | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/admin-users/:adminUid/permissions/preview` | super-admin | — | `status-success` | — unspecified | rewritten |
+| `POST` | `/api/admin/admin-users/:adminUid/permissions/preview` | super-admin | — | `status-success` | ✅ authored | rewritten |
 | `POST` | `/api/admin/admin-users/:adminUid/resend-invite` | super-admin | — | `status-success` | — unspecified | rewritten |
 | `PATCH` | `/api/admin/admin-users/:adminUid/status` | super-admin | — | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/admin-users/bootstrap-super-admin` | authenticated | — | `status-success` | — unspecified | rewritten |
+| `POST` | `/api/admin/admin-users/bootstrap-super-admin` | authenticated | — | `status-success` | ✅ authored | rewritten |
 | `POST` | `/api/admin/admin-users/invite` | super-admin | — | `status-success` | — unspecified | rewritten |
 
 ## `/api/admin/finance` (26)
@@ -213,19 +213,19 @@ only rise.
 |---|---|---|---|---|---|---|
 | `GET` | `/api/admin/bookings` | permission | `bookings.view` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/bookings` | permission | `bookings.create` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/bookings/:id` | permission | `bookings.details.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/bookings/:id` | permission | `bookings.details.view` | `status-success` | ✅ authored | rewritten |
 | `POST` | `/api/admin/bookings/:id/approve-completion` | permission | `bookings.approve_completion` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/bookings/:id/assign` | permission | `bookings.assign_provider` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/bookings/:id/assignment-candidates` | permission | `bookings.assign_provider` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/bookings/:id/cancel` | permission | `bookings.cancel` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/bookings/:id/confirm-provider-assignment` | permission | `bookings.confirm_on_behalf` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/bookings/:id/escalate` | permission | `bookings.escalate` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/bookings/:id/notes` | permission | `bookings.details.view` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/bookings/:id/notes` | permission | `bookings.notes.add` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/bookings/:id/notes` | permission | `bookings.details.view` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/bookings/:id/notes` | permission | `bookings.notes.add` | `status-success` | ✅ authored | rewritten |
 | `POST` | `/api/admin/bookings/:id/reassign` | permission | `bookings.reassign_provider` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/bookings/:id/reschedule` | permission | `bookings.reschedule` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/bookings/:id/timeline` | permission | `bookings.timeline.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/bookings/metrics` | permission | `bookings.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/bookings/:id/timeline` | permission | `bookings.timeline.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/bookings/metrics` | permission | `bookings.view` | `status-success` | ✅ authored | rewritten |
 | `GET` | `/api/admin/bookings/slot-candidates` | permission | `bookings.create` | `status-success` | — unspecified | rewritten |
 
 ## `/api/admin/booking-drafts` (6)
