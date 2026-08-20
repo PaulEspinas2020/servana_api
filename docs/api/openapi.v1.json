@@ -13340,7 +13340,7 @@
               "addons": {
                 "type": "array",
                 "items": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/CatalogAddon"
                 }
               },
               "available": {
@@ -13689,8 +13689,15 @@
             ]
           },
           "state": {
-            "type": "object",
-            "description": "The caller-appropriate projection of the new state."
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CustomerBookingState"
+              },
+              {
+                "$ref": "#/components/schemas/ProviderBookingState"
+              }
+            ],
+            "description": "The caller-appropriate projection of the new state, so a client never has to derive it. WHICH of the two arrives is decided by the caller seat, not by the booking: a customer gets CustomerBookingState, a provider or admin gets ProviderBookingState. The two are not interchangeable — one carries `detail` and the other `nextAction`."
           }
         }
       },
@@ -13806,7 +13813,91 @@
       },
       "Booking": {
         "type": "object",
-        "description": "A booking as produced by bookingService.formatBooking."
+        "required": [
+          "bookingId",
+          "bookingCode",
+          "status",
+          "effectiveStatus"
+        ],
+        "additionalProperties": true,
+        "description": "A booking as produced by bookingService.formatBooking. AN OPEN SHAPE, and deliberately declared as one. formatBooking spreads the whole camelCased database row — `{ ...toCamel(raw) }` — and getBookingById selects `b.*` plus a dozen joined aliases, so the wire carries every column of `bookings` and then some. The properties below are the fields the FORMATTER itself guarantees; everything else is whatever the query selected that day. additionalProperties is true because saying otherwise would be a lie, not because the extra fields are unknowable. Note what this means for the v1 parity exemption: /api/v1 is exempt from parityMiddleware so that a declared shape IS the wire, but formatBooking adds its own aliases one layer down — bookingId, scheduleAt AND scheduledAt, providerUid, customerId AND customerUid, statusLower, assignmentStatus. The exemption stops the middleware, not the habit. CREDENTIALS ARE NOT IN THIS SHAPE. `bookings` stores otp_code and worker_code, and the spread used to disclose both to every caller with booking access — including the assigned provider, for whom worker_code is the doorstep proof they are supposed to be GIVEN. formatBooking now omits them unless a caller that has established the actor opts in. See tests/booking-credential-disclosure.test.ts.",
+        "properties": {
+          "bookingId": {
+            "type": "integer",
+            "description": "Added by the formatter when the row carries only `id`."
+          },
+          "id": {
+            "type": "integer",
+            "description": "The raw primary key. Present because the row is spread."
+          },
+          "bookingCode": {
+            "type": "string",
+            "description": "Human-readable, SVN-XXXXXX, derived from the id when the row has none."
+          },
+          "status": {
+            "type": "string",
+            "description": "The raw bookings.status column, uppercase as stored."
+          },
+          "statusLower": {
+            "type": "string",
+            "description": "The same value lowercased, added for platforms that normalise. Not a second state."
+          },
+          "effectiveStatus": {
+            "type": "string",
+            "description": "DERIVED by deriveEffectiveBookingStatus from status and worker_status together. The only status field here that reconciles the two columns."
+          },
+          "scheduleAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "scheduledAt": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcTimestamp"
+              }
+            ],
+            "description": "The SAME value as scheduleAt. Two names for one column, both emitted."
+          },
+          "providerUid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Alias of worker_uid."
+          },
+          "workerUid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customerUid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Alias of user_id."
+          },
+          "customerId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SAME value as customerUid. A string uid despite the name."
+          },
+          "assignmentStatus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Alias of booking_workers.status."
+          },
+          "workerStatus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       },
       "BookingList": {
         "type": "object",
@@ -13827,15 +13918,65 @@
         "required": [
           "timeline"
         ],
+        "description": "Operational history, voiced for the customer. Not the audit record (§16).\n\nCORRECTED. This schema declared `timeline` as an ARRAY of untyped objects. The handler answers ok(res, req, { timeline }) where timeline is the RETURN of bookingService.getCustomerBookingTimeline — an OBJECT carrying { bookingId, events, currentStep }. A client generated from the previous declaration would have iterated `timeline` and found nothing, with no error anywhere. Nothing caught it because `items: { type: object }` generates as an empty object, so no client could bind tightly enough to notice the OUTER type was wrong either. The wire is unchanged; the document now matches it.",
         "properties": {
           "timeline": {
-            "type": "array",
-            "items": {
-              "type": "object"
+            "type": "object",
+            "required": [
+              "bookingId",
+              "events"
+            ],
+            "properties": {
+              "bookingId": {
+                "type": "integer"
+              },
+              "events": {
+                "type": "array",
+                "description": "Oldest first, from projectTimelineForCustomer.",
+                "items": {
+                  "$ref": "#/components/schemas/CustomerTimelineEvent"
+                }
+              },
+              "currentStep": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The code of the LAST event, or null when there are none. Derived, not stored."
+              }
             }
           }
-        },
-        "description": "Operational history, voiced for the customer. Not the audit record (§16)."
+        }
+      },
+      "CustomerTimelineEvent": {
+        "type": "object",
+        "required": [
+          "code",
+          "label",
+          "actor",
+          "sequence"
+        ],
+        "description": "One timeline entry as the CUSTOMER sees it. Only `event_type` and `created_at` cross from booking_timeline_events: `title`, `description` and `metadata` there are admin-authored and must never reach a customer.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The event code. Stable; the label is not."
+          },
+          "label": {
+            "type": "string",
+            "description": "Customer-voiced, never a backend transition name (§5). PROVIDER_DECLINED deliberately does not say the professional refused — §14 forbids exposing declined providers."
+          },
+          "at": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "actor": {
+            "type": "string",
+            "description": "Falls back to 'SERVANA' when the provider seat does not map to a customer-facing actor."
+          },
+          "sequence": {
+            "type": "integer"
+          }
+        }
       },
       "BookingTracking": {
         "type": "object",
@@ -14202,7 +14343,43 @@
           },
           "verdict": {
             "type": "object",
-            "description": "The policy verdict, including the notice window that applied to this actor."
+            "required": [
+              "allowed",
+              "refusal",
+              "noticeHours",
+              "reasons"
+            ],
+            "description": "The policy verdict, including the notice window that applied to this actor. From experiencePolicy.evaluateReschedule, which decides everything reachable WITHOUT the provider calendar. PROVIDER_CONFLICT is deliberately not decided there — it needs a query — so `allowed: true` here does not mean the reschedule succeeded, only that policy did not refuse it.",
+            "properties": {
+              "allowed": {
+                "type": "boolean"
+              },
+              "refusal": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The refusal code when allowed is false."
+              },
+              "noticeCutoff": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "description": "The earliest instant this actor could still have moved it to."
+              },
+              "noticeHours": {
+                "type": "integer",
+                "description": "The notice window that applied to THIS actor."
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       },
@@ -14319,7 +14496,11 @@
             "type": "integer"
           },
           "request": {
-            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdditionalWorkRequest_Row"
+              }
+            ],
             "description": "The child request as stored: id, status (PENDING_ADMIN_APPROVAL → WAITING_FOR_PAYMENT → WAITING_WORKER_APPROVAL → ACCEPTED → IN_PROGRESS) and total_amount. A change order is a priced child record, never a mutation of the original service."
           }
         }
@@ -14337,7 +14518,7 @@
           "requests": {
             "type": "array",
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/AdditionalWorkRequest_Row"
             }
           }
         }
@@ -14478,7 +14659,186 @@
       },
       "JobCard": {
         "type": "object",
-        "description": "A job card as produced by controllers/jobCardView.formatJobCard. Carries the CANONICAL booking state alongside the legacy raw columns: `canonicalState` (one of the eleven machine states), `stateLabel`, `nextAction` and `terminal`. `status` and `workerStatus` are the raw legacy columns, preserved for shipped clients and DEPRECATED — read `canonicalState` instead. `availableActions` is generated from the canonical transition whitelist, so an action never appears for a state the executor would refuse."
+        "required": [
+          "bookingId",
+          "canonicalState",
+          "customer",
+          "address",
+          "availableActions"
+        ],
+        "description": "One job as the assigned provider sees it, from controllers/jobCardView.formatJobCard. An EXPLICIT allow-list, unlike Booking: the formatter names every field it emits, which is why the one-time codes on the booking row never reached this response even when the same columns were leaking through formatBooking. That is the argument bookingPaymentService.projectFor makes in this codebase — an additive projection discloses only what it names. DISCLOSURE IS TIERED. Customer identity and the exact address appear only after the provider has accepted; before that the name is masked and the address narrows to city and country; and a relinquished job discloses neither. So a null here is frequently \"not yet entitled\", not \"not recorded\".",
+        "properties": {
+          "bookingId": {
+            "type": "integer"
+          },
+          "workerId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "DEPRECATED — raw bookings.status. Read canonicalState."
+          },
+          "workerStatus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "DEPRECATED — raw booking_workers.status."
+          },
+          "scheduleAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "paymentMethod": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paymentStatus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customer": {
+            "type": "object",
+            "description": "Masked until the job is accepted; emptied when it is relinquished.",
+            "properties": {
+              "uid": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "description": "Masked before acceptance; empty string once relinquished."
+              },
+              "phone": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "NULL until the job is accepted."
+              }
+            }
+          },
+          "address": {
+            "type": "object",
+            "description": "Before acceptance only city, country and label are disclosed. Coordinates come from the stored point and are never fabricated from a city centre — a null lat means no exact point was recorded, not that one was approximated.",
+            "properties": {
+              "addressOne": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "addressTwo": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "city": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "zipCode": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "country": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "instructions": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lat": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "lng": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            }
+          },
+          "service": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "addOns": {
+            "description": "The pricing_breakdown jsonb, passed through unshaped."
+          },
+          "assignedAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "startedAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "completedAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "canonicalState": {
+            "type": "string"
+          },
+          "stateLabel": {
+            "type": "string",
+            "description": "Provider voice: what they do next, not what the booking is."
+          },
+          "nextAction": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "terminal": {
+            "type": "boolean"
+          },
+          "availableActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "GENERATED from the transition whitelist, not switched on a raw status string. Where the two status columns disagree it answers about the BOOKING: a booking cancelled while the assignment row still read ACCEPTED is read-only here, and used to offer MARK_EN_ROUTE."
+          }
+        }
       },
       "JobCardList": {
         "type": "object",
@@ -14812,8 +15172,12 @@
           "reviews": {
             "type": "array",
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/PublicReview"
             }
+          },
+          "total": {
+            "type": "integer",
+            "description": "An exact COUNT(*)::int over the same filters. Never null."
           }
         },
         "description": "No customer identity is projected (§58)."
@@ -15327,11 +15691,64 @@
           },
           "provider": {
             "type": "object",
-            "description": "ADMIN only."
+            "required": [
+              "uid",
+              "economicModel",
+              "payable",
+              "isEstimate"
+            ],
+            "description": "ADMIN only. Present because projectFor builds an explicit per-actor DTO rather than deleting fields from a shared object — a subtractive projection discloses every field somebody forgets to remove. Read from financeLedger.provider.",
+            "properties": {
+              "uid": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "economicModel": {
+                "type": "string",
+                "enum": [
+                  "EXTERNAL_PROVIDER",
+                  "INTERNAL_FIXER"
+                ],
+                "description": "An INTERNAL_FIXER earns nothing; the whole gross is Servana revenue."
+              },
+              "payable": {
+                "type": "number",
+                "description": "What the provider is owed, in PHP major units. ZERO for an internal fixer, always — and withheldReason then says why. See TAB 04 on money units."
+              },
+              "isEstimate": {
+                "type": "boolean",
+                "description": "FALSE means `payable` came from a real disbursement row; TRUE means it was derived from the split and the actual payout has not been written yet."
+              },
+              "withheldReason": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Present when the model earns nothing, so a zero is never unexplained."
+              }
+            }
           },
           "servana": {
             "type": "object",
-            "description": "ADMIN only — the retained revenue and commission rate."
+            "required": [
+              "revenue",
+              "commissionRate"
+            ],
+            "description": "ADMIN only — the retained revenue and commission rate.",
+            "properties": {
+              "revenue": {
+                "type": "number",
+                "description": "Everything not owed to the provider, in PHP major units. The WHOLE gross for an internal fixer."
+              },
+              "commissionRate": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "A FRACTION of gross, not a percentage. 0.2 means 20%. The value is the constant SERVANA_COMMISSION_RATE in services/revenueSplit.ts, which is 0.2, and its sibling PROVIDER_SHARE_RATE is 0.8 — the two sum to exactly 1, which is what settles the unit beyond argument. A client must NOT decide the unit from the magnitude: the heuristic `rate <= 1 ? rate * 100 : rate` is ambiguous at exactly 1 and wrong for any genuine percentage below it. See TAB 05."
+              }
+            }
           },
           "payout": {
             "type": "object",
@@ -18021,24 +18438,574 @@
         }
       },
       "EarningsSummary": {
-        "type": "object",
-        "description": "PLANNED — owned by the provider-earnings domain command."
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProviderEarningsSummary"
+          }
+        ],
+        "deprecated": true,
+        "description": "DEPRECATED ALIAS. Nothing references this name: the earnings endpoint declares ProviderEarningsSummary, and a reference count over the generated document finds zero for this one. It was an empty object that no endpoint served and no schema pointed at — a name with nothing behind it. Kept as an alias rather than deleted, because a client may already have generated a type from the name. Aliasing gives that type a real shape instead of Record<string, never>, which is strictly better for anyone holding it, and lets the name be removed later on evidence rather than on assumption."
       },
       "AdminBookingList": {
         "type": "object",
-        "description": "PLANNED — owned by the admin-bookings domain command."
+        "required": [
+          "rows",
+          "total",
+          "page",
+          "limit"
+        ],
+        "description": "The admin operations list. Read from adminBookingService.getAdminBookings, which returns { rows, total, page, limit } — note ROWS, not `items` and not the v1 `data`/`meta` pagination shape used elsewhere on this surface. Documented as it stands rather than renamed: a rename bundled into a documentation pass is a change nobody can review.",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminBookingRow"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "description": "An exact COUNT(*) over the filtered set, never null. Contrast PageMeta.total, which the contract declares nullable — see TAB 06."
+          },
+          "page": {
+            "type": "integer",
+            "description": "Clamped to a minimum of 1."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Clamped to 1..100. A larger request is capped silently, not refused."
+          }
+        }
+      },
+      "AdminBookingRow": {
+        "type": "object",
+        "required": [
+          "bookingId",
+          "canonicalState",
+          "stateGroup",
+          "terminal",
+          "customerType"
+        ],
+        "description": "One row of the admin operations list, as the mapper inside getAdminBookings builds it. Every `null` here is a COALESCE in that mapper, so null means \"the column was null\", never \"the field was omitted\".",
+        "properties": {
+          "bookingId": {
+            "type": "integer"
+          },
+          "rawStatus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The legacy bookings.status column, unmapped."
+          },
+          "operationsStatus": {
+            "type": "string",
+            "description": "The LEGACY operations vocabulary. It cannot express EN_ROUTE or ARRIVED and reports both as `accepted`. It travels beside canonicalState, never instead of it, because portal badge maps are still keyed on this union."
+          },
+          "canonicalState": {
+            "type": "string",
+            "description": "The authoritative state, read from the COMPUTED column rather than re-derived, so a row cannot display one state while having been filtered on another."
+          },
+          "stateGroup": {
+            "type": "string"
+          },
+          "stateLabel": {
+            "type": "string"
+          },
+          "stateIsCollapsedInLegacyField": {
+            "type": "boolean",
+            "description": "True when operationsStatus cannot express canonicalState — the EN_ROUTE/ARRIVED case."
+          },
+          "terminal": {
+            "type": "boolean"
+          },
+          "customerType": {
+            "type": "string",
+            "enum": [
+              "guest",
+              "client"
+            ],
+            "description": "Defaults to 'client'."
+          },
+          "customerUid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "guestCustomerId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customerName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Trimmed; an all-whitespace name becomes null rather than an empty string."
+          },
+          "providerUid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "providerName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Trimmed, as customerName."
+          },
+          "assignmentStatus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The worker_status column."
+          },
+          "confirmationSource": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "admin_on_behalf_of_provider",
+              null
+            ],
+            "description": "Non-null only when an admin confirmed on a provider behalf."
+          },
+          "serviceId": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "serviceOptionId": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "serviceName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "specificServiceName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scheduledAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "quotedPrice": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ],
+            "description": "numeric(12,2). See TAB 04 on money units."
+          },
+          "finalPrice": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ],
+            "description": "numeric(12,2). See TAB 04 on money units."
+          },
+          "paymentMethod": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paymentStatus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branchId": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "branchName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branchCity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isUnassigned": {
+            "type": "boolean",
+            "description": "Derived: worker_uid is absent."
+          },
+          "isLate": {
+            "type": "boolean",
+            "description": "Derived at READ TIME from scheduled_at < now(), excluding completed and cancelled. It is a property of when you asked, not a stored fact."
+          },
+          "hasPaymentIssue": {
+            "type": "boolean",
+            "description": "Derived: payment_status in (FAILED, REFUND_PENDING)."
+          },
+          "hasDispute": {
+            "type": "boolean"
+          },
+          "needsAdminAction": {
+            "type": "boolean",
+            "description": "Derived: unassigned AND operationsStatus in (new, awaiting_assignment)."
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "updatedAt": {
+            "type": "null",
+            "description": "ALWAYS null. The mapper hard-codes `updatedAt: null` — it is a constant, not a signal, and a client must not read it as \"never updated\". Declared as type null so a generated client cannot mistake it for a timestamp that might arrive."
+          }
+        }
       },
       "AssignmentCandidatePool": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/AssignmentCandidate"
+        },
+        "description": "The ranked candidate list. An ARRAY, not an object: the handler calls ok(res, req, candidates, { diagnostics }), so `data` is the candidates and the diagnostics ride in `meta` — the legacy route put them in a sibling key for the same reason, that widening the array under `data` later is a breaking change. The diagnostics are CandidatePoolDiagnostics."
+      },
+      "AssignmentCandidate": {
         "type": "object",
-        "description": "PLANNED — the ranked candidate list under `data`, plus `diagnostics`: population, evaluated, the cap applied, how many providers hold the service at all, the dominant blocker and a zero-candidate reason code. Shaped by services/booking/candidateDiagnostics."
+        "required": [
+          "providerUid",
+          "eligible",
+          "score",
+          "reasons",
+          "checks",
+          "provider"
+        ],
+        "description": "One evaluated provider, from providerEligibilityEngine. This is the PREVIEW of a mutation and runs the same PROVIDER_CAPABILITY_SQL the assign call commits with: a preview narrower than its committer does not fail safe, it hides assignable providers from the operator deciding.",
+        "properties": {
+          "providerUid": {
+            "type": "string"
+          },
+          "eligible": {
+            "type": "boolean"
+          },
+          "score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "0-100, higher is a better candidate. The sort key."
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EligibilityReason"
+            }
+          },
+          "checks": {
+            "type": "object",
+            "required": [
+              "accountActive",
+              "activationActive",
+              "notArchived",
+              "hasActiveService",
+              "servicePolicyOk",
+              "availabilityOk",
+              "serviceAreaOk",
+              "complianceOk"
+            ],
+            "description": "Every stage evaluated, so an operator sees which one refused rather than only that one did.",
+            "properties": {
+              "accountActive": {
+                "type": "boolean"
+              },
+              "activationActive": {
+                "type": "boolean"
+              },
+              "notArchived": {
+                "type": "boolean"
+              },
+              "hasActiveService": {
+                "type": "boolean"
+              },
+              "servicePolicyOk": {
+                "type": "boolean"
+              },
+              "availabilityOk": {
+                "type": "boolean"
+              },
+              "serviceAreaOk": {
+                "type": "boolean"
+              },
+              "complianceOk": {
+                "type": "boolean"
+              }
+            }
+          },
+          "provider": {
+            "type": "object",
+            "required": [
+              "uid",
+              "name",
+              "email",
+              "activeServices"
+            ],
+            "properties": {
+              "uid": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "phone": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "avatarUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "activeServices": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "EligibilityReason": {
+        "type": "object",
+        "required": [
+          "code",
+          "severity",
+          "message"
+        ],
+        "description": "Why a provider is or is not assignable. `code` is an OPEN union — the engine types it as EligibilityCheckCode | string — so a client must not switch on it without a default branch.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Known codes: ACCOUNT_INACTIVE, ACCOUNT_ARCHIVED, NO_ACTIVE_SERVICE, SERVICE_GRANT_INACTIVE, TIME_OFF, BOOKING_CONFLICT, NO_AVAILABILITY_SET, DAY_NOT_AVAILABLE, OUTSIDE_SCHEDULE_WINDOW, NO_SERVICE_AREA, CITY_NOT_IN_AREA, BRANCH_NOT_IN_AREA, DEFAULT_ALL_CITIES, ELIGIBLE. NOT declared as an enum, because the engine permits any string and an exact enum would make a new code a compile error in every client."
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "blocker"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "CandidatePoolDiagnostics": {
+        "type": "object",
+        "required": [
+          "capabilityEvaluated",
+          "population",
+          "evaluated",
+          "truncated",
+          "eligible",
+          "blocked"
+        ],
+        "description": "Why the pool is the size it is. Carried in `meta.diagnostics` on the assignment-candidates response. A count alone cannot answer, months later, whether supply was healthy at the moment of an assignment.",
+        "properties": {
+          "serviceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "capabilityEvaluated": {
+            "type": "boolean",
+            "description": "FALSE means the booking resolved to no canonical service, so the capability stage was SKIPPED and every provider listed is \"eligible\" for a job nobody was checked against. That is a more dangerous pool than an empty one and it shows up in no count — read this before trusting `eligible`."
+          },
+          "population": {
+            "type": "integer",
+            "description": "Providers returned by the population query."
+          },
+          "evaluated": {
+            "type": "integer",
+            "description": "Providers actually evaluated. Lower than population means capped."
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "cap": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "CANDIDATE_POOL_CAP, currently 20. Named and reported so \"no providers available\" can never again mean \"the ones who could do it sort after the twentieth first name\"."
+          },
+          "capable": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Providers holding the canonical service grant. null = not measured."
+          },
+          "eligible": {
+            "type": "integer"
+          },
+          "blocked": {
+            "type": "integer"
+          },
+          "primaryBlockers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "One entry per blocked provider, attributed to its EARLIEST blocker by BLOCKER_PRECEDENCE. Sums to `blocked`."
+          },
+          "blockerOccurrences": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Every blocker seen, counted once per provider. Sums HIGHER than `blocked`, deliberately."
+          },
+          "dominantBlocker": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "zeroCandidateReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "BOOKING_HAS_NO_SERVICE",
+              "NO_PROVIDER_POPULATION",
+              "NO_PROVIDER_HAS_CAPABILITY",
+              "POOL_TRUNCATED_BEFORE_EVALUATION",
+              "ALL_CANDIDATES_BLOCKED",
+              null
+            ]
+          },
+          "zeroCandidateMessage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "supplyCollapse": {
+            "type": "object",
+            "required": [
+              "suspected"
+            ],
+            "properties": {
+              "suspected": {
+                "type": "boolean"
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The arithmetic that raised it, in words."
+              }
+            }
+          },
+          "capabilitySource": {
+            "type": "object",
+            "description": "The capability-source split. `canonicalCovers: false` means this pool exists ONLY because the legacy fallback is still in the predicate — remove it today and these providers stop being assignable.",
+            "properties": {
+              "canonicalServiceId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "legacyFamilyId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "capableCanonical": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "capableLegacyOnly": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "canonicalCovers": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
       },
       "AdminAssignRequest": {
         "type": "object",
-        "description": "PLANNED — providerUid and an optional reason."
+        "required": [
+          "providerUid"
+        ],
+        "description": "Assign a provider to an UNASSIGNED booking. Read from the admin.bookings.assign handler.",
+        "properties": {
+          "providerUid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Rejected when empty or absent — readNonEmpty, not a truthiness check."
+          },
+          "reason": {
+            "type": "string",
+            "description": "OPTIONAL here and REQUIRED on reassign. The asymmetry is deliberate: a first assignment takes nothing away from anybody, so it needs no justification."
+          }
+        }
       },
       "AdminReassignRequest": {
         "type": "object",
-        "description": "PLANNED — providerUid and a REQUIRED reason; the override is audited."
+        "required": [
+          "toProviderUid",
+          "reason"
+        ],
+        "description": "Move an assigned booking from one provider to another. NOTE the field name: the handler reads `toProviderUid`, NOT `providerUid`. The previous description of this schema said providerUid, and a client built from that sentence would have sent a body the handler rejects as missing.",
+        "properties": {
+          "toProviderUid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The provider receiving the job. The one losing it is read from the booking."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "description": "MANDATORY, and enforced twice — readNonEmpty in the handler and a second check in adminReassignProvider. Taking a job from a provider who already has it is an override, and an override without a stated reason is an audit record that cannot answer the only question it will ever be asked."
+          }
+        }
       },
       "RefundFailureRequest": {
         "type": "object",
@@ -18076,8 +19043,350 @@
         }
       },
       "AdminBookingActionResult": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AdminAssignResult"
+          },
+          {
+            "$ref": "#/components/schemas/AdminReassignResult"
+          }
+        ],
+        "description": "DEPRECATED as a response type. Prefer AdminAssignResult or AdminReassignResult — this name described two different objects and could not be bound to either."
+      },
+      "AdminAssignResult": {
         "type": "object",
-        "description": "PLANNED — the canonical booking projection after the transition."
+        "required": [
+          "bookingId",
+          "providerUid",
+          "status"
+        ],
+        "description": "Read from adminBookingService.adminAssignProvider. Both of its return paths.",
+        "properties": {
+          "bookingId": {
+            "type": "integer"
+          },
+          "providerUid": {
+            "type": "string"
+          },
+          "providerName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "WORKER_ASSIGNED"
+            ],
+            "description": "A single value today. Present on assign and ABSENT on reassign."
+          },
+          "idempotent": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "description": "Present ONLY when the booking already carried this provider, so the call changed nothing. Absent on a first assignment — a client must test presence, not truth."
+          }
+        }
+      },
+      "AdminReassignResult": {
+        "type": "object",
+        "required": [
+          "bookingId",
+          "fromProviderUid",
+          "toProviderUid"
+        ],
+        "description": "Read from adminBookingService.adminReassignProvider. It carries NO `status` field, unlike the assign result, and names both ends of the move.",
+        "properties": {
+          "bookingId": {
+            "type": "integer"
+          },
+          "fromProviderUid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The provider losing the job. Null when the booking was unassigned."
+          },
+          "toProviderUid": {
+            "type": "string"
+          },
+          "providerName": {
+            "type": "string",
+            "description": "Present on the committed path and ABSENT on the idempotent early return, which answers { bookingId, fromProviderUid, toProviderUid, idempotent } only."
+          },
+          "idempotent": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "description": "Present only when the booking already carried toProviderUid."
+          }
+        }
+      },
+      "CustomerBookingState": {
+        "type": "object",
+        "required": [
+          "canonicalState",
+          "label",
+          "detail",
+          "terminal",
+          "availableActions"
+        ],
+        "description": "From projections.toCustomerProjection. Deliberately about the PROVIDER progress rather than the administrative state: \"Awaiting Assignment\" is an operations concept and means nothing to somebody waiting for a cleaner.",
+        "properties": {
+          "canonicalState": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "description": "What the customer is told. Their register, not the operator one."
+          },
+          "detail": {
+            "type": "string",
+            "description": "One line of context under the label. NOT present on the provider projection."
+          },
+          "terminal": {
+            "type": "boolean"
+          },
+          "availableActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ProviderBookingState": {
+        "type": "object",
+        "required": [
+          "canonicalState",
+          "label",
+          "terminal",
+          "availableActions"
+        ],
+        "description": "From projections.toProviderProjection. Action-oriented.",
+        "properties": {
+          "canonicalState": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "description": "What the provider does next, not what the booking is."
+          },
+          "nextAction": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The single next step when there is an obvious one. NOT present on the customer projection."
+          },
+          "terminal": {
+            "type": "boolean"
+          },
+          "availableActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AdditionalWorkRequest_Row": {
+        "type": "object",
+        "required": [
+          "id",
+          "booking_id",
+          "status",
+          "total_amount"
+        ],
+        "description": "A change order row, as additional.service returns it. NOTE THE FIELD NAMES: this is a RAW database row and its keys are SNAKE_CASE - booking_id, total_amount, approved_at, worker_decision. Almost every other v1 response is camelCase, because a mapper sits between the query and the wire. There is no mapper here: getByBooking returns res.rows and createRequest returns rows[0] from an INSERT ... RETURNING *. Documented as it stands rather than renamed - the wire is what clients read today.",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "booking_id": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "description": "Created as PENDING_ADMIN_APPROVAL. The statuses that count as approved for amount purposes are WAITING_FOR_PAYMENT, WAITING_WORKER_APPROVAL, ACCEPTED, IN_PROGRESS, PROCEEDING and COMPLETED."
+          },
+          "total_amount": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "numeric - may arrive as a string through some drivers. See TAB 04."
+          },
+          "approved_amount": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ],
+            "description": "NOT a stored column: a CASE expression returning total_amount when status is in the approved set and NULL otherwise. It is total_amount seen through the status, never a separately agreed figure. Absent from the CREATE response, which is RETURNING * and so carries only real columns."
+          },
+          "approved_at": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "paid_at": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "worker_decision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decided_at": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "requested_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present on the CREATE response (RETURNING *); not selected by the list query."
+          }
+        }
+      },
+      "PublicReview": {
+        "type": "object",
+        "required": [
+          "reviewId",
+          "overallRating",
+          "visibility",
+          "moderationStatus"
+        ],
+        "description": "One publicly visible review, from customerReviewService.mapPublicReviewRow. NO CUSTOMER IDENTITY is projected (§58) — there is no customerUid, no name and no avatar, and that is a property of the mapper rather than of the query. The list is already filtered: only PUBLIC and ANONYMOUS_PUBLIC visibility, only PUBLISHED/EDITED/REDACTED publication states, and only non-deleted rows. A review missing from this list has been withdrawn or held, and the two are not distinguishable from here.",
+        "properties": {
+          "reviewId": {
+            "type": "string",
+            "description": "Cast to text in SQL — a STRING, not a number."
+          },
+          "overallRating": {
+            "type": "number"
+          },
+          "publicComment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "PUBLIC",
+              "ANONYMOUS_PUBLIC"
+            ]
+          },
+          "moderationStatus": {
+            "type": "string"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "editedAt": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcTimestamp"
+              }
+            ],
+            "description": "Non-null means the customer edited it after publishing."
+          },
+          "providerResponse": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "responseId",
+                  "body"
+                ],
+                "properties": {
+                  "responseId": {
+                    "type": "string",
+                    "description": "Cast to text — a STRING."
+                  },
+                  "body": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "$ref": "#/components/schemas/UtcTimestamp"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "NULL when there is no response OR when the response exists but is deleted or not yet through moderation — the LEFT JOIN filters on both. A null is not proof the provider stayed silent."
+          }
+        }
+      },
+      "CatalogAddon": {
+        "type": "object",
+        "required": [
+          "ref",
+          "id",
+          "name"
+        ],
+        "description": "An add-on offered with a catalog service, from catalogPublicService. Both `ref` and `id` are emitted: the ref is the stable addressable handle, the id is the raw numeric key the legacy option tables use.",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "description": "makeRef(addon, id). Prefer this over id."
+          },
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string",
+            "description": "The level_3 label."
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "basePrice": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ],
+            "description": "See TAB 04 on money units."
+          },
+          "basePriceSummary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pre-rendered \"P350 per unit\" style text."
+          },
+          "durationMins": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "UtcTimestamp": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "format": "date-time",
+        "description": "ISO 8601 with a UTC designator, guaranteed at the DRIVER rather than per field: src/db/dbQuery.ts registers asUtcIso against OIDs 1114 (timestamp) and 1184 (timestamptz), and that function ends in Date.toISOString(), which always emits a trailing Z. Postgres native \"2026-08-11 11:03:23.421016+00\" therefore cannot reach a client through this path. See TAB 03."
       }
     }
   },

@@ -879,8 +879,78 @@ export const getDashboardAnalytics = async () => {
  * Booking `id` = numeric PK, NOT a Firebase UID — applyParity() is NOT used
  * here to avoid the id→uid alias collision that applies only to user objects.
  */
-export const formatBooking = (raw: any): Record<string, unknown> => {
+/**
+ * Booking columns that are CREDENTIALS, not data.
+ *
+ * `bookings` stores two one-time codes and `formatBooking` spreads the whole
+ * camelCased row, so both reached every caller who could read the booking at
+ * all. Proven by executing the formatter, not by reading it: a row carrying
+ * `worker_code: '778899'` came back as `workerCode: '778899'`.
+ *
+ * ## Why `worker_code` leaving this way is the serious one
+ *
+ * It is the SERVICE_START credential. `experiencePolicy.BOOKING_OTP_PURPOSES`
+ * states the property in as many words:
+ *
+ *     The RECIPIENT is the customer even though the VERIFIER is the provider —
+ *     that inversion is the entire security property. The customer reads the
+ *     code out on the doorstep; the provider types it in.
+ *
+ * `bookingAccessService.resolveBookingAccess` grants the role `provider` to any
+ * worker whose assignment row is ASSIGNED, ACCEPTED, EN_ROUTE or ARRIVED — every
+ * state BEFORE the start this code gates. So the provider could read, from the
+ * API, the proof of presence they are supposed to be handed at the door, and
+ * start a job without ever arriving. The doorstep check was defeatable without
+ * touching the doorstep.
+ *
+ * `otp_code` is the BOOKING_CONFIRMATION code, `verifiableBy: ['customer',
+ * 'admin']`. It is valid only in PENDING_OTP and AWAITING_ASSIGNMENT, where
+ * there is normally no assignment row and so no `provider` role to leak to —
+ * lower exposure, same class of mistake, and it costs nothing to close both.
+ *
+ * ## Deny by default, and why the flag is not a boolean on the row
+ *
+ * The customer LEGITIMATELY needs `workerCode`: BOOKING_OTP_PURPOSES declares
+ * `delivery: 'booking_detail'`, which means the booking detail response IS the
+ * delivery channel. Stripping it unconditionally would break the customer app
+ * and take the code away from the only person entitled to it.
+ *
+ * So the default is to omit, and a caller that has ESTABLISHED the actor is the
+ * customer opts in. That is the shape `bookingPaymentService.projectFor`
+ * already argues for in this codebase — "explicit per-actor DTOs, not a shared
+ * object with fields deleted afterwards … a subtractive projection discloses
+ * every field somebody forgets to remove, and an additive one discloses only
+ * what it names". `formatJobCard` follows it too, which is exactly why the
+ * provider's own job card never carried these codes. `formatBooking` was the
+ * one spread left, and it was the one that leaked.
+ */
+export const BOOKING_CREDENTIAL_FIELDS = [
+  'otpCode',
+  'otp_code',
+  'workerCode',
+  'worker_code',
+] as const;
+
+export interface FormatBookingOptions {
+  /**
+   * Emit the one-time codes.
+   *
+   * Pass true ONLY where the caller has established that the actor is the
+   * customer on this booking (or an admin). Never on a provider path: the
+   * provider is the party the SERVICE_START code is meant to be proved TO.
+   */
+  includeCredentials?: boolean;
+}
+
+export const formatBooking = (
+  raw: any,
+  options: FormatBookingOptions = {},
+): Record<string, unknown> => {
   const c: any = toCamel(raw);
+
+  if (!options.includeCredentials) {
+    for (const field of BOOKING_CREDENTIAL_FIELDS) delete c[field];
+  }
 
   const bookingPk = c.id ?? raw.id;
   const scheduleVal = c.schedule ?? raw.schedule ?? null;
@@ -911,8 +981,15 @@ export const formatBooking = (raw: any): Record<string, unknown> => {
   };
 };
 
-export const formatBookings = (rows: any[]): Record<string, unknown>[] =>
-  rows.map(formatBooking);
+export const formatBookings = (
+  rows: any[],
+  options: FormatBookingOptions = {},
+): Record<string, unknown>[] =>
+  // NOT `rows.map(formatBooking)`. Array.map passes (value, INDEX, array), so
+  // the index would arrive as `options` and index 0 — falsy — would redact
+  // while every later row opted in on a truthy number. The bug would have been
+  // invisible in any single-row test.
+  rows.map((row) => formatBooking(row, options));
 
 // ─── Customer Self-Cancel (BACKEND_GAP-C15-001 implementation) ────────────────
 
