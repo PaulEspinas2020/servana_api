@@ -36,6 +36,7 @@
 
 import { db } from "../config";
 import dbQuery from "../db/dbQuery";
+import { checkServiceability } from "./serviceabilityService";
 
 const dbSchema = db.schema;
 
@@ -661,3 +662,23 @@ export const getPublicCatalogSummary = async () => {
 };
 
 export const __test__ = { toIso, priceSummary, mapService };
+
+/**
+ * Whether a service can be booked at a point.
+ *
+ * Delegates: the mechanics live in `serviceabilityService`, which has to know
+ * how `createBooking` resolves a service family and how coverage is tested.
+ * Neither belongs in the public catalog projection.
+ *
+ * It is re-exported HERE because `serviceId` on this route means what it means
+ * on every other public catalog route — the canonical `services.id` — and
+ * `v1-catalog-contract.test.ts` proves that by checking each parameter name
+ * resolves through ONE domain service. Naming a second service for the same
+ * parameter is how "four different things are called a service id" starts
+ * again, which is the ambiguity that gate exists to prevent.
+ */
+export const getServiceability = (
+  serviceId: number,
+  lat: number,
+  lon: number,
+) => checkServiceability(serviceId, lat, lon);

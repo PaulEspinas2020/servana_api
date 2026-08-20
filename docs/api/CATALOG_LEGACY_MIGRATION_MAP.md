@@ -111,7 +111,7 @@ so this list cannot drift from what is enforced:
 4. The canonical successor is `implemented`, not `planned`.
 
 <!-- BEGIN GENERATED: catalog-successor-status -->
-All **6** canonical catalog successors are `implemented`, so criterion 4 is already met for every route above.
+**1 of 7** canonical catalog successors are still `planned`, so criterion 4 is **not** met for the routes they supersede: `/api/v1/catalog/services/:serviceId/serviceability`.
 <!-- END GENERATED: catalog-successor-status -->
 
 The others are blocked on a deploy: traffic

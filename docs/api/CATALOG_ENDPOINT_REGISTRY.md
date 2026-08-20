@@ -2,7 +2,7 @@
 
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand.
 
-**11 canonical catalog and search endpoints.** All public, all read-only.
+**12 canonical catalog and search endpoints.** All public, all read-only.
 
 Mutation lives on `/api/admin/catalog/*` behind `verifyAuth → verifyRoles([1]) →
 requirePermission`. There is no write handler on the public surface and there must not be —
@@ -15,6 +15,7 @@ server-side authorization is not satisfiable on an unauthenticated route.
 | `GET` | `/api/v1/catalog` | `CatalogTree` | `INTERNAL` |
 | `GET` | `/api/v1/catalog/summary` | `CatalogSummary` | `INTERNAL` |
 | `GET` | `/api/v1/catalog/services` | `CatalogServiceList` | `INTERNAL` |
+| `GET` | `/api/v1/catalog/services/:serviceId/serviceability` | `CatalogServiceability` | `INTERNAL`, `VALIDATION_FAILED` |
 | `GET` | `/api/v1/catalog/services/:serviceId` | `CatalogServiceDetail` | `CATALOG_SERVICE_NOT_FOUND`, `INTERNAL`, `VALIDATION_FAILED` |
 | `GET` | `/api/v1/search` | `SearchResults` | `INTERNAL`, `VALIDATION_FAILED` |
 | `GET` | `/api/v1/catalog/search` | `SearchResults` | `INTERNAL`, `VALIDATION_FAILED` |
@@ -33,6 +34,7 @@ to both and means different things to each.
 
 | Endpoint | Parameter | Resolves against |
 |---|---|---|
+| `/api/v1/catalog/services/:serviceId/serviceability` | `serviceId` | `services.id` — the canonical Specific Service (95 rows) |
 | `/api/v1/catalog/services/:serviceId` | `serviceId` | `services.id` — the canonical Specific Service (95 rows) |
 | `/api/v1/catalog/categories/:categoryId` | `categoryId` | `catalog_categories.id` (3 rows) |
 | `/api/v1/catalog/categories/:categoryId/subcategories` | `categoryId` | `catalog_categories.id` (3 rows) |
@@ -49,6 +51,7 @@ to both and means different things to each.
 | `GET /api/v1/catalog` | `services/catalogPublicService.getPublicCatalog + getPublicCatalogSummary` |
 | `GET /api/v1/catalog/summary` | `services/catalogPublicService.getPublicCatalogSummary` |
 | `GET /api/v1/catalog/services` | `services/catalogPublicService.listPublicServices` |
+| `GET /api/v1/catalog/services/:serviceId/serviceability` | `services/catalogPublicService.getServiceability` |
 | `GET /api/v1/catalog/services/:serviceId` | `services/catalogPublicService.getServiceDetail` |
 | `GET /api/v1/search` | `services/catalogSearchService.searchCatalog` |
 | `GET /api/v1/catalog/search` | `services/catalogSearchService.searchCatalog` |
@@ -65,6 +68,7 @@ to both and means different things to each.
 | `/api/v1/catalog` | · | · | — | — | — |
 | `/api/v1/catalog/summary` | · | · | — | — | — |
 | `/api/v1/catalog/services` | · | · | — | — | — |
+| `/api/v1/catalog/services/:serviceId/serviceability` | · | · | — | — | — |
 | `/api/v1/catalog/services/:serviceId` | · | · | — | — | — |
 | `/api/v1/search` | ⏳ | · | — | — | — |
 | `/api/v1/catalog/search` | · | · | — | — | — |
@@ -84,6 +88,7 @@ Legend: ✅ migrated · ⏳ still on a legacy route · · planned · — not app
 | `GET` | `/api/services/full` | `CANONICALIZE` | `/api/v1/catalog` |
 | `GET` | `/api/catalog/summary` | `ALIAS_TEMPORARILY` | `/api/v1/catalog/summary` |
 | `GET` | `/api/catalog/services` | `ALIAS_TEMPORARILY` | `/api/v1/catalog/services` |
+| `GET` | `/api/catalog/services/:serviceId/serviceability` | `CANONICALIZE` | `/api/v1/catalog/services/:serviceId/serviceability` |
 | `GET` | `/api/catalog/services/:serviceId` | `ALIAS_TEMPORARILY` | `/api/v1/catalog/services/:serviceId` |
 | `GET` | `/api/services/full` | `CANONICALIZE` | `/api/v1/search` |
 | `GET` | `/api/services/:serviceId/level2` | `CANONICALIZE` | `/api/v1/catalog/categories/:categoryId/subcategories` |

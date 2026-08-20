@@ -487,6 +487,57 @@ export const V1_CONTRACT: ContractEntry[] = [
     observability: 'catalog',
   },
   {
+    id: 'catalog.services.serviceability',
+    domain: 'catalog',
+    method: 'get',
+    path: '/catalog/services/:serviceId/serviceability',
+    summary:
+      'Whether a service can be booked at a given point, before the customer fills in a form.',
+    auth: 'public',
+    idempotent: true,
+    responseSchema: 'CatalogServiceability',
+    errors: ['VALIDATION_FAILED'],
+    params: [
+      { name: 'serviceId', type: 'integer', description: 'Canonical services.id' },
+    ],
+    query: [
+      {
+        name: 'lat',
+        type: 'string',
+        required: true,
+        description: 'Latitude of the service address, as a decimal degree',
+      },
+      {
+        name: 'lon',
+        type: 'string',
+        required: true,
+        description: 'Longitude of the service address, as a decimal degree',
+      },
+    ],
+    status: 'planned',
+    domainService: 'services/catalogPublicService.getServiceability',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/catalog/services/:serviceId/serviceability',
+        disposition: 'CANONICALIZE',
+        note:
+          'Mounted on the public catalog router alongside the read it belongs to. ' +
+          'Should become the canonical v1 route; no v1 successor built yet.',
+      },
+    ],
+    callers: { ...ALL_PLANNED, admin: 'n/a', providerMobile: 'n/a', providerWeb: 'n/a' },
+    observability: 'catalog',
+    notes:
+      'The verdict createBooking would reach, offered before the journey rather ' +
+      'than at the end of it: today a customer picks an address, a date and a ' +
+      'payment method and only then learns "Service not available in your area." ' +
+      'It resolves the service family with the statement createBooking uses, so the ' +
+      'pre-check cannot promise a booking the server will refuse. It answers a ' +
+      'verdict and never the coverage discs or the legacy id, which ' +
+      'catalogPublicService withholds deliberately (§11, §58).',
+  },
+  {
     id: 'catalog.services.get',
     domain: 'catalog',
     method: 'get',

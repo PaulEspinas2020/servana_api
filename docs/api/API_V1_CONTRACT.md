@@ -237,10 +237,11 @@ Each names the legacy route it will replace and why it was not adapted here.
 quietly become "half-built".
 
 <!-- BEGIN GENERATED: v1-planned -->
-**0 planned entries today**, against 114 implemented.
+**1 planned entry today**, against 114 implemented.
 
 | Path | Domain | Successor to | Why it is not built here |
 |---|---|---|---|
+| `/api/v1/catalog/services/:serviceId/serviceability` | catalog | `GET /api/catalog/services/:serviceId/serviceability` | The verdict createBooking would reach, offered before the journey rather than at the end of it: today a customer picks an address, a date and a payment method and only then learns "Service not available in your area." It resolves the service family with the statement createBooking uses, so the pre-check cannot promise a booking the server will refuse. It answers a verdict and never the coverage discs or the legacy id, which catalogPublicService withholds deliberately (§11, §58). |
 <!-- END GENERATED: v1-planned -->
 
 The count moves as domain commands land — `/auth/refresh` and `/search` were

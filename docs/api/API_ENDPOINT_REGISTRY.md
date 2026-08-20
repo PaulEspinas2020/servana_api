@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**114 implemented** · **0 planned** · 114 total.
+**114 implemented** · **1 planned** · 115 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -17,6 +17,7 @@ Caller legend: ✅ migrated · ⏳ still on a legacy route · · planned · — 
 | `GET` | `/api/v1/catalog` | **live** | public | — | `CatalogTree` | yes | catalog |
 | `GET` | `/api/v1/catalog/summary` | **live** | public | — | `CatalogSummary` | yes | catalog |
 | `GET` | `/api/v1/catalog/services` | **live** | public | — | `CatalogServiceList` | yes | catalog |
+| `GET` | `/api/v1/catalog/services/:serviceId/serviceability` | _planned_ | public | — | `CatalogServiceability` | yes | catalog |
 | `GET` | `/api/v1/catalog/services/:serviceId` | **live** | public | — | `CatalogServiceDetail` | yes | catalog |
 | `GET` | `/api/v1/catalog/search` | **live** | public | — | `SearchResults` | yes | catalog |
 | `GET` | `/api/v1/catalog/categories` | **live** | public | — | `CategorySummaryList` | yes | catalog |
@@ -55,6 +56,20 @@ Flat list of every bookable service, for search and deep links.
 - **Callers** — Cust Mobile · · Cust Web · · Prov Mobile — · Prov Web — · Admin —
 - **Legacy it replaces**
   - `GET /api/catalog/services` — **ALIAS_TEMPORARILY** — Same router, superseded by this route.
+
+### `GET /api/v1/catalog/services/:serviceId/serviceability`
+
+Whether a service can be booked at a given point, before the customer fills in a form.
+
+> The verdict createBooking would reach, offered before the journey rather than at the end of it: today a customer picks an address, a date and a payment method and only then learns "Service not available in your area." It resolves the service family with the statement createBooking uses, so the pre-check cannot promise a booking the server will refuse. It answers a verdict and never the coverage discs or the legacy id, which catalogPublicService withholds deliberately (§11, §58).
+
+- **Domain service** — `services/catalogPublicService.getServiceability`
+- **Error codes** — `INTERNAL`, `VALIDATION_FAILED`
+- **Path params** — `serviceId` (integer) Canonical services.id
+- **Query** — `lat` (string, required) Latitude of the service address, as a decimal degree; `lon` (string, required) Longitude of the service address, as a decimal degree
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile — · Prov Web — · Admin —
+- **Legacy it replaces**
+  - `GET /api/catalog/services/:serviceId/serviceability` — **CANONICALIZE** — Mounted on the public catalog router alongside the read it belongs to. Should become the canonical v1 route; no v1 successor built yet.
 
 ### `GET /api/v1/catalog/services/:serviceId`
 
@@ -1603,6 +1618,7 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `GET /api/v1/openapi.json` | · | · | · | · | · |
 | `GET /api/v1/catalog/summary` | · | · | — | — | — |
 | `GET /api/v1/catalog/services` | · | · | — | — | — |
+| `GET /api/v1/catalog/services/:serviceId/serviceability` | · | · | — | — | — |
 | `GET /api/v1/catalog/services/:serviceId` | · | · | — | — | — |
 | `GET /api/v1/me` | · | · | ✅ | ✅ | · |
 | `GET /api/v1/bookings` | ⏳ | ⏳ | — | — | — |

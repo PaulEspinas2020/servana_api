@@ -105,3 +105,33 @@ export const getService = async (req: Request, res: Response) => {
     return failure(res, error);
   }
 };
+
+// GET /catalog/services/:serviceId/serviceability?lat=&lon=
+//
+// The verdict `createBooking` would reach, offered BEFORE the customer fills in
+// a form instead of after they submit one. Same family resolution, same
+// coverage test — see `serviceabilityService`.
+//
+// Public, like the rest of this router and like the `/api/services/:id/
+// coverage-geo` it supersedes for canonical services. It answers strictly less
+// than that route does: a yes or no, never the discs, never the legacy id.
+export const getServiceability = async (req: Request, res: Response) => {
+  try {
+    const serviceId = Number(req.params.serviceId);
+    if (!isPositiveId(serviceId)) {
+      return res
+        .status(400)
+        .json({ status: "failed", message: "Invalid serviceId" });
+    }
+
+    // Parsed, not trusted. An absent or unparseable coordinate is answered
+    // INVALID_LOCATION by the service rather than defaulted to somewhere.
+    const lat = Number(req.query.lat);
+    const lon = Number(req.query.lon);
+
+    const result = await svc.getServiceability(serviceId, lat, lon);
+    return res.json({ status: "success", data: result });
+  } catch (error) {
+    return failure(res, error);
+  }
+};

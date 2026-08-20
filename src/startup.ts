@@ -40,8 +40,12 @@
  * `payments`, its trigger, the three finance tables and the normalized identifier
  * columns all come from `scripts/baseline/000-baseline.sql` and no longer depend
  * on a bootstrap having run. The `booking` slots (booking-ops, admin-create-booking)
- * are gone too. ONE `required` entry remains — `admin-permission-seed` — and it
- * seeds DATA, not schema, which is why it survives a pass whose goal is no DDL.
+ * are gone too. Of the entries that remain, `admin-permission-seed` seeds DATA,
+ * not schema, which is why it survives a pass whose goal is no DDL.
+ *
+ * `address-geocode-store` was ADDED rather than inherited: it creates nothing
+ * and is a liveness probe, declared because booking creation depends on it and
+ * nothing said so. A list that only shrinks would have kept that invisible.
  *
  * When this list reaches zero the API can start with DDL privileges revoked,
  * which is TAB 02's acceptance criterion. Do NOT add an entry here to create
@@ -56,6 +60,7 @@ import { seedReasonCodes, seedRequirementDefinitions } from './services/adminOnb
 import { seedAdminPermissions } from './services/adminPermissionService';
 import { ensureReviewTables } from './services/customerReviewService';
 import { getFirebaseAdmin } from './middleware/firebaseApp';
+import mongoDb from './db/mongodbQuery';
 
 /** Generous, but bounded. A hung bootstrap must not hold the boot open. */
 const SCHEMA_TIMEOUT_MS = 30_000;
@@ -93,6 +98,34 @@ export const STARTUP_DEPENDENCIES: readonly Dependency[] = Object.freeze([
       'nothing, which is an authorization outcome decided by absence.',
   },
 
+
+  {
+    name: 'address-geocode-store',
+    kind: 'required',
+    // A ping, not a schema build. If the driver cannot select a server in this
+    // long it will not select one at boot either.
+    timeoutMs: 10_000,
+    start: async () => {
+      const db = await mongoDb;
+      // `ping` is the cheapest command that proves a server was actually
+      // SELECTED. Constructing the client proves nothing — it is lazy — and
+      // listing collections would fail differently on an empty database.
+      await db.command({ ping: 1 });
+    },
+    why:
+      'BOOKING. `bookingService.createBooking` resolves the customer address ' +
+      'through `address.service.getLatLonByLocationId`, which reads the ' +
+      'MongoDB `addresses` collection and THROWS "Location not found" when the ' +
+      'document is missing or the store is unreachable. There is no fallback: ' +
+      'the coordinates it returns feed `checkCoverageGeo`, so without them no ' +
+      'booking can be created at all. ' +
+      'It was undeclared, which meant /readyz reported `ready:true` with five ' +
+      'green dependencies while every booking failed — readiness answering for ' +
+      'everything except the thing the customer came to do. Required for the ' +
+      'same reason the rule exists: a booking dependency must not be silently ' +
+      'downgraded, and required withholds READINESS rather than killing the ' +
+      'process, so an operator still has /readyz to ask why.',
+  },
 
   // ── Optional: degraded, reported, and not a reason to withhold traffic ──
   {

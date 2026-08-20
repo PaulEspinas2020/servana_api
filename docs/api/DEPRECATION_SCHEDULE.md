@@ -34,15 +34,15 @@ installed.
 
 | | |
 | --- | --- |
-| Legacy mappings tracked | 125 |
-| In the retirement plan | 106 |
+| Legacy mappings tracked | 126 |
+| In the retirement plan | 107 |
 | `KEEP` (not a duplicate of anything) | 6 |
 | `ROLE_SPECIFIC` (different auth/action, same service) | 13 |
 | `ALIAS_TEMPORARILY` | 94 |
-| `CANONICALIZE` | 11 |
+| `CANONICALIZE` | 12 |
 | `RETIRE` | 1 |
 | **Retirable today** | **0** |
-| Blocked | 106 |
+| Blocked | 107 |
 
 Nothing is retirable today, and the reason is the same for all of them: no client has migrated, because the v1 namespace is not deployed. The schedule is the order things become retirable, not a queue of pending deletions.
 
@@ -90,6 +90,7 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `GET /api/catalog` | ALIAS_TEMPORARILY | `catalog.browse` | Customer Mobile, Customer Web have not migrated | 90d |
 | `GET /api/catalog/services` | ALIAS_TEMPORARILY | `catalog.services.list` | Customer Mobile, Customer Web have not migrated | 90d |
 | `GET /api/catalog/services/:serviceId` | ALIAS_TEMPORARILY | `catalog.services.get` | Customer Mobile, Customer Web have not migrated | 90d |
+| `GET /api/catalog/services/:serviceId/serviceability` | CANONICALIZE | `catalog.services.serviceability` | the canonical successor `catalog.services.serviceability` is not mounted yet; Customer Mobile, Customer Web have not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 90d |
 | `GET /api/catalog/summary` | ALIAS_TEMPORARILY | `catalog.summary` | Customer Mobile, Customer Web have not migrated | 90d |
 | `POST /api/chat/attachments/upload` | CANONICALIZE | `conversations.attachments.create` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 90d |
 | `GET /api/chat/conversations` | ALIAS_TEMPORARILY | `conversations.list` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |

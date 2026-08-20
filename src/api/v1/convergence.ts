@@ -225,6 +225,7 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'catalog.categories.list', 'catalog.categories.get', 'catalog.categories.subcategories',
       'catalog.subcategories.get', 'catalog.subcategories.services',
       'catalog.services.list', 'catalog.services.get',
+      'catalog.services.serviceability',
     ],
     domainModule: 'services/catalogPublicService',
     surfaces: CLIENT_SURFACES,
@@ -232,7 +233,10 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'No role split. The catalog is public product data keyed on services.id — Catalog V2, ' +
       'category → subcategory → service. A provider browsing what they can apply for and a ' +
       'customer browsing what they can book are reading the same tree; a second projection ' +
-      'would be the moment service_families crept back in as a parallel identity.',
+      'would be the moment service_families crept back in as a parallel identity. ' +
+      'Serviceability belongs to browsing rather than to booking for the same reason: it ' +
+      'answers "can this be booked here" while the customer is still choosing, and it ' +
+      'answers it identically for every surface.',
   },
   {
     key: 'catalogSearch',

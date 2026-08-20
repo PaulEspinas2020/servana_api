@@ -184,6 +184,30 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  CatalogServiceability: {
+    type: 'object',
+    required: ['serviceable', 'reason', 'defaulted'],
+    description:
+      'Whether a service can be booked at a point, answered before the customer fills in ' +
+      'a form rather than at submission. Deliberately a verdict and nothing more: the ' +
+      'coverage geometry and the legacy service id stay unexposed, as they are on every ' +
+      'other public catalog read.',
+    properties: {
+      serviceable: { type: 'boolean' },
+      reason: {
+        type: ['string', 'null'],
+        enum: ['OUTSIDE_SERVICE_AREA', 'UNKNOWN_SERVICE', 'INVALID_LOCATION', null],
+        description: 'Null when serviceable. INVALID_LOCATION means the point could not be judged.',
+      },
+      defaulted: {
+        type: 'boolean',
+        description:
+          'True when the service has no coverage configured and the Servana-supported ' +
+          'footprint decided the answer (§28). False when explicit coverage decided it.',
+      },
+    },
+  },
+
   CatalogRef: {
     type: 'string',
     pattern: '^(category|subcategory|service|addon):[0-9]+$',

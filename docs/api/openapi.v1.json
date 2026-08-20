@@ -518,6 +518,115 @@
         }
       }
     },
+    "/api/v1/catalog/services/{serviceId}/serviceability": {
+      "get": {
+        "operationId": "catalog.services.serviceability",
+        "summary": "Whether a service can be booked at a given point, before the customer fills in a form.",
+        "tags": [
+          "catalog"
+        ],
+        "deprecated": false,
+        "x-status": "planned",
+        "x-implemented": false,
+        "x-idempotent": true,
+        "x-domain-service": "services/catalogPublicService.getServiceability",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/catalog/services/:serviceId/serviceability",
+            "disposition": "CANONICALIZE"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "n/a",
+          "providerWeb": "n/a",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "catalog",
+        "security": [],
+        "parameters": [
+          {
+            "name": "serviceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Canonical services.id"
+          },
+          {
+            "name": "lat",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Latitude of the service address, as a decimal degree"
+          },
+          {
+            "name": "lon",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Longitude of the service address, as a decimal degree"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CatalogServiceability"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "The verdict createBooking would reach, offered before the journey rather than at the end of it: today a customer picks an address, a date and a payment method and only then learns \"Service not available in your area.\" It resolves the service family with the statement createBooking uses, so the pre-check cannot promise a booking the server will refuse. It answers a verdict and never the coverage discs or the legacy id, which catalogPublicService withholds deliberately (§11, §58)."
+      }
+    },
     "/api/v1/catalog/services/{serviceId}": {
       "get": {
         "operationId": "catalog.services.get",
@@ -13238,6 +13347,37 @@
           }
         }
       },
+      "CatalogServiceability": {
+        "type": "object",
+        "required": [
+          "serviceable",
+          "reason",
+          "defaulted"
+        ],
+        "description": "Whether a service can be booked at a point, answered before the customer fills in a form rather than at submission. Deliberately a verdict and nothing more: the coverage geometry and the legacy service id stay unexposed, as they are on every other public catalog read.",
+        "properties": {
+          "serviceable": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "OUTSIDE_SERVICE_AREA",
+              "UNKNOWN_SERVICE",
+              "INVALID_LOCATION",
+              null
+            ],
+            "description": "Null when serviceable. INVALID_LOCATION means the point could not be judged."
+          },
+          "defaulted": {
+            "type": "boolean",
+            "description": "True when the service has no coverage configured and the Servana-supported footprint decided the answer (§28). False when explicit coverage decided it."
+          }
+        }
+      },
       "CatalogRef": {
         "type": "string",
         "pattern": "^(category|subcategory|service|addon):[0-9]+$",
@@ -19703,5 +19843,5 @@
   ],
   "x-generated-from": "src/api/v1/contract.ts",
   "x-implemented-count": 114,
-  "x-total-count": 114
+  "x-total-count": 115
 }

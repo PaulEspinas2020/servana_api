@@ -20,8 +20,8 @@
 | --- | --- |
 | Capabilities | 62 |
 | Canonical endpoints mounted | 114 |
-| Canonical endpoints planned | 0 |
-| Legacy mappings tracked | 125 |
+| Canonical endpoints planned | 1 |
+| Legacy mappings tracked | 126 |
 | Converged (one route family) | 54 |
 | Role-split over ONE service | 4 |
 | Single-surface | 4 |
@@ -474,18 +474,20 @@ Canonical:
   - `GET /api/v1/catalog/subcategories/:subcategoryId/services`
   - `GET /api/v1/catalog/services`
   - `GET /api/v1/catalog/services/:serviceId`
+  - `GET /api/v1/catalog/services/:serviceId/serviceability`
 
 Legacy still aliased for this capability:
   - `GET /api/:serviceId/options-with-addons`
   - `GET /api/catalog`
   - `GET /api/catalog/services`
   - `GET /api/catalog/services/:serviceId`
+  - `GET /api/catalog/services/:serviceId/serviceability`
   - `GET /api/catalog/summary`
   - `GET /api/services/:serviceId/level2`
   - `GET /api/services/:serviceId/options-with-addons`
   - `GET /api/services/full`
 
-No role split. The catalog is public product data keyed on services.id — Catalog V2, category → subcategory → service. A provider browsing what they can apply for and a customer browsing what they can book are reading the same tree; a second projection would be the moment service_families crept back in as a parallel identity.
+No role split. The catalog is public product data keyed on services.id — Catalog V2, category → subcategory → service. A provider browsing what they can apply for and a customer browsing what they can book are reading the same tree; a second projection would be the moment service_families crept back in as a parallel identity. Serviceability belongs to browsing rather than to booking for the same reason: it answers "can this be booked here" while the customer is still choosing, and it answers it identically for every surface.
 
 ### Search services
 
