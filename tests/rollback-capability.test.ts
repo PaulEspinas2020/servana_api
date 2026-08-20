@@ -2,13 +2,18 @@
  * The rollback exists, has been executed, and cannot regress to the shape that
  * made it inoperative (TAB 05).
  *
- * ## Measured state
+ * ## Measured state — the gap is now CLOSED
  *
- * `.github/workflows/deploy.yml` — the workflow that actually runs — contains
- * ZERO rollback references, and there is no retained previous build. The
- * rollback is absent from production, not merely unrehearsed, and it is blocked
- * on a credential: the PAT lacks the `workflow` scope, so
- * `docs/pending-workflow/deploy.yml` cannot be landed.
+ * This used to record a gap nothing in the repository could close: the workflow
+ * that actually ran carried ZERO rollback references, and the parked copy that
+ * would have fixed it could not be landed because the PAT lacked the `workflow`
+ * scope. So the rollback was absent from production rather than merely
+ * unrehearsed.
+ *
+ * Deleting CI closed it. `scripts/deploy-prod.sh` is the deploy now, a script
+ * carries no workflow-scope restriction, and it calls the probe, this rollback
+ * and the retention in the order the parked file described. The assertions
+ * below moved from that parked YAML onto the script, unchanged in substance.
  *
  * ## The defect rehearsal found
  *
@@ -26,8 +31,7 @@
  * needed. A rollback that reads as present and is absent is worse than a missing
  * one, because nobody goes looking.
  *
- * These assertions exist so that ordering cannot quietly revert when somebody
- * finally has the scope to land the file.
+ * These assertions exist so that ordering cannot quietly revert.
  */
 
 import fs from 'fs';
@@ -36,8 +40,7 @@ import path from 'path';
 const ROOT = path.join(__dirname, '..');
 const read = (...p: string[]) => fs.readFileSync(path.join(ROOT, ...p), 'utf8');
 
-const LIVE = read('.github', 'workflows', 'deploy.yml');
-const PARKED = read('docs', 'pending-workflow', 'deploy.yml');
+const DEPLOY = read('scripts', 'deploy-prod.sh');
 const ROLLBACK = read('scripts', 'rollback.sh');
 const SNAPSHOT = read('scripts', 'snapshot-build.sh');
 
@@ -82,21 +85,27 @@ describe('the rollback is a runnable artefact, not only a YAML fragment', () => 
 });
 
 describe('retention happens after the probe, never after checkout', () => {
-  it('the parked workflow retains only on success, as the last step', () => {
-    const probeIdx = PARKED.indexOf('id: probe');
-    const retainIdx = PARKED.indexOf('snapshot-build.sh');
+  it('the deploy retains only after the probe accepted the build, as the last step', () => {
+    const probeIdx = DEPLOY.indexOf('post-deploy-readiness.sh');
+    const retainIdx = DEPLOY.indexOf('snapshot-build.sh');
     expect(probeIdx).toBeGreaterThan(-1);
     expect(retainIdx).toBeGreaterThan(probeIdx);
-    expect(PARKED).toContain("if: success()");
+    // And it is genuinely last: nothing runs after the retention.
+    expect(DEPLOY.slice(retainIdx)).not.toMatch(/\$PM2 start|npm run migrations/);
   });
 
-  it('no snapshot is taken between checkout and build — the ordering that never worked', () => {
-    const checkoutIdx = PARKED.indexOf('actions/checkout');
-    const buildIdx = PARKED.indexOf('- name: Build');
-    const between = PARKED.slice(checkoutIdx, buildIdx);
-    // The explanatory comment may mention it; an actual copy step may not.
-    expect(between).not.toContain('cp -a dist');
-    expect(between).not.toContain('cp -a "$DIST"');
+  it('no snapshot is taken before the build — the ordering that never worked', () => {
+    /**
+     * The workflow form of this bug was structural: `actions/checkout` runs
+     * `git clean -ffdx`, `dist` is ignored, so the snapshot step found nothing
+     * to copy on every single run. A script does no checkout, so the bug can
+     * only return as a reordering — snapshotting while `dist/` still holds the
+     * build being replaced, or before `npm run build` has written the new one.
+     */
+    const buildIdx = DEPLOY.indexOf('npm run build');
+    const retainIdx = DEPLOY.indexOf('snapshot-build.sh');
+    expect(buildIdx).toBeGreaterThan(-1);
+    expect(retainIdx).toBeGreaterThan(buildIdx);
   });
 
   it('dist really is ignored, which is why the old ordering failed', () => {
@@ -128,23 +137,22 @@ describe('retention happens after the probe, never after checkout', () => {
   });
 });
 
-describe('the live pipeline still has no rollback, and this says so', () => {
+describe('the live deploy path now HAS the rollback it used to lack', () => {
   /**
-   * Asserted as a KNOWN STATE rather than as a passing gate, because nothing in
-   * this repository can change it: `.github/workflows/deploy.yml` needs a PAT
-   * scope this repository does not have. When somebody lands the parked file,
-   * this test turns red and gets deleted — which is the correct outcome and the
-   * point of writing it this way.
+   * The previous version of this block asserted the gap as a known state,
+   * because nothing in the repository could close it — the workflow needed a
+   * PAT scope this repository does not have. Removing CI removed the blocker
+   * along with the workflow: the deploy is a script, and a script can carry the
+   * probe and the recovery.
    */
-  it('names the gap instead of implying it is closed', () => {
-    expect(LIVE.toLowerCase()).not.toContain('rollback');
-    expect(LIVE).not.toContain('snapshot-build.sh');
-    expect(LIVE).not.toContain('post-deploy-readiness');
+  it('the deploy calls the probe, the rollback and the retention', () => {
+    expect(DEPLOY).toContain('scripts/post-deploy-readiness.sh');
+    expect(DEPLOY).toContain('scripts/rollback.sh');
+    expect(DEPLOY).toContain('scripts/snapshot-build.sh');
   });
 
-  it('the parked file that WOULD close it is complete', () => {
-    expect(PARKED).toContain('scripts/rollback.sh');
-    expect(PARKED).toContain('scripts/snapshot-build.sh');
-    expect(PARKED.toLowerCase()).toContain('rollback');
+  it('a rollback still reports failure, so a recovered incident is not read as a deploy', () => {
+    const afterRollback = DEPLOY.slice(DEPLOY.indexOf('scripts/rollback.sh'));
+    expect(afterRollback).toMatch(/exit 1/);
   });
 });

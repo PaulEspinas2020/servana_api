@@ -5,11 +5,16 @@
 #
 # ## Why this exists
 #
-# release-gate.yml and fresh-db.yml are manual-only: they are GitHub-hosted and
-# this repo's Actions credit is exhausted and not being topped up. Without them,
-# nothing stood between a push and production — and for this repo a push to main
-# IS a production deploy (deploy.yml runs on the self-hosted runner, migrates the
-# database, and restarts PM2). A gate that runs after the deploy is not a gate.
+# This repository has NO CI. There are no workflow files at all: Actions credit
+# is exhausted and is not being topped up, so every workflow was deleted rather
+# than left manual-only. This hook is the ONLY gate that exists.
+#
+# Deployment is now a direct push plus `scripts/deploy-prod.sh`, run by hand on
+# the production host. Note the change carefully: a push to main no longer
+# deploys by itself, but it is still the thing production is deployed FROM, and
+# the deploy script does not re-run the suite (it runs on a 961 MB box that
+# cannot hold it). So this remains the last point at which a broken main can be
+# stopped, and a gate that runs after the deploy would not be a gate.
 #
 # So the check that CI used to perform now runs here, before the push leaves.
 #
@@ -32,9 +37,8 @@
 # servana-serviceAccountKey.json on disk and FIREBASE_SERVICE_ACCOUNT_JSON
 # unset: all four suites pass, 32 tests.
 #
-# So a green hook now IS proof, and that is the whole point — with GitHub-hosted
-# CI unavailable, a gate nobody trusts is a gate people reach past with
-# --no-verify.
+# So a green hook now IS proof, and that is the whole point — with no CI at all,
+# a gate nobody trusts is a gate people reach past with --no-verify.
 
 set -e
 

@@ -2,9 +2,19 @@
 
 **Decided 2026-08-19, after an outage caused by the deploy pipeline itself.**
 
-There is no CI. GitHub Actions is **disabled** on this repository and on
-`ServanaClientAPP`. Deploys are manual. `npm run verify` runs on a developer
+There is no CI. **As of 2026-08-20 there are no workflow files at all** — the
+three under `.github/workflows/` and the three parked under
+`docs/pending-workflow/` were deleted, along with the tests that policed them.
+This is a standing rule across every repository, not a setting on this one:
+Actions credit is not being topped up, so "disabled" was replaced with "absent",
+which cannot be re-enabled by accident.
+
+Deployment is a direct push to `main` (or `dev`), followed by
+`scripts/deploy-prod.sh` run on the box. `npm run verify` runs on a developer
 machine, invoked by the `pre-push` hook.
+
+**Note what the change costs: a push no longer deploys anything by itself.**
+The push lands the code and the hook gates it; a human then runs the script.
 
 This document exists because three separate gates could not pass on the machine
 that now runs them, and because the reason production died was not a code
@@ -98,6 +108,32 @@ into a customer-facing outage.
 ## Deploying
 
 ```
+ssh -n root@192.46.224.126 'cd /var/www/servana_api && git pull && bash scripts/deploy-prod.sh'
+```
+
+`scripts/deploy-prod.sh` is the deploy. It carries every step the deleted
+workflow carried, in the order that was argued over, plus the three the live
+workflow never had:
+
+| Step | Why the order matters |
+| --- | --- |
+| secrets | copied only if the source exists — it will not clobber a live `.env` |
+| `npm ci --include=dev` | typescript and jest are devDependencies |
+| typecheck, docs drift, secret scan, protected-contract guard | cheap, host-specific. The full suite deliberately does NOT run here — 961 MB cannot hold it, and that is what killed production |
+| `npm run build` + `verify-build-info --strict` | `--strict` explicitly, because no CI variable sets it any more |
+| `migrations:plan` then `migrations:apply` | after the build, before the restart. A failing build touches nothing; a failing migration stops short of the restart, so old code keeps serving |
+| PM2 stop / delete / start | not `reload` — fork mode makes reload a restart anyway, and cluster mode would double every cron tick |
+| post-deploy probe | **new.** The live workflow had none |
+| rollback on probe failure, exit 1 | **new.** A recovered incident is not a successful deploy |
+| retain the build | **new,** and last: retaining a build the probe rejected would make the next rollback restore it |
+
+`SERVANA_APPLY_DESTRUCTIVE=<migration>` in the calling shell authorises one
+destructive migration, for one deploy, with a backup taken. Never export it
+permanently.
+
+The older two-command form still works for a code-only change:
+
+```
 ssh -n root@192.46.224.126 'cd /var/www/servana_api; npm run build'
 ssh -n root@192.46.224.126 'pm2 restart servana-prod'
 ssh root@192.46.224.126 'pm2 save'
@@ -146,7 +182,7 @@ not, all of them Linux-only assumptions:
 
 | Gate | Why it failed on Windows | Fix |
 | --- | --- | --- |
-| `deploy-gating` | Asserted the hook's exec bit via `statSync().mode & 0o111`. NTFS carries no POSIX exec bit, so Node reports `666` and the assertion is unsatisfiable. `ls -la` showing `-rwxr-xr-x` is git emulating its **index**, not the filesystem. | Assert `git ls-files -s` reports `100755` — the mode that actually travels |
+| `deploy-gating` (now `deploy-is-direct-not-ci`) | Asserted the hook's exec bit via `statSync().mode & 0o111`. NTFS carries no POSIX exec bit, so Node reports `666` and the assertion is unsatisfiable. `ls -la` showing `-rwxr-xr-x` is git emulating its **index**, not the filesystem. | Assert `git ls-files -s` reports `100755` — the mode that actually travels |
 | `jest-vacuous-ratchet` | Built keys as `test.path.replace(process.cwd() + '/', '')`. `test.path` uses backslashes; the concatenation appends a forward slash; **the replace matched nothing** and every key stayed absolute, so none aligned with the frozen relative list. It reported *"24 no longer on the list"* when nothing had regressed. | Normalise separators before stripping the root. Now reports *3*, the true number |
 | `release-gate-hermeticity` | Correctly caught a new test writing into the repo root | The test moved to `os.tmpdir()` |
 
@@ -161,6 +197,32 @@ the code, fix the check.
 green in one command. Used to escape a failure, it blesses every current
 zero-assertion test as acceptable and launders a real signal. Re-freeze only
 when a test legitimately delegates its assertion, and say so in a comment.
+
+---
+
+## What deleting CI actually cost, and who now owns it
+
+Two things ran only in a workflow. Neither is automated any more, so both are
+named here rather than left to be discovered.
+
+**The fresh-database `--live` gate.** `fresh-db.yml` ran
+`npm run db:verify -- --live` against a real PostgreSQL 16 service container.
+`--embedded` is not a substitute: PGlite is a single bundled superuser, so
+**ownership and role separation are invisible to it** — and that is the exact
+defect that left 29 of 116 tables unusable in production. The mode still exists
+and still refuses production and unacknowledged hosts. It is now an operator
+step, to be run against a local PostgreSQL before any migration lands:
+
+```
+npm run db:verify -- --live        # needs a local PG; refuses prod by design
+npm run db:verify:embedded         # runs anywhere; does NOT cover ownership
+```
+
+Do not read a green `db:verify:embedded` as covering ownership. It never did.
+
+**The release-gate summary artifact.** `release-gate.yml` retained
+`reports/release-summary.json` per run. `npm run release:summary` still writes
+it; nothing archives it. If a release needs an auditable record, keep the file.
 
 ---
 

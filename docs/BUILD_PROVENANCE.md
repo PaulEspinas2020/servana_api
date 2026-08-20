@@ -18,7 +18,7 @@ Re-measured, that is no longer true:
 |---|---|
 | `npm run build` stamps `dist/BUILD_INFO.json` | **yes** — since `8781cf6` |
 | `origin/main`'s `package.json` carries that build script | **yes** |
-| live `.github/workflows/deploy.yml` runs `npm run build` | **yes** |
+| the deploy runs `npm run build` | **yes** — `scripts/deploy-prod.sh` |
 | production `GET /api/v1/health` | `available: false`, all fields null |
 | production `GET /health` | 404 |
 
@@ -26,7 +26,10 @@ So the deploy *would* stamp. The reason production cannot name itself is narrowe
 **`8781cf6` was pushed with `[skip ci]`, so it never triggered a deploy.** Production is
 serving an artefact built before the stamper existed.
 
-**That part is fixed by a deploy, not by code.** It is named here rather than worked around.
+**That part is fixed by a deploy, not by code.** It is named here rather than worked around —
+and with CI gone, "a deploy" means someone running `scripts/deploy-prod.sh` on the box.
+Re-measured 2026-08-20: `GET /api/v1/health` still answers `available: false`, so it has not
+happened yet.
 
 ## What was genuinely missing, and is now present
 
@@ -43,15 +46,19 @@ does not:
 | `commit` null | **fatal in CI/production**, a warning locally |
 | stamp ≠ `GITHUB_SHA` | **fatal** — the artefact is not built from the commit being deployed |
 
-### Why it lives in `npm run build` and not in the workflow
+### Why it lives in `npm run build`
 
-`.github/workflows/deploy.yml` **cannot be changed with this repository's credentials** — the
-PAT lacks the `workflow` scope, which is why the fuller pipeline still sits parked in
-`docs/pending-workflow/`. `package.json` has no such restriction, and the live deploy already
-runs `npm run build`. A gate placed in the build reaches production **without a workflow
-edit**.
+Originally because `.github/workflows/deploy.yml` could not be changed with this repository's
+credentials — the PAT lacked the `workflow` scope — so a gate placed in the build was the only
+one that could reach production. That constraint is gone with the workflows themselves, but
+the placement outlived its reason and is still right: every path that produces a `dist/` runs
+`npm run build`, so the check cannot be skipped by deploying some other way.
 
-That constraint is the design, not a preference.
+One thing the removal did change. `verify-build-info.mjs` is STRICT under `CI`,
+`GITHUB_ACTIONS`, `NODE_ENV=production` or `--strict`, and the first two are never set now.
+`scripts/deploy-prod.sh` therefore passes `--strict` itself. Without it, a build unable to name
+its own commit would have started reaching production silently — the exact failure this gate
+exists to prevent, reintroduced by deleting CI rather than by any code change.
 
 ## `/health` at the root
 

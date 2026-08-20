@@ -547,29 +547,47 @@ describe('the fresh-database gate is wired and refuses production', () => {
       .toBe(true);
   });
 
-  it('the workflow pins a major version and applies as the runtime role', () => {
-    const workflow = fs.readFileSync(path.join(REPO_ROOT, '.github/workflows/fresh-db.yml'), 'utf8');
-    expect(workflow).toMatch(/image:\s*postgres:16/);
-    expect(workflow).not.toMatch(/image:\s*postgres:latest/);
-    // Applying as a superuser would let a migration pass here and fail live.
-    expect(workflow).toContain('CREATE SCHEMA servana AUTHORIZATION admin');
-    expect(workflow).toContain('postgres://admin:');
+  /**
+   * These four used to be asserted against `.github/workflows/fresh-db.yml`.
+   * That workflow is deleted along with every other one — this platform runs no
+   * CI — so the properties are asserted where they now live: in the runner the
+   * workflow used to call.
+   *
+   * ## The capability this genuinely costs, stated rather than hidden
+   *
+   * `--live` was the ONLY place ownership and role separation were checkable.
+   * `--embedded` runs PGlite, which is a single bundled superuser, so it cannot
+   * see the defect that left 29 of 116 tables unusable in production. The mode
+   * still exists and still refuses production — but nothing runs it on a
+   * schedule any more. It is an operator step now, and `docs/DEPLOY_AND_GATE_POLICY.md`
+   * says so. Do not read a green `db:verify:embedded` as covering ownership; it
+   * never did.
+   */
+  const freshDb = fs.readFileSync(path.join(REPO_ROOT, 'scripts/verify-fresh-db.ts'), 'utf8');
+
+  it('applies as the runtime role, not as a superuser', () => {
+    // Applying as a superuser lets a migration pass the gate and fail live.
+    expect(freshDb).toContain('AUTHORIZATION ${RUNTIME_ROLE}');
+    expect(freshDb).not.toContain('AUTHORIZATION postgres');
   });
 
-  it('the workflow asserts ownership after applying', () => {
-    const workflow = fs.readFileSync(path.join(REPO_ROOT, '.github/workflows/fresh-db.yml'), 'utf8');
-    expect(workflow).toContain('tableowner <> \'admin\'');
+  it('still offers the live mode, which is the only one that can see ownership', () => {
+    expect(freshDb).toContain('--live');
+    expect(freshDb).toContain('single bundled superuser');
   });
 
-  it('the static job runs unconditionally and the live job waits for a baseline', () => {
-    const workflow = fs.readFileSync(path.join(REPO_ROOT, '.github/workflows/fresh-db.yml'), 'utf8');
-    expect(workflow).toMatch(/hashFiles\('scripts\/baseline\/000-baseline\.sql'\) != ''/);
+  it('the live mode refuses production and refuses an unacknowledged host', () => {
+    // Asserted through the exported decision function rather than through prose,
+    // so it cannot drift. These are the checks the workflow relied on.
+    expect(checkLiveTarget('postgres://u@prod.servana.internal/db', {}, { host: 'prod.servana.internal' }).allowed)
+      .toBe(false);
+    expect(checkLiveTarget('postgres://u@ci-db:5432/fresh', {}, { host: 'prod' }).allowed).toBe(false);
   });
 
   it('carries no real credential', () => {
-    const workflow = fs.readFileSync(path.join(REPO_ROOT, '.github/workflows/fresh-db.yml'), 'utf8');
-    expect(workflow).not.toMatch(/eyJ[A-Za-z0-9._-]{20,}/);
-    expect(workflow).toMatch(/ci-not-a-secret/);
+    // The workflow used to be the file most likely to grow one. The runner is
+    // now that file.
+    expect(freshDb).not.toMatch(/eyJ[A-Za-z0-9._-]{20,}/);
   });
 });
 

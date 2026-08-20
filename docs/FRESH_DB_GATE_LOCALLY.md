@@ -1,8 +1,10 @@
-# Running the fresh-database gate without GitHub Actions
+# Running the fresh-database gate
 
-`fresh-db.yml` is `workflow_dispatch`-only because this repository's Actions
-credit is exhausted (owner decision, 2026-08-19). Two of its three jobs need no
-engine and already run locally as part of `npm run verify`. The third —
+**This is the only way to run it.** `fresh-db.yml` was deleted on 2026-08-20
+along with every other workflow in every repository: Actions credit is not being
+topped up, so this gate has no automated runner and will not get one. Two of its
+three jobs needed no engine and already run locally as part of `npm run verify`.
+The third —
 **zero-to-current on a real engine** — is the one that cannot, and it is the one
 that matters most: it applies the chain as a **least-privilege runtime role**,
 which is the only way to catch the ownership class of defect that left 29 of 116

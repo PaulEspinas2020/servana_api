@@ -172,18 +172,22 @@ describe('the post-deploy probe asserts the running commit', () => {
     expect(SCRIPT).not.toContain('api.servana.com.ph');
   });
 
-  it('is not wired into the live workflow, and this test says so out loud', () => {
+  it('IS wired into the deploy, and told which commit to expect', () => {
     /**
-     * An honest failing assertion would be wrong here — nothing in this
-     * repository can fix it, because `.github/workflows/deploy.yml` needs a PAT
-     * scope this repository does not have. So it is asserted as a KNOWN STATE
-     * rather than as a passing gate: if someone lands the parked workflow, this
-     * test turns red and gets deleted, which is the correct outcome.
+     * This was previously asserted as a KNOWN GAP rather than a passing gate:
+     * the probe existed but nothing ran it, and nothing in the repository could
+     * change that, because the workflow needed a PAT scope this repository does
+     * not have.
+     *
+     * Removing CI removed the blocker with it. The deploy is `deploy-prod.sh`
+     * now, and a script can call the probe. `EXPECTED_COMMIT` is passed
+     * explicitly because `GITHUB_SHA` — the fallback the script also accepts —
+     * is never set outside Actions, and an unset expectation makes the
+     * provenance check silently vacuous.
      */
-    const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'deploy.yml'), 'utf8');
-    expect(workflow).not.toContain('post-deploy-readiness');
-    const parked = fs.readFileSync(path.join(ROOT, 'docs', 'pending-workflow', 'deploy.yml'), 'utf8');
-    expect(parked).toContain('BUILD_INFO.json');
+    const deploy = fs.readFileSync(path.join(ROOT, 'scripts', 'deploy-prod.sh'), 'utf8');
+    expect(deploy).toContain('post-deploy-readiness.sh');
+    expect(deploy).toMatch(/EXPECTED_COMMIT="\$\(git rev-parse HEAD/);
   });
 });
 

@@ -158,9 +158,15 @@ describe('the runner applies the safe prefix and HOLDS', () => {
   });
 });
 
-describe('the deploy workflow uses the real runner', () => {
-  const YML = fs.readFileSync(
-    path.resolve(__dirname, '../.github/workflows/deploy.yml'),
+describe('the deploy script uses the real runner', () => {
+  /**
+   * These properties used to be asserted against `.github/workflows/deploy.yml`.
+   * That file is gone — this platform runs no CI on any repository — and the
+   * deploy is now `scripts/deploy-prod.sh`, which carries the same steps. The
+   * properties did not change with the medium, so neither did the assertions.
+   */
+  const SH = fs.readFileSync(
+    path.resolve(__dirname, '../scripts/deploy-prod.sh'),
     'utf8',
   );
 
@@ -169,34 +175,55 @@ describe('the deploy workflow uses the real runner', () => {
     // database — two ledgers for one question, and they had already diverged.
     // Asserted on the EXECUTABLE body, not the file: the comment above the step
     // deliberately explains what the marker-file ledger was and why it went.
-    expect(YML).not.toMatch(/^\s*DONE_DIR=/m);
-    expect(YML).not.toMatch(/touch "[$]DONE_DIR/);
-    expect(YML).not.toMatch(/^\s*for FILE in .*scripts\/migrations/m);
+    expect(SH).not.toMatch(/^\s*DONE_DIR=/m);
+    expect(SH).not.toMatch(/touch "[$]DONE_DIR/);
+    expect(SH).not.toMatch(/^\s*for FILE in .*scripts\/migrations/m);
   });
 
   it('invokes the runner that holds the advisory lock and checks checksums', () => {
-    expect(YML).toContain('npm run migrations:apply');
+    expect(SH).toContain('npm run migrations:apply');
   });
 
   it('plans before it applies', () => {
-    const plan = YML.indexOf('npm run migrations:plan');
-    const apply = YML.indexOf('npm run migrations:apply');
+    const plan = SH.indexOf('npm run migrations:plan');
+    const apply = SH.indexOf('npm run migrations:apply');
     expect(plan).toBeGreaterThan(-1);
     expect(apply).toBeGreaterThan(plan);
   });
 
-  it('keeps migrations after the gate and before the restart', () => {
+  it('keeps migrations after the checks and the build, and before the restart', () => {
     /**
-     * Load-bearing ordering, and the comment in deploy.yml explains it was got
-     * wrong once already: a failing test must touch nothing, and a failing
-     * migration must stop short of the restart so old code keeps serving.
+     * Load-bearing ordering, got wrong once already: a failing check must touch
+     * nothing, and a failing migration must stop short of the restart so the old
+     * code keeps serving.
+     *
+     * The full suite is deliberately NOT one of these checks — it runs in the
+     * pre-push hook, on a machine with memory. What runs here are the checks
+     * specific to this host: typecheck, docs drift, secret scan, and the
+     * protected-contract guard.
      */
-    const verify = YML.indexOf('npm run verify');
-    const build = YML.indexOf('name: Build');
-    const migrate = YML.indexOf('npm run migrations:apply');
-    const restart = YML.indexOf('name: Restart PM2');
-    expect(verify).toBeLessThan(build);
+    const checks = SH.indexOf('npm run guard:protected-contracts');
+    const build = SH.indexOf('npm run build');
+    const migrate = SH.indexOf('npm run migrations:apply');
+    const restart = SH.indexOf('$PM2 start');
+    expect(checks).toBeGreaterThan(-1);
+    expect(checks).toBeLessThan(build);
     expect(build).toBeLessThan(migrate);
     expect(migrate).toBeLessThan(restart);
+  });
+
+  it('passes the destructive-migration authorisation through from the operator', () => {
+    // It used to come from an Actions repo variable. With Actions gone it must
+    // come from the calling shell — and it must NOT be hardcoded here, which
+    // would authorise every future destructive migration rather than the one
+    // deploy that intends it.
+    expect(SH).toMatch(/SERVANA_APPLY_DESTRUCTIVE/);
+    // Every assignment must derive from the environment. A literal migration
+    // name here would authorise it on every subsequent deploy, silently.
+    const assignments = SH.match(/SERVANA_APPLY_DESTRUCTIVE=\S*/g) ?? [];
+    expect(assignments.length).toBeGreaterThan(0);
+    for (const a of assignments) {
+      expect(a).toMatch(/SERVANA_APPLY_DESTRUCTIVE="\$\{SERVANA_APPLY_DESTRUCTIVE/);
+    }
   });
 });
