@@ -35,6 +35,75 @@ PORT="${1:-${PORT:-3000}}"
 DEADLINE="${2:-90}"
 BASE="http://127.0.0.1:${PORT}"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Does the process that just restarted serve the commit this deploy built?
+#
+# Readiness proves it can serve. It does not prove it is serving THIS build, and
+# those come apart in a way that has already happened here: a deploy whose
+# migration step fails stops short of the PM2 restart, so the workflow's earlier
+# steps go green, the old process keeps answering, and from the outside a deploy
+# that silently did not restart is indistinguishable from one that did.
+#
+# `dist/BUILD_INFO.json` is stamped by `npm run build`, and `/api/v1/health`
+# serves it. Comparing the two answers "is the running process the artefact we
+# just made?" — which is the question a deploy log cannot otherwise be asked.
+#
+# EXPECTED_COMMIT is the commit the deploy checked out (GITHUB_SHA). When it is
+# unset — a hand-run on the host — the probe still asserts that provenance is
+# AVAILABLE, because `available:false` means the running build cannot name
+# itself at all, and that is worth failing on whether or not we know what it
+# should have been.
+check_provenance() {
+  local expected="${EXPECTED_COMMIT:-${GITHUB_SHA:-}}"
+  local body
+  body="$(curl -sS -m 5 "${BASE}/api/v1/health" 2>/dev/null)"
+
+  local available commit
+  available="$(printf '%s' "$body" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("data",{}).get("available"))
+except Exception: print("unreadable")' 2>/dev/null)"
+  commit="$(printf '%s' "$body" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("data",{}).get("commit"))
+except Exception: print("")' 2>/dev/null)"
+
+  if [ "$available" != "True" ]; then
+    echo ""
+    echo "  DEPLOY FAILED PROVENANCE — /api/v1/health reports available=${available}"
+    echo ""
+    echo "  The running build cannot say which commit it is. dist/BUILD_INFO.json"
+    echo "  is absent from the artefact this process is serving, which means either"
+    echo "  the build step did not stamp it or PM2 did not restart onto the new"
+    echo "  dist. Both look exactly like a successful deploy from outside."
+    return 1
+  fi
+
+  if [ -n "$expected" ] && [ "$commit" != "$expected" ]; then
+    echo ""
+    echo "  DEPLOY FAILED PROVENANCE — serving the wrong commit"
+    echo "    built:   ${expected}"
+    echo "    serving: ${commit}"
+    echo ""
+    echo "  The restart did not take. The previous build is still answering, and"
+    echo "  every step of this deploy before now reported success."
+    return 1
+  fi
+
+  echo "  provenance ok — serving ${commit}"
+  return 0
+}
+
+# Provenance alone, without waiting out readiness.
+#
+# Two callers want this. An operator asking "what is actually serving right now?"
+# should not have to satisfy a readiness deadline to find out — and during an
+# incident readiness is exactly what is failing, which is when the question is
+# asked most. And a test can exercise the provenance assertion without standing
+# up a database.
+if [ "${PROVENANCE_ONLY:-}" = "1" ]; then
+  check_provenance
+  exit $?
+fi
+
 echo "post-deploy readiness: ${BASE}, up to ${DEADLINE}s"
 
 started=$(date +%s)
@@ -52,7 +121,8 @@ while :; do
   if [ "$code" = "200" ]; then
     echo "  ready after ${attempt} attempt(s)"
     rm -f /tmp/readyz.$$
-    exit 0
+    check_provenance
+    exit $?
   fi
 
   now=$(date +%s)

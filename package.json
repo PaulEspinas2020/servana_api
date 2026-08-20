@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build": "tsc && node scripts/stamp-build-info.mjs",
+    "build": "tsc && node scripts/stamp-build-info.mjs && node scripts/verify-build-info.mjs",
     "start": "tsc -p . && node dist/app.js",
     "dev": "nodemon --files src/app.ts",
     "typecheck": "tsc --noEmit",
@@ -22,7 +22,7 @@
     "api:docs:check": "ts-node scripts/generate-api-docs.ts --check",
     "booking:docs": "ts-node scripts/generate-booking-docs.ts",
     "booking:docs:check": "ts-node scripts/generate-booking-docs.ts --check",
-    "_comment:ops": "Operational scripts. -r dotenv/config is REQUIRED, not decoration: src/config.ts loads '../.env', which resolves correctly for dist/app.js but points one directory above the app for anything run from the repo root \u2014 so DB_PASSWORD is undefined and pg fails with 'SASL: client password must be a string'. Preloading dotenv reads ./.env from the CWD instead.",
+    "_comment:ops": "Operational scripts. -r dotenv/config is REQUIRED, not decoration: src/config.ts loads '../.env', which resolves correctly for dist/app.js but points one directory above the app for anything run from the repo root — so DB_PASSWORD is undefined and pg fails with 'SASL: client password must be a string'. Preloading dotenv reads ./.env from the CWD instead.",
     "audit:identifiers": "ts-node -r dotenv/config scripts/audit-identifier-conflicts.ts",
     "backfill:identifiers": "ts-node -r dotenv/config scripts/backfill-normalized-identifiers.ts",
     "backfill:documents": "ts-node -r dotenv/config scripts/backfill-document-private-storage.ts",
@@ -75,7 +75,8 @@
     "refunds:segregation": "ts-node scripts/verify-refund-segregation.ts",
     "deploy:verify": "bash scripts/post-deploy-readiness.sh",
     "db:diagnose": "ts-node -r dotenv/config scripts/diagnose-production.ts",
-    "typecheck:scripts": "tsc -p tsconfig.scripts.json"
+    "typecheck:scripts": "tsc -p tsconfig.scripts.json",
+    "build:verify": "node scripts/verify-build-info.mjs"
   },
   "keywords": [],
   "author": "Cla H.",
