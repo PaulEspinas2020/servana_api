@@ -12,7 +12,7 @@
   ],
   "x-generated-from": "scripts/generate-admin-api-docs.ts",
   "x-operation-count": 251,
-  "x-authored-response-count": 73,
+  "x-authored-response-count": 95,
   "x-parity-rewritten-count": 231,
   "paths": {
     "/api/admin/admin-users": {
@@ -5270,7 +5270,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5284,7 +5284,12 @@
                       ]
                     },
                     "disbursements": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      },
+                      "description": "camelCased disbursement rows."
                     }
                   }
                 }
@@ -5301,6 +5306,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/disbursement.routes.ts:65",
         "x-controller": "../controllers/disbursement.controller.ts",
+        "x-derived-from": "disbursement.controller.list -> rows.map(toCamel)",
+        "x-note": "THE PAYLOAD KEY IS `disbursements`, NOT `data`, and the wrapper is `{ success: true }`, not `{ status: \"success\" }`. Two departures from the rest of the admin surface in one response.",
         "x-callers": [
           "adminWeb"
         ]
@@ -5325,7 +5332,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5339,7 +5346,8 @@
                       ]
                     },
                     "disbursement": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "additionalProperties": true
                     }
                   }
                 }
@@ -5356,6 +5364,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/disbursement.routes.ts:71",
         "x-controller": "../controllers/disbursement.controller.ts",
+        "x-derived-from": "disbursement.controller.retry",
+        "x-note": "Payload key is `disbursement`. Wrapper is `{ success: true }`.",
         "x-callers": [
           "adminWeb"
         ]
@@ -5380,7 +5390,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5394,7 +5404,8 @@
                       ]
                     },
                     "disbursement": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "additionalProperties": true
                     }
                   }
                 }
@@ -5411,6 +5422,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/disbursement.routes.ts:68",
         "x-controller": "../controllers/disbursement.controller.ts",
+        "x-derived-from": "disbursement.controller.getByBooking -> toCamel(row)",
+        "x-note": "Payload key is `disbursement`, singular. Wrapper is `{ success: true }`.",
         "x-callers": [
           "adminWeb"
         ]
@@ -5425,7 +5438,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5462,6 +5475,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/disbursement.routes.ts:74",
         "x-controller": "../controllers/disbursement.controller.ts",
+        "x-derived-from": "disbursement.controller.triggerNow",
+        "x-note": "FOUR payload keys and no `data` at all, under `{ success: true }`. Runs the due payout batch immediately instead of waiting for the schedule.",
         "x-callers": [
           "adminWeb"
         ]
@@ -5476,7 +5491,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5490,7 +5505,32 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "required": [
+                        "rows",
+                        "total",
+                        "page",
+                        "limit"
+                      ],
+                      "properties": {
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          },
+                          "description": "Typed `unknown[]` in the service signature, so the row shape is NOT guessed here."
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "page": {
+                          "type": "integer"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        }
+                      }
                     }
                   }
                 }
@@ -5507,6 +5547,7 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:23",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.listLedgerEntries",
         "x-callers": [
           "adminWeb"
         ]
@@ -5531,7 +5572,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5545,7 +5586,12 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      },
+                      "description": "Every ledger entry for one booking. Typed `unknown[]`, so not described further."
                     }
                   }
                 }
@@ -5562,6 +5608,7 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:24",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.getBookingLedger — Promise<unknown[]>",
         "x-callers": [
           "adminWeb"
         ]
@@ -5576,7 +5623,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5590,7 +5637,32 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "required": [
+                        "rows",
+                        "total",
+                        "page",
+                        "limit"
+                      ],
+                      "properties": {
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          },
+                          "description": "Typed `unknown[]` in the service signature, so the row shape is NOT guessed here."
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "page": {
+                          "type": "integer"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        }
+                      }
                     }
                   }
                 }
@@ -5607,6 +5679,7 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:15",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.listPayments",
         "x-callers": [
           "adminWeb"
         ]
@@ -5841,7 +5914,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5855,7 +5928,12 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      },
+                      "description": "Payments awaiting manual GCash verification. Typed `unknown[]`."
                     }
                   }
                 }
@@ -5872,6 +5950,7 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:16",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.listGcashPendingQueue — Promise<unknown[]>",
         "x-callers": [
           "adminWeb"
         ]
@@ -5886,7 +5965,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5900,7 +5979,32 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "required": [
+                        "rows",
+                        "total",
+                        "page",
+                        "limit"
+                      ],
+                      "properties": {
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          },
+                          "description": "Typed `unknown[]` in the service signature, so the row shape is NOT guessed here."
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "page": {
+                          "type": "integer"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        }
+                      }
                     }
                   }
                 }
@@ -5917,6 +6021,7 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:27",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.listPayouts",
         "x-callers": [
           "adminWeb"
         ]
@@ -5996,7 +6101,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6010,7 +6115,7 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "$ref": "#/components/schemas/PayoutAcknowledgement"
                     }
                   }
                 }
@@ -6027,6 +6132,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:29",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.holdPayout — Promise<void>",
+        "x-note": "A hold reason is required; holdUntil is optional.",
         "x-callers": [
           "adminWeb"
         ]
@@ -6051,7 +6158,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6065,7 +6172,7 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "$ref": "#/components/schemas/PayoutAcknowledgement"
                     }
                   }
                 }
@@ -6082,6 +6189,7 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:30",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.releasePayoutHold — Promise<void>",
         "x-callers": [
           "adminWeb"
         ]
@@ -6106,7 +6214,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6120,7 +6228,20 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "required": [
+                        "disbursementId",
+                        "message"
+                      ],
+                      "properties": {
+                        "disbursementId": {
+                          "type": "integer"
+                        },
+                        "message": {
+                          "type": "string",
+                          "description": "A CONSTANT string, 'Payout queued for retry'. It confirms the request was accepted, NOT that the payout succeeded — the batch runs later."
+                        }
+                      }
                     }
                   }
                 }
@@ -6137,6 +6258,7 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:31",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.retryPayout — Promise<void>",
         "x-callers": [
           "adminWeb"
         ]
@@ -6161,7 +6283,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6175,7 +6297,20 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "required": [
+                        "providerUid",
+                        "isInternalFixer"
+                      ],
+                      "properties": {
+                        "providerUid": {
+                          "type": "string"
+                        },
+                        "isInternalFixer": {
+                          "type": "boolean",
+                          "description": "The state AFTER the write."
+                        }
+                      }
                     }
                   }
                 }
@@ -6192,6 +6327,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:34",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.setInternalFixer — Promise<void>",
+        "x-note": "The flag that decides economics. An INTERNAL_FIXER earns no job share, so their payable is zero and commissionRate becomes exactly 1 — see TAB 05. Permissioned and audited as finance_internal_fixer_tagged, and the reconciliation engine treats a payout row for one of them as a critical break.",
         "x-callers": [
           "adminWeb"
         ]
@@ -6206,7 +6343,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6220,7 +6357,32 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "required": [
+                        "rows",
+                        "total",
+                        "page",
+                        "limit"
+                      ],
+                      "properties": {
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          },
+                          "description": "Typed `unknown[]` in the service signature, so the row shape is NOT guessed here."
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "page": {
+                          "type": "integer"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        }
+                      }
                     }
                   }
                 }
@@ -6237,6 +6399,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:47",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.listExceptions",
+        "x-note": "An exception is a reconciliation BREAK — the ledger and the payments disagree. An empty list is the healthy state; a non-empty one is money that does not add up.",
         "x-callers": [
           "adminWeb"
         ]
@@ -6361,7 +6525,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6375,7 +6539,21 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "required": [
+                        "inserted",
+                        "runDate"
+                      ],
+                      "properties": {
+                        "inserted": {
+                          "type": "integer",
+                          "description": "Exceptions RAISED by this run. ZERO is the good answer — it means every check passed, not that the run did nothing."
+                        },
+                        "runDate": {
+                          "type": "string",
+                          "description": "The date this run is recorded against."
+                        }
+                      }
                     }
                   }
                 }
@@ -6392,6 +6570,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:46",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.runReconciliation — typed in the service signature",
+        "x-note": "Idempotent per run date: re-running replaces that date's exceptions rather than duplicating them.",
         "x-callers": [
           "adminWeb"
         ]
@@ -6406,7 +6586,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6420,7 +6600,32 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "required": [
+                        "rows",
+                        "total",
+                        "page",
+                        "limit"
+                      ],
+                      "properties": {
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          },
+                          "description": "Typed `unknown[]` in the service signature, so the row shape is NOT guessed here."
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "page": {
+                          "type": "integer"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        }
+                      }
                     }
                   }
                 }
@@ -6437,6 +6642,7 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:37",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.listRefundReviews",
         "x-callers": [
           "adminWeb"
         ]
@@ -6449,7 +6655,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6463,7 +6669,9 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "The opened review. This is the ONLY refund endpoint that accepts an amount."
                     }
                   }
                 }
@@ -6480,6 +6688,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:38",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.openRefundReview — returns the new review id",
+        "x-note": "THE amount-bearing endpoint. `amount` is required and is bounded server-side by `payments.amount - refunded_amount` for the ONE payment named by paymentId — which is NOT the same figure as BookingPayment.refund.refundable, a booking-level number that also includes paid additional work. Bound a UI by the payment, not by refundable. See TAB 10.",
         "x-callers": [
           "adminWeb"
         ]
@@ -6559,7 +6769,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6573,7 +6783,7 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "$ref": "#/components/schemas/RefundAcknowledgement"
                     }
                   }
                 }
@@ -6590,6 +6800,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:40",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.approveRefund — Promise<void>; the controller builds the payload",
+        "x-note": "Carries NO amount, deliberately: the amount was fixed when the review was opened and this transition acts on the recorded review rather than re-deciding it. Segregation of duty applies — the requester cannot approve their own refund.",
         "x-callers": [
           "adminWeb"
         ]
@@ -6614,7 +6826,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6628,7 +6840,7 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "$ref": "#/components/schemas/RefundAcknowledgement"
                     }
                   }
                 }
@@ -6645,6 +6857,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:43",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.markRefundFailed — Promise<void>",
+        "x-note": "The v1 twin of this endpoint declares RefundTransitionResult.status as the single-value enum ['failed'] — the only terminal it can reach. TAB 10 confirmed that is intended.",
         "x-callers": [
           "adminWeb"
         ]
@@ -6669,7 +6883,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6683,7 +6897,7 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "$ref": "#/components/schemas/RefundAcknowledgement"
                     }
                   }
                 }
@@ -6700,6 +6914,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:42",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.markRefundProcessed — Promise<void>",
+        "x-note": "Records that the money actually moved, with an external reference. Distinct from approve: approval is a decision, this is a settlement fact.",
         "x-callers": [
           "adminWeb"
         ]
@@ -6724,7 +6940,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6738,7 +6954,7 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "$ref": "#/components/schemas/RefundAcknowledgement"
                     }
                   }
                 }
@@ -6755,6 +6971,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:41",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.rejectRefund — Promise<void>",
+        "x-note": "A rejection reason is required by the controller.",
         "x-callers": [
           "adminWeb"
         ]
@@ -6769,7 +6987,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6783,7 +7001,7 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "$ref": "#/components/schemas/FinanceSummary"
                     }
                   }
                 }
@@ -6800,6 +7018,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminFinance.routes.ts:12",
         "x-controller": "../controllers/adminFinanceController.ts",
+        "x-derived-from": "adminFinanceService.getFinanceSummary — typed in the service signature",
+        "x-note": "READ THE TIMEZONE NOTE on paymentsToday. This route computes its day and month boundaries in Asia/Manila explicitly; the provider earnings route's thisMonthGross does not. Two \"todays\" exist on this admin surface.",
         "x-callers": [
           "adminWeb"
         ]
@@ -16272,6 +16492,75 @@
                 }
               }
             }
+          }
+        }
+      },
+      "FinanceSummary": {
+        "type": "object",
+        "required": [
+          "paymentsToday",
+          "revenueMtd",
+          "pendingGcashCount",
+          "pendingPayoutCount",
+          "openRefundCount",
+          "openExceptionCount",
+          "totalPaidPayments",
+          "releasedPayoutsCount"
+        ],
+        "description": "The finance dashboard, in one pass.",
+        "properties": {
+          "paymentsToday": {
+            "type": "number",
+            "description": "Net of refunds — SUM(amount - refunded_amount) — and bounded by a day computed AT TIME ZONE 'Asia/Manila' EXPLICITLY, not by the UTC session zone. That makes this \"today\" the operator's today. Contrast AdminProviderEarnings.thisMonthGross, which uses the session zone and therefore a UTC month. Two different day boundaries exist on this admin surface, and only one of them matches the business. PHP major units."
+          },
+          "revenueMtd": {
+            "type": "number",
+            "description": "Month to date, also Manila-bounded, also net of refunds. EXCLUDES synthetic bookings: a smoke-test booking carrying a price would otherwise report as money never taken. PHP major units."
+          },
+          "pendingGcashCount": {
+            "type": "integer",
+            "description": "Payments awaiting manual verification."
+          },
+          "pendingPayoutCount": {
+            "type": "integer"
+          },
+          "openRefundCount": {
+            "type": "integer"
+          },
+          "openExceptionCount": {
+            "type": "integer",
+            "description": "Reconciliation breaks not yet resolved or ignored. NON-ZERO means the ledger and the payments disagree about money."
+          },
+          "totalPaidPayments": {
+            "type": "integer"
+          },
+          "releasedPayoutsCount": {
+            "type": "integer"
+          }
+        }
+      },
+      "RefundAcknowledgement": {
+        "type": "object",
+        "required": [
+          "refundId"
+        ],
+        "description": "The receipt for a refund transition. Deliberately NOT the whole review, and deliberately carrying no amount: the service is typed Promise<void> and the controller builds this, so there is nothing here to compute with. A caller that needs the record reads it back, rather than this becoming a second and subtly different source for it.",
+        "properties": {
+          "refundId": {
+            "type": "integer",
+            "description": "finance_refund_reviews.id."
+          }
+        }
+      },
+      "PayoutAcknowledgement": {
+        "type": "object",
+        "required": [
+          "disbursementId"
+        ],
+        "description": "The receipt for a payout transition. Same shape of answer as a refund transition, and for the same reason: the service returns void and the state is read back.",
+        "properties": {
+          "disbursementId": {
+            "type": "integer"
           }
         }
       },

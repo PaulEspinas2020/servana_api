@@ -269,6 +269,295 @@ export const ADMIN_RESPONSES: Record<string, AdminResponseSchema> = {
       'an already-resolved report is a 404, not a repeat.',
   },
 
+  // ── finance ───────────────────────────────────────────────────────────────
+  // 30 operations counting disbursements. The highest money-risk area, and
+  // where TAB 10 found the refund-ceiling divergence.
+  //
+  // Most of the WRITE operations return an acknowledgement built by the
+  // CONTROLLER — the services are typed `Promise<void>`. That is a deliberate
+  // design and the reason the portal could adopt "money is displayed, never
+  // computed": there is nothing in a transition response to compute with.
+
+  'GET /api/admin/finance/summary': {
+    derivedFrom: 'adminFinanceService.getFinanceSummary — typed in the service signature',
+    schema: { $ref: '#/components/schemas/FinanceSummary' },
+    note:
+      'READ THE TIMEZONE NOTE on paymentsToday. This route computes its day and month '
+      + "boundaries in Asia/Manila explicitly; the provider earnings route's thisMonthGross "
+      + 'does not. Two "todays" exist on this admin surface.',
+  },
+
+  'GET /api/admin/finance/payments': {
+    derivedFrom: 'adminFinanceService.listPayments',
+    schema: {
+      type: 'object',
+      required: ['rows', 'total', 'page', 'limit'],
+      properties: {
+        rows: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+          description: 'Typed `unknown[]` in the service signature, so the row shape is NOT guessed here.',
+        },
+        total: { type: 'integer' },
+        page: { type: 'integer' },
+        limit: { type: 'integer' },
+      },
+    },
+  },
+
+  'GET /api/admin/finance/payouts': {
+    derivedFrom: 'adminFinanceService.listPayouts',
+    schema: {
+      type: 'object',
+      required: ['rows', 'total', 'page', 'limit'],
+      properties: {
+        rows: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+          description: 'Typed `unknown[]` in the service signature, so the row shape is NOT guessed here.',
+        },
+        total: { type: 'integer' },
+        page: { type: 'integer' },
+        limit: { type: 'integer' },
+      },
+    },
+  },
+
+  'GET /api/admin/finance/refunds': {
+    derivedFrom: 'adminFinanceService.listRefundReviews',
+    schema: {
+      type: 'object',
+      required: ['rows', 'total', 'page', 'limit'],
+      properties: {
+        rows: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+          description: 'Typed `unknown[]` in the service signature, so the row shape is NOT guessed here.',
+        },
+        total: { type: 'integer' },
+        page: { type: 'integer' },
+        limit: { type: 'integer' },
+      },
+    },
+  },
+
+  'GET /api/admin/finance/reconciliation/exceptions': {
+    derivedFrom: 'adminFinanceService.listExceptions',
+    schema: {
+      type: 'object',
+      required: ['rows', 'total', 'page', 'limit'],
+      properties: {
+        rows: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+          description: 'Typed `unknown[]` in the service signature, so the row shape is NOT guessed here.',
+        },
+        total: { type: 'integer' },
+        page: { type: 'integer' },
+        limit: { type: 'integer' },
+      },
+    },
+    note:
+      'An exception is a reconciliation BREAK — the ledger and the payments disagree. An '
+      + 'empty list is the healthy state; a non-empty one is money that does not add up.',
+  },
+
+  'POST /api/admin/finance/reconciliation/run': {
+    derivedFrom: 'adminFinanceService.runReconciliation — typed in the service signature',
+    schema: {
+      type: 'object',
+      required: ['inserted', 'runDate'],
+      properties: {
+        inserted: {
+          type: 'integer',
+          description:
+            'Exceptions RAISED by this run. ZERO is the good answer — it means every check '
+            + 'passed, not that the run did nothing.',
+        },
+        runDate: { type: 'string', description: 'The date this run is recorded against.' },
+      },
+    },
+    note: 'Idempotent per run date: re-running replaces that date\'s exceptions rather than duplicating them.',
+  },
+
+  'POST /api/admin/finance/refunds': {
+    derivedFrom: 'adminFinanceService.openRefundReview — returns the new review id',
+    schema: {
+      type: 'object',
+      additionalProperties: true,
+      description: 'The opened review. This is the ONLY refund endpoint that accepts an amount.',
+    },
+    note:
+      'THE amount-bearing endpoint. `amount` is required and is bounded server-side by '
+      + '`payments.amount - refunded_amount` for the ONE payment named by paymentId — which '
+      + 'is NOT the same figure as BookingPayment.refund.refundable, a booking-level number '
+      + 'that also includes paid additional work. Bound a UI by the payment, not by '
+      + 'refundable. See TAB 10.',
+  },
+
+  'POST /api/admin/finance/refunds/:refundId/approve': {
+    derivedFrom: 'adminFinanceService.approveRefund — Promise<void>; the controller builds the payload',
+    schema: { $ref: '#/components/schemas/RefundAcknowledgement' },
+    note:
+      'Carries NO amount, deliberately: the amount was fixed when the review was opened and '
+      + 'this transition acts on the recorded review rather than re-deciding it. Segregation '
+      + 'of duty applies — the requester cannot approve their own refund.',
+  },
+
+  'POST /api/admin/finance/refunds/:refundId/reject': {
+    derivedFrom: 'adminFinanceService.rejectRefund — Promise<void>',
+    schema: { $ref: '#/components/schemas/RefundAcknowledgement' },
+    note: 'A rejection reason is required by the controller.',
+  },
+
+  'POST /api/admin/finance/refunds/:refundId/mark-processed': {
+    derivedFrom: 'adminFinanceService.markRefundProcessed — Promise<void>',
+    schema: { $ref: '#/components/schemas/RefundAcknowledgement' },
+    note:
+      'Records that the money actually moved, with an external reference. Distinct from '
+      + 'approve: approval is a decision, this is a settlement fact.',
+  },
+
+  'POST /api/admin/finance/refunds/:refundId/mark-failed': {
+    derivedFrom: 'adminFinanceService.markRefundFailed — Promise<void>',
+    schema: { $ref: '#/components/schemas/RefundAcknowledgement' },
+    note:
+      'The v1 twin of this endpoint declares RefundTransitionResult.status as the '
+      + "single-value enum ['failed'] — the only terminal it can reach. TAB 10 confirmed "
+      + 'that is intended.',
+  },
+
+  'POST /api/admin/finance/payouts/:disbursementId/hold': {
+    derivedFrom: 'adminFinanceService.holdPayout — Promise<void>',
+    schema: { $ref: '#/components/schemas/PayoutAcknowledgement' },
+    note: 'A hold reason is required; holdUntil is optional.',
+  },
+
+  'POST /api/admin/finance/payouts/:disbursementId/release-hold': {
+    derivedFrom: 'adminFinanceService.releasePayoutHold — Promise<void>',
+    schema: { $ref: '#/components/schemas/PayoutAcknowledgement' },
+  },
+
+  'POST /api/admin/finance/payouts/:disbursementId/retry': {
+    derivedFrom: 'adminFinanceService.retryPayout — Promise<void>',
+    schema: {
+      type: 'object',
+      required: ['disbursementId', 'message'],
+      properties: {
+        disbursementId: { type: 'integer' },
+        message: {
+          type: 'string',
+          description:
+            "A CONSTANT string, 'Payout queued for retry'. It confirms the request was "
+            + 'accepted, NOT that the payout succeeded — the batch runs later.',
+        },
+      },
+    },
+  },
+
+  'POST /api/admin/finance/providers/:uid/internal-fixer': {
+    derivedFrom: 'adminFinanceService.setInternalFixer — Promise<void>',
+    schema: {
+      type: 'object',
+      required: ['providerUid', 'isInternalFixer'],
+      properties: {
+        providerUid: { type: 'string' },
+        isInternalFixer: { type: 'boolean', description: 'The state AFTER the write.' },
+      },
+    },
+    note:
+      'The flag that decides economics. An INTERNAL_FIXER earns no job share, so their '
+      + 'payable is zero and commissionRate becomes exactly 1 — see TAB 05. Permissioned '
+      + 'and audited as finance_internal_fixer_tagged, and the reconciliation engine treats '
+      + 'a payout row for one of them as a critical break.',
+  },
+
+  'GET /api/admin/finance/ledger': {
+    derivedFrom: 'adminFinanceService.listLedgerEntries',
+    schema: {
+      type: 'object',
+      required: ['rows', 'total', 'page', 'limit'],
+      properties: {
+        rows: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+          description: 'Typed `unknown[]` in the service signature, so the row shape is NOT guessed here.',
+        },
+        total: { type: 'integer' },
+        page: { type: 'integer' },
+        limit: { type: 'integer' },
+      },
+    },
+  },
+
+  'GET /api/admin/finance/ledger/booking/:bookingId': {
+    derivedFrom: 'adminFinanceService.getBookingLedger — Promise<unknown[]>',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description: 'Every ledger entry for one booking. Typed `unknown[]`, so not described further.',
+    },
+  },
+
+  'GET /api/admin/finance/payments/gcash-pending': {
+    derivedFrom: 'adminFinanceService.listGcashPendingQueue — Promise<unknown[]>',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description: 'Payments awaiting manual GCash verification. Typed `unknown[]`.',
+    },
+  },
+
+  // ── disbursements ─────────────────────────────────────────────────────────
+  // The four routes that answer with a BOOLEAN success flag rather than the
+  // admin status envelope. A client unwrapping body.data reads undefined here.
+
+  'GET /api/admin/disbursements': {
+    derivedFrom: 'disbursement.controller.list -> rows.map(toCamel)',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description: 'camelCased disbursement rows.',
+    },
+    note:
+      'THE PAYLOAD KEY IS `disbursements`, NOT `data`, and the wrapper is '
+      + '`{ success: true }`, not `{ status: "success" }`. Two departures from the rest of '
+      + 'the admin surface in one response.',
+  },
+
+  'GET /api/admin/disbursements/booking/:bookingId': {
+    derivedFrom: 'disbursement.controller.getByBooking -> toCamel(row)',
+    schema: { type: 'object', additionalProperties: true },
+    note: 'Payload key is `disbursement`, singular. Wrapper is `{ success: true }`.',
+  },
+
+  'POST /api/admin/disbursements/:id/retry': {
+    derivedFrom: 'disbursement.controller.retry',
+    schema: { type: 'object', additionalProperties: true },
+    note: 'Payload key is `disbursement`. Wrapper is `{ success: true }`.',
+  },
+
+  'POST /api/admin/disbursements/trigger': {
+    derivedFrom: 'disbursement.controller.triggerNow',
+    schema: {
+      type: 'object',
+      properties: {
+        attempted: { type: 'integer' },
+        selected: { type: 'integer', description: 'Rows the batch chose. attempted may be lower if it stopped early.' },
+        threw: {
+          type: 'integer',
+          description:
+            'How many raised. NON-ZERO IS NOT A FAILED REQUEST — the endpoint answers 200 '
+            + 'and reports the count, so a client must read this rather than the status code.',
+        },
+        message: { type: 'string' },
+      },
+    },
+    note:
+      'FOUR payload keys and no `data` at all, under `{ success: true }`. Runs the due '
+      + 'payout batch immediately instead of waiting for the schedule.',
+  },
+
   // ── audit-logs ────────────────────────────────────────────────────────────
   // 7 operations. The lock TAB 09 found already existed: request_id is a real
   // column here, filtered in SQL, so an operator's quoted reference resolves.
@@ -2221,6 +2510,70 @@ export const ADMIN_SCHEMAS: Record<string, unknown> = {
           },
         },
       },
+    },
+  },
+
+  FinanceSummary: {
+    type: 'object',
+    required: [
+      'paymentsToday', 'revenueMtd', 'pendingGcashCount', 'pendingPayoutCount',
+      'openRefundCount', 'openExceptionCount', 'totalPaidPayments', 'releasedPayoutsCount',
+    ],
+    description: 'The finance dashboard, in one pass.',
+    properties: {
+      paymentsToday: {
+        type: 'number',
+        description:
+          'Net of refunds — SUM(amount - refunded_amount) — and bounded by a day computed '
+          + "AT TIME ZONE 'Asia/Manila' EXPLICITLY, not by the UTC session zone. That makes "
+          + 'this "today" the operator\'s today. Contrast AdminProviderEarnings.thisMonthGross, '
+          + 'which uses the session zone and therefore a UTC month. Two different day '
+          + 'boundaries exist on this admin surface, and only one of them matches the '
+          + 'business. PHP major units.',
+      },
+      revenueMtd: {
+        type: 'number',
+        description:
+          'Month to date, also Manila-bounded, also net of refunds. EXCLUDES synthetic '
+          + 'bookings: a smoke-test booking carrying a price would otherwise report as money '
+          + 'never taken. PHP major units.',
+      },
+      pendingGcashCount: { type: 'integer', description: 'Payments awaiting manual verification.' },
+      pendingPayoutCount: { type: 'integer' },
+      openRefundCount: { type: 'integer' },
+      openExceptionCount: {
+        type: 'integer',
+        description:
+          'Reconciliation breaks not yet resolved or ignored. NON-ZERO means the ledger and '
+          + 'the payments disagree about money.',
+      },
+      totalPaidPayments: { type: 'integer' },
+      releasedPayoutsCount: { type: 'integer' },
+    },
+  },
+
+  RefundAcknowledgement: {
+    type: 'object',
+    required: ['refundId'],
+    description:
+      'The receipt for a refund transition. Deliberately NOT the whole review, and '
+      + 'deliberately carrying no amount: the service is typed Promise<void> and the '
+      + 'controller builds this, so there is nothing here to compute with. A caller that '
+      + 'needs the record reads it back, rather than this becoming a second and subtly '
+      + 'different source for it.',
+    properties: {
+      refundId: { type: 'integer', description: 'finance_refund_reviews.id.' },
+    },
+  },
+
+  PayoutAcknowledgement: {
+    type: 'object',
+    required: ['disbursementId'],
+    description:
+      'The receipt for a payout transition. Same shape of answer as a refund transition, '
+      + 'and for the same reason: the service returns void and the state is read back.',
+    properties: {
+      disbursementId: { type: 'integer' },
     },
   },
 

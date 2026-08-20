@@ -40,7 +40,7 @@ successor for one of these must not be QUIETER than the route it replaces.
 
 ## Payload schemas
 
-Authored: **73** of 251.
+Authored: **95** of 251.
 
 The remainder publish their envelope, guard, permission and parity status, and declare
 the payload `UNSPECIFIED`. That is deliberate. A guessed schema is worse than an absent
@@ -171,41 +171,41 @@ only rise.
 
 | Method | Path | Guard | Permission | Envelope | Payload | Parity |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/admin/finance/ledger` | permission | `revenue_ledger.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/finance/ledger/booking/:bookingId` | permission | `revenue_ledger.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/finance/payments` | permission | `payments.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/finance/ledger` | permission | `revenue_ledger.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/finance/ledger/booking/:bookingId` | permission | `revenue_ledger.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/finance/payments` | permission | `payments.view` | `status-success` | ✅ authored | rewritten |
 | `GET` | `/api/admin/finance/payments/:paymentId` | permission | `payments.details.view` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/finance/payments/:paymentId/approve-gcash` | permission | `payments.gcash.approve` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/finance/payments/:paymentId/confirm-cash` | permission | `payments.cash.mark_paid` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/finance/payments/:paymentId/reject-gcash` | permission | `payments.gcash.reject` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/finance/payments/gcash-pending` | permission | `payments.gcash_review.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/finance/payouts` | permission | `payouts.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/finance/payments/gcash-pending` | permission | `payments.gcash_review.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/finance/payouts` | permission | `payouts.view` | `status-success` | ✅ authored | rewritten |
 | `GET` | `/api/admin/finance/payouts/:disbursementId` | permission | `payouts.details.view` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/finance/payouts/:disbursementId/hold` | permission | `payouts.hold` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/finance/payouts/:disbursementId/release-hold` | permission | `payouts.release_hold` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/finance/payouts/:disbursementId/retry` | permission | `payouts.retry_failed` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/finance/providers/:uid/internal-fixer` | permission | `providers.profile.edit` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/finance/reconciliation/exceptions` | permission | `reconciliation.view` | `status-success` | — unspecified | rewritten |
+| `POST` | `/api/admin/finance/payouts/:disbursementId/hold` | permission | `payouts.hold` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/finance/payouts/:disbursementId/release-hold` | permission | `payouts.release_hold` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/finance/payouts/:disbursementId/retry` | permission | `payouts.retry_failed` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/finance/providers/:uid/internal-fixer` | permission | `providers.profile.edit` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/finance/reconciliation/exceptions` | permission | `reconciliation.view` | `status-success` | ✅ authored | rewritten |
 | `POST` | `/api/admin/finance/reconciliation/exceptions/:exceptionId/ignore` | permission | `reconciliation.exception.ignore` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/finance/reconciliation/exceptions/:exceptionId/resolve` | permission | `reconciliation.exception.resolve` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/finance/reconciliation/run` | permission | `reconciliation.run` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/finance/refunds` | permission | `payments.view` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/finance/refunds` | permission | `refunds.review.open` | `status-success` | — unspecified | rewritten |
+| `POST` | `/api/admin/finance/reconciliation/run` | permission | `reconciliation.run` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/finance/refunds` | permission | `payments.view` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/finance/refunds` | permission | `refunds.review.open` | `status-success` | ✅ authored | rewritten |
 | `GET` | `/api/admin/finance/refunds/:refundId` | permission | `payments.view` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/finance/refunds/:refundId/approve` | permission | `refunds.approve` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/finance/refunds/:refundId/mark-failed` | permission | `refunds.mark_failed` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/finance/refunds/:refundId/mark-processed` | permission | `refunds.mark_processed` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/finance/refunds/:refundId/reject` | permission | `refunds.reject` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/finance/summary` | permission | `finance.dashboard.view` | `status-success` | — unspecified | rewritten |
+| `POST` | `/api/admin/finance/refunds/:refundId/approve` | permission | `refunds.approve` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/finance/refunds/:refundId/mark-failed` | permission | `refunds.mark_failed` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/finance/refunds/:refundId/mark-processed` | permission | `refunds.mark_processed` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/finance/refunds/:refundId/reject` | permission | `refunds.reject` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/finance/summary` | permission | `finance.dashboard.view` | `status-success` | ✅ authored | rewritten |
 
 ## `/api/admin/disbursements` (4)
 
 | Method | Path | Guard | Permission | Envelope | Payload | Parity |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/admin/disbursements` | permission | `payouts.view` | `success-flag` | — unspecified | rewritten |
-| `POST` | `/api/admin/disbursements/:id/retry` | permission | `payouts.retry_failed` | `success-flag` | — unspecified | rewritten |
-| `GET` | `/api/admin/disbursements/booking/:bookingId` | permission | `payouts.details.view` | `success-flag` | — unspecified | rewritten |
-| `POST` | `/api/admin/disbursements/trigger` | permission | `payouts.trigger_due_run` | `success-flag` | — unspecified | rewritten |
+| `GET` | `/api/admin/disbursements` | permission | `payouts.view` | `success-flag` | ✅ authored | rewritten |
+| `POST` | `/api/admin/disbursements/:id/retry` | permission | `payouts.retry_failed` | `success-flag` | ✅ authored | rewritten |
+| `GET` | `/api/admin/disbursements/booking/:bookingId` | permission | `payouts.details.view` | `success-flag` | ✅ authored | rewritten |
+| `POST` | `/api/admin/disbursements/trigger` | permission | `payouts.trigger_due_run` | `success-flag` | ✅ authored | rewritten |
 
 ## `/api/admin/bookings` (16)
 
