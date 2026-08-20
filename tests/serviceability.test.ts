@@ -83,15 +83,19 @@ describe('a location that cannot be judged is never answered yes', () => {
 describe('the verdict', () => {
   beforeEach(() => query.mockReset());
 
-  /** Family lookup answers `serviceId`, then coverage answers `rows`. */
-  const stub = (serviceId: number | null, rows: unknown[]) => {
+  /**
+   * Family lookup answers `serviceId`, coverage answers `rows`, and the supply
+   * count answers `capable` — the third query, asked only when coverage passes.
+   */
+  const stub = (serviceId: number | null, rows: unknown[], capable = 1) => {
     query
       .mockResolvedValueOnce(
         serviceId === null
           ? { rowCount: 0, rows: [] }
           : { rowCount: 1, rows: [{ service_id: serviceId }] },
       )
-      .mockResolvedValueOnce({ rowCount: rows.length, rows });
+      .mockResolvedValueOnce({ rowCount: rows.length, rows })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ capable }] });
   };
 
   it('is yes inside a configured disc', async () => {
@@ -163,5 +167,64 @@ describe('the verdict', () => {
       'reason',
       'serviceable',
     ]);
+  });
+});
+
+describe('in the area, but nobody can do it', () => {
+  beforeEach(() => query.mockReset());
+
+  const stub = (serviceId: number, rows: unknown[], capable: number) => {
+    query
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ service_id: serviceId }] })
+      .mockResolvedValueOnce({ rowCount: rows.length, rows })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ capable }] });
+  };
+
+  it('reports NO_CAPABLE_PROVIDER rather than pretending it is bookable', async () => {
+    // Measured 2026-08-20: services.id 180 — the only Home Maintenance service
+    // — has zero grants across all three capability sources, while two
+    // applications sit in pending_review since July. Coverage was added to
+    // family 67 that day, so the service is now inside the area and still has
+    // nobody to send. Without this it would take bookings nobody can serve.
+    stub(67, [{ id: 1, radius_km: 50, distance_km: 3 }], 0);
+
+    const result = await checkServiceability(180, 14.5547, 121.0244);
+
+    expect(result.serviceable).toBe(false);
+    expect(result.reason).toBe('NO_CAPABLE_PROVIDER');
+  });
+
+  it('is a DIFFERENT answer from being outside the area', async () => {
+    // The customer can act on OUTSIDE_SERVICE_AREA — another saved address
+    // might work. They can do nothing about supply, and telling them to try
+    // another address sends them round a loop with no exit.
+    stub(52, [{ id: 1, radius_km: 25, distance_km: 564 }], 6);
+
+    const result = await checkServiceability(19, 10.3157, 123.8854);
+
+    expect(result.reason).toBe('OUTSIDE_SERVICE_AREA');
+    expect(result.reason).not.toBe('NO_CAPABLE_PROVIDER');
+  });
+
+  it('does not ask about supply for an address outside the area', async () => {
+    // The reason given is the FIRST that applies, not the cheapest to compute.
+    // A customer in Cebu is not told the platform has no electricians.
+    stub(52, [{ id: 1, radius_km: 25, distance_km: 564 }], 0);
+
+    await checkServiceability(19, 10.3157, 123.8854);
+
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it('one capable provider is enough', async () => {
+    // Capability, not availability. A provider who is offline, booked or on
+    // leave is still capable — refusing for that would make the catalogue
+    // flicker with the roster.
+    stub(52, [{ id: 1, radius_km: 25, distance_km: 3 }], 1);
+
+    const result = await checkServiceability(19, 14.5547, 121.0244);
+
+    expect(result.serviceable).toBe(true);
+    expect(result.reason).toBeNull();
   });
 });

@@ -44,13 +44,23 @@ import { db } from "../config";
 import dbQuery from "../db/dbQuery";
 import { checkCoverageGeo } from "./serviceService";
 import { isWithinSupportedFootprint } from "./serviceAreaFootprint";
+import { CAPABLE_PROVIDER_COUNT_SQL } from "./booking/eligibilityPipeline";
 
 const dbSchema = db.schema;
 
 export type ServiceabilityReason =
   | "OUTSIDE_SERVICE_AREA"
   | "UNKNOWN_SERVICE"
-  | "INVALID_LOCATION";
+  | "INVALID_LOCATION"
+  /**
+   * In the area, but nobody on the platform can perform it.
+   *
+   * Distinct from OUTSIDE_SERVICE_AREA because the customer can act on that
+   * one — a different saved address might work — and cannot act on this one.
+   * Telling them to try another address when the problem is supply sends them
+   * round a loop that has no exit.
+   */
+  | "NO_CAPABLE_PROVIDER";
 
 export interface Serviceability {
   serviceable: boolean;
@@ -58,6 +68,35 @@ export interface Serviceability {
   /** True when no coverage was configured and the supported footprint decided. */
   defaulted: boolean;
 }
+
+/**
+ * Whether anyone can actually perform this service.
+ *
+ * Reuses `CAPABLE_PROVIDER_COUNT_SQL` rather than asking the question again.
+ * Capability is granted by THREE sources — `catalog_provider_services`,
+ * `employee_services` and approved `worker_service_applications` — and the
+ * eligibility audit found three predicates in this codebase naming different
+ * subsets of them. A fourth, written here, would be the next one.
+ *
+ * Measured 2026-08-20: 94 of the 95 catalogue services have a capable
+ * provider. The one that does not is `services.id` 180, the only Home
+ * Maintenance service, whose legacy family 67 has zero grants — and two
+ * applications sitting in `pending_review` since July.
+ *
+ * Deliberately counts CAPABILITY, not availability. A provider who is offline,
+ * booked or on leave is still capable, and refusing the booking for that would
+ * make the catalogue flicker with the roster.
+ */
+const hasCapableProvider = async (
+  canonicalServiceId: number | null,
+  legacyFamilyId: number | null,
+): Promise<boolean> => {
+  const result = await dbQuery.query(CAPABLE_PROVIDER_COUNT_SQL(dbSchema), [
+    canonicalServiceId,
+    legacyFamilyId,
+  ]);
+  return Number(result.rows[0]?.capable ?? 0) > 0;
+};
 
 /**
  * [serviceOptionId] is what the booking payload calls `serviceOptionId` and
@@ -115,9 +154,22 @@ export const checkServiceability = async (
   const serviceId = Number(svcRes.rows[0].service_id);
   const coverage = await checkCoverageGeo(serviceId, lat, lon);
 
+  if (!coverage.covered) {
+    return {
+      serviceable: false,
+      reason: "OUTSIDE_SERVICE_AREA",
+      defaulted: Boolean((coverage as { defaulted?: boolean }).defaulted),
+    };
+  }
+
+  // Covered, but is there anyone to send? Asked only AFTER coverage, so the
+  // reason a customer is given is the first one that applies rather than the
+  // cheapest one to compute.
+  const staffed = await hasCapableProvider(serviceOptionId, serviceId);
+
   return {
-    serviceable: coverage.covered,
-    reason: coverage.covered ? null : "OUTSIDE_SERVICE_AREA",
+    serviceable: staffed,
+    reason: staffed ? null : "NO_CAPABLE_PROVIDER",
     defaulted: Boolean((coverage as { defaulted?: boolean }).defaulted),
   };
 };
