@@ -1525,7 +1525,25 @@ export const SCHEMAS: Record<string, unknown> = {
           refundedAmount: { type: 'number' },
           refundedAmountMinor: { type: 'integer' },
           refundedAt: { type: ['string', 'null'], format: 'date-time' },
-          refundable: { type: 'number', description: 'Captured minus already refunded. Never below zero.' },
+          refundable: {
+            type: 'number',
+            description:
+              'Captured minus already refunded. Never below zero.'
+              + ' '
+              + 'BOOKING-LEVEL, and therefore NOT the maximum for a single refund request. '
+              + 'It is gross minus refunded, where gross is final_price PLUS paid '
+              + 'additional work — and paid additional work is charged through its OWN '
+              + 'payments row (earningsBasis.paidAdditionalWorkSql sums payments where '
+              + 'additional_request_id IS NOT NULL).'
+              + ' '
+              + 'adminFinanceService.openRefundReview bounds an operator-entered amount by '
+              + 'a PAYMENT-level figure instead: payments.amount minus refunded_amount, for '
+              + 'the one row named by paymentId. On any booking with paid additional work '
+              + 'this field is larger, by exactly that amount. A client that bounds its '
+              + 'input with this number will let an operator enter a figure the server then '
+              + 'refuses — using a ceiling the system itself supplied. Bound by the payment, '
+              + 'display this. See TAB 10.',
+          },
           refundableMinor: { type: 'integer' },
         },
       },
