@@ -373,6 +373,139 @@ export const ADMIN_RESPONSES: Record<string, AdminResponseSchema> = {
     note: 'An empty list means the legacy tree is fully represented in the canonical catalog.',
   },
 
+  'GET /api/admin/provider-catalog/service-families': {
+    derivedFrom: 'providerCatalogService.listServiceFamilies — typed in the service signature',
+    schema: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'name'],
+        properties: {
+          id: {
+            type: 'integer',
+            description:
+              'The LEGACY family id — service_families.id, what employee_services keys on. '
+              + 'NOT the canonical services.id the eligibility engine prefers. The two are '
+              + 'both integers and are not interchangeable.',
+          },
+          name: { type: 'string' },
+        },
+      },
+    },
+    note:
+      'Two ids exist for what a reader may think is one thing. The catalog-association '
+      + 'route on a provider reports which of the two covered them, and capabilitySource '
+      + 'on the assignment diagnostics reports the same for a booking.',
+  },
+
+  'GET /api/admin/provider-catalog/offerings': {
+    derivedFrom: 'providerCatalogService.listAdminOfferings — typed `any[]`',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description: 'Row shape is `any[]` in the service signature, so it is not guessed here.',
+    },
+  },
+
+  'GET /api/admin/provider-catalog/offerings/:offeringId': {
+    derivedFrom: 'providerCatalogService.getAdminOffering — typed `any | null`',
+    schema: {
+      type: 'object',
+      additionalProperties: true,
+      description: 'Null for an unknown id, which the controller renders as a 404.',
+    },
+  },
+
+  'GET /api/admin/provider-catalog/offerings/:offeringId/providers': {
+    derivedFrom: 'providerCatalogService.getOfferingProviders — typed `any[]`',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description:
+        'Providers who can perform this offering. EMPTY means the offering is publishable '
+        + 'but not bookable — the same condition catalog/summary counts as '
+        + 'servicesWithoutProviders.',
+    },
+  },
+
+  'GET /api/admin/provider-catalog/offerings/:offeringId/specific-services': {
+    derivedFrom: 'providerCatalogService.listSpecificServicesForOffering — typed `any[]`',
+    schema: { type: 'array', items: { type: 'object', additionalProperties: true } },
+  },
+
+  'GET /api/admin/provider-catalog/specific-services/filter-options': {
+    derivedFrom: 'providerCatalogService.listSpecificServiceFilterOptions — typed in the signature',
+    schema: {
+      type: 'object',
+      required: ['categories', 'level2s', 'units', 'priceRange'],
+      properties: {
+        categories: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['category', 'serviceCount'],
+            properties: {
+              category: { type: 'string' },
+              serviceCount: { type: 'integer', description: 'COUNT(*)::int, so a real number.' },
+            },
+          },
+          description:
+            'Only MAIN options are counted, and only where the family carries a non-empty '
+            + 'category — so a category absent here has no main services, not none at all.',
+        },
+        level2s: { type: 'array', items: { type: 'string' } },
+        units: { type: 'array', items: { type: 'string' } },
+        priceRange: {
+          type: 'object',
+          required: ['min', 'max'],
+          properties: {
+            min: { type: ['number', 'null'] },
+            max: { type: ['number', 'null'] },
+          },
+          description:
+            'BOTH NULL when nothing priced matches — that is an empty set, not a free '
+            + 'service. A slider bound to these must handle the null pair.',
+        },
+      },
+    },
+    note: 'The vocabulary a filter UI should populate from, rather than hard-coding.',
+  },
+
+  'GET /api/admin/provider-catalog/specific-services': {
+    derivedFrom: 'providerCatalogService.listAllSpecificServices',
+    schema: {
+      type: 'object',
+      additionalProperties: true,
+      description: 'Paged and heavily filterable. The row shape is not typed in the service.',
+    },
+    note:
+      'Filters accept STRING booleans — mapped, hasBanner and isActive are "true" | "false" '
+      + '| omitted, and OMITTED MEANS ALL rather than false. Sorting is restricted to a '
+      + 'named set: name, catalog, price, updatedAt, level2, category.',
+  },
+
+  'GET /api/admin/provider-catalog/specific-services/:serviceOptionId': {
+    derivedFrom: 'providerCatalogService.getAdminSpecificService — typed `any | null`',
+    schema: { type: 'object', additionalProperties: true },
+  },
+
+  // ── catalog, remaining reads ──────────────────────────────────────────────
+
+  'GET /api/admin/catalog': {
+    derivedFrom: 'catalogAdminService.getCatalogHierarchy',
+    schema: {
+      type: 'object',
+      additionalProperties: true,
+      description:
+        'The whole tree — categories, their subcategories, their services. Archived rows are '
+        + 'excluded unless includeArchived is set.',
+    },
+    note:
+      'One request rather than three. A client rendering the catalog admin screen should '
+      + 'read this instead of walking the three list routes, which cannot be consistent '
+      + 'with each other across separate requests.',
+  },
+
   // ── provider-catalog ──────────────────────────────────────────────────────
   // The canonical offering tree, and the mappings that connect it to the legacy
   // service families the eligibility engine still falls back to.

@@ -12,7 +12,7 @@
   ],
   "x-generated-from": "scripts/generate-admin-api-docs.ts",
   "x-operation-count": 251,
-  "x-authored-response-count": 116,
+  "x-authored-response-count": 125,
   "x-parity-rewritten-count": 231,
   "paths": {
     "/api/admin/admin-users": {
@@ -2474,7 +2474,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2488,7 +2488,9 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "The whole tree — categories, their subcategories, their services. Archived rows are excluded unless includeArchived is set."
                     }
                   }
                 }
@@ -2505,6 +2507,8 @@
         "x-parity-rewritten": false,
         "x-source": "src/routes/catalogAdmin.routes.ts:30",
         "x-controller": "../controllers/catalogAdminController.ts",
+        "x-derived-from": "catalogAdminService.getCatalogHierarchy",
+        "x-note": "One request rather than three. A client rendering the catalog admin screen should read this instead of walking the three list routes, which cannot be consistent with each other across separate requests.",
         "x-callers": [
           "adminWeb"
         ]
@@ -7928,7 +7932,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7942,7 +7946,12 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      },
+                      "description": "Row shape is `any[]` in the service signature, so it is not guessed here."
                     }
                   }
                 }
@@ -7959,6 +7968,7 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/providerCatalog.routes.ts:26",
         "x-controller": "../controllers/providerCatalogController.ts",
+        "x-derived-from": "providerCatalogService.listAdminOfferings — typed `any[]`",
         "x-callers": [
           "adminWeb"
         ]
@@ -8026,7 +8036,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8040,7 +8050,9 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Null for an unknown id, which the controller renders as a 404."
                     }
                   }
                 }
@@ -8057,6 +8069,7 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/providerCatalog.routes.ts:134",
         "x-controller": "../controllers/providerCatalogController.ts",
+        "x-derived-from": "providerCatalogService.getAdminOffering — typed `any | null`",
         "x-callers": [
           "adminWeb"
         ]
@@ -8244,7 +8257,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8258,7 +8271,12 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      },
+                      "description": "Providers who can perform this offering. EMPTY means the offering is publishable but not bookable — the same condition catalog/summary counts as servicesWithoutProviders."
                     }
                   }
                 }
@@ -8275,6 +8293,7 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/providerCatalog.routes.ts:169",
         "x-controller": "../controllers/providerCatalogController.ts",
+        "x-derived-from": "providerCatalogService.getOfferingProviders — typed `any[]`",
         "x-callers": [
           "adminWeb"
         ]
@@ -8413,7 +8432,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8427,7 +8446,11 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
                     }
                   }
                 }
@@ -8444,6 +8467,7 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/providerCatalog.routes.ts:174",
         "x-controller": "../controllers/providerCatalogController.ts",
+        "x-derived-from": "providerCatalogService.listSpecificServicesForOffering — typed `any[]`",
         "x-callers": [
           "adminWeb"
         ]
@@ -8665,7 +8689,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8679,7 +8703,23 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "name"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "description": "The LEGACY family id — service_families.id, what employee_services keys on. NOT the canonical services.id the eligibility engine prefers. The two are both integers and are not interchangeable."
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        }
+                      }
                     }
                   }
                 }
@@ -8696,6 +8736,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/providerCatalog.routes.ts:98",
         "x-controller": "../controllers/providerCatalogController.ts",
+        "x-derived-from": "providerCatalogService.listServiceFamilies — typed in the service signature",
+        "x-note": "Two ids exist for what a reader may think is one thing. The catalog-association route on a provider reports which of the two covered them, and capabilitySource on the assignment diagnostics reports the same for a booking.",
         "x-callers": [
           "adminWeb"
         ]
@@ -8710,7 +8752,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8724,7 +8766,9 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Paged and heavily filterable. The row shape is not typed in the service."
                     }
                   }
                 }
@@ -8741,6 +8785,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/providerCatalog.routes.ts:38",
         "x-controller": "../controllers/providerCatalogController.ts",
+        "x-derived-from": "providerCatalogService.listAllSpecificServices",
+        "x-note": "Filters accept STRING booleans — mapped, hasBanner and isActive are \"true\" | \"false\" | omitted, and OMITTED MEANS ALL rather than false. Sorting is restricted to a named set: name, catalog, price, updatedAt, level2, category.",
         "x-callers": [
           "adminWeb"
         ]
@@ -8765,7 +8811,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8779,7 +8825,8 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "additionalProperties": true
                     }
                   }
                 }
@@ -8796,6 +8843,7 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/providerCatalog.routes.ts:54",
         "x-controller": "../controllers/providerCatalogController.ts",
+        "x-derived-from": "providerCatalogService.getAdminSpecificService — typed `any | null`",
         "x-callers": [
           "adminWeb"
         ]
@@ -9081,7 +9129,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9095,7 +9143,69 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "type": "object",
+                      "required": [
+                        "categories",
+                        "level2s",
+                        "units",
+                        "priceRange"
+                      ],
+                      "properties": {
+                        "categories": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "category",
+                              "serviceCount"
+                            ],
+                            "properties": {
+                              "category": {
+                                "type": "string"
+                              },
+                              "serviceCount": {
+                                "type": "integer",
+                                "description": "COUNT(*)::int, so a real number."
+                              }
+                            }
+                          },
+                          "description": "Only MAIN options are counted, and only where the family carries a non-empty category — so a category absent here has no main services, not none at all."
+                        },
+                        "level2s": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "units": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "priceRange": {
+                          "type": "object",
+                          "required": [
+                            "min",
+                            "max"
+                          ],
+                          "properties": {
+                            "min": {
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "max": {
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            }
+                          },
+                          "description": "BOTH NULL when nothing priced matches — that is an empty set, not a free service. A slider bound to these must handle the null pair."
+                        }
+                      }
                     }
                   }
                 }
@@ -9112,6 +9222,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/providerCatalog.routes.ts:47",
         "x-controller": "../controllers/providerCatalogController.ts",
+        "x-derived-from": "providerCatalogService.listSpecificServiceFilterOptions — typed in the signature",
+        "x-note": "The vocabulary a filter UI should populate from, rather than hard-coding.",
         "x-callers": [
           "adminWeb"
         ]

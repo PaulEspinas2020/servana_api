@@ -40,7 +40,7 @@ successor for one of these must not be QUIETER than the route it replaces.
 
 ## Payload schemas
 
-Authored: **116** of 251.
+Authored: **125** of 251.
 
 The remainder publish their envelope, guard, permission and parity status, and declare
 the payload `UNSPECIFIED`. That is deliberate. A guessed schema is worse than an absent
@@ -279,7 +279,7 @@ only rise.
 
 | Method | Path | Guard | Permission | Envelope | Payload | Parity |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/admin/catalog` | permission | `services.view` | `status-success` | — unspecified | exempt |
+| `GET` | `/api/admin/catalog` | permission | `services.view` | `status-success` | ✅ authored | exempt |
 | `GET` | `/api/admin/catalog/categories` | permission | `services.view` | `status-success` | ✅ authored | exempt |
 | `POST` | `/api/admin/catalog/categories` | permission | `services.offering.create` | `status-success` | — unspecified | exempt |
 | `PATCH` | `/api/admin/catalog/categories/:categoryId` | permission | `services.offering.edit` | `status-success` | — unspecified | exempt |
@@ -364,29 +364,29 @@ only rise.
 | `GET` | `/api/admin/provider-catalog/audit` | permission | `services.view` | `status-success` | ✅ authored | rewritten |
 | `DELETE` | `/api/admin/provider-catalog/mappings/:mappingId` | permission | `services.mapping.archive` | `status-success` | — unspecified | rewritten |
 | `PATCH` | `/api/admin/provider-catalog/mappings/:mappingId` | permission | `services.mapping.edit` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/provider-catalog/offerings` | permission | `services.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/provider-catalog/offerings` | permission | `services.view` | `status-success` | ✅ authored | rewritten |
 | `POST` | `/api/admin/provider-catalog/offerings` | permission | `services.offering.create` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/provider-catalog/offerings/:offeringId` | permission | `services.details.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/provider-catalog/offerings/:offeringId` | permission | `services.details.view` | `status-success` | ✅ authored | rewritten |
 | `PATCH` | `/api/admin/provider-catalog/offerings/:offeringId` | permission | `services.offering.edit` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/provider-catalog/offerings/:offeringId/mappings` | permission | `services.mapping.create` | `status-success` | — unspecified | rewritten |
 | `PUT` | `/api/admin/provider-catalog/offerings/:offeringId/policy` | permission | `services.offering.edit` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/provider-catalog/offerings/:offeringId/providers` | permission | `services.details.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/provider-catalog/offerings/:offeringId/providers` | permission | `services.details.view` | `status-success` | ✅ authored | rewritten |
 | `POST` | `/api/admin/provider-catalog/offerings/:offeringId/publish` | permission | `services.publish` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/provider-catalog/offerings/:offeringId/publish-preview` | permission | `services.compatibility_preview.run` | `status-success` | ✅ authored | rewritten |
-| `GET` | `/api/admin/provider-catalog/offerings/:offeringId/specific-services` | permission | `services.details.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/provider-catalog/offerings/:offeringId/specific-services` | permission | `services.details.view` | `status-success` | ✅ authored | rewritten |
 | `POST` | `/api/admin/provider-catalog/offerings/:offeringId/specific-services` | permission | `services.specific.create` | `status-success` | — unspecified | rewritten |
 | `PATCH` | `/api/admin/provider-catalog/offerings/:offeringId/status` | permission | `services.offering.archive` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/provider-catalog/overview` | permission | `services.view` | `status-success` | ✅ authored | rewritten |
 | `GET` | `/api/admin/provider-catalog/policy-dimensions` | permission | `services.view` | `status-success` | ✅ authored | rewritten |
-| `GET` | `/api/admin/provider-catalog/service-families` | permission | `services.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/provider-catalog/specific-services` | permission | `services.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/provider-catalog/specific-services/:serviceOptionId` | permission | `services.details.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/provider-catalog/service-families` | permission | `services.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/provider-catalog/specific-services` | permission | `services.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/provider-catalog/specific-services/:serviceOptionId` | permission | `services.details.view` | `status-success` | ✅ authored | rewritten |
 | `PATCH` | `/api/admin/provider-catalog/specific-services/:serviceOptionId` | permission | `services.specific.edit` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/provider-catalog/specific-services/:serviceOptionId/addons` | permission | `services.addon.create` | `status-success` | — unspecified | rewritten |
 | `DELETE` | `/api/admin/provider-catalog/specific-services/:serviceOptionId/banner` | permission | `services.specific.edit` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/provider-catalog/specific-services/:serviceOptionId/banner` | permission | `services.specific.edit` | `status-success` | — unspecified | rewritten |
 | `PATCH` | `/api/admin/provider-catalog/specific-services/:serviceOptionId/status` | permission | `services.specific.archive` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/provider-catalog/specific-services/filter-options` | permission | `services.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/provider-catalog/specific-services/filter-options` | permission | `services.view` | `status-success` | ✅ authored | rewritten |
 
 ## `/api/admin/review-moderation` (2)
 
