@@ -643,13 +643,50 @@ export const listServicesOfSubcategory = async (
 };
 
 /** Shape counters for cache validation and the client's empty-state copy. */
+/**
+ * Counts and freshness for the catalog the customer can actually see.
+ *
+ * ## The counts must use the tree's visibility rule, not a weaker one
+ *
+ * Each count used to filter only the row's OWN status, while `getPublicCatalog`
+ * filters `s.status AND sc.status AND c.status`. The two agreed for as long as
+ * nothing was ever archived — and disagreed the moment something was.
+ *
+ * Archiving one duplicate subcategory on 2026-08-20 took the tree from 95
+ * services to 85 and left this reporting 95. A summary that overstates the
+ * catalogue is not a cosmetic defect: it is the number the client renders as
+ * "95 services available" beside a list of 85, and the number a cache-warming
+ * check would compare against.
+ *
+ * ## Freshness has to move when ANY level changes
+ *
+ * `lastUpdatedAt` was `MAX(services.updated_at)` alone. Archiving a
+ * subcategory changes what the catalog serves without touching a single
+ * service row, so the marker did not move — and `applyFreshness`/`notModified`
+ * would have answered **304 Not Modified** to every client holding the old
+ * tree. The retirement would have been invisible to exactly the people it was
+ * for, until something else happened to bump a service.
+ *
+ * The greatest of the three is the honest answer, because any of the three can
+ * change what this endpoint returns.
+ */
 export const getPublicCatalogSummary = async () => {
   const res = await dbQuery.query(
     `SELECT
-       (SELECT COUNT(*)::int FROM ${dbSchema}.catalog_categories    WHERE status = $1) AS categories,
-       (SELECT COUNT(*)::int FROM ${dbSchema}.catalog_subcategories WHERE status = $1) AS subcategories,
-       (SELECT COUNT(*)::int FROM ${dbSchema}.services              WHERE status = $1) AS services,
-       (SELECT MAX(updated_at) FROM ${dbSchema}.services)                              AS last_updated_at`,
+       (SELECT COUNT(*)::int FROM ${dbSchema}.catalog_categories c
+         WHERE c.status = $1) AS categories,
+       (SELECT COUNT(*)::int FROM ${dbSchema}.catalog_subcategories sc
+          JOIN ${dbSchema}.catalog_categories c ON c.id = sc.category_id
+         WHERE sc.status = $1 AND c.status = $1) AS subcategories,
+       (SELECT COUNT(*)::int FROM ${dbSchema}.services s
+          JOIN ${dbSchema}.catalog_subcategories sc ON sc.id = s.subcategory_id
+          JOIN ${dbSchema}.catalog_categories c ON c.id = sc.category_id
+         WHERE s.status = $1 AND sc.status = $1 AND c.status = $1) AS services,
+       GREATEST(
+         COALESCE((SELECT MAX(updated_at) FROM ${dbSchema}.services), 'epoch'::timestamptz),
+         COALESCE((SELECT MAX(updated_at) FROM ${dbSchema}.catalog_subcategories), 'epoch'::timestamptz),
+         COALESCE((SELECT MAX(updated_at) FROM ${dbSchema}.catalog_categories), 'epoch'::timestamptz)
+       ) AS last_updated_at`,
     [VISIBLE_STATUS],
   );
   const r = res.rows[0] ?? {};

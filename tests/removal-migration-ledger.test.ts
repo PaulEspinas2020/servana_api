@@ -171,7 +171,7 @@ describe('the fix did not reclassify anything else', () => {
      * reference.
      */
     const noEffect = checks.filter((c) => c.verdict === 'no-schema-effect');
-    expect(noEffect.length).toBe(15);
+    expect(noEffect.length).toBe(16);
     expect(noEffect.map((c) => c.file)).toEqual(
       expect.arrayContaining([
         '002-massage-specific-services.sql',
@@ -185,6 +185,15 @@ describe('the fix did not reclassify anything else', () => {
         // NAMED rather than only counted, so the next DML migration arrives as
         // a reviewable line in the diff instead of a number somebody bumps.
         '039-electrical-service-coverage.sql',
+        // 16th. `040-retire-duplicate-massage-subcategory.sql` flips one
+        // `catalog_subcategories.status` to 'archived' — 0 CREATE/ALTER/DROP,
+        // 1 UPDATE — so it lands here by the same rule.
+        //
+        // Like 039 it is executed nowhere else: the fresh-database rehearsal
+        // seeds this bucket as already applied, so a data migration would
+        // otherwise reach production having never run. `npm run
+        // migration:040:rehearse` runs it on PGlite.
+        '040-retire-duplicate-massage-subcategory.sql',
       ]),
     );
   });
