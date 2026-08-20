@@ -181,8 +181,34 @@ describe('the deploy cannot run ahead of its gate', () => {
       expect(parked).toMatch(/127\.0\.0\.1/);            // probe the host, not the CDN
       expect(parked).toMatch(/BUILD_INFO\.json/);        // running commit, not a /version endpoint
       expect(parked).toMatch(/Roll back to the previous build/);
-      expect(parked).toMatch(/Snapshot the running build/);
       expect(parked).toMatch(/environment:\s*production/);
+    });
+
+    /**
+     * This assertion used to read `/Snapshot the running build/`, and it was
+     * pinning a defect.
+     *
+     * That step copied the RUNNING dist/ after checkout and before `npm run
+     * build` overwrote it. It could never have worked: `dist` is gitignored
+     * (.gitignore:109) and `actions/checkout@v4` defaults to `clean: true`,
+     * which runs `git clean -ffdx` — `-x` removes ignored files. Verified with
+     * `git clean -ffdxn -- dist`, which prints "Would remove dist/".
+     *
+     * So it would have warned "no dist/ to snapshot" on every deploy and the
+     * rollback below it would have found nothing to restore every time it was
+     * needed. Retention now runs after the probe passes, on the build that has
+     * just proven it can serve, and this asserts that ordering rather than the
+     * name of the step that used to be wrong.
+     */
+    it('the parked deploy.yml retains a PROVEN build, not whatever survived checkout', () => {
+      const parked = fs.readFileSync(path.join(pending, 'deploy.yml'), 'utf8');
+      const probe = parked.indexOf('id: probe');
+      const retain = parked.indexOf('snapshot-build.sh');
+      expect(probe).toBeGreaterThan(-1);
+      expect(retain).toBeGreaterThan(probe);
+      expect(parked).toMatch(/if: success\(\)/);
+      // And it delegates to the rehearsed scripts rather than restating them.
+      expect(parked).toMatch(/scripts\/rollback\.sh/);
     });
 
     it('the parked release-gate.yml keeps the callable trigger and the summary fallback', () => {

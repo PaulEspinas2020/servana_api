@@ -159,43 +159,46 @@ jobs:
       - name: Guard protected route contracts
         run: npm run guard:protected-contracts
 
-      # Rollback needs somewhere to roll back TO (TAB 03).
+      # THE SNAPSHOT MOVED TO THE END OF THIS FILE, AND HERE IS WHY.
       #
-      # `npm run build` overwrites dist/ in place, so the currently-running
-      # build has to be copied out before it is destroyed. Kept outside the
-      # workspace because `actions/checkout` may clean the workspace between
-      # runs, and a rollback artefact that the next checkout deletes is not a
-      # rollback artefact.
-      - name: Snapshot the running build, so a failed probe has something to restore
-        run: |
-          RELEASES=/home/github-runner/releases
-          sudo mkdir -p "$RELEASES"
-          sudo chown -R github-runner:github-runner "$RELEASES" 2>/dev/null || true
-          if [ -d dist ]; then
-            rm -rf "$RELEASES/previous"
-            cp -a dist "$RELEASES/previous"
-            echo "snapshotted the running build to $RELEASES/previous"
-          else
-            echo "::warning::no dist/ to snapshot — first deploy on this host, or the workspace was cleaned. Rollback will be unavailable for this run."
-          fi
+      # A step here used to copy the running `dist/` to $RELEASES/previous
+      # before `npm run build` overwrote it. It could never have worked, and
+      # would have failed silently on every single deploy:
+      #
+      #   - `dist` is gitignored (.gitignore:109)
+      #   - `actions/checkout@v4` above defaults to `clean: true`, which runs
+      #     `git clean -ffdx`, and `-x` removes ignored files. Verified:
+      #     `git clean -ffdxn -- dist` prints "Would remove dist/".
+      #
+      # So by the time that step ran there was no dist/ to copy. It would have
+      # taken its `::warning::no dist/ to snapshot` branch every time, and the
+      # rollback further down would have found "NO previous build to restore"
+      # every time it was ever needed. A rollback that reads as present and is
+      # absent is worse than a missing one, because nobody goes looking.
+      #
+      # Retention now happens AFTER the post-deploy probe passes, so what is
+      # kept is a build known to have served traffic. See the final step.
+      #
+      # The cost, stated plainly: the FIRST deploy after this lands has no
+      # snapshot and therefore no rollback. A known-good build has to be proven
+      # once before it can be kept.
 
       - name: Build
         run: npm run build
 
-      # Proves WHICH commit is running, without publishing it.
+      # THE HAND-WRITTEN STAMP STEP WAS REMOVED.
       #
-      # The book asks the post-deploy step to assert the running commit. There is
-      # no /version endpoint and there should not be one: a build SHA on a public
-      # endpoint is free reconnaissance, and least-disclosure says do not add it
-      # merely to make CI's life easier. Stamping the SHA into the build itself
-      # answers the same question locally — the probe below reads this file from
-      # the very dist/ that PM2 is running.
-      - name: Stamp the build with its commit
-        run: |
-          printf '{"commit":"%s","ref":"%s","builtAt":"%s","run":"%s"}\n' \
-            "$GITHUB_SHA" "$GITHUB_REF" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$GITHUB_RUN_ID" \
-            > dist/BUILD_INFO.json
-          cat dist/BUILD_INFO.json
+      # `npm run build` now stamps dist/BUILD_INFO.json itself
+      # (scripts/stamp-build-info.mjs) and then refuses to finish if the stamp
+      # is absent, malformed, or disagrees with GITHUB_SHA
+      # (scripts/verify-build-info.mjs). A printf here would overwrite the
+      # build's own stamp with one written by hand on the host, which is exactly
+      # what TAB 04 refuses: the stamp must come from the build that produced
+      # the artefact, not from the deploy that shipped it.
+      #
+      # It also stamps a manual `git pull && npm run build && pm2 restart` on the
+      # host, which is how production was last assembled and which no
+      # deploy-time step can cover.
 
       # MOVED. This used to be the fifth step — it ran before Node was even
       # installed, so schema changes were applied to the production database
@@ -348,37 +351,21 @@ jobs:
       # it — docs/MASTER_TODO_MANUAL_TASKS.md 03.5.
       - name: Roll back to the previous build
         if: failure() && steps.probe.outcome == 'failure'
+        env:
+          RELEASES: /home/github-runner/releases
+          PM2: sudo /usr/bin/pm2
+          PM2_NAME: servana-prod
+        # Calls the script rather than restating it. The inline version could
+        # never be rehearsed — rehearsing it meant deploying a deliberately
+        # broken build to production — so it was written, never executed, and
+        # carried a snapshot bug that made it inoperative.
+        #
+        # scripts/rollback.sh HAS been rehearsed: broken build serving 503 ->
+        # restore -> healthy on the previous commit, verified by asking the
+        # running process rather than reading a file. It also refuses, without
+        # touching the running process, when there is nothing to restore.
         run: |
-          RELEASES=/home/github-runner/releases
-          if [ ! -d "$RELEASES/previous" ]; then
-            echo "::error::post-deploy probe failed and there is NO previous build to restore."
-            echo "Production is running the new build and it did not answer. Intervene manually."
-            exit 1
-          fi
-
-          echo "::warning::post-deploy probe failed — restoring the previous build"
-          rm -rf dist
-          cp -a "$RELEASES/previous" dist
-
-          APP="$(pwd)/dist/app.js"
-          sudo /usr/bin/pm2 stop servana-prod 2>/dev/null || true
-          sudo /usr/bin/pm2 delete servana-prod 2>/dev/null || true
-          sudo /usr/bin/pm2 start "$APP" --name servana-prod
-          sudo /usr/bin/pm2 save --force
-
-          PORT=$(grep -E '^PORT=' .env | head -1 | cut -d= -f2- | tr -d '"'"'"' \r' || true)
-          PORT=${PORT:-3000}
-          for i in $(seq 1 20); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${PORT}/healthz" || echo 000)
-            [ "$code" = "200" ] && break
-            sleep 3
-          done
-          if [ "$code" != "200" ]; then
-            echo "::error::ROLLBACK DID NOT RECOVER. /healthz -> $code. Manual intervention required."
-            exit 1
-          fi
-          echo "::warning::rolled back successfully; production is serving the PREVIOUS build."
-
+          scripts/rollback.sh
           # The run still fails. A rollback is a recovered incident, not a
           # successful deploy, and a green tick here would hide it.
           exit 1
@@ -393,3 +380,14 @@ jobs:
         if: always()
         run: echo "Rollback restores the BUILD only. Applied migrations stay applied — see docs/audits/TAB03_DEPLOY_GATING.md"
 
+      # RETENTION, last, and only when everything above succeeded.
+      #
+      # `if: success()` is load-bearing. Retaining a build the probe rejected
+      # would make the next rollback restore the very build this deploy just
+      # rolled back from, and it would look like a recovery.
+      - name: Retain this build, so the NEXT deploy can roll back to it
+        if: success()
+        env:
+          RELEASES: /home/github-runner/releases
+          KEEP: '3'
+        run: scripts/snapshot-build.sh
