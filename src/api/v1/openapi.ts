@@ -1531,13 +1531,22 @@ export const SCHEMAS: Record<string, unknown> = {
             minimum: 0,
             maximum: 1,
             description:
-              'A FRACTION of gross, not a percentage. 0.2 means 20%. The value is the '
-              + 'constant SERVANA_COMMISSION_RATE in services/revenueSplit.ts, which is 0.2, '
-              + 'and its sibling PROVIDER_SHARE_RATE is 0.8 — the two sum to exactly 1, which '
-              + 'is what settles the unit beyond argument. A client must NOT decide the unit '
-              + 'from the magnitude: the heuristic `rate <= 1 ? rate * 100 : rate` is '
-              + 'ambiguous at exactly 1 and wrong for any genuine percentage below it. '
-              + 'See TAB 05.',
+              'A FRACTION of gross in [0, 1], not a percentage. 0.2 means 20%. The value is '
+              + 'SERVANA_COMMISSION_RATE in services/revenueSplit.ts, and its sibling '
+              + 'PROVIDER_SHARE_RATE is 0.8 — the two sum to exactly 1, which is what settles '
+              + 'the unit beyond argument. tests/revenue-split asserts that sum.'
+              + ' '
+              + 'TWO VALUES REACH THE WIRE TODAY, and the second one matters: financePolicy '
+              + 'splitFor returns SERVANA_COMMISSION_RATE for an EXTERNAL_PROVIDER and '
+              + 'exactly 1 for an INTERNAL_FIXER, who earns no job share so Servana retains '
+              + 'the whole gross. So 1 is a REAL value, not a theoretical edge — which is '
+              + 'precisely where the magnitude heuristic `rate <= 1 ? rate * 100 : rate` is '
+              + 'ambiguous, because 1 could be read as 100% or as 1%. Read it as a fraction '
+              + 'and 1 is 100%, which is what an internal fixer means. Never infer the unit '
+              + 'from the magnitude.'
+              + ' '
+              + 'Contrast providerSharePercent on ProviderEarningsTransactions, which is a '
+              + 'whole-number PERCENT in [0, 100] on this same API. See TAB 05.',
           },
         },
       },
@@ -1645,7 +1654,27 @@ export const SCHEMAS: Record<string, unknown> = {
         bookingAmountMinor: { type: 'integer' },
         providerShareAmount: { type: 'number' },
         providerShareAmountMinor: { type: 'integer' },
-        providerSharePercent: { type: 'integer', description: '0 for an INTERNAL_FIXER.' },
+        providerSharePercent: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 100,
+          description:
+            'A WHOLE-NUMBER PERCENTAGE in [0, 100]. 80 means 80%. It is NOT a fraction, '
+            + 'and this is the field on which that has already gone wrong once: '
+            + 'providerController records that Provider Web kept its own constant named '
+            + 'PROVIDER_SHARE_PERCENT holding a FRACTION — eight tenths — under a name '
+            + 'saying percent, against a backend constant of eighty. Same name, same '
+            + 'concept, units a hundredfold apart.'
+            + ' '
+            + 'Note the asymmetry with BookingPayment.servana.commissionRate, which is a '
+            + 'FRACTION in [0, 1] on the same API. Two representations of one split exist '
+            + 'because two audiences want different ones; neither NAME says which, so both '
+            + 'now say it here. Derived from PROVIDER_SHARE_PERCENT, which '
+            + 'tests/provider-earnings-rate-and-eta pins to Math.round(PROVIDER_SHARE_RATE '
+            + '* 100).'
+            + ' '
+            + '0 for an INTERNAL_FIXER, who earns no job share at all.',
+        },
         isEstimate: { type: 'boolean' },
         economicModel: { type: 'string', enum: ['EXTERNAL_PROVIDER', 'INTERNAL_FIXER'] },
         withheldReason: { type: ['string', 'null'] },
@@ -2141,7 +2170,12 @@ export const SCHEMAS: Record<string, unknown> = {
       role: { type: 'string', enum: ['customer', 'provider'] },
       percent: {
         type: 'integer',
-        description: 'Counts EVERY requirement including the cosmetic ones - what a progress bar means to a person.',
+        minimum: 0,
+        maximum: 100,
+        description:
+          'A WHOLE-NUMBER PERCENTAGE in [0, 100]. 80 means 80%, not 0.8. '
+          + 'Counts EVERY requirement including the cosmetic ones - what a progress bar '
+          + 'means to a person.',
       },
       isComplete: { type: 'boolean' },
       canProceed: {
