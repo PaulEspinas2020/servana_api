@@ -40,7 +40,7 @@ successor for one of these must not be QUIETER than the route it replaces.
 
 ## Payload schemas
 
-Authored: **31** of 251.
+Authored: **48** of 251.
 
 The remainder publish their envelope, guard, permission and parity status, and declare
 the payload `UNSPECIFIED`. That is deliberate. A guessed schema is worse than an absent
@@ -99,32 +99,32 @@ only rise.
 
 | Method | Path | Guard | Permission | Envelope | Payload | Parity |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/admin/providers` | permission | `providers.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/providers/:uid` | permission | `providers.profile.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/providers` | permission | `providers.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/providers/:uid` | permission | `providers.profile.view` | `status-success` | ✅ authored | rewritten |
 | `PATCH` | `/api/admin/providers/:uid/account-status` | permission | `providers.status.change` | `status-success` | — unspecified | rewritten |
 | `PATCH` | `/api/admin/providers/:uid/archive` | permission | `providers.archive` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/providers/:uid/attribution` | permission | `providers.profile.view` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/providers/:uid/auto-online/disable` | permission | `auto_online.disable` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/providers/:uid/auto-online/enable-override` | permission | `auto_online.enable_override` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/providers/:uid/auto-online/re-evaluate` | permission | `auto_online.reevaluate` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/providers/:uid/auto-online/readiness` | permission | `auto_online.readiness.view` | `status-success` | — unspecified | rewritten |
+| `POST` | `/api/admin/providers/:uid/auto-online/disable` | permission | `auto_online.disable` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/providers/:uid/auto-online/enable-override` | permission | `auto_online.enable_override` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/providers/:uid/auto-online/re-evaluate` | permission | `auto_online.reevaluate` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/providers/:uid/auto-online/readiness` | permission | `auto_online.readiness.view` | `status-success` | ✅ authored | rewritten |
 | `DELETE` | `/api/admin/providers/:uid/availability` | permission | `provider_availability.weekly_schedule.edit` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/providers/:uid/availability` | permission | `provider_availability.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/providers/:uid/availability` | permission | `provider_availability.view` | `status-success` | ✅ authored | rewritten |
 | `PUT` | `/api/admin/providers/:uid/availability` | permission | `provider_availability.weekly_schedule.edit` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/providers/:uid/availability/force-offline` | permission | `providers.availability.force_offline` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/providers/:uid/availability/timeline` | permission | `provider_availability.view` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/providers/:uid/catalog-association` | permission | `providers.profile.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/providers/:uid/catalog-capabilities` | permission | `providers.profile.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/providers/:uid/earnings` | permission | `providers.earnings.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/providers/:uid/catalog-capabilities` | permission | `providers.profile.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/providers/:uid/earnings` | permission | `providers.earnings.view` | `status-success` | ✅ authored | rewritten |
 | `POST` | `/api/admin/providers/:uid/eligibility-preview` | permission | `provider_eligibility.preview` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/providers/:uid/jobs` | permission | `providers.jobs.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/providers/:uid/performance` | permission | `providers.performance.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/providers/:uid/jobs` | permission | `providers.jobs.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/providers/:uid/performance` | permission | `providers.performance.view` | `status-success` | ✅ authored | rewritten |
 | `PATCH` | `/api/admin/providers/:uid/profile` | permission | `providers.profile.edit` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/providers/:uid/profile-photo-submissions` | permission | `providers.profile.view` | `status-success` | — unspecified | rewritten |
 | `PATCH` | `/api/admin/providers/:uid/profile-photo-submissions/:submissionId/decision` | permission | `providers.profile.edit` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/providers/:uid/profile-photo-submissions/:submissionId/preview` | permission | `providers.profile.view` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/providers/:uid/reputation` | permission | `reviews.moderation.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/providers/:uid/requirements` | permission | `providers.documents.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/providers/:uid/requirements` | permission | `providers.documents.view` | `status-success` | ✅ authored | rewritten |
 | `POST` | `/api/admin/providers/:uid/requirements` | permission | `providers.documents.upload` | `status-success` | — unspecified | rewritten |
 | `DELETE` | `/api/admin/providers/:uid/requirements/:id` | permission | `providers.documents.delete` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/providers/:uid/requirements/:id/preview` | permission | `providers.documents.view` | `status-success` | — unspecified | rewritten |
@@ -132,17 +132,17 @@ only rise.
 | `PATCH` | `/api/admin/providers/:uid/requirements/:id/request-resubmission` | permission | `providers.documents.request_resubmission` | `status-success` | — unspecified | rewritten |
 | `PATCH` | `/api/admin/providers/:uid/requirements/:id/verify` | permission | `providers.documents.verify` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/providers/:uid/reviews` | permission | `reviews.moderation.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/providers/:uid/service-applications` | permission | `providers.profile.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/providers/:uid/service-area` | permission | `provider_service_area.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/providers/:uid/service-applications` | permission | `providers.profile.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/providers/:uid/service-area` | permission | `provider_service_area.view` | `status-success` | ✅ authored | rewritten |
 | `PUT` | `/api/admin/providers/:uid/service-area` | permission | `provider_service_area.edit` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/providers/:uid/services` | permission | `providers.active_services.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/providers/:uid/services` | permission | `providers.active_services.view` | `status-success` | ✅ authored | rewritten |
 | `POST` | `/api/admin/providers/:uid/services` | permission | `providers.services.assign` | `status-success` | — unspecified | rewritten |
 | `DELETE` | `/api/admin/providers/:uid/services/:serviceId` | permission | `providers.services.remove` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/providers/:uid/time-off` | permission | `provider_availability.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/providers/:uid/time-off` | permission | `provider_availability.view` | `status-success` | ✅ authored | rewritten |
 | `POST` | `/api/admin/providers/:uid/time-off` | permission | `provider_availability.time_off.add` | `status-success` | — unspecified | rewritten |
 | `PATCH` | `/api/admin/providers/:uid/time-off/:timeOffId/cancel` | permission | `provider_availability.time_off.cancel` | `status-success` | — unspecified | rewritten |
 | `POST` | `/api/admin/providers/attribution/backfill` | permission | `providers.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/providers/metrics` | permission | `providers.view` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/providers/metrics` | permission | `providers.view` | `status-success` | ✅ authored | rewritten |
 | `GET` | `/api/admin/providers/mobile-metrics` | permission | `providers.view` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/providers/requirement-definitions` | permission | `providers.documents.view` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/providers/service-applications` | permission | `providers.view` | `status-success` | — unspecified | rewritten |

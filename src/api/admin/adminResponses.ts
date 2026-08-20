@@ -269,6 +269,272 @@ export const ADMIN_RESPONSES: Record<string, AdminResponseSchema> = {
       'an already-resolved report is a 404, not a repeat.',
   },
 
+  // ── providers ─────────────────────────────────────────────────────────────
+  // 50 operations, the largest single admin area. Third by blast radius: these
+  // read and change the record of a person's ability to work — their identity,
+  // documents, services, availability and money.
+  //
+  // Authored where the service could be READ. Where it could not, the entry is
+  // absent and the operation publishes UNSPECIFIED, which is this file's rule:
+  // a guessed schema is worse than an absent one.
+
+  'GET /api/admin/providers': {
+    derivedFrom: 'adminProviderService.listProviders — returns rowsRes.rows, the RAW rows',
+    schema: {
+      type: 'object',
+      required: ['rows', 'total', 'page', 'limit'],
+      properties: {
+        rows: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+          description:
+            'RAW database rows, SNAKE_CASE, no mapper. Unlike getProviderIdentity, which '
+            + 'camelCases the same person, this list hands back what the query selected. '
+            + 'Documented as it stands rather than renamed.',
+        },
+        total: { type: 'integer', description: 'Exact COUNT over the filtered set.' },
+        page: { type: 'integer' },
+        limit: { type: 'integer' },
+      },
+    },
+    note: 'Pages as rows/total/page/limit, like the onboarding queue and the admin bookings list.',
+  },
+
+  'GET /api/admin/providers/metrics': {
+    derivedFrom: 'adminProviderService.getProviderMetrics',
+    schema: { $ref: '#/components/schemas/AdminProviderMetrics' },
+    note:
+      'READ THE -1 SEMANTICS below before rendering any of these. Two fields are counted '
+      + 'through safeCount/safeMongoCount, which return -1 when the table or collection '
+      + 'cannot be read at all.',
+  },
+
+  'GET /api/admin/providers/:uid': {
+    derivedFrom: 'adminProviderService.getProviderIdentity',
+    schema: { $ref: '#/components/schemas/AdminProviderIdentity' },
+    note:
+      'Spans TWO stores: user_credentials and the profile/address tables in Postgres, plus '
+      + 'the provider location document in MongoDB. onlineStatus and lastSeenAt come from '
+      + 'the Mongo document, so they are absent-safe rather than authoritative.',
+  },
+
+  'GET /api/admin/providers/:uid/services': {
+    derivedFrom: 'adminProviderService.getProviderActiveServices',
+    schema: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['serviceId'],
+        properties: {
+          serviceId: { type: 'integer' },
+          category: { type: 'string', description: "Coalesced to '' — an empty string, never null." },
+          serviceName: { type: 'string', description: "Coalesced to ''." },
+          assignedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+        },
+      },
+    },
+    note:
+      'The services this provider may actually be assigned work for, from employee_services. '
+      + 'Distinct from service APPLICATIONS, which are requests to gain one.',
+  },
+
+  'GET /api/admin/providers/:uid/service-applications': {
+    derivedFrom: 'adminProviderService.getProviderServiceApplications',
+    schema: { type: 'array', items: { $ref: '#/components/schemas/ProviderServiceApplication' } },
+  },
+
+  'GET /api/admin/providers/:uid/requirements': {
+    derivedFrom: 'adminProviderService.getProviderRequirements',
+    schema: { type: 'array', items: { $ref: '#/components/schemas/ProviderRequirementRow' } },
+    note:
+      'A LIST response, and it deliberately withholds signed URLs — see fileUrl. Use the '
+      + 'per-document preview endpoint to obtain one.',
+  },
+
+  'GET /api/admin/providers/:uid/jobs': {
+    derivedFrom: 'adminProviderService.getProviderJobs',
+    schema: {
+      type: 'object',
+      required: ['rows', 'total', 'page', 'limit'],
+      properties: {
+        rows: { type: 'array', items: { $ref: '#/components/schemas/AdminProviderJobRow' } },
+        total: { type: 'integer' },
+        page: { type: 'integer' },
+        limit: { type: 'integer' },
+      },
+    },
+  },
+
+  'GET /api/admin/providers/:uid/performance': {
+    derivedFrom: 'adminProviderService.getProviderPerformance',
+    schema: { $ref: '#/components/schemas/AdminProviderPerformance' },
+  },
+
+  'GET /api/admin/providers/:uid/earnings': {
+    derivedFrom: 'adminProviderService.getProviderEarningsSummary',
+    schema: { $ref: '#/components/schemas/AdminProviderEarnings' },
+    note:
+      'The ADMIN view, which shows gross as well as the provider share. Note '
+      + 'providerSharePercent is a whole-number PERCENT while BookingPayment.servana.'
+      + 'commissionRate on the v1 surface is a FRACTION — see TAB 05.',
+  },
+
+  'GET /api/admin/providers/:uid/time-off': {
+    derivedFrom:
+      'technicianService.getWorkerTimeOff — SELECT * FROM worker_time_off ' +
+      'WHERE worker_uid = $1 ORDER BY start_date ASC, with no mapper',
+    schema: { type: 'array', items: { $ref: '#/components/schemas/AdminProviderTimeOff' } },
+    note:
+      'Includes CANCELLED periods — cancelling sets a status, it does not delete the row. '
+      + 'A client listing live time off must filter on status. This is the same entity as '
+      + 'the v1 ProviderTimeOff schema, whose `id` TAB 07 corrected from string to integer.',
+  },
+
+  'GET /api/admin/providers/:uid/catalog-capabilities': {
+    derivedFrom: 'adminProviderService.getProviderCatalogCapabilities',
+    schema: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'status'],
+        properties: {
+          id: { type: 'integer' },
+          offeringId: { type: ['integer', 'null'] },
+          serviceId: {
+            type: ['integer', 'null'],
+            description:
+              'The CANONICAL services.id, not the legacy family id. The eligibility engine '
+              + 'keys capability on this one; the legacy family is a separate column '
+              + 'elsewhere and the two are not interchangeable.',
+          },
+          offeringName: { type: 'string', description: "Coalesced to ''." },
+          catalogKey: { type: 'string', description: "Coalesced to ''." },
+          category: { type: 'string', description: "Coalesced to ''." },
+          serviceName: { type: 'string', description: "Coalesced to ''." },
+          status: { type: 'string' },
+          approvedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+          suspendedAt: {
+            oneOf: [{ $ref: '#/components/schemas/UtcTimestamp' }],
+            description: 'Non-null means the capability is withdrawn but the row survives.',
+          },
+          applicationId: { type: ['integer', 'null'] },
+        },
+      },
+    },
+    note:
+      'What this provider is CAPABLE of in the canonical catalog — distinct from '
+      + '/services, which is the legacy employee_services grant. The eligibility engine '
+      + 'reads both, and its diagnostics report which source covered a booking.',
+  },
+
+  'GET /api/admin/providers/:uid/availability': {
+    derivedFrom: 'adminProviderService.getProviderAvailability',
+    schema: {
+      type: 'object',
+      required: ['schedule', 'timezone', 'timeOff'],
+      properties: {
+        schedule: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+          description:
+            'Coalesced to []. An EMPTY array is not "available always" — the auto-online '
+            + 'engine reports that state as availabilityMode: missing.',
+        },
+        timezone: {
+          type: 'string',
+          description:
+            "Coalesced to 'Asia/Manila'. An IANA NAME, not an offset — and Angular's "
+            + 'DatePipe cannot read IANA names at all, so a client must not pass this '
+            + 'straight to a date formatter. See TAB 03.',
+        },
+        updatedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+        timeOff: {
+          type: 'array',
+          description: 'A REDUCED projection — five fields, not the full time-off row.',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'integer' },
+              startDate: { type: 'string', format: 'date' },
+              endDate: { type: 'string', format: 'date' },
+              reason: { type: ['string', 'null'] },
+              createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+            },
+          },
+        },
+      },
+    },
+    note:
+      'The embedded timeOff carries NO status field, unlike GET /:uid/time-off. So this '
+      + 'projection cannot distinguish an active period from a cancelled one — use the '
+      + 'dedicated time-off route when that matters.',
+  },
+
+  'GET /api/admin/providers/:uid/service-area': {
+    derivedFrom: 'adminProviderService.getProviderServiceArea',
+    schema: {
+      type: 'object',
+      required: ['cityIds'],
+      properties: {
+        cityIds: {
+          type: 'array',
+          items: { type: 'integer' },
+          description:
+            'Coalesced to []. EMPTY MEANS NOT CONFIGURED, which the auto-online engine '
+            + 'reports as serviceAreaMode: missing — it does not mean "everywhere".',
+        },
+        label: { type: ['string', 'null'] },
+        updatedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      },
+    },
+  },
+
+  // ── auto-online ───────────────────────────────────────────────────────────
+
+  'GET /api/admin/providers/:uid/auto-online/readiness': {
+    derivedFrom: 'providerAutoOnlineEngine.evaluateProvider',
+    schema: { $ref: '#/components/schemas/ProviderAutoOnlineReadiness' },
+    note:
+      'Evaluated on READ, not stored — lastEvaluatedAt is the moment you asked. The same '
+      + 'shape is returned by re-evaluate and by enable-override.',
+  },
+
+  'POST /api/admin/providers/:uid/auto-online/re-evaluate': {
+    derivedFrom: 'providerAutoOnlineEngine.evaluateProvider — identical call to readiness',
+    schema: { $ref: '#/components/schemas/ProviderAutoOnlineReadiness' },
+    note:
+      'Returns the same shape as the GET. The difference is intent, not payload: this one '
+      + 'records that an admin asked for a re-evaluation.',
+  },
+
+  'POST /api/admin/providers/:uid/auto-online/enable-override': {
+    derivedFrom:
+      'providerAutoOnlineEngine.enableAutoOnlineOverride, then evaluateProvider — the '
+      + 'response is the RE-EVALUATED readiness, not an acknowledgement',
+    schema: { $ref: '#/components/schemas/ProviderAutoOnlineReadiness' },
+    note: 'A reason is required. Read autoOnline.eligible on the way back to confirm the override took.',
+  },
+
+  'POST /api/admin/providers/:uid/auto-online/disable': {
+    derivedFrom: 'providerAutoOnlineEngine.disableAutoOnline — the payload is built in the controller',
+    schema: {
+      type: 'object',
+      required: ['success'],
+      properties: {
+        success: {
+          type: 'boolean',
+          enum: [true],
+          description:
+            'A constant. The failure case is an error envelope, never `success: false` — so '
+            + 'branching on this value tests nothing.',
+        },
+      },
+    },
+    note:
+      'NOTE THE NESTING: this is `{ status: "success", data: { success: true } }`. Two '
+      + 'success signals in one body, one of them the admin envelope and one the payload.',
+  },
+
   // ── provider-onboarding ───────────────────────────────────────────────────
   // 16 operations, and second by blast radius after communications: these are
   // the decisions that let a person work. A silent field rename here is a
@@ -911,6 +1177,421 @@ export const ADMIN_SCHEMAS: Record<string, unknown> = {
       lifecycleSynchronized: {
         type: 'boolean',
         description: 'Whether the provider account lifecycle was updated to match this decision.',
+      },
+    },
+  },
+
+  AdminProviderMetrics: {
+    type: 'object',
+    required: ['total', 'active', 'archived', 'pendingReview', 'suspended', 'rejected'],
+    description:
+      'Provider counts for the admin dashboard, from one query plus several helpers.'
+      + ' '
+      + 'TWO FIELDS CAN BE -1. providersMissingAvailability and providersMissingServiceArea '
+      + 'are counted through safeCount and safeMongoCount, whose contract is stated in the '
+      + 'service: "-1 means could not be established, NEVER zero". Rendering -1 as 0 turns '
+      + '"we cannot read that table" into "everything is fine", which is the reading that '
+      + 'costs the most.',
+    properties: {
+      total: { type: 'integer' },
+      active: { type: 'integer' },
+      archived: { type: 'integer' },
+      pendingReview: { type: 'integer' },
+      suspended: { type: 'integer' },
+      rejected: { type: 'integer' },
+      providersWithDocuments: { type: 'integer' },
+      providersMissingDocuments: { type: 'integer' },
+      providersWithServiceApplications: { type: 'integer' },
+      providersWithPendingServiceApplications: { type: 'integer' },
+      providersWithActiveServices: { type: 'integer' },
+      providersWithBothActiveServiceAndPendingApplication: {
+        type: 'integer',
+        description: 'Deduped: a provider counted here is in both of the two above.',
+      },
+      providersMissingAvailability: {
+        type: 'integer',
+        minimum: -1,
+        description:
+          '-1 MEANS UNKNOWN, not zero. Counted through safeCount, which returns -1 when the '
+          + 'table is absent or its schema does not match.',
+      },
+      providersMissingServiceArea: {
+        type: 'integer',
+        minimum: -1,
+        description:
+          '-1 MEANS UNKNOWN, not zero. This one spans MongoDB — worker_locations is not in '
+          + 'Postgres, and reaching for it through safeCount is how it silently read -1 for '
+          + 'the life of the function.',
+      },
+    },
+  },
+
+  AdminProviderIdentity: {
+    type: 'object',
+    required: ['uid', 'email', 'role', 'accountStatus'],
+    description:
+      'A provider as the 360 detail screen reads them. Assembled across user_credentials, '
+      + 'the profile and address tables, the availability state and the MongoDB location '
+      + 'document — so a null here can mean "not recorded" or "that store had nothing".',
+    properties: {
+      uid: { type: 'string' },
+      email: { type: 'string' },
+      firstName: { type: ['string', 'null'] },
+      lastName: { type: ['string', 'null'] },
+      fullName: {
+        type: 'string',
+        description: 'Joined and trimmed, FALLING BACK TO THE EMAIL when both names are empty.',
+      },
+      phoneNumber: { type: ['string', 'null'] },
+      role: {
+        type: 'integer',
+        description: 'A NUMBER — Number(cred.role). 2 and 4 are both provider roles.',
+      },
+      accountStatus: { type: 'string', description: "Coalesced to 'pending'." },
+      isArchive: { type: 'boolean' },
+      isEmailVerified: { type: 'boolean' },
+      createdDate: { $ref: '#/components/schemas/UtcTimestamp' },
+      photoUrl: { type: ['string', 'null'] },
+      birthdate: { type: ['string', 'null'], description: 'A DATE — no zone, deliberately unparsed.' },
+      gender: { type: ['string', 'null'] },
+      address: {
+        oneOf: [
+          {
+            type: 'object',
+            properties: {
+              addressOne: { type: 'string' },
+              addressTwo: { type: ['string', 'null'] },
+              zipCode: { type: ['string', 'null'] },
+              city: { type: ['string', 'null'] },
+              country: { type: 'string', description: "Coalesced to 'PH'." },
+              label: { type: ['string', 'null'] },
+            },
+          },
+          { type: 'null' },
+        ],
+        description:
+          'NULL when addressOne is empty — the whole object is withheld rather than '
+          + 'returned with null fields, so a client tests the object, not each field.',
+      },
+      onlineStatus: {
+        type: 'string',
+        enum: ['online', 'offline'],
+        description:
+          "From the MongoDB location document. 'offline' is also what an ABSENT document "
+          + 'yields, so it does not distinguish "logged off" from "never seen".',
+      },
+      lastSeenAt: {
+        type: ['string', 'null'],
+        format: 'date-time',
+        description: 'From MongoDB, so it does NOT pass through the Postgres UTC parser.',
+      },
+      availabilitySource: { type: ['string', 'null'] },
+      availabilityChangedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      availabilityChangedByUid: { type: ['string', 'null'] },
+      availabilityChangedByRole: { type: ['string', 'null'] },
+      availabilityReason: { type: ['string', 'null'] },
+    },
+  },
+
+  ProviderServiceApplication: {
+    type: 'object',
+    required: ['id', 'serviceId', 'status', 'version'],
+    description: 'A provider request to be granted a service.',
+    properties: {
+      id: { type: 'string', description: 'A STRING — String(r.id).' },
+      serviceId: { type: 'integer' },
+      category: { type: 'string', description: "Always '' on this route — the query selects a literal empty string." },
+      serviceName: { type: 'string', description: "Coalesced to ''." },
+      status: { type: 'string' },
+      submittedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      updatedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      reviewedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      reviewedBy: { type: ['string', 'null'] },
+      reviewedByName: {
+        type: ['string', 'null'],
+        description: 'NULL when the reviewer join found nothing, not when there was no reviewer.',
+      },
+      reviewReason: { type: ['string', 'null'] },
+      approvedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      cancelledAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      version: { type: 'integer', description: 'Optimistic-concurrency token.' },
+    },
+  },
+
+  ProviderRequirementRow: {
+    type: 'object',
+    required: ['id', 'fileName', 'previewAvailable', 'legacyStorage', 'version'],
+    description:
+      'One uploaded requirement document, as the LIST returns it. Read fileUrl and '
+      + 'legacyStorage together before rendering anything.',
+    properties: {
+      id: { type: 'integer' },
+      fileName: { type: 'string' },
+      fileUrl: {
+        type: ['string', 'null'],
+        description:
+          'NULL for every canonically-stored document, ALWAYS. The service withholds it '
+          + 'deliberately: "canonical private rows never leak signed URLs through list '
+          + 'responses". A non-null value here means a LEGACY row that keeps its '
+          + 'compatibility URL until the controlled backfill. Use the preview endpoint to '
+          + 'obtain a URL, and do not treat null as "no document" — read previewAvailable.',
+      },
+      previewExpiresAt: {
+        type: 'null',
+        description: 'ALWAYS null on the list. A constant, not a signal — the list issues no preview.',
+      },
+      previewAvailable: {
+        type: 'boolean',
+        description: 'True when EITHER a canonical storage path or a legacy URL exists. This is the "is there a document" field.',
+      },
+      legacyStorage: { type: 'boolean', description: 'True when there is no canonical storage path.' },
+      uploadedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      requirementType: { type: ['string', 'null'] },
+      mimeType: { type: ['string', 'null'] },
+      byteSize: { type: ['integer', 'null'], description: 'Number()d, so a bigint column arrives as a number.' },
+      lifecycleState: { type: 'string', description: "Coalesced to 'legacy_review_required'." },
+      scanState: {
+        type: 'string',
+        description:
+          "The malware scan state, coalesced to 'legacy_review_required' — which means NOT "
+          + 'SCANNED, not "clean". A legacy row has never been through the scanner.',
+      },
+      issueDate: { type: ['string', 'null'], description: 'A DATE, no zone.' },
+      expiresAt: { type: ['string', 'null'] },
+      identifierMask: {
+        type: ['string', 'null'],
+        description: 'A MASKED identifier. The full value is never projected to an admin list.',
+      },
+      version: { type: 'integer', description: 'Coalesced to 1.' },
+    },
+  },
+
+  AdminProviderJobRow: {
+    type: 'object',
+    required: ['id', 'bookingId', 'bookingCode', 'currency'],
+    description: 'One job in a provider history, as the admin list projects it.',
+    properties: {
+      id: { type: 'string', description: 'A STRING, and the SAME value as bookingId.' },
+      bookingId: { type: 'string', description: 'A STRING here, though the v1 surface types booking ids as integers.' },
+      bookingCode: { type: 'string', description: 'Derived, SVN-XXXXXX. Not a stored column.' },
+      status: { type: 'string', description: "Coalesced to ''." },
+      serviceName: { type: 'string' },
+      categoryName: { type: 'string' },
+      customerName: {
+        type: 'string',
+        description:
+          'DELIBERATELY MASKED: first name plus the INITIAL of the surname, e.g. "Maria S.". '
+          + 'A provider job history is not a customer directory, and the full surname is not '
+          + 'projected here even for an admin.',
+      },
+      addressLine: { type: 'string' },
+      city: { type: 'string' },
+      scheduledAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      bookingAmount: { type: 'number', description: 'final_price, Number()d. PHP major units.' },
+      quotedPrice: { type: 'number', description: 'PHP major units.' },
+      transpoFee: { type: 'number', description: 'PHP major units.' },
+      paymentMethod: { type: 'string', description: "Lower-cased, coalesced to 'cash'." },
+      currency: { type: 'string', enum: ['PHP'] },
+    },
+  },
+
+  AdminProviderPerformance: {
+    type: 'object',
+    required: ['totalJobs', 'completedJobs', 'completionRate', 'currency'],
+    properties: {
+      totalJobs: { type: 'integer' },
+      completedJobs: { type: 'integer' },
+      cancelledJobs: { type: 'integer' },
+      activeJobs: { type: 'integer', description: 'In progress right now.' },
+      completionRate: {
+        type: 'integer',
+        minimum: 0,
+        maximum: 100,
+        description:
+          'A WHOLE-NUMBER PERCENTAGE in [0, 100] — 80 means 80%, not 0.8. Rounded. '
+          + 'ZERO when totalJobs is 0, which is a division guard rather than a measurement: '
+          + 'a provider with no jobs has no completion rate, and 0% reads as failure. '
+          + 'Check totalJobs before rendering this. See TAB 05 on rate units.',
+      },
+      totalGross: { type: 'number', description: 'PHP major units.' },
+      currency: { type: 'string', enum: ['PHP'] },
+    },
+  },
+
+  AdminProviderEarnings: {
+    type: 'object',
+    required: ['totalJobs', 'totalGrossAmount', 'totalProviderShare', 'providerSharePercent', 'currency'],
+    description: 'The ADMIN earnings view, which discloses gross as well as the provider share.',
+    properties: {
+      totalJobs: { type: 'integer' },
+      totalGrossAmount: { type: 'number', description: 'PHP major units.' },
+      totalProviderShare: {
+        type: 'number',
+        description: 'providerShareOf(gross) — computed server-side, never by a client.',
+      },
+      thisMonthGross: {
+        type: 'number',
+        description:
+          'Filtered by DATE_TRUNC month on the SESSION timezone, which the pool pins to UTC. '
+          + 'So "this month" is a UTC month, and Servana operates in Asia/Manila (+08): the '
+          + 'first eight hours of a Manila month fall in the previous UTC one.',
+      },
+      thisMonthProviderShare: { type: 'number' },
+      providerSharePercent: {
+        type: 'integer',
+        minimum: 0,
+        maximum: 100,
+        description:
+          'A WHOLE-NUMBER PERCENT in [0, 100]. NOT a fraction — contrast '
+          + 'BookingPayment.servana.commissionRate on the v1 surface, which is a fraction in '
+          + '[0, 1]. One split, two representations, a hundredfold apart. See TAB 05.',
+      },
+      currency: { type: 'string', enum: ['PHP'] },
+    },
+  },
+
+  AdminProviderTimeOff: {
+    type: 'object',
+    required: ['id', 'worker_uid', 'start_date', 'end_date', 'status'],
+    description:
+      'A worker_time_off row as the ADMIN route returns it: SELECT *, no mapper, so the '
+      + 'keys are SNAKE_CASE. The v1 ProviderTimeOff schema describes the same table in '
+      + 'camelCase — two shapes for one entity, documented rather than reconciled.',
+    additionalProperties: true,
+    properties: {
+      id: {
+        type: 'integer',
+        description: 'A NUMBER. The column is integer; TAB 07 corrected the v1 contract, which claimed string.',
+      },
+      worker_uid: { type: 'string' },
+      start_date: { type: 'string', format: 'date' },
+      end_date: { type: 'string', format: 'date' },
+      all_day: { type: 'boolean' },
+      start_time: { type: ['string', 'null'] },
+      end_time: { type: ['string', 'null'] },
+      reason: { type: ['string', 'null'] },
+      note: { type: ['string', 'null'] },
+      status: {
+        type: 'string',
+        enum: ['active', 'cancelled'],
+        description: 'Cancelling does NOT delete the row, so this list includes cancelled periods.',
+      },
+      created_at: { $ref: '#/components/schemas/UtcTimestamp' },
+      created_by: { type: ['string', 'null'] },
+      cancelled_at: { $ref: '#/components/schemas/UtcTimestamp' },
+      cancelled_by: { type: ['string', 'null'] },
+    },
+  },
+
+  ProviderAutoOnlineReadiness: {
+    type: 'object',
+    required: ['providerUid', 'source', 'details', 'documents', 'serviceAssociation', 'autoOnline'],
+    description:
+      'Whether this provider can be brought online automatically, and what is stopping it. '
+      + 'Evaluated on READ — autoOnline.lastEvaluatedAt is the moment you asked, not a '
+      + 'stored fact. Typed as ProviderAutoOnlineReadiness in providerAutoOnlineEngine.',
+    properties: {
+      providerUid: { type: 'string' },
+      source: {
+        type: 'object',
+        description: 'Where this provider came from, and how confident that is.',
+        properties: {
+          registrationSource: {
+            type: 'string',
+            enum: [
+              'provider_web', 'provider_mobile', 'admin_created',
+              'inferred_mobile', 'inferred_web', 'unknown',
+            ],
+          },
+          sourceConfidence: {
+            type: 'string',
+            enum: ['explicit', 'inferred', 'unknown'],
+            description: "'inferred' means it was deduced, not recorded — do not report it as fact.",
+          },
+          firstSeenAt: { type: ['string', 'null'], format: 'date-time' },
+          lastSeenAt: { type: ['string', 'null'], format: 'date-time' },
+        },
+      },
+      details: {
+        type: 'object',
+        description: 'Identity completeness.',
+        properties: {
+          complete: { type: 'boolean' },
+          missingFields: { type: 'array', items: { type: 'string' } },
+          firstName: { type: 'boolean' },
+          lastName: { type: 'boolean' },
+          hasEmail: { type: 'boolean' },
+          hasPhone: { type: 'boolean' },
+          roleValid: { type: 'boolean' },
+          accountAllowed: { type: 'boolean' },
+        },
+      },
+      documents: {
+        type: 'object',
+        properties: {
+          complete: { type: 'boolean' },
+          requiredTotal: { type: 'integer', enum: [3], description: 'A CONSTANT of 3 in the engine.' },
+          submittedRequired: { type: 'integer' },
+          approvedRequired: { type: 'integer' },
+          pendingReviewRequired: { type: 'integer' },
+          missingRequiredTypes: { type: 'array', items: { type: 'string' } },
+          classification: {
+            type: 'string',
+            enum: ['typed', 'legacy_inferred', 'incomplete', 'unknown'],
+            description: "'legacy_inferred' means the types were deduced from older rows.",
+          },
+        },
+      },
+      serviceAssociation: {
+        type: 'object',
+        properties: {
+          complete: { type: 'boolean' },
+          associatedServiceIds: { type: 'array', items: { type: 'integer' } },
+          associatedOfferingIds: { type: 'array', items: { type: 'integer' } },
+          associatedCatalogKeys: { type: 'array', items: { type: 'string' } },
+          source: {
+            type: 'string',
+            enum: ['employee_services', 'service_applications', 'catalog_capabilities', 'mixed', 'none'],
+            description: 'WHICH store the association was found in. `mixed` means more than one, and they may disagree.',
+          },
+        },
+      },
+      autoOnline: {
+        type: 'object',
+        required: ['eligible', 'active', 'bookable', 'onlineStatus', 'lastEvaluatedAt'],
+        properties: {
+          eligible: { type: 'boolean', description: 'May be brought online automatically.' },
+          active: { type: 'boolean', description: 'Auto-online is switched on for them.' },
+          bookable: {
+            type: 'boolean',
+            description: 'The one that decides whether work can reach them. Eligible and active are inputs to it.',
+          },
+          onlineStatus: { type: 'string', enum: ['online', 'offline'] },
+          availabilityMode: {
+            type: 'string',
+            enum: ['all_time', 'custom', 'missing'],
+            description: "'missing' is not 'always available' — it means nothing was configured.",
+          },
+          serviceAreaMode: {
+            type: 'string',
+            enum: ['all', 'custom', 'missing'],
+            description: "'missing' means no area was configured.",
+          },
+          activatedAt: { type: ['string', 'null'], format: 'date-time' },
+          lastEvaluatedAt: {
+            type: 'string',
+            format: 'date-time',
+            description: 'The moment THIS request evaluated it. Never a stored value.',
+          },
+          reasonCodes: { type: 'array', items: { type: 'string' } },
+          blockers: { type: 'array', items: { type: 'string' }, description: 'What prevents bookability.' },
+          warnings: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Do NOT prevent bookability. Rendering these as blockers overstates the problem.',
+          },
+        },
       },
     },
   },
