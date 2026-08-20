@@ -32,6 +32,7 @@
     "admin:bootstrap": "ts-node -r dotenv/config scripts/create-admin-with-password.ts",
     "report:provider-readiness": "ts-node -r dotenv/config scripts/report-provider-readiness.ts",
     "backfill:verified-identifiers": "ts-node -r dotenv/config scripts/backfill-verified-identifiers.ts",
+    "migration:039:rehearse": "ts-node scripts/rehearse-migration-039.ts",
     "migrations:plan": "ts-node -r dotenv/config scripts/run-migrations.ts",
     "migrations:apply": "ts-node -r dotenv/config scripts/run-migrations.ts --apply",
     "migrations:ledger:repair": "ts-node scripts/repair-migration-ledger.ts",

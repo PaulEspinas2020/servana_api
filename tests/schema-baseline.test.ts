@@ -133,6 +133,10 @@ describe('the repository cannot build the database from zero', () => {
       'provider_catalog_offerings',
       'provider_onboarding_cases',
       'provider_onboarding_drafts',
+      // Added by 039, which inserts coverage for legacy family 67. The chain
+      // has never created this table — it selects from it and now writes to
+      // it, so like the seventeen above it, it can only come from the baseline.
+      'service_coverage_geo',
       'service_families',
       'service_option_meta',
       'service_options',
