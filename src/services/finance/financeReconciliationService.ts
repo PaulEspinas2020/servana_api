@@ -32,6 +32,7 @@ import { db } from '../../config';
 import {
   RECONCILIATION_CHECKS,
   toCentavos,
+  toMinorUnits,
   type ReconciliationCheckSpec,
 } from './financePolicy';
 import { bookingFinanceSelect, computeBookingFinance, toBookingFinanceRow } from './financeLedger';
@@ -313,6 +314,13 @@ export interface ReconciliationReport {
     internalFixerRevenue: number;
     /** Accrued minus released. What Servana still owes providers. */
     outstandingProviderLiability: number;
+    /** Minor-unit twins of the six above. Centavos, integer. TAB 04. */
+    capturedAmountMinor: number;
+    refundedAmountMinor: number;
+    accruedProviderEarningsMinor: number;
+    releasedPayoutsMinor: number;
+    internalFixerRevenueMinor: number;
+    outstandingProviderLiabilityMinor: number;
   };
   breaks: ReconciliationBreak[];
   /** True when nothing is open. The gate §"zero unexplained breaks" reads this. */
@@ -403,6 +411,22 @@ export async function getReconciliationReport(
       releasedPayouts: released,
       internalFixerRevenue: toCentavos(t.internal_fixer),
       outstandingProviderLiability: toCentavos(accrued - released),
+
+      /**
+       * Minor-unit twins (TAB 04). Additive; the majors are unchanged.
+       *
+       * This is the screen the twins exist FOR. A reconciliation report is
+       * where a float number of pesos surfaces its drift — small, real, and
+       * extremely expensive to explain — and outstandingProviderLiability is a
+       * subtraction of two floats, which is exactly the arithmetic that
+       * accumulates it.
+       */
+      capturedAmountMinor: toMinorUnits(t.captured),
+      refundedAmountMinor: toMinorUnits(t.refunded),
+      accruedProviderEarningsMinor: toMinorUnits(accrued),
+      releasedPayoutsMinor: toMinorUnits(released),
+      internalFixerRevenueMinor: toMinorUnits(t.internal_fixer),
+      outstandingProviderLiabilityMinor: toMinorUnits(accrued - released),
     },
     breaks: breakRows.rows.map((row: any) => {
       const spec = CATALOG_BY_CODE.get(String(row.exception_code));

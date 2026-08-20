@@ -16203,6 +16203,30 @@
             "type": "number",
             "description": "Derived; no disbursement row yet. UNIT: PHP MAJOR units — pesos, two decimal places. CURRENCY: PHP (financePolicy.CURRENCY). Prefer the Minor twin for arithmetic where one exists."
           },
+          "totalEarnedMinor": {
+            "type": "integer"
+          },
+          "totalPaidMinor": {
+            "type": "integer"
+          },
+          "totalPendingMinor": {
+            "type": "integer"
+          },
+          "totalFailedMinor": {
+            "type": "integer"
+          },
+          "totalRefundedMinor": {
+            "type": "integer",
+            "description": "UNIT: PHP MINOR units — centavos, an integer. This is the representation to compute with; an integer number of centavos cannot drift. CURRENCY: PHP (financePolicy.CURRENCY)."
+          },
+          "pendingRecordedAmountMinor": {
+            "type": "integer",
+            "description": "UNIT: PHP MINOR units — centavos, an integer. This is the representation to compute with; an integer number of centavos cannot drift. CURRENCY: PHP (financePolicy.CURRENCY)."
+          },
+          "pendingEstimatedAmountMinor": {
+            "type": "integer",
+            "description": "The seven Minor fields are derived from the SAME expressions as their majors, not re-summed — a twin computed independently is a second and subtly different source for one number. Compute with these; display the majors. UNIT: PHP MINOR units — centavos, an integer. This is the representation to compute with; an integer number of centavos cannot drift. CURRENCY: PHP (financePolicy.CURRENCY)."
+          },
           "pendingIsEstimate": {
             "type": "boolean"
           },
@@ -16528,6 +16552,30 @@
               "outstandingProviderLiability": {
                 "type": "number",
                 "description": "Accrued minus released — what Servana still owes providers."
+              },
+              "capturedAmountMinor": {
+                "type": "integer",
+                "description": "UNIT: PHP MINOR units — centavos, an integer. This is the representation to compute with; an integer number of centavos cannot drift. CURRENCY: PHP (financePolicy.CURRENCY)."
+              },
+              "refundedAmountMinor": {
+                "type": "integer",
+                "description": "UNIT: PHP MINOR units — centavos, an integer. This is the representation to compute with; an integer number of centavos cannot drift. CURRENCY: PHP (financePolicy.CURRENCY)."
+              },
+              "accruedProviderEarningsMinor": {
+                "type": "integer",
+                "description": "UNIT: PHP MINOR units — centavos, an integer. This is the representation to compute with; an integer number of centavos cannot drift. CURRENCY: PHP (financePolicy.CURRENCY)."
+              },
+              "releasedPayoutsMinor": {
+                "type": "integer",
+                "description": "UNIT: PHP MINOR units — centavos, an integer. This is the representation to compute with; an integer number of centavos cannot drift. CURRENCY: PHP (financePolicy.CURRENCY)."
+              },
+              "internalFixerRevenueMinor": {
+                "type": "integer",
+                "description": "UNIT: PHP MINOR units — centavos, an integer. This is the representation to compute with; an integer number of centavos cannot drift. CURRENCY: PHP (financePolicy.CURRENCY)."
+              },
+              "outstandingProviderLiabilityMinor": {
+                "type": "integer",
+                "description": "This is the screen the minor units exist FOR. A reconciliation report is where a float number of pesos surfaces its drift, and this field is a SUBTRACTION of two floats — exactly the arithmetic that accumulates it. Reconcile on the Minor fields."
               }
             }
           },

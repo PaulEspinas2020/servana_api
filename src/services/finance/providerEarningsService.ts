@@ -235,6 +235,14 @@ export interface EarningsSummary {
   totalPending: number;
   totalFailed: number;
   totalRefunded: number;
+  /** Minor-unit twins of the five above. Centavos, integer. TAB 04. */
+  totalEarnedMinor: number;
+  totalPaidMinor: number;
+  totalPendingMinor: number;
+  totalFailedMinor: number;
+  totalRefundedMinor: number;
+  pendingRecordedAmountMinor: number;
+  pendingEstimatedAmountMinor: number;
   /** The portion of totalPending backed by a disbursement row. */
   pendingRecordedAmount: number;
   /** The portion still derived because no disbursement row exists yet. */
@@ -319,6 +327,28 @@ export async function getEarningsSummary(
     totalRefunded: money(totalRefunded),
     pendingRecordedAmount: money(pendingRecorded),
     pendingEstimatedAmount: money(pendingEstimated),
+
+    /**
+     * Minor-unit twins (TAB 04).
+     *
+     * Purely additive: every field above keeps its name, type and value, so a
+     * client reading the float path is unaffected. What changes is that one
+     * that wants to COMPUTE no longer has to do it in floats — an integer
+     * number of centavos cannot drift, and a float number of pesos accumulates
+     * error at the fourth decimal place and surfaces months later in a
+     * reconciliation report.
+     *
+     * Derived from the SAME expressions as their majors, not re-summed. A twin
+     * computed independently is a second and subtly different source for one
+     * number, which is worse than not having one.
+     */
+    totalEarnedMinor: toMinorUnits(totalPaid + pendingRecorded + pendingEstimated + totalFailed),
+    totalPaidMinor: toMinorUnits(totalPaid),
+    totalPendingMinor: toMinorUnits(totalPending),
+    totalFailedMinor: toMinorUnits(totalFailed),
+    totalRefundedMinor: toMinorUnits(totalRefunded),
+    pendingRecordedAmountMinor: toMinorUnits(pendingRecorded),
+    pendingEstimatedAmountMinor: toMinorUnits(pendingEstimated),
     pendingIsEstimate: estimatedJobs > 0,
     estimatedJobsCount: estimatedJobs,
     jobsCount: transactions.length,

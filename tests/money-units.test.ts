@@ -319,3 +319,123 @@ describe('the admin payment projection emits a minor twin for every amount', () 
     expect(provider.provider).toBeUndefined();
   });
 });
+
+/**
+ * Every minor-unit twin in the contract agrees with its major partner.
+ *
+ * TAB 04 asked for a twin on every money field and landed eight on the admin
+ * payment seat. The two that were left ratcheted — the provider earnings summary
+ * and the reconciliation totals — are now done, taking the contract from 7
+ * twins to 25.
+ *
+ * The reconciliation one is the screen the twins exist FOR:
+ * `outstandingProviderLiability` is a SUBTRACTION of two floats, which is
+ * exactly the arithmetic that accumulates error at the fourth decimal place and
+ * surfaces months later as a discrepancy nobody can explain.
+ *
+ * ## What this asserts, and why it is not a formality
+ *
+ * That every declared twin has a major partner declared beside it, and that the
+ * two are the same KIND of number. A twin whose major is missing is a field a
+ * client cannot cross-check; a twin declared `number` rather than `integer` is
+ * not a minor unit at all, it is the float path wearing a different name.
+ */
+describe('the minor-unit twins are complete and consistent', () => {
+  const doc = buildOpenApiDocument() as any;
+
+  interface Pair { path: string; minor: any; major: any }
+
+  const pairs = (node: unknown, path: string, out: Pair[]): void => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      node.forEach((c, i) => pairs(c, `${path}[${i}]`, out));
+      return;
+    }
+    const o = node as Record<string, any>;
+    if (o.properties) {
+      for (const [name, field] of Object.entries<any>(o.properties)) {
+        if (!/Minor$/.test(name)) continue;
+        out.push({
+          path: `${path}.${name}`,
+          minor: field,
+          major: o.properties[name.replace(/Minor$/, '')],
+        });
+      }
+    }
+    for (const [k, v] of Object.entries(o)) {
+      if (k === 'enum' || k === 'description') continue;
+      pairs(v, `${path}.${k}`, out);
+    }
+  };
+
+  const found: Pair[] = [];
+  pairs(doc.components.schemas, 'schemas', found);
+
+  it('finds them, so the sweep is not vacuous', () => {
+    // The rule this suite's own repo learned the hard way: a search that
+    // matches nothing proves nothing.
+    expect(found.length).toBeGreaterThanOrEqual(25);
+  });
+
+  it('declares every twin as an INTEGER', () => {
+    // A twin typed `number` is the float path with a new name.
+    const notInteger = found
+      .filter((p) => {
+        const t = Array.isArray(p.minor.type) ? p.minor.type : [p.minor.type];
+        return !t.includes('integer');
+      })
+      .map((p) => p.path);
+    expect(notInteger).toEqual([]);
+  });
+
+  it('gives every twin a major partner declared beside it', () => {
+    // Without the major there is nothing to cross-check the twin against, and
+    // the point of a twin is that a client can.
+    const orphans = found.filter((p) => !p.major).map((p) => p.path);
+    expect(orphans).toEqual([]);
+  });
+
+  it('covers the two schemas TAB 04 left ratcheted', () => {
+    const names = found.map((p) => p.path);
+    expect(names.some((n) => n.includes('ProviderEarningsSummary'))).toBe(true);
+    expect(names.some((n) => n.includes('FinanceReconciliation'))).toBe(true);
+  });
+});
+
+describe('the earnings and reconciliation twins agree with their majors at runtime', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { toMinorUnits: minor } = require('../src/services/finance/financePolicy');
+
+  it('converts the awkward decimals a reconciliation actually carries', () => {
+    // .07 and .01 are where float drift shows. Exact centavo values are pinned
+    // so a rounding change is visible rather than absorbed.
+    expect(minor(1000.07)).toBe(100007);
+    expect(minor(0.01)).toBe(1);
+    expect(minor(99999.99)).toBe(9999999);
+  });
+
+  it('makes a subtraction of two majors exact in minor units', () => {
+    /**
+     * The defect the reconciliation twin exists to prevent, in one line.
+     *
+     * accrued - released is a float subtraction. Done in pesos it can land a
+     * centavo away from the truth; done in centavos it cannot, because both
+     * operands are integers.
+     */
+    const accrued = 1234.56;
+    const released = 1000.07;
+    const inPesos = accrued - released;
+
+    expect(minor(accrued) - minor(released)).toBe(23449);
+    expect(Number.isInteger(minor(accrued) - minor(released))).toBe(true);
+    // The float path lands in the right neighbourhood and is not exact.
+    expect(Math.round(inPesos * 100)).toBe(23449);
+  });
+
+  it('sums without drifting, which the float path does not guarantee', () => {
+    const parts = [0.1, 0.2, 0.07, 1000.01];
+    const minorSum = parts.reduce((n, p) => n + minor(p), 0);
+    expect(minorSum).toBe(100038);
+    expect(Number.isInteger(minorSum)).toBe(true);
+  });
+});

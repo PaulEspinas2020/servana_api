@@ -1719,6 +1719,19 @@ export const SCHEMAS: Record<string, unknown> = {
       totalRefunded: { type: 'number' },
       pendingRecordedAmount: { type: 'number', description: 'Backed by a disbursement row.' },
       pendingEstimatedAmount: { type: 'number', description: 'Derived; no disbursement row yet.' },
+      totalEarnedMinor: { type: 'integer' },
+      totalPaidMinor: { type: 'integer' },
+      totalPendingMinor: { type: 'integer' },
+      totalFailedMinor: { type: 'integer' },
+      totalRefundedMinor: { type: 'integer' },
+      pendingRecordedAmountMinor: { type: 'integer' },
+      pendingEstimatedAmountMinor: {
+        type: 'integer',
+        description:
+          'The seven Minor fields are derived from the SAME expressions as their majors, '
+          + 'not re-summed — a twin computed independently is a second and subtly different '
+          + 'source for one number. Compute with these; display the majors.',
+      },
       pendingIsEstimate: { type: 'boolean' },
       estimatedJobsCount: { type: 'integer' },
       jobsCount: { type: 'integer' },
@@ -1851,6 +1864,19 @@ export const SCHEMAS: Record<string, unknown> = {
           outstandingProviderLiability: {
             type: 'number',
             description: 'Accrued minus released — what Servana still owes providers.',
+          },
+          capturedAmountMinor: { type: 'integer' },
+          refundedAmountMinor: { type: 'integer' },
+          accruedProviderEarningsMinor: { type: 'integer' },
+          releasedPayoutsMinor: { type: 'integer' },
+          internalFixerRevenueMinor: { type: 'integer' },
+          outstandingProviderLiabilityMinor: {
+            type: 'integer',
+            description:
+              'This is the screen the minor units exist FOR. A reconciliation report is '
+              + 'where a float number of pesos surfaces its drift, and this field is a '
+              + 'SUBTRACTION of two floats — exactly the arithmetic that accumulates it. '
+              + 'Reconcile on the Minor fields.',
           },
         },
       },
