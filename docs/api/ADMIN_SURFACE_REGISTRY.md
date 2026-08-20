@@ -40,7 +40,7 @@ successor for one of these must not be QUIETER than the route it replaces.
 
 ## Payload schemas
 
-Authored: **15** of 251.
+Authored: **31** of 251.
 
 The remainder publish their envelope, guard, permission and parity status, and declare
 the payload `UNSPECIFIED`. That is deliberate. A guessed schema is worse than an absent
@@ -78,22 +78,22 @@ only rise.
 
 | Method | Path | Guard | Permission | Envelope | Payload | Parity |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/admin/provider-onboarding/cases` | permission | `onboarding.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/provider-onboarding/cases/:caseId` | permission | `onboarding.case.view` | `status-success` | — unspecified | rewritten |
-| `PATCH` | `/api/admin/provider-onboarding/cases/:caseId/assign` | permission | `onboarding.case.assign` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/provider-onboarding/cases/:caseId/final-approve` | permission | `onboarding.final_approve` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/provider-onboarding/cases/:caseId/final-reject` | permission | `onboarding.final_reject` | `status-success` | — unspecified | rewritten |
-| `PATCH` | `/api/admin/provider-onboarding/cases/:caseId/move` | permission | `onboarding.status.move` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/provider-onboarding/cases/:caseId/notes` | permission | `onboarding.case.view` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/provider-onboarding/cases/:caseId/notes` | permission | `onboarding.notes.add` | `status-success` | — unspecified | rewritten |
-| `PATCH` | `/api/admin/provider-onboarding/cases/:caseId/priority` | permission | `onboarding.priority.change` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/provider-onboarding/cases/:caseId/readiness` | permission | `onboarding.readiness.run` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/provider-onboarding/cases/:caseId/timeline` | permission | `onboarding.timeline.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/provider-onboarding/queues` | permission | `onboarding.view` | `status-success` | — unspecified | rewritten |
-| `GET` | `/api/admin/provider-onboarding/reason-codes` | permission | `onboarding.view` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/provider-onboarding/requirements/:id/approve` | permission | `onboarding.requirement.approve` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/provider-onboarding/requirements/:id/reject` | permission | `onboarding.requirement.reject` | `status-success` | — unspecified | rewritten |
-| `POST` | `/api/admin/provider-onboarding/requirements/:id/request-resubmission` | permission | `onboarding.requirement.request_resubmission` | `status-success` | — unspecified | rewritten |
+| `GET` | `/api/admin/provider-onboarding/cases` | permission | `onboarding.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/provider-onboarding/cases/:caseId` | permission | `onboarding.case.view` | `status-success` | ✅ authored | rewritten |
+| `PATCH` | `/api/admin/provider-onboarding/cases/:caseId/assign` | permission | `onboarding.case.assign` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/provider-onboarding/cases/:caseId/final-approve` | permission | `onboarding.final_approve` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/provider-onboarding/cases/:caseId/final-reject` | permission | `onboarding.final_reject` | `status-success` | ✅ authored | rewritten |
+| `PATCH` | `/api/admin/provider-onboarding/cases/:caseId/move` | permission | `onboarding.status.move` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/provider-onboarding/cases/:caseId/notes` | permission | `onboarding.case.view` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/provider-onboarding/cases/:caseId/notes` | permission | `onboarding.notes.add` | `status-success` | ✅ authored | rewritten |
+| `PATCH` | `/api/admin/provider-onboarding/cases/:caseId/priority` | permission | `onboarding.priority.change` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/provider-onboarding/cases/:caseId/readiness` | permission | `onboarding.readiness.run` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/provider-onboarding/cases/:caseId/timeline` | permission | `onboarding.timeline.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/provider-onboarding/queues` | permission | `onboarding.view` | `status-success` | ✅ authored | rewritten |
+| `GET` | `/api/admin/provider-onboarding/reason-codes` | permission | `onboarding.view` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/provider-onboarding/requirements/:id/approve` | permission | `onboarding.requirement.approve` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/provider-onboarding/requirements/:id/reject` | permission | `onboarding.requirement.reject` | `status-success` | ✅ authored | rewritten |
+| `POST` | `/api/admin/provider-onboarding/requirements/:id/request-resubmission` | permission | `onboarding.requirement.request_resubmission` | `status-success` | ✅ authored | rewritten |
 
 ## `/api/admin/providers` (50)
 
