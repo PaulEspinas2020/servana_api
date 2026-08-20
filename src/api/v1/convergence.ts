@@ -98,6 +98,49 @@ export const SURFACE_CORRECTION_COST: Readonly<Record<ClientSurface, {
   customerMobile: { order: 5, cost: 'days–weeks', deploys: 'Play review; the largest installed base', retirementDays: RETIREMENT_CRITERIA.mobileZeroTrafficDays },
 });
 
+/**
+ * Whether a surface has actually shipped to real users.
+ *
+ * ## Why retirement needs this and `callers` cannot supply it
+ *
+ * `callers.<client>` is derived from that client's published manifest, which is
+ * generated from that client's own source. It answers "does this client's CODE
+ * call the canonical route?" — and that is the only question a client can
+ * answer about itself.
+ *
+ * Retiring a legacy route asks a different question: "is anything in the FIELD
+ * still calling it?" Those come apart precisely when a client has rewritten its
+ * calls but not shipped them, and the party asserting the migration is then not
+ * the party who knows what is installed. A client should not be able to license
+ * the deletion of a route by publishing a manifest about its own unreleased
+ * code.
+ *
+ * ## The measured case
+ *
+ * Landing the worker app's manifest moved 32 entries to
+ * `providerMobile: 'migrated'` and, with nothing else changed, made **13 legacy
+ * aliases retirable** — `GET /api/worker/job-cards`, the five job-transition
+ * routes, the provider document routes. The client that licensed that is a
+ * greenfield repository recorded in its own manifest as
+ * `"local-only (no remote)"`, with no UI, no release, and its own certification
+ * returning NOT_CERTIFIED. Meanwhile the ServanaWorker build those legacy routes
+ * were written for publishes no manifest at all — which is exactly the case the
+ * migration plan warns about: do not retire a route because no manifest lists
+ * it, without checking the clients that publish none.
+ *
+ * So this is a platform fact, held here, and a manifest cannot assert it.
+ */
+export const SURFACE_RELEASED: Readonly<Record<ClientSurface, boolean>> = Object.freeze({
+  admin: true,
+  providerWeb: true,
+  // Angular, never deployed — SURFACE_CORRECTION_COST says as much.
+  customerWeb: false,
+  // The greenfield worker app. Its manifest is real and its calls are real; it
+  // has never been released, so it cannot speak for what is installed.
+  providerMobile: false,
+  customerMobile: true,
+});
+
 /** Surfaces in migration order: cheapest to correct first, mobile last. */
 export const MIGRATION_ORDER: readonly ClientSurface[] = Object.freeze(
   [...CLIENT_SURFACES].sort(
@@ -721,6 +764,28 @@ export const deprecationPlan = (): DeprecationRow[] => {
         blockedBy.push(
           `${blockingSurfaces.map((s) => SURFACE_LABEL[s]).join(', ')} ` +
             `${blockingSurfaces.length === 1 ? 'has' : 'have'} not migrated`,
+        );
+      }
+
+      /**
+       * A `migrated` mark from a surface that has never shipped does not clear
+       * the route for retirement — see SURFACE_RELEASED. The code has moved; the
+       * installed base has not, because there is no installed base yet, and the
+       * previous build of that client is still whatever it was.
+       *
+       * Separate from the check above on purpose: "has not migrated" and "has
+       * migrated but has not shipped" are different states needing different
+       * work, and collapsing them would tell a client team to redo a migration
+       * they have already done.
+       */
+      const unreleasedMigrated = CLIENT_SURFACES.filter(
+        (s) => entry.callers[s] === 'migrated' && !SURFACE_RELEASED[s],
+      );
+      if (unreleasedMigrated.length) {
+        blockedBy.push(
+          `${unreleasedMigrated.map((s) => SURFACE_LABEL[s]).join(', ')} ` +
+            `${unreleasedMigrated.length === 1 ? 'has' : 'have'} migrated in code but ` +
+            'not shipped, so nothing yet proves the legacy path is unused in the field',
         );
       }
       if (legacy.disposition === 'CANONICALIZE') {

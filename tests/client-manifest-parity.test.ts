@@ -36,11 +36,11 @@ const key = (method: string, p: string) => `${method.toLowerCase()} ${shape(p)}`
 describe('the contract agrees with the clients that publish a manifest', () => {
   const manifests = loadManifests();
 
-  it('a providerWeb manifest is present — without it this suite proves nothing', () => {
+  it('the manifests are present — without them this suite proves nothing', () => {
     // A vacuous pass is the failure mode of every parity check. Say so out loud.
     expect(manifests.map((m) => m.client)).toContain('providerWeb');
-    const providerWeb = manifests.find((m) => m.client === 'providerWeb')!;
-    expect(providerWeb.endpoints.length).toBeGreaterThan(0);
+    expect(manifests.map((m) => m.client)).toContain('providerMobile');
+    for (const m of manifests) expect(m.endpoints.length).toBeGreaterThan(0);
   });
 
   it('every endpoint the portal calls exists in the contract', () => {
@@ -86,11 +86,47 @@ describe('the contract agrees with the clients that publish a manifest', () => {
      * alone and this asserts that it was.
      */
     const withManifest = new Set(manifests.map((m) => m.client));
-    expect([...withManifest]).toEqual(['providerWeb']);
 
+    // Derived from what is on disk rather than from a list written here. When
+    // the worker app's manifest landed, the hardcoded version of this assertion
+    // failed for the right reason and had to be generalised — a list in a test
+    // is the same maintenance burden as a list in the contract, one file along.
     for (const client of ['customerWeb', 'providerMobile', 'customerMobile', 'admin'] as const) {
+      if (withManifest.has(client)) continue;
       const migrated = (V1_CONTRACT as any[]).filter((e) => e.callers?.[client] === 'migrated');
       expect(migrated.length).toBe(0);
     }
+  });
+
+  /**
+   * The second client, and the reason the reconciler had to stop naming the
+   * first one twice.
+   *
+   * `providerMobile` is the worker app. Its manifest is generated from the
+   * RESOLVED Dart AST rather than from a pattern over text, and its shape
+   * matches providerWeb's field for field, so the reconciler needed no special
+   * case to read it — which is the property being asserted here.
+   */
+  it("providerMobile reads 'migrated' for exactly the endpoints the worker app calls", () => {
+    const providerMobile = manifests.find((m) => m.client === 'providerMobile')!;
+    const called = calledKeys(providerMobile);
+    for (const entry of V1_CONTRACT as any[]) {
+      const k = key(entry.method, entry.path);
+      if (called.has(k)) {
+        expect([entry.id, entry.callers.providerMobile]).toEqual([entry.id, 'migrated']);
+      } else {
+        expect([entry.id, entry.callers.providerMobile]).not.toEqual([entry.id, 'migrated']);
+      }
+    }
+  });
+
+  it('both clients are reconciled, and they are not the same set', () => {
+    // A reconciler that had collapsed to one client would still pass every
+    // assertion above if both columns happened to agree. They do not.
+    const web = new Set(calledKeys(manifests.find((m) => m.client === 'providerWeb')!));
+    const mobile = new Set(calledKeys(manifests.find((m) => m.client === 'providerMobile')!));
+    expect(web.size).toBeGreaterThan(0);
+    expect(mobile.size).toBeGreaterThan(0);
+    expect([...mobile].some((k) => !web.has(k))).toBe(true);
   });
 });

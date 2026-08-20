@@ -475,7 +475,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'domain command, not here.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'migrated', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'planned' },
     observability: 'identity',
   },
 
@@ -609,7 +609,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'Retirement gated on a ServanaWorker release.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
     notes:
       'Three paths, one domain service. This is the clearest centralization case in the ' +
@@ -631,7 +631,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     legacy: [
       { method: 'get', path: '/api/worker/job-cards/:bookingId', disposition: 'ALIAS_TEMPORARILY', note: 'Provider Web. Same service and view function.' },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'migrated', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
   },
 
@@ -861,7 +861,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'gives customers the multi-device behaviour providers already had.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'n/a' },
+    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'notifications',
     notes:
       'Account-scoped by construction: the row is upserted ON THE TOKEN, so registering a ' +
@@ -896,7 +896,7 @@ export const V1_CONTRACT: ContractEntry[] = [
         note: 'Same operation for customers, against the single legacy column.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'n/a' },
+    callers: { customerMobile: 'legacy', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'notifications',
     notes:
       'Omitting the token releases EVERY device, which is what a sign-out-everywhere wants. ' +
@@ -962,7 +962,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     status: 'implemented',
     domainService: 'services/account/accountSettingsService.getSettings',
     legacy: [],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'planned', admin: 'planned' },
     observability: 'account',
     notes:
       'There was no server-side settings store before this. Locale and privacy choices were held ' +
@@ -984,7 +984,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     status: 'implemented',
     domainService: 'services/account/accountSettingsService.patchSettings',
     legacy: [],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'planned', admin: 'planned' },
     observability: 'account',
     notes:
       'PATCH rather than PUT: a full replace means a client that knows about four settings ' +
@@ -1037,7 +1037,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'active-eligible and missing a photo.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'planned', admin: 'n/a' },
     observability: 'account',
     notes:
       '`percent` counts every requirement including the cosmetic ones, because that is what a ' +
@@ -1398,7 +1398,7 @@ export const V1_CONTRACT: ContractEntry[] = [
         note: 'The same static catalog constant. No per-caller data of any kind.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'legacy', admin: 'n/a' },
     observability: 'account',
     notes:
       'Provider-scoped rather than public even though the payload is static policy: the ' +
@@ -1434,7 +1434,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'endpoint that stored the file without re-evaluating would leave them blocked.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'migrated', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'account',
     notes:
       'The file is a data URI validated by SIGNATURE against an allowlist and a size ceiling, ' +
@@ -1465,7 +1465,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'route, so they travel with the only v1 response that contains a private storage URL.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'migrated', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'account',
     notes:
       'A malformed id and an id belonging to another provider answer the SAME 404. A 422 for ' +
@@ -1495,7 +1495,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'skipping it would leave someone online against a document they just removed.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'migrated', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'account',
   },
   {
@@ -1575,7 +1575,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'commitment and appears in neither.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'legacy', admin: 'n/a' },
     observability: 'account',
   },
   {
@@ -1609,7 +1609,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'not say so would leave them assuming leave cancels their jobs.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'legacy', admin: 'n/a' },
     observability: 'account',
     notes:
       'The response reports what was STORED, never the request. A response assembled from the ' +
@@ -1638,7 +1638,7 @@ export const V1_CONTRACT: ContractEntry[] = [
         note: 'IDENTICAL engine call. Cancels rather than deletes; the row survives as history.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'legacy', admin: 'n/a' },
     observability: 'account',
     notes:
       'A malformed id answers 404, the same as one belonging to another provider - a 422 for ' +
@@ -1677,7 +1677,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'endpoints exist to tell apart.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'planned', admin: 'n/a' },
     observability: 'account',
     notes:
       'Keyed on `services.id` - the Catalog V2 canonical specific-service identity - never on a ' +
@@ -2253,7 +2253,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     status: 'implemented',
     domainService: 'services/identityVerificationSync.provenFrom + recordProvenIdentifiers, guarded by services/accountLinkGuard',
     legacy: [],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'planned', admin: 'n/a' },
     observability: 'auth',
     notes:
       'There is no server-side SMS OTP and this does not add one. The proof is a Firebase ID ' +
@@ -2951,7 +2951,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'agree on what happened.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'planned', admin: 'planned' },
     observability: 'bookings',
     notes:
       'Preserves a reassigned provider\'s full progression — accepted, en route, ' +
@@ -2992,7 +2992,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'the provider from the token and check the CURRENT assignment.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
   },
   {
@@ -3030,7 +3030,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'the provider from the token and check the CURRENT assignment.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
   },
   {
@@ -3068,7 +3068,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'the provider from the token and check the CURRENT assignment.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
   },
   {
@@ -3106,7 +3106,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'the provider from the token and check the CURRENT assignment.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
   },
   {
@@ -3144,7 +3144,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'the provider from the token and check the CURRENT assignment.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'legacy', admin: 'n/a' },
     observability: 'provider-jobs',
     notes:
       'The worker code is the six-digit secret the CUSTOMER reads out. It is the only '
@@ -3186,7 +3186,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'the provider from the token and check the CURRENT assignment.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
   },
   {
@@ -3237,7 +3237,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'question is the availableActions block on GET /bookings/:id/transitions.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'legacy', providerWeb: 'migrated', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'provider-jobs',
     notes:
       'Completes the cancellation triad. Customer, provider and admin cancellation are ' +
@@ -3283,7 +3283,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'This entry adds the state and time-window rules §64 requires.',
       },
     ],
-    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'planned', providerWeb: 'migrated', admin: 'planned' },
+    callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'planned' },
     observability: 'booking-experiences',
     notes:
       'A withheld position is a 200 with visibility.reason, never a 403: the caller is ' +
@@ -3395,7 +3395,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     status: 'implemented',
     domainService: 'services/booking/bookingOtpService.readCredentialState',
     legacy: [],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'migrated', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'planned' },
     observability: 'booking-experiences',
     notes:
       'Exists so a client renders "resend in 42s" and "2 attempts left" from the backend ' +
@@ -3499,7 +3499,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'call the same additionalService instance.',
       },
     ],
-    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'migrated', admin: 'n/a' },
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'n/a' },
     observability: 'booking-experiences',
     notes:
       'Additional work was ALREADY a child-request model (booking_additional_requests + ' +
@@ -3529,7 +3529,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'only in living under the booking it belongs to, which is what §60 asks for.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'legacy', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'legacy', admin: 'planned' },
     observability: 'booking-experiences',
   },
   {
@@ -3575,7 +3575,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'answers "may I open one" for a live client that has no other way to ask.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'migrated', admin: 'legacy' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'legacy' },
     observability: 'booking-experiences',
     notes:
       'One record for all three actors. A second dispute table would have given admin, ' +
@@ -3596,7 +3596,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     status: 'implemented',
     domainService: 'services/booking/bookingDisputeService.listDisputes',
     legacy: [],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'migrated', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'migrated', admin: 'planned' },
     observability: 'booking-experiences',
     notes:
       '`reason`, `assigned_team` and `actor_uid` are withheld from every caller: free text ' +
@@ -3884,7 +3884,7 @@ export const V1_CONTRACT: ContractEntry[] = [
           'permission. Both now read the same underlying capture events.',
       },
     ],
-    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'planned', providerWeb: 'planned', admin: 'planned' },
+    callers: { customerMobile: 'planned', customerWeb: 'planned', providerMobile: 'migrated', providerWeb: 'planned', admin: 'planned' },
     observability: 'finance-payments',
     notes:
       'One endpoint, three explicit DTOs. The provider is shown the gross their share is a ' +

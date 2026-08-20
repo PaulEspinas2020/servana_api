@@ -23,15 +23,15 @@ endpoint remains, §3 states why the authorization differs — never the truth.
 
 | Endpoint | Status | Customer Mobile | Customer Web | Provider Mobile | Provider Web | Admin |
 |---|---|---|---|---|---|---|
-| `GET /api/v1/provider/jobs` | implemented | · | · | `legacy` | `migrated` | · |
-| `GET /api/v1/provider/jobs/:bookingId` | implemented | · | · | `planned` | `migrated` | · |
-| `POST /api/v1/provider/jobs/:bookingId/accept` | implemented | · | · | `legacy` | `migrated` | · |
-| `POST /api/v1/provider/jobs/:bookingId/decline` | implemented | · | · | `legacy` | `migrated` | · |
-| `POST /api/v1/provider/jobs/:bookingId/en-route` | implemented | · | · | `legacy` | `migrated` | · |
-| `POST /api/v1/provider/jobs/:bookingId/arrived` | implemented | · | · | `legacy` | `migrated` | · |
-| `POST /api/v1/provider/jobs/:bookingId/start` | implemented | · | · | `legacy` | `legacy` | · |
-| `POST /api/v1/provider/jobs/:bookingId/complete` | implemented | · | · | `legacy` | `migrated` | · |
-| `POST /api/v1/provider/jobs/:bookingId/cancel` | implemented | · | · | `legacy` | `migrated` | · |
+| `GET /api/v1/provider/jobs` | implemented | · | · | `migrated` | `migrated` | · |
+| `GET /api/v1/provider/jobs/:bookingId` | implemented | · | · | `migrated` | `migrated` | · |
+| `POST /api/v1/provider/jobs/:bookingId/accept` | implemented | · | · | `migrated` | `migrated` | · |
+| `POST /api/v1/provider/jobs/:bookingId/decline` | implemented | · | · | `migrated` | `migrated` | · |
+| `POST /api/v1/provider/jobs/:bookingId/en-route` | implemented | · | · | `migrated` | `migrated` | · |
+| `POST /api/v1/provider/jobs/:bookingId/arrived` | implemented | · | · | `migrated` | `migrated` | · |
+| `POST /api/v1/provider/jobs/:bookingId/start` | implemented | · | · | `migrated` | `legacy` | · |
+| `POST /api/v1/provider/jobs/:bookingId/complete` | implemented | · | · | `migrated` | `migrated` | · |
+| `POST /api/v1/provider/jobs/:bookingId/cancel` | implemented | · | · | `migrated` | `migrated` | · |
 | `GET /api/v1/admin/bookings/:bookingId/assignment-candidates` | implemented | · | · | · | · | `legacy` |
 | `POST /api/v1/admin/bookings/:bookingId/assign` | implemented | · | · | · | · | `legacy` |
 | `POST /api/v1/admin/bookings/:bookingId/reassign` | implemented | · | · | · | · | `legacy` |

@@ -1,0 +1,232 @@
+{
+  "client": "providerMobile",
+  "repository": "local-only (no remote; see WORKER_APP_BASELINE.md)",
+  "generatedBy": "tool/generate_canonical_calls.dart",
+  "note": "Generated from the RESOLVED Dart AST, never from a pattern over text. Every entry is a path this app calls through ServanaApiClient, with the file:line that calls it. Shape matches src/api/v1/client-manifests/providerWeb.canonical-calls.json field for field so the backend reconciler needs no special case.",
+  "endpoints": [
+    {
+      "method": "post",
+      "path": "/v1/auth/verify-mobile",
+      "cites": [
+        "lib/features/account/provider_account_api.dart:17"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/bookings/:bookingId/additional-work",
+      "cites": [
+        "lib/features/bookings/booking_experience_api.dart:36"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/bookings/:bookingId/additional-work",
+      "cites": [
+        "lib/features/bookings/booking_experience_api.dart:46"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/bookings/:bookingId/disputes",
+      "cites": [
+        "lib/features/bookings/booking_experience_api.dart:50"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/bookings/:bookingId/disputes",
+      "cites": [
+        "lib/features/bookings/booking_experience_api.dart:56"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/bookings/:bookingId/otp/status",
+      "cites": [
+        "lib/features/bookings/booking_experience_api.dart:19"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/bookings/:bookingId/payment",
+      "cites": [
+        "lib/features/bookings/booking_experience_api.dart:33"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/bookings/:bookingId/tracking",
+      "cites": [
+        "lib/features/bookings/booking_experience_api.dart:29"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/bookings/:bookingId/transitions",
+      "cites": [
+        "lib/features/bookings/booking_experience_api.dart:25"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/me",
+      "cites": [
+        "lib/features/account/provider_account_api.dart:20"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/me/completion",
+      "cites": [
+        "lib/features/account/provider_account_api.dart:23"
+      ]
+    },
+    {
+      "method": "delete",
+      "path": "/v1/me/devices",
+      "cites": [
+        "lib/features/notifications/device_registration.dart:34"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/me/devices",
+      "cites": [
+        "lib/features/notifications/device_registration.dart:22"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/me/settings",
+      "cites": [
+        "lib/features/account/provider_account_api.dart:56"
+      ]
+    },
+    {
+      "method": "patch",
+      "path": "/v1/me/settings",
+      "cites": [
+        "lib/features/account/provider_account_api.dart:59"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/document-types",
+      "cites": [
+        "lib/features/account/provider_account_api.dart:29"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/documents",
+      "cites": [
+        "lib/features/account/provider_account_api.dart:39"
+      ]
+    },
+    {
+      "method": "delete",
+      "path": "/v1/provider/documents/:documentId",
+      "cites": [
+        "lib/features/account/provider_account_api.dart:49"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/documents/:documentId/preview",
+      "cites": [
+        "lib/features/account/provider_account_api.dart:46"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/jobs",
+      "cites": [
+        "lib/features/jobs/provider_jobs_api.dart:64"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/jobs/:bookingId",
+      "cites": [
+        "lib/features/jobs/provider_jobs_api.dart:67"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/jobs/:bookingId/accept",
+      "cites": [
+        "lib/features/jobs/provider_jobs_api.dart:76"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/jobs/:bookingId/arrived",
+      "cites": [
+        "lib/features/jobs/provider_jobs_api.dart:85"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/jobs/:bookingId/cancel",
+      "cites": [
+        "lib/features/jobs/provider_jobs_api.dart:101"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/jobs/:bookingId/complete",
+      "cites": [
+        "lib/features/jobs/provider_jobs_api.dart:97"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/jobs/:bookingId/decline",
+      "cites": [
+        "lib/features/jobs/provider_jobs_api.dart:79"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/jobs/:bookingId/en-route",
+      "cites": [
+        "lib/features/jobs/provider_jobs_api.dart:82"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/jobs/:bookingId/start",
+      "cites": [
+        "lib/features/jobs/provider_jobs_api.dart:93"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/services",
+      "cites": [
+        "lib/features/account/provider_account_api.dart:52"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/v1/provider/time-off",
+      "cites": [
+        "lib/features/account/provider_account_api.dart:61"
+      ]
+    },
+    {
+      "method": "post",
+      "path": "/v1/provider/time-off",
+      "cites": [
+        "lib/features/account/provider_account_api.dart:71"
+      ]
+    },
+    {
+      "method": "delete",
+      "path": "/v1/provider/time-off/:timeOffId",
+      "cites": [
+        "lib/features/account/provider_account_api.dart:75"
+      ]
+    }
+  ]
+}

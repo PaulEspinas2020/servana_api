@@ -100,7 +100,7 @@ re-fetch to learn its badge or decrement a number it guessed.
 | Mark everything read | legacy | legacy | legacy | migrated | planned |
 | Dismiss one notification | planned | planned | planned | migrated | — |
 | Read and change my notification preferences | planned | planned | legacy | legacy | planned |
-| Register and release this device for push | legacy | planned | legacy | migrated | — |
+| Register and release this device for push | legacy | planned | migrated | migrated | — |
 
 No client is `migrated` yet: the platform application repositories are out of scope until the
 backend Master Command completes. Every legacy route above stays mounted and reaches the same

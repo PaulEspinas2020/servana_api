@@ -236,20 +236,17 @@ tap today.
 First Flutter client.
 
 <!-- BEGIN GENERATED: v1-moves:providerMobile -->
-**43** canonical capabilities are live that this client still reaches by a legacy route.
+**33** canonical capabilities are live that this client still reaches by a legacy route.
 
 | Move to (canonical) | Legacy routes it supersedes |
 |---|---|
 | `GET /api/v1/bookings/:bookingId` | `GET /api/:id` |
-| `GET /api/v1/provider/jobs` | `GET /api/worker/job-cards`<br>`GET /api/workers/:workerId/job-cards` |
 | `GET /api/v1/notifications` | `GET /api/user/notifications` |
 | `GET /api/v1/notifications/unread-count` | `GET /api/user/notifications/unread-count` |
 | `PATCH /api/v1/notifications/:key/read` | `PATCH /api/user/notifications/:key/read` |
 | `POST /api/v1/notifications/read-all` | `POST /api/user/notifications/mark-all-read` |
 | `GET /api/v1/me/notification-preferences` | `GET /api/provider/notification-preferences` |
 | `PATCH /api/v1/me/notification-preferences` | `PUT /api/provider/notification-preferences` |
-| `POST /api/v1/me/devices` | `POST /api/provider/fcm-token`<br>`POST /api/user/fcm-token` |
-| `DELETE /api/v1/me/devices` | `DELETE /api/provider/fcm-token`<br>`DELETE /api/user/fcm-token` |
 | `PATCH /api/v1/me` | `PUT /api/user/updateprofile` |
 | `GET /api/v1/provider/profile` | `GET /api/provider/profile` |
 | `PATCH /api/v1/provider/profile` | `POST /api/provider/public-profile-revisions` |
@@ -273,13 +270,6 @@ First Flutter client.
 | `GET /api/v1/conversations/:conversationId/messages` | `GET /api/chat/conversations/:id/messages` |
 | `POST /api/v1/conversations/:conversationId/messages` | `POST /api/chat/conversations/:id/messages` |
 | `POST /api/v1/conversations/:conversationId/read` | `POST /api/chat/conversations/:id/read` |
-| `POST /api/v1/provider/jobs/:bookingId/accept` | `PUT /api/worker/bookings/:bookingId/accept` |
-| `POST /api/v1/provider/jobs/:bookingId/decline` | `PUT /api/worker/bookings/:bookingId/decline` |
-| `POST /api/v1/provider/jobs/:bookingId/en-route` | `PUT /api/worker/bookings/:bookingId/en-route` |
-| `POST /api/v1/provider/jobs/:bookingId/arrived` | `PUT /api/worker/bookings/:bookingId/arrived` |
-| `POST /api/v1/provider/jobs/:bookingId/start` | `PUT /api/worker/bookings/:bookingId/start` |
-| `POST /api/v1/provider/jobs/:bookingId/complete` | `PUT /api/worker/bookings/:bookingId/complete` |
-| `POST /api/v1/provider/jobs/:bookingId/cancel` | `POST /api/provider/bookings/:bookingId/cancel` |
 | `GET /api/v1/provider/earnings/summary` | `GET /api/provider/earnings/summary` |
 | `GET /api/v1/provider/earnings/transactions` | `GET /api/provider/earnings`<br>`GET /api/provider/ledger` |
 | `GET /api/v1/provider/earnings/payouts` | `GET /api/provider/payouts` |

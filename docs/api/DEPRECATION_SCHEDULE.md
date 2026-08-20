@@ -55,14 +55,14 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `GET /api/:id` | ALIAS_TEMPORARILY | `bookings.get` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `POST /api/:id/confirm-otp` | ALIAS_TEMPORARILY | `bookings.otp.verify` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
 | `GET /api/:id/timeline` | ALIAS_TEMPORARILY | `bookings.timeline` | Customer Mobile, Customer Web have not migrated | 90d |
-| `GET /api/:id/tracking` | ALIAS_TEMPORARILY | `bookings.tracking` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
+| `GET /api/:id/tracking` | ALIAS_TEMPORARILY | `bookings.tracking` | Customer Mobile, Customer Web, Admin Web have not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 90d |
 | `GET /api/:serviceId/options-with-addons` | ALIAS_TEMPORARILY | `catalog.subcategories.services` | Customer Mobile, Customer Web, Provider Mobile have not migrated | 90d |
-| `GET /api/additional/booking/:bookingId` | ALIAS_TEMPORARILY | `bookings.additionalWork.list` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
-| `POST /api/additional/request/:userId` | ALIAS_TEMPORARILY | `bookings.additionalWork.create` | Provider Mobile has not migrated | 90d |
+| `GET /api/additional/booking/:bookingId` | ALIAS_TEMPORARILY | `bookings.additionalWork.list` | Customer Mobile, Customer Web, Provider Web, Admin Web have not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 90d |
+| `POST /api/additional/request/:userId` | ALIAS_TEMPORARILY | `bookings.additionalWork.create` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
 | `GET /api/admin/bookings` | CANONICALIZE | `admin.bookings.list` | Admin Web has not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 14d |
 | `POST /api/admin/bookings/:id/assign` | CANONICALIZE | `admin.bookings.assign` | Admin Web has not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 14d |
 | `GET /api/admin/bookings/:id/assignment-candidates` | CANONICALIZE | `admin.bookings.assignmentCandidates` | Admin Web has not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 14d |
-| `POST /api/admin/bookings/:id/escalate` | ALIAS_TEMPORARILY | `bookings.disputes.open` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
+| `POST /api/admin/bookings/:id/escalate` | ALIAS_TEMPORARILY | `bookings.disputes.open` | Customer Mobile, Customer Web, Admin Web have not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 90d |
 | `POST /api/admin/bookings/:id/reassign` | CANONICALIZE | `admin.bookings.reassign` | Admin Web has not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 14d |
 | `POST /api/admin/bookings/:id/reschedule` | ALIAS_TEMPORARILY | `bookings.reschedule` | Customer Mobile, Customer Web, Admin Web have not migrated | 90d |
 | `GET /api/admin/finance/reconciliation/exceptions` | ALIAS_TEMPORARILY | `admin.finance.reconciliation` | Admin Web has not migrated | 14d |
@@ -72,7 +72,7 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `POST /api/auth/firebase-login` | ALIAS_TEMPORARILY | `auth.login` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `POST /api/auth/forgot-password` | ALIAS_TEMPORARILY | `auth.forgotPassword` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `POST /api/auth/logout` | ALIAS_TEMPORARILY | `auth.logout` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
-| `GET /api/auth/me` | ALIAS_TEMPORARILY | `identity.me` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
+| `GET /api/auth/me` | ALIAS_TEMPORARILY | `identity.me` | Customer Mobile, Customer Web, Admin Web have not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 90d |
 | `POST /api/auth/provider/register` | ALIAS_TEMPORARILY | `auth.register` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/auth/refresh` | ALIAS_TEMPORARILY | `auth.refresh` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `POST /api/auth/resend-email-otp` | ALIAS_TEMPORARILY | `auth.resendVerification` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
@@ -81,7 +81,7 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `POST /api/auth/signin` | ALIAS_TEMPORARILY | `auth.login` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
 | `POST /api/auth/signup` | ALIAS_TEMPORARILY | `auth.register` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/auth/verify-email-otp` | ALIAS_TEMPORARILY | `auth.verifyEmail` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
-| `GET /api/booking/:bookingId/provider-location` | ALIAS_TEMPORARILY | `bookings.tracking` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
+| `GET /api/booking/:bookingId/provider-location` | ALIAS_TEMPORARILY | `bookings.tracking` | Customer Mobile, Customer Web, Admin Web have not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 90d |
 | `GET /api/bookings/:bookingId/conversation` | ALIAS_TEMPORARILY | `conversations.create` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
 | `GET /api/bookings/:bookingId/review-eligibility` | ALIAS_TEMPORARILY | `bookings.review.get` | Customer Mobile, Customer Web have not migrated | 90d |
 | `POST /api/bookings/:bookingId/reviews` | ALIAS_TEMPORARILY | `bookings.review.create` | Customer Mobile, Customer Web have not migrated | 90d |
@@ -98,16 +98,16 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `POST /api/chat/conversations/:id/messages` | ALIAS_TEMPORARILY | `conversations.messages.create` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
 | `POST /api/chat/conversations/:id/messages/:msgId/report` | ALIAS_TEMPORARILY | `conversations.messages.report` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/chat/conversations/:id/read` | ALIAS_TEMPORARILY | `conversations.read` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
-| `POST /api/provider/bookings/:bookingId/cancel` | ALIAS_TEMPORARILY | `provider.jobs.cancel` | Provider Mobile has not migrated | 90d |
-| `GET /api/provider/document-types` | ALIAS_TEMPORARILY | `provider.documents.types` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/bookings/:bookingId/cancel` | ALIAS_TEMPORARILY | `provider.jobs.cancel` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `GET /api/provider/document-types` | ALIAS_TEMPORARILY | `provider.documents.types` | Provider Web has not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
 | `GET /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.list` | Provider Mobile has not migrated | 90d |
-| `POST /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.create` | Provider Mobile has not migrated | 90d |
-| `DELETE /api/provider/documents/:documentId` | ALIAS_TEMPORARILY | `provider.documents.delete` | Provider Mobile has not migrated | 90d |
-| `GET /api/provider/documents/:documentId/preview` | ALIAS_TEMPORARILY | `provider.documents.preview` | Provider Mobile has not migrated | 90d |
+| `POST /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.create` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `DELETE /api/provider/documents/:documentId` | ALIAS_TEMPORARILY | `provider.documents.delete` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `GET /api/provider/documents/:documentId/preview` | ALIAS_TEMPORARILY | `provider.documents.preview` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
 | `GET /api/provider/earnings` | ALIAS_TEMPORARILY | `provider.earnings.transactions` | Provider Mobile has not migrated | 90d |
 | `GET /api/provider/earnings/summary` | ALIAS_TEMPORARILY | `provider.earnings.summary` | Provider Mobile has not migrated | 90d |
-| `POST /api/provider/fcm-token` | ALIAS_TEMPORARILY | `me.devices.register` | Customer Mobile, Customer Web, Provider Mobile have not migrated | 90d |
-| `DELETE /api/provider/fcm-token` | ALIAS_TEMPORARILY | `me.devices.release` | Customer Mobile, Customer Web, Provider Mobile have not migrated | 90d |
+| `POST /api/provider/fcm-token` | ALIAS_TEMPORARILY | `me.devices.register` | Customer Mobile, Customer Web have not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 90d |
+| `DELETE /api/provider/fcm-token` | ALIAS_TEMPORARILY | `me.devices.release` | Customer Mobile, Customer Web have not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 90d |
 | `GET /api/provider/ledger` | ALIAS_TEMPORARILY | `provider.earnings.transactions` | Provider Mobile has not migrated | 90d |
 | `GET /api/provider/notification-preferences` | ALIAS_TEMPORARILY | `me.notificationPreferences.get` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
 | `PUT /api/provider/notification-preferences` | ALIAS_TEMPORARILY | `me.notificationPreferences.patch` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
@@ -127,8 +127,8 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `POST /api/user/adduseraddress` | ALIAS_TEMPORARILY | `customer.addresses.update` | Customer Mobile, Customer Web have not migrated | 90d |
 | `GET /api/user/alluseraddresses` | ALIAS_TEMPORARILY | `customer.addresses.list` | Customer Mobile, Customer Web have not migrated | 90d |
 | `DELETE /api/user/deleteaddress` | ALIAS_TEMPORARILY | `customer.addresses.delete` | Customer Mobile, Customer Web have not migrated | 90d |
-| `POST /api/user/fcm-token` | ALIAS_TEMPORARILY | `me.devices.register` | Customer Mobile, Customer Web, Provider Mobile have not migrated | 90d |
-| `DELETE /api/user/fcm-token` | ALIAS_TEMPORARILY | `me.devices.release` | Customer Mobile, Customer Web, Provider Mobile have not migrated | 90d |
+| `POST /api/user/fcm-token` | ALIAS_TEMPORARILY | `me.devices.register` | Customer Mobile, Customer Web have not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 90d |
+| `DELETE /api/user/fcm-token` | ALIAS_TEMPORARILY | `me.devices.release` | Customer Mobile, Customer Web have not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 90d |
 | `PUT /api/user/makeaddressprimary` | ALIAS_TEMPORARILY | `customer.addresses.setDefault` | Customer Mobile, Customer Web have not migrated | 90d |
 | `GET /api/user/notifications` | ALIAS_TEMPORARILY | `notifications.list` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
 | `PATCH /api/user/notifications/:key/read` | ALIAS_TEMPORARILY | `notifications.markRead` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
@@ -140,22 +140,22 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `GET /api/users/:userId/bookings` | ALIAS_TEMPORARILY | `bookings.listMine` | Customer Mobile, Customer Web have not migrated | 90d |
 | `GET /api/worker/availability` | ALIAS_TEMPORARILY | `provider.availability.get` | Provider Mobile, Provider Web have not migrated | 90d |
 | `PUT /api/worker/availability` | ALIAS_TEMPORARILY | `provider.availability.patch` | Provider Mobile, Provider Web have not migrated | 90d |
-| `PUT /api/worker/bookings/:bookingId/accept` | ALIAS_TEMPORARILY | `provider.jobs.accept` | Provider Mobile has not migrated | 90d |
-| `PUT /api/worker/bookings/:bookingId/arrived` | ALIAS_TEMPORARILY | `provider.jobs.arrived` | Provider Mobile has not migrated | 90d |
-| `PUT /api/worker/bookings/:bookingId/complete` | ALIAS_TEMPORARILY | `provider.jobs.complete` | Provider Mobile has not migrated | 90d |
-| `PUT /api/worker/bookings/:bookingId/decline` | ALIAS_TEMPORARILY | `provider.jobs.decline` | Provider Mobile has not migrated | 90d |
-| `PUT /api/worker/bookings/:bookingId/en-route` | ALIAS_TEMPORARILY | `provider.jobs.enroute` | Provider Mobile has not migrated | 90d |
-| `PUT /api/worker/bookings/:bookingId/start` | ALIAS_TEMPORARILY | `provider.jobs.start` | Provider Mobile, Provider Web have not migrated | 90d |
-| `GET /api/worker/job-cards` | ALIAS_TEMPORARILY | `provider.jobs.list` | Provider Mobile has not migrated | 90d |
-| `GET /api/worker/job-cards/:bookingId` | ALIAS_TEMPORARILY | `provider.jobs.get` | Provider Mobile has not migrated | 90d |
-| `GET /api/worker/services-overview` | ALIAS_TEMPORARILY | `provider.services.list` | Provider Mobile, Provider Web have not migrated | 90d |
-| `GET /api/worker/time-off` | ALIAS_TEMPORARILY | `provider.timeOff.list` | Provider Mobile, Provider Web have not migrated | 90d |
-| `POST /api/worker/time-off` | ALIAS_TEMPORARILY | `provider.timeOff.create` | Provider Mobile, Provider Web have not migrated | 90d |
-| `DELETE /api/worker/time-off/:id` | ALIAS_TEMPORARILY | `provider.timeOff.cancel` | Provider Mobile, Provider Web have not migrated | 90d |
+| `PUT /api/worker/bookings/:bookingId/accept` | ALIAS_TEMPORARILY | `provider.jobs.accept` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `PUT /api/worker/bookings/:bookingId/arrived` | ALIAS_TEMPORARILY | `provider.jobs.arrived` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `PUT /api/worker/bookings/:bookingId/complete` | ALIAS_TEMPORARILY | `provider.jobs.complete` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `PUT /api/worker/bookings/:bookingId/decline` | ALIAS_TEMPORARILY | `provider.jobs.decline` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `PUT /api/worker/bookings/:bookingId/en-route` | ALIAS_TEMPORARILY | `provider.jobs.enroute` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `PUT /api/worker/bookings/:bookingId/start` | ALIAS_TEMPORARILY | `provider.jobs.start` | Provider Web has not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `GET /api/worker/job-cards` | ALIAS_TEMPORARILY | `provider.jobs.list` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `GET /api/worker/job-cards/:bookingId` | ALIAS_TEMPORARILY | `provider.jobs.get` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `GET /api/worker/services-overview` | ALIAS_TEMPORARILY | `provider.services.list` | Provider Web has not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `GET /api/worker/time-off` | ALIAS_TEMPORARILY | `provider.timeOff.list` | Provider Web has not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `POST /api/worker/time-off` | ALIAS_TEMPORARILY | `provider.timeOff.create` | Provider Web has not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `DELETE /api/worker/time-off/:id` | ALIAS_TEMPORARILY | `provider.timeOff.cancel` | Provider Web has not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
 | `GET /api/workers/:uid/earnings-history` | RETIRE | `provider.earnings.transactions` | Provider Mobile has not migrated | 90d |
 | `GET /api/workers/:uid/notification-preferences` | ALIAS_TEMPORARILY | `settings.notificationPreferences.get` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
 | `PUT /api/workers/:uid/notification-preferences` | ALIAS_TEMPORARILY | `settings.notificationPreferences.put` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
-| `GET /api/workers/:workerId/job-cards` | ALIAS_TEMPORARILY | `provider.jobs.list` | Provider Mobile has not migrated | 90d |
+| `GET /api/workers/:workerId/job-cards` | ALIAS_TEMPORARILY | `provider.jobs.list` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
 
 ## 4. The paths the command names
 
