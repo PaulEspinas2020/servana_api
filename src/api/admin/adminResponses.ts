@@ -489,6 +489,32 @@ export const ADMIN_RESPONSES: Record<string, AdminResponseSchema> = {
     schema: { type: 'object', additionalProperties: true },
   },
 
+  'PATCH /api/admin/providers/service-applications/:id/approve': {
+    derivedFrom:
+      'adminProviderService.approveApplicationAtomic, projected by ' +
+      'adminProviderController.approveServiceApplication',
+    schema: { $ref: '#/components/schemas/ServiceApplicationDecision' },
+    note:
+      'ATOMIC and optimistically concurrent: expectedVersion is REQUIRED as a number and a '
+      + 'stale one is refused. Also fires an auto-online re-evaluation for the provider, '
+      + 'which is why activeServices is in changedScopes here and not on reject.',
+  },
+
+  'PATCH /api/admin/providers/service-applications/:id/reject': {
+    derivedFrom:
+      'adminProviderService.decideApplicationAtomic, projected by ' +
+      'adminProviderController.rejectServiceApplication',
+    schema: { $ref: '#/components/schemas/ServiceApplicationDecision' },
+  },
+
+  'PATCH /api/admin/providers/service-applications/:id/flag-action-required': {
+    derivedFrom: 'adminProviderController.flagServiceApplicationActionRequired',
+    schema: { $ref: '#/components/schemas/ServiceApplicationDecision' },
+    note:
+      'Neither an approval nor a rejection — it returns the application to the provider for '
+      + 'more information, so only the applications scope changes.',
+  },
+
   // ── catalog, remaining reads ──────────────────────────────────────────────
 
   'GET /api/admin/catalog': {
@@ -3201,6 +3227,37 @@ export const ADMIN_SCHEMAS: Record<string, unknown> = {
       'UNIT: PHP MAJOR units — pesos. CURRENCY: PHP. A real JSON number: catalogAdminService '
       + 'passes it through `money()`, which is `Number(v)`, so it does NOT arrive as the '
       + 'string a numeric column would otherwise yield. See TAB 04.',
+  },
+
+  ServiceApplicationDecision: {
+    type: 'object',
+    required: ['id', 'status', 'version', 'affectedProviderUid', 'changedScopes'],
+    description:
+      'The outcome of a service-application decision. Deliberately not the whole '
+      + 'application: a caller that needs the record reads it back.',
+    properties: {
+      id: { type: 'string' },
+      status: { type: 'string', enum: ['approved', 'rejected', 'action_required'] },
+      version: {
+        type: 'integer',
+        description:
+          'The version AFTER the write. Pass it as the next expectedVersion — re-reading the '
+          + 'application instead races the next decision.',
+      },
+      affectedProviderUid: {
+        type: 'string',
+        description: 'Whose record changed. Present so a client need not join back to find out.',
+      },
+      changedScopes: {
+        type: 'array',
+        items: { type: 'string', enum: ['applications', 'activeServices', 'identity'] },
+        description:
+          'Which Provider 360 areas a client should reload. The SERVER decides this, rather '
+          + 'than every client hard-coding a mapping from decision to tab and drifting from '
+          + 'it. `activeServices` appears on approve only, because that is the decision that '
+          + 'grants a service and triggers the auto-online re-evaluation.',
+      },
+    },
   },
 
   UtcTimestamp: {

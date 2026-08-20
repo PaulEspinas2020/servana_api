@@ -40,7 +40,7 @@ successor for one of these must not be QUIETER than the route it replaces.
 
 ## Payload schemas
 
-Authored: **125** of 251.
+Authored: **128** of 251.
 
 The remainder publish their envelope, guard, permission and parity status, and declare
 the payload `UNSPECIFIED`. That is deliberate. A guessed schema is worse than an absent
@@ -146,9 +146,9 @@ only rise.
 | `GET` | `/api/admin/providers/mobile-metrics` | permission | `providers.view` | `status-success` | ✅ authored | rewritten |
 | `GET` | `/api/admin/providers/requirement-definitions` | permission | `providers.documents.view` | `status-success` | — unspecified | rewritten |
 | `GET` | `/api/admin/providers/service-applications` | permission | `providers.view` | `status-success` | — unspecified | rewritten |
-| `PATCH` | `/api/admin/providers/service-applications/:id/approve` | permission | `providers.status.change` | `status-success` | — unspecified | rewritten |
-| `PATCH` | `/api/admin/providers/service-applications/:id/flag-action-required` | permission | `providers.status.change` | `status-success` | — unspecified | rewritten |
-| `PATCH` | `/api/admin/providers/service-applications/:id/reject` | permission | `providers.status.change` | `status-success` | — unspecified | rewritten |
+| `PATCH` | `/api/admin/providers/service-applications/:id/approve` | permission | `providers.status.change` | `status-success` | ✅ authored | rewritten |
+| `PATCH` | `/api/admin/providers/service-applications/:id/flag-action-required` | permission | `providers.status.change` | `status-success` | ✅ authored | rewritten |
+| `PATCH` | `/api/admin/providers/service-applications/:id/reject` | permission | `providers.status.change` | `status-success` | ✅ authored | rewritten |
 
 ## `/api/admin/admin-users` (12)
 

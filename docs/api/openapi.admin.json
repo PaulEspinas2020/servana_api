@@ -12,7 +12,7 @@
   ],
   "x-generated-from": "scripts/generate-admin-api-docs.ts",
   "x-operation-count": 251,
-  "x-authored-response-count": 125,
+  "x-authored-response-count": 128,
   "x-parity-rewritten-count": 231,
   "paths": {
     "/api/admin/admin-users": {
@@ -13197,7 +13197,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13211,7 +13211,7 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "$ref": "#/components/schemas/ServiceApplicationDecision"
                     }
                   }
                 }
@@ -13228,6 +13228,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminProvider.routes.ts:21",
         "x-controller": "../controllers/adminProviderController.ts",
+        "x-derived-from": "adminProviderService.approveApplicationAtomic, projected by adminProviderController.approveServiceApplication",
+        "x-note": "ATOMIC and optimistically concurrent: expectedVersion is REQUIRED as a number and a stale one is refused. Also fires an auto-online re-evaluation for the provider, which is why activeServices is in changedScopes here and not on reject.",
         "x-callers": [
           "adminWeb"
         ]
@@ -13252,7 +13254,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13266,7 +13268,7 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "$ref": "#/components/schemas/ServiceApplicationDecision"
                     }
                   }
                 }
@@ -13283,6 +13285,8 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminProvider.routes.ts:23",
         "x-controller": "../controllers/adminProviderController.ts",
+        "x-derived-from": "adminProviderController.flagServiceApplicationActionRequired",
+        "x-note": "Neither an approval nor a rejection — it returns the application to the provider for more information, so only the applications scope changes.",
         "x-callers": [
           "adminWeb"
         ]
@@ -13307,7 +13311,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Envelope declared; payload not yet authored.",
+            "description": "Authored against the service.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13321,7 +13325,7 @@
                       ]
                     },
                     "data": {
-                      "description": "UNSPECIFIED. No schema has been authored for this operation yet. This is an honest gap, not an empty object: the payload has a real shape and nobody has written it down. A guessed schema would be worse than this, because a client would generate types from it."
+                      "$ref": "#/components/schemas/ServiceApplicationDecision"
                     }
                   }
                 }
@@ -13338,6 +13342,7 @@
         "x-parity-rewritten": true,
         "x-source": "src/routes/adminProvider.routes.ts:22",
         "x-controller": "../controllers/adminProviderController.ts",
+        "x-derived-from": "adminProviderService.decideApplicationAtomic, projected by adminProviderController.rejectServiceApplication",
         "x-callers": [
           "adminWeb"
         ]
@@ -17270,6 +17275,50 @@
           "null"
         ],
         "description": "UNIT: PHP MAJOR units — pesos. CURRENCY: PHP. A real JSON number: catalogAdminService passes it through `money()`, which is `Number(v)`, so it does NOT arrive as the string a numeric column would otherwise yield. See TAB 04."
+      },
+      "ServiceApplicationDecision": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "version",
+          "affectedProviderUid",
+          "changedScopes"
+        ],
+        "description": "The outcome of a service-application decision. Deliberately not the whole application: a caller that needs the record reads it back.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "rejected",
+              "action_required"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "description": "The version AFTER the write. Pass it as the next expectedVersion — re-reading the application instead races the next decision."
+          },
+          "affectedProviderUid": {
+            "type": "string",
+            "description": "Whose record changed. Present so a client need not join back to find out."
+          },
+          "changedScopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "applications",
+                "activeServices",
+                "identity"
+              ]
+            },
+            "description": "Which Provider 360 areas a client should reload. The SERVER decides this, rather than every client hard-coding a mapping from decision to tab and drifting from it. `activeServices` appears on approve only, because that is the decision that grants a service and triggers the auto-online re-evaluation."
+          }
+        }
       },
       "UtcTimestamp": {
         "type": [
