@@ -15,10 +15,10 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 114 |
+| Mounted endpoints | 115 |
 | `public` | 22 |
 | `authenticated` | 60 |
-| `provider` | 26 |
+| `provider` | 27 |
 | `admin` | 6 |
 | Object-scoped | 43 |
 | Object-scoped WITH an ownership rule | 43 |
@@ -213,6 +213,7 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `notifications.markAllRead` | POST /notifications/read-all | `authenticated` | · ● ● ● | — |
 | `notifications.markRead` | PATCH /notifications/:key/read | `authenticated` | · ● ● ● | — |
 | `notifications.unreadCount` | GET /notifications/unread-count | `authenticated` | · ● ● ● | — |
+| `provider.activation.get` | GET /provider/activation | `provider` | · · ● · | — |
 | `provider.availability.get` | GET /provider/availability | `provider` | · · ● · | — |
 | `provider.availability.patch` | PATCH /provider/availability | `provider` | · · ● · | — |
 | `provider.documents.create` | POST /provider/documents | `provider` | · · ● · | — |
@@ -268,7 +269,7 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-59 of 114 endpoints are probeable; the other
+60 of 115 endpoints are probeable; the other
 55 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.

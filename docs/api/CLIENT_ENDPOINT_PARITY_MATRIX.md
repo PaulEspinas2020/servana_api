@@ -18,11 +18,11 @@
 
 | | |
 | --- | --- |
-| Capabilities | 62 |
-| Canonical endpoints mounted | 114 |
+| Capabilities | 63 |
+| Canonical endpoints mounted | 115 |
 | Canonical endpoints planned | 1 |
-| Legacy mappings tracked | 126 |
-| Converged (one route family) | 54 |
+| Legacy mappings tracked | 128 |
+| Converged (one route family) | 55 |
 | Role-split over ONE service | 4 |
 | Single-surface | 4 |
 | **Divergent (forked truth)** | **0** |
@@ -66,6 +66,7 @@ direction of whoever wrote it.
 | What is left before my account is usable | SHARED | planned | planned | **migrated** | planned | — |
 | Read and change my customer profile | SHARED | legacy | legacy | — | — | planned |
 | Read and change my account record | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | ⚠ mixed | planned |
+| Find out why I cannot work yet, and what to do about it | SHARED | — | — | planned | planned | — |
 | Read and change my availability, and book time off | SHARED | — | — | ⚠ mixed | legacy | — |
 | Submit, read, preview and withdraw my documents | SHARED | — | — | ⚠ mixed | ⚠ mixed | — |
 | Read and change my provider profile | SHARED | — | — | legacy | **migrated** | planned |
@@ -218,6 +219,21 @@ Legacy still aliased for this capability:
   - `PUT /api/user/updateprofile`
 
 No role split. One identity record for every account, and the ROLE-specific data is deliberately not here — `/me` carries a pointer to which extensions exist, not their contents. A `/me` that carried the provider compliance state would be fetched by every screen, used by almost none, and cached everywhere.
+
+### Find out why I cannot work yet, and what to do about it
+
+- key: `accountPolicy:providerActivation` · declared in `services/account/accountPolicy`
+- verdict: **SHARED** · domain service: `services/account/providerActivationProjection`
+- route families: `/provider`
+
+Canonical:
+  - `GET /api/v1/provider/activation`
+
+Legacy still aliased for this capability:
+  - `GET /api/provider/account-state`
+  - `GET /api/provider/compliance`
+
+DELIBERATELY not folded into providerProfile, and that separation is the whole design. The ProviderProfile schema serves two seats - the provider reading their own, and a CUSTOMER reading somebody else's - so an activation checklist added to it would be declared, in the published contract, as travelling on the endpoint customers read. Rendering a provider card and driving an onboarding checklist are different purposes over different data, and separate capabilities let authorization, retention and caching differ per purpose instead of all three being set by whichever purpose is laxest. No role split within the capability: both provider surfaces perform the identical operation and receive the identical DTO. Auth is `provider`, which is STRICTER than the account-state route it supersedes and equal to the compliance route it also supersedes - the parity gate refused the looser first draft, because compliance detail must not become reachable one rung lower as a side effect of a migration. The discovery property survives: requireProviderRole admits every provider role including suspended and unapproved, so the caller who needs to know why they cannot work still gets the checklist, and a non-provider receives the branchable ROLE_REQUIRED. The uid comes from the token and no parameter can name another account.
 
 ### Read and change my availability, and book time off
 

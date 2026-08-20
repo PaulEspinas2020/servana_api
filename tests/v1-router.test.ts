@@ -1091,6 +1091,8 @@ describe('every implemented contract entry is reachable at its declared path', (
     'customer.addresses.setDefault': () =>
       call('POST', '/api/v1/customer/addresses/CAD001/default', { body: {} }),
     'provider.profile.get': () => call('GET', '/api/v1/provider/profile', { role: 'provider' }),
+    'provider.activation.get': () =>
+      call('GET', '/api/v1/provider/activation', { role: 'provider' }),
     'provider.profile.patch': () =>
       call('PATCH', '/api/v1/provider/profile', {
         role: 'provider',

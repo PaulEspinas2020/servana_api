@@ -24,6 +24,7 @@ import { Request, Response } from 'express';
 import * as account from '../../../services/account/accountService';
 import * as addresses from '../../../services/account/addressBookService';
 import * as providerProfile from '../../../services/account/providerProfileService';
+import * as providerActivation from '../../../services/account/providerActivationProjection';
 import * as settings from '../../../services/account/accountSettingsService';
 import { getCompletion } from '../../../services/account/profileCompletionService';
 import { getUserRole } from '../../../chat/chat.repository';
@@ -281,6 +282,27 @@ export const handlers: V1Handlers = {
       );
     } catch (error) {
       return sendCaught(res, req, 'provider.profile.patch', asApiError(error));
+    }
+  },
+
+  /**
+   * The caller's OWN activation checklist.
+   *
+   * `provider`, and the uid comes from the token — there is no parameter here
+   * with which to name another account, which is the whole of the authorization
+   * argument. The role rung is the one the parity gate insisted on: this entry
+   * supersedes `/api/provider/compliance`, which is provider-gated, so anything
+   * looser would have been a weaker route to the same compliance detail.
+   *
+   * A provider who cannot work still reaches it — `requireProviderRole` admits
+   * suspended, unapproved and mid-activation accounts, which are exactly the
+   * ones that need the explanation.
+   */
+  'provider.activation.get': async (req: Request, res: Response) => {
+    try {
+      return ok(res, req, await providerActivation.getProviderActivation(uidOf(req)));
+    } catch (error) {
+      return sendCaught(res, req, 'provider.activation.get', asApiError(error));
     }
   },
 

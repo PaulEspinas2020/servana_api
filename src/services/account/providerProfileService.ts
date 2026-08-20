@@ -250,6 +250,34 @@ export const patchProviderProfile = async (
   // and its audit trail; writing the columns here would be a second, weaker copy
   // of a review process.
   const compliance = await import('../providerProfileComplianceService');
+
+  /**
+   * Review-editable, but not through THIS channel.
+   *
+   * `providerMayEdit` above consults the field registry, which marks `photo` as
+   * `editable: 'review'` — correctly, because a provider may indeed propose a new
+   * one. It is submitted as a FILE through the photo-submission route, with the
+   * validation §44 requires, and the revision table carries jsonb strings.
+   *
+   * Without this, such a field passed the check above and was refused two
+   * statements later by the compliance service with `FIELD_NOT_EDITABLE`, a code
+   * this operation does not declare and no contract-gated client can branch on.
+   * Refusing here uses the DECLARED code and names where the field is actually
+   * changed, which is what this function's docblock already promised for
+   * identifier and operational fields.
+   */
+  const wrongChannel = keys.filter((key) => key in compliance.REVIEW_FIELD_CHANNELS);
+  if (wrongChannel.length) {
+    throw new ProviderProfileError(
+      'PROVIDER_FIELD_NOT_EDITABLE',
+      `Not submitted here: ${wrongChannel.join(', ')}. ` +
+        wrongChannel
+          .map((key) => `${key} is changed through ${compliance.REVIEW_FIELD_CHANNELS[key]}`)
+          .join('; ') +
+        '.',
+      422,
+    );
+  }
   await compliance.submitPublicProfileRevision(uid, {
     fields: patch,
     clientRequestId: String(clientRequestId),

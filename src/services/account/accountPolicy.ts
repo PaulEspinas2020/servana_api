@@ -774,6 +774,30 @@ export const ACCOUNT_CAPABILITIES: readonly AccountCapability[] = Object.freeze(
       'reimplementing it.',
   },
   {
+    key: 'providerActivation',
+    title: 'Find out why I cannot work yet, and what to do about it',
+    contractIds: ['provider.activation.get'],
+    domainModule: 'services/account/providerActivationProjection',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'DELIBERATELY not folded into providerProfile, and that separation is the whole design. ' +
+      'The ProviderProfile schema serves two seats - the provider reading their own, and a ' +
+      'CUSTOMER reading somebody else\'s - so an activation checklist added to it would be ' +
+      'declared, in the published contract, as travelling on the endpoint customers read. ' +
+      'Rendering a provider card and driving an onboarding checklist are different purposes ' +
+      'over different data, and separate capabilities let authorization, retention and caching ' +
+      'differ per purpose instead of all three being set by whichever purpose is laxest. ' +
+      'No role split within the capability: both provider surfaces perform the identical ' +
+      'operation and receive the identical DTO. Auth is `provider`, which is STRICTER than the ' +
+      'account-state route it supersedes and equal to the compliance route it also supersedes - ' +
+      'the parity gate refused the looser first draft, because compliance detail must not become ' +
+      'reachable one rung lower as a side effect of a migration. The discovery property survives: ' +
+      'requireProviderRole admits every provider role including suspended and unapproved, so the ' +
+      'caller who needs to know why they cannot work still gets the checklist, and a non-provider ' +
+      'receives the branchable ROLE_REQUIRED. The uid comes from the token and no parameter can ' +
+      'name another account.',
+  },
+  {
     key: 'providerDocuments',
     title: 'Submit, read, preview and withdraw my documents',
     // Sorted, and everything document-shaped shares the `provider.documents.`

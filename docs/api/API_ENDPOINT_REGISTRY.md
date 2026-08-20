@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**114 implemented** · **1 planned** · 115 total.
+**115 implemented** · **1 planned** · 116 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -557,6 +557,7 @@ Releases this device, or every device for the account.
 | `POST` | `/api/v1/customer/addresses/:addressId/default` | **live** | any signed-in | — | `Address` | yes | account |
 | `GET` | `/api/v1/provider/profile` | **live** | provider (role 2/4) | — | `ProviderProfile` | yes | account |
 | `PATCH` | `/api/v1/provider/profile` | **live** | provider (role 2/4) | `ProviderProfilePatch` | `ProviderProfileRevision` | no | account |
+| `GET` | `/api/v1/provider/activation` | **live** | provider (role 2/4) | — | `ProviderActivation` | yes | account |
 | `GET` | `/api/v1/providers/:providerUid/profile` | **live** | any signed-in | — | `ProviderProfile` | yes | account |
 | `GET` | `/api/v1/provider/documents` | **live** | provider (role 2/4) | — | `ProviderDocumentList` | yes | account |
 | `GET` | `/api/v1/provider/document-types` | **live** | provider (role 2/4) | — | `ProviderDocumentTypeCatalog` | yes | account |
@@ -733,6 +734,19 @@ Proposes a change to a reviewable public profile field.
 - **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ⏳ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `POST /api/provider/public-profile-revisions` — **ALIAS_TEMPORARILY** — The live revision submit. IDENTICAL domain call - this is a second URL onto one workflow.
+
+### `GET /api/v1/provider/activation`
+
+The caller's own activation checklist: why they cannot work yet, and what to do.
+
+> A SIBLING of provider.profile.get rather than more fields on it. `ProviderProfile` is also the response schema of provider.publicProfile.get - what a stranger sees - so widening it would put a compliance checklist in the shape customers read, one seat-computation bug from disclosure. Separate resources also let this one fan out to the readiness and activation engines without charging the customer browse screen for it (56). auth is `provider`, and the first draft had it as `authenticated` to mirror /api/provider/account-state, which is mounted on verifyAuth alone so a non-provider learns WHY rather than receiving a bare 403. `legacy-authz-parity` refused that, correctly: this entry also supersedes /api/provider/compliance, which IS provider-gated, so at `authenticated` it was a strictly weaker route to compliance detail than the route it replaces. Compliance is null for a non-provider today, but that is a property of the service and the contract is what a future change reads. The discovery property survives the tightening, which is why this is not a regression: `requireProviderRole` admits EVERY provider role - suspended, unapproved, pending, mid-activation - so the caller who actually needs to know why they cannot work still gets the checklist that explains it. The only callers now refused are non-providers, who have no activation state to discover, and they receive ROLE_REQUIRED - a structured v1 code a client can branch on, carrying the same information nextStep: ROLE_NOT_PERMITTED carried. Nothing was lost; a rung was gained. Authorization is also in the SIGNATURE: the uid comes from the token and there is no parameter with which to name another account. A denied account loads nothing, so compliance and the three summaries are null rather than zeroed - "we did not look" and "nothing outstanding" are different answers.
+
+- **Domain service** — `services/account/providerActivationProjection.getProviderActivation`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/account-state` — **ALIAS_TEMPORARILY** — The live discovery endpoint. FULLY subsumed: every key it returns - account, verification, profile, documents, application, activation, access, checklist, nextStep - is carried here, from the same service, unchanged.
+  - `GET /api/provider/compliance` — **ALIAS_TEMPORARILY** — Returns `calculateCompliance` verbatim, which this entry carries as `compliance` from the SAME computation - not a second call, so the two cannot disagree.
 
 ### `GET /api/v1/providers/:providerUid/profile`
 
@@ -1649,6 +1663,7 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `POST /api/v1/customer/addresses/:addressId/default` | ⏳ | ⏳ | — | — | — |
 | `GET /api/v1/provider/profile` | — | — | ⏳ | ✅ | · |
 | `PATCH /api/v1/provider/profile` | — | — | ⏳ | ✅ | — |
+| `GET /api/v1/provider/activation` | — | — | · | · | — |
 | `GET /api/v1/providers/:providerUid/profile` | · | · | — | — | · |
 | `GET /api/v1/provider/documents` | — | — | ⏳ | ✅ | — |
 | `GET /api/v1/provider/document-types` | — | — | ✅ | ⏳ | — |

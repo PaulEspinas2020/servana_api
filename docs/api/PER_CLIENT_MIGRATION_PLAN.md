@@ -14,7 +14,7 @@
 > [`CROSS_CLIENT_MIGRATION_PLAN.md`](CROSS_CLIENT_MIGRATION_PLAN.md), which is
 > hand-written because an argument is not derivable. This is what each client
 > actually has to change, and it is generated because a hand-maintained list of
-> 114 endpoints across five clients is stale the day after it is written.
+> 115 endpoints across five clients is stale the day after it is written.
 
 ## How to read this
 
@@ -87,17 +87,18 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 40 |
+| Capabilities that apply | 41 |
 | Already on canonical | 23 |
 | Still on a legacy route | 1 |
 | Partially migrated | 7 |
-| No equivalent called today | 9 |
+| No equivalent called today | 10 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
 | Additional work | ⚠ mixed | `GET /api/additional/booking/:bookingId`, `POST /api/additional/request/:userId` | `POST /api/v1/bookings/:bookingId/additional-work`, `GET /api/v1/bookings/:bookingId/additional-work` |
 | Attach a file to a conversation | planned | `POST /api/chat/attachments/upload` | `POST /api/v1/conversations/:conversationId/attachments` |
 | Fetch the contract this process implements | planned | _no legacy equivalent — this is new_ | `GET /api/v1/openapi.json` |
+| Find out why I cannot work yet, and what to do about it | planned | `GET /api/provider/account-state`, `GET /api/provider/compliance` | `GET /api/v1/provider/activation` |
 | Move a booking through its state machine | ⚠ mixed | `POST /api/admin/bookings/:id/assign`, `POST /api/admin/bookings/:id/reassign`, `PUT /api/worker/bookings/:bookingId/accept`, `PUT /api/worker/bookings/:bookingId/arrived`, `PUT /api/worker/bookings/:bookingId/complete`, `PUT /api/worker/bookings/:bookingId/decline`, `PUT /api/worker/bookings/:bookingId/en-route`, `PUT /api/worker/bookings/:bookingId/start` | `POST /api/v1/provider/jobs/:bookingId/accept`, `POST /api/v1/provider/jobs/:bookingId/decline`, `POST /api/v1/provider/jobs/:bookingId/en-route`, `POST /api/v1/provider/jobs/:bookingId/arrived`, `POST /api/v1/provider/jobs/:bookingId/start`, `POST /api/v1/provider/jobs/:bookingId/complete`, `POST /api/v1/admin/bookings/:bookingId/assign`, `POST /api/v1/admin/bookings/:bookingId/reassign` |
 | Read a booking | planned | `GET /api/:id`, `GET /api/:id/timeline`, `GET /api/users/:userId/bookings` | `GET /api/v1/bookings`, `GET /api/v1/bookings/:bookingId`, `GET /api/v1/bookings/:bookingId/timeline`, `GET /api/v1/bookings/:bookingId/transitions` |
 | Read a booking's payment and price breakdown | planned | _no legacy equivalent — this is new_ | `GET /api/v1/bookings/:bookingId/payment` |
@@ -183,11 +184,11 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 43 |
+| Capabilities that apply | 44 |
 | Already on canonical | 12 |
 | Still on a legacy route | 17 |
 | Partially migrated | 5 |
-| No equivalent called today | 9 |
+| No equivalent called today | 10 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
@@ -198,6 +199,7 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Browse the service catalog | legacy | `GET /api/:serviceId/options-with-addons`, `GET /api/catalog`, `GET /api/catalog/services`, `GET /api/catalog/services/:serviceId`, `GET /api/catalog/services/:serviceId/serviceability`, `GET /api/catalog/summary`, `GET /api/services/:serviceId/level2`, `GET /api/services/:serviceId/options-with-addons`, `GET /api/services/full` | `GET /api/v1/catalog`, `GET /api/v1/catalog/summary`, `GET /api/v1/catalog/categories`, `GET /api/v1/catalog/categories/:categoryId`, `GET /api/v1/catalog/categories/:categoryId/subcategories`, `GET /api/v1/catalog/subcategories/:subcategoryId`, `GET /api/v1/catalog/subcategories/:subcategoryId/services`, `GET /api/v1/catalog/services`, `GET /api/v1/catalog/services/:serviceId`, `GET /api/v1/catalog/services/:serviceId/serviceability` |
 | Dismiss one notification | planned | `DELETE /api/provider/notifications/:key` | `DELETE /api/v1/notifications/:key` |
 | Fetch the contract this process implements | planned | _no legacy equivalent — this is new_ | `GET /api/v1/openapi.json` |
+| Find out why I cannot work yet, and what to do about it | planned | `GET /api/provider/account-state`, `GET /api/provider/compliance` | `GET /api/v1/provider/activation` |
 | How many unread I have | legacy | `GET /api/user/notifications/unread-count` | `GET /api/v1/notifications/unread-count` |
 | List my conversations with unread counts | legacy | `GET /api/chat/conversations` | `GET /api/v1/conversations` |
 | Mark everything read | legacy | `POST /api/user/notifications/mark-all-read` | `POST /api/v1/notifications/read-all` |

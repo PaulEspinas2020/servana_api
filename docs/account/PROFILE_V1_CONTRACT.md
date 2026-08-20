@@ -296,6 +296,7 @@ see.
 | `POST /api/v1/customer/addresses/:addressId/default` | authenticated | yes | `services/account/addressBookService.setDefaultAddress` |
 | `GET /api/v1/provider/profile` | provider | yes | `services/account/providerProfileService.getProviderProfile` |
 | `PATCH /api/v1/provider/profile` | provider | no | `services/account/providerProfileService.patchProviderProfile` |
+| `GET /api/v1/provider/activation` | provider | yes | `services/account/providerActivationProjection.getProviderActivation` |
 | `GET /api/v1/providers/:providerUid/profile` | authenticated | yes | `services/account/providerProfileService.getProviderProfile` |
 | `GET /api/v1/provider/documents` | provider | yes | `services/account/providerProfileService.listDocuments` |
 | `GET /api/v1/provider/document-types` | provider | yes | `services/providerProfileComplianceService.DOCUMENT_TYPE_CATALOG` |
@@ -330,6 +331,8 @@ route can only be documented as superseded if it is also being measured.
 | `GET /api/provider/profile` | ALIAS_TEMPORARILY | `provider.profile.get` | The live provider profile, built inline in a controller with a hand-written column list. Safe only for as long as nobody adds a column; the canonical route emits the fields the policy says this seat may read. |
 | `GET /api/provider/profile-center` | ROLE_SPECIFIC | `provider.profile.get` | The compliance view: revision history, review state, field-level edit affordances. A genuinely different question, and it already reads the same field registry this entry projects from. |
 | `POST /api/provider/public-profile-revisions` | ALIAS_TEMPORARILY | `provider.profile.patch` | The live revision submit. IDENTICAL domain call - this is a second URL onto one workflow. |
+| `GET /api/provider/account-state` | ALIAS_TEMPORARILY | `provider.activation.get` | The live discovery endpoint. FULLY subsumed: every key it returns - account, verification, profile, documents, application, activation, access, checklist, nextStep - is carried here, from the same service, unchanged. |
+| `GET /api/provider/compliance` | ALIAS_TEMPORARILY | `provider.activation.get` | Returns `calculateCompliance` verbatim, which this entry carries as `compliance` from the SAME computation - not a second call, so the two cannot disagree. |
 | `GET /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.list` | The live document list. Same `worker_requirements` model - the command is explicit that provider_documents must not be invented, and it does not exist. |
 | `GET /api/provider/document-types` | ALIAS_TEMPORARILY | `provider.documents.types` | The same static catalog constant. No per-caller data of any kind. |
 | `POST /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.create` | The live submit for both provider clients. IDENTICAL domain call, and it carries the same post-commit `autoOnlineEngine.evaluateProvider` — submitting the last outstanding requirement is what makes a provider eligible to go online, so an endpoint that stored the file without re-evaluating would leave them blocked. |
@@ -358,6 +361,7 @@ route can only be documented as superseded if it is also being measured.
 | Read and change my customer profile | legacy | legacy | — | — | planned |
 | Manage my saved addresses | legacy | legacy | — | — | — |
 | Read and change my provider profile | — | — | legacy | migrated | planned |
+| Find out why I cannot work yet, and what to do about it | — | — | planned | planned | — |
 | Submit, read, preview and withdraw my documents | — | — | legacy | legacy | — |
 | Read and change my availability, and book time off | — | — | legacy | legacy | — |
 | Read the services I am approved for | — | — | migrated | planned | — |
@@ -393,6 +397,10 @@ No role split. Five legacy routes with five shapes — query-param ids, a POST t
 **Read and change my provider profile** (`services/account/providerProfileService`)
 
 Role-specific by DATA and by WORKFLOW. A provider profile field is classified, and editing a reviewable one submits a revision rather than writing a column — the compliance service owns that, and the canonical PATCH delegates to it instead of reimplementing it.
+
+**Find out why I cannot work yet, and what to do about it** (`services/account/providerActivationProjection`)
+
+DELIBERATELY not folded into providerProfile, and that separation is the whole design. The ProviderProfile schema serves two seats - the provider reading their own, and a CUSTOMER reading somebody else's - so an activation checklist added to it would be declared, in the published contract, as travelling on the endpoint customers read. Rendering a provider card and driving an onboarding checklist are different purposes over different data, and separate capabilities let authorization, retention and caching differ per purpose instead of all three being set by whichever purpose is laxest. No role split within the capability: both provider surfaces perform the identical operation and receive the identical DTO. Auth is `provider`, which is STRICTER than the account-state route it supersedes and equal to the compliance route it also supersedes - the parity gate refused the looser first draft, because compliance detail must not become reachable one rung lower as a side effect of a migration. The discovery property survives: requireProviderRole admits every provider role including suspended and unapproved, so the caller who needs to know why they cannot work still gets the checklist, and a non-provider receives the branchable ROLE_REQUIRED. The uid comes from the token and no parameter can name another account.
 
 **Submit, read, preview and withdraw my documents** (`services/providerProfileComplianceService`)
 

@@ -34,15 +34,15 @@ installed.
 
 | | |
 | --- | --- |
-| Legacy mappings tracked | 126 |
-| In the retirement plan | 107 |
+| Legacy mappings tracked | 128 |
+| In the retirement plan | 109 |
 | `KEEP` (not a duplicate of anything) | 6 |
 | `ROLE_SPECIFIC` (different auth/action, same service) | 13 |
-| `ALIAS_TEMPORARILY` | 94 |
+| `ALIAS_TEMPORARILY` | 96 |
 | `CANONICALIZE` | 12 |
 | `RETIRE` | 1 |
 | **Retirable today** | **0** |
-| Blocked | 107 |
+| Blocked | 109 |
 
 Nothing is retirable today, and the reason is the same for all of them: no client has migrated, because the v1 namespace is not deployed. The schedule is the order things become retirable, not a queue of pending deletions.
 
@@ -99,7 +99,9 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `POST /api/chat/conversations/:id/messages` | ALIAS_TEMPORARILY | `conversations.messages.create` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
 | `POST /api/chat/conversations/:id/messages/:msgId/report` | ALIAS_TEMPORARILY | `conversations.messages.report` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/chat/conversations/:id/read` | ALIAS_TEMPORARILY | `conversations.read` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
+| `GET /api/provider/account-state` | ALIAS_TEMPORARILY | `provider.activation.get` | Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/provider/bookings/:bookingId/cancel` | ALIAS_TEMPORARILY | `provider.jobs.cancel` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `GET /api/provider/compliance` | ALIAS_TEMPORARILY | `provider.activation.get` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/document-types` | ALIAS_TEMPORARILY | `provider.documents.types` | Provider Web has not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
 | `GET /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.list` | Provider Mobile has not migrated | 90d |
 | `POST /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.create` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |

@@ -2427,6 +2427,166 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  ProviderActivation: {
+    type: 'object',
+    required: [
+      'uid', 'state', 'nextStep', 'account', 'verification', 'documents',
+      'application', 'access', 'availableActions', 'checklist',
+      'compliance', 'documentSummary', 'certificationSummary', 'completion',
+    ],
+    description:
+      'The activation checklist for the CALLER\'s own account. A sibling of ProviderProfile, ' +
+      'not part of it: ProviderProfile is also what a customer receives for another provider, ' +
+      'and a compliance checklist does not belong in that shape. The uid is taken from the ' +
+      'token; there is no parameter with which to name another account. ' +
+      'The four nullable members are null when NOTHING WAS LOADED - a denied or unknown ' +
+      'account - and are never zeroed: an empty summary and an unloaded one are different ' +
+      'answers, and a client that renders the second as the first tells a refused provider ' +
+      'they have no outstanding requirements.',
+    properties: {
+      uid: { type: 'string' },
+      state: {
+        type: 'string',
+        enum: ['NOT_ELIGIBLE', 'PENDING_REQUIREMENTS', 'READY_FOR_ACTIVATION', 'ACTIVE', 'TEMPORARILY_RESTRICTED'],
+        description:
+          'The STORED activation state, never derived in this read. Approval starts ' +
+          'activation; it does not complete it.',
+      },
+      nextStep: {
+        type: 'object',
+        required: ['code', 'route', 'blocking'],
+        description:
+          'One precedence order, shared by every client, so the portal and the mobile app ' +
+          'cannot route the same provider differently.',
+        properties: {
+          code: { type: 'string' },
+          route: { type: 'string' },
+          blocking: { type: 'boolean' },
+        },
+      },
+      account: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: ['PENDING', 'ACTIVE', 'SUSPENDED', 'DISABLED', 'CLOSED', 'UNKNOWN'] },
+          role: { type: ['string', 'null'] },
+        },
+      },
+      verification: {
+        type: 'object',
+        properties: {
+          email: { type: 'string', enum: ['MISSING', 'PENDING', 'VERIFIED'] },
+          mobile: { type: 'string', enum: ['MISSING', 'PENDING', 'VERIFIED'] },
+          minimumRequirementMet: {
+            type: 'boolean',
+            description: 'At least one VERIFIED identifier. Absence of data is never verification.',
+          },
+        },
+      },
+      documents: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: ['NOT_STARTED', 'INCOMPLETE', 'UNDER_REVIEW', 'ACTION_REQUIRED', 'APPROVED'] },
+          required: { type: 'integer' },
+          approved: { type: 'integer' },
+          actionRequired: { type: 'integer' },
+        },
+      },
+      application: {
+        type: 'object',
+        properties: {
+          status: { type: 'string' },
+          submittedAt: { type: ['string', 'null'], format: 'date-time' },
+          reviewReference: {
+            type: ['string', 'null'],
+            description: 'A safe reference for a support conversation, never the internal case id.',
+          },
+        },
+      },
+      access: {
+        type: 'object',
+        additionalProperties: { type: 'boolean' },
+        description:
+          'Capability truth, one boolean per capability. A STATEMENT about state, never a ' +
+          'grant: every endpoint re-checks, and a capability true here that is not enforced ' +
+          'there is a bug in that endpoint rather than a licence.',
+      },
+      availableActions: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'Exactly the capabilities in `access` that are true, as action codes, sorted. ' +
+          'DERIVED from `access` rather than mapped by hand, so a capability added tomorrow ' +
+          'appears here the same day instead of being silently omitted.',
+      },
+      checklist: {
+        type: 'array',
+        description:
+          'Provider-actionable items ONLY, both phases, each with somewhere to go. ' +
+          'Servana\'s own review backlog is excluded - it is not something a provider can ' +
+          'act on, and showing it as a task is a complaint rather than an instruction.',
+        items: {
+          type: 'object',
+          properties: {
+            code: { type: 'string' },
+            label: { type: 'string' },
+            phase: { type: 'string', enum: ['approval', 'activation'] },
+            satisfied: { type: 'boolean' },
+            blocking: { type: 'boolean' },
+            route: { type: 'string' },
+          },
+        },
+      },
+      compliance: {
+        type: ['object', 'null'],
+        additionalProperties: true,
+        description:
+          'The compliance verdict - state, blockingRequirements, warnings, ' +
+          'affectedCapabilities. The SAME computation the capability decision above was made ' +
+          'from, returned rather than recomputed, so the two cannot disagree. Null when ' +
+          'nothing was loaded.',
+      },
+      documentSummary: {
+        type: ['object', 'null'],
+        properties: {
+          total: { type: 'integer' },
+          verified: { type: 'integer' },
+          actionRequired: { type: 'integer' },
+        },
+        description: 'Counts over the same document array the verdict was computed from.',
+      },
+      certificationSummary: {
+        type: ['object', 'null'],
+        properties: {
+          total: { type: 'integer' },
+          current: { type: 'integer' },
+        },
+      },
+      completion: {
+        type: ['object', 'null'],
+        description:
+          'Driven by the document CATALOG, not by the rows: a required document that has ' +
+          'never been submitted appears as `blocked`. A checklist built from rows alone shows ' +
+          'an empty screen to the provider who has everything left to do.',
+        properties: {
+          state: { type: 'string', enum: ['complete', 'incomplete'] },
+          requirements: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                label: { type: 'string' },
+                state: { type: 'string', enum: ['completed', 'pending', 'blocked'] },
+                blocking: { type: 'boolean' },
+                route: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+
   ProviderProfilePatch: {
     type: 'object',
     required: ['clientRequestId'],

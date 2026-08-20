@@ -3750,6 +3750,103 @@
         "description": "Not a write. A provider does not edit their public profile; they propose a change and it is reviewed. Identifier fields and operational fields are refused by name, with the message naming where each is actually changed."
       }
     },
+    "/api/v1/provider/activation": {
+      "get": {
+        "operationId": "provider.activation.get",
+        "summary": "The caller's own activation checklist: why they cannot work yet, and what to do.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/account/providerActivationProjection.getProviderActivation",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/account-state",
+            "disposition": "ALIAS_TEMPORARILY"
+          },
+          {
+            "method": "GET",
+            "path": "/api/provider/compliance",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderActivation"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "A SIBLING of provider.profile.get rather than more fields on it. `ProviderProfile` is also the response schema of provider.publicProfile.get - what a stranger sees - so widening it would put a compliance checklist in the shape customers read, one seat-computation bug from disclosure. Separate resources also let this one fan out to the readiness and activation engines without charging the customer browse screen for it (56). auth is `provider`, and the first draft had it as `authenticated` to mirror /api/provider/account-state, which is mounted on verifyAuth alone so a non-provider learns WHY rather than receiving a bare 403. `legacy-authz-parity` refused that, correctly: this entry also supersedes /api/provider/compliance, which IS provider-gated, so at `authenticated` it was a strictly weaker route to compliance detail than the route it replaces. Compliance is null for a non-provider today, but that is a property of the service and the contract is what a future change reads. The discovery property survives the tightening, which is why this is not a regression: `requireProviderRole` admits EVERY provider role - suspended, unapproved, pending, mid-activation - so the caller who actually needs to know why they cannot work still gets the checklist that explains it. The only callers now refused are non-providers, who have no activation state to discover, and they receive ROLE_REQUIRED - a structured v1 code a client can branch on, carrying the same information nextStep: ROLE_NOT_PERMITTED carried. Nothing was lost; a rung was gained. Authorization is also in the SIGNATURE: the uid comes from the token and there is no parameter with which to name another account. A denied account loads nothing, so compliance and the three summaries are null rather than zeroed - \"we did not look\" and \"nothing outstanding\" are different answers."
+      }
+    },
     "/api/v1/providers/{providerUid}/profile": {
       "get": {
         "operationId": "provider.publicProfile.get",
@@ -17741,6 +17838,285 @@
           }
         }
       },
+      "ProviderActivation": {
+        "type": "object",
+        "required": [
+          "uid",
+          "state",
+          "nextStep",
+          "account",
+          "verification",
+          "documents",
+          "application",
+          "access",
+          "availableActions",
+          "checklist",
+          "compliance",
+          "documentSummary",
+          "certificationSummary",
+          "completion"
+        ],
+        "description": "The activation checklist for the CALLER's own account. A sibling of ProviderProfile, not part of it: ProviderProfile is also what a customer receives for another provider, and a compliance checklist does not belong in that shape. The uid is taken from the token; there is no parameter with which to name another account. The four nullable members are null when NOTHING WAS LOADED - a denied or unknown account - and are never zeroed: an empty summary and an unloaded one are different answers, and a client that renders the second as the first tells a refused provider they have no outstanding requirements.",
+        "properties": {
+          "uid": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "NOT_ELIGIBLE",
+              "PENDING_REQUIREMENTS",
+              "READY_FOR_ACTIVATION",
+              "ACTIVE",
+              "TEMPORARILY_RESTRICTED"
+            ],
+            "description": "The STORED activation state, never derived in this read. Approval starts activation; it does not complete it."
+          },
+          "nextStep": {
+            "type": "object",
+            "required": [
+              "code",
+              "route",
+              "blocking"
+            ],
+            "description": "One precedence order, shared by every client, so the portal and the mobile app cannot route the same provider differently.",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "route": {
+                "type": "string"
+              },
+              "blocking": {
+                "type": "boolean"
+              }
+            }
+          },
+          "account": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "PENDING",
+                  "ACTIVE",
+                  "SUSPENDED",
+                  "DISABLED",
+                  "CLOSED",
+                  "UNKNOWN"
+                ]
+              },
+              "role": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "verification": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string",
+                "enum": [
+                  "MISSING",
+                  "PENDING",
+                  "VERIFIED"
+                ]
+              },
+              "mobile": {
+                "type": "string",
+                "enum": [
+                  "MISSING",
+                  "PENDING",
+                  "VERIFIED"
+                ]
+              },
+              "minimumRequirementMet": {
+                "type": "boolean",
+                "description": "At least one VERIFIED identifier. Absence of data is never verification."
+              }
+            }
+          },
+          "documents": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "NOT_STARTED",
+                  "INCOMPLETE",
+                  "UNDER_REVIEW",
+                  "ACTION_REQUIRED",
+                  "APPROVED"
+                ]
+              },
+              "required": {
+                "type": "integer"
+              },
+              "approved": {
+                "type": "integer"
+              },
+              "actionRequired": {
+                "type": "integer"
+              }
+            }
+          },
+          "application": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string"
+              },
+              "submittedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "description": "ISO 8601 with a UTC designator — always ends in Z. Guaranteed at the driver, not per field: src/db/dbQuery.ts parses OIDs 1114 and 1184 through asUtcIso, which ends in Date.toISOString(). Never Postgres native \"2026-08-11 11:03:23.421016+00\"."
+              },
+              "reviewReference": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A safe reference for a support conversation, never the internal case id."
+              }
+            }
+          },
+          "access": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "description": "Capability truth, one boolean per capability. A STATEMENT about state, never a grant: every endpoint re-checks, and a capability true here that is not enforced there is a bug in that endpoint rather than a licence."
+          },
+          "availableActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Exactly the capabilities in `access` that are true, as action codes, sorted. DERIVED from `access` rather than mapped by hand, so a capability added tomorrow appears here the same day instead of being silently omitted."
+          },
+          "checklist": {
+            "type": "array",
+            "description": "Provider-actionable items ONLY, both phases, each with somewhere to go. Servana's own review backlog is excluded - it is not something a provider can act on, and showing it as a task is a complaint rather than an instruction.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "phase": {
+                  "type": "string",
+                  "enum": [
+                    "approval",
+                    "activation"
+                  ]
+                },
+                "satisfied": {
+                  "type": "boolean"
+                },
+                "blocking": {
+                  "type": "boolean"
+                },
+                "route": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "compliance": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "The compliance verdict - state, blockingRequirements, warnings, affectedCapabilities. The SAME computation the capability decision above was made from, returned rather than recomputed, so the two cannot disagree. Null when nothing was loaded."
+          },
+          "documentSummary": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "total": {
+                "type": "integer"
+              },
+              "verified": {
+                "type": "integer"
+              },
+              "actionRequired": {
+                "type": "integer"
+              }
+            },
+            "description": "Counts over the same document array the verdict was computed from."
+          },
+          "certificationSummary": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "total": {
+                "type": "integer"
+              },
+              "current": {
+                "type": "integer"
+              }
+            }
+          },
+          "completion": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Driven by the document CATALOG, not by the rows: a required document that has never been submitted appears as `blocked`. A checklist built from rows alone shows an empty screen to the provider who has everything left to do.",
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "complete",
+                  "incomplete"
+                ]
+              },
+              "requirements": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "completed",
+                        "pending",
+                        "blocked"
+                      ]
+                    },
+                    "blocking": {
+                      "type": "boolean"
+                    },
+                    "route": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "ProviderProfilePatch": {
         "type": "object",
         "required": [
@@ -19890,6 +20266,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 114,
-  "x-total-count": 115
+  "x-implemented-count": 115,
+  "x-total-count": 116
 }

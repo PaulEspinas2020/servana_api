@@ -1447,6 +1447,65 @@ export const V1_CONTRACT: ContractEntry[] = [
       'message naming where each is actually changed.',
   },
   {
+    id: 'provider.activation.get',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/activation',
+    summary: "The caller's own activation checklist: why they cannot work yet, and what to do.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderActivation',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/account/providerActivationProjection.getProviderActivation',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/account-state',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'The live discovery endpoint. FULLY subsumed: every key it returns - account, ' +
+          'verification, profile, documents, application, activation, access, checklist, ' +
+          'nextStep - is carried here, from the same service, unchanged.',
+      },
+      {
+        method: 'get',
+        path: '/api/provider/compliance',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Returns `calculateCompliance` verbatim, which this entry carries as `compliance` ' +
+          'from the SAME computation - not a second call, so the two cannot disagree.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'A SIBLING of provider.profile.get rather than more fields on it. `ProviderProfile` is ' +
+      'also the response schema of provider.publicProfile.get - what a stranger sees - so ' +
+      'widening it would put a compliance checklist in the shape customers read, one ' +
+      'seat-computation bug from disclosure. Separate resources also let this one fan out to ' +
+      'the readiness and activation engines without charging the customer browse screen for ' +
+      'it (56). ' +
+      'auth is `provider`, and the first draft had it as `authenticated` to mirror ' +
+      '/api/provider/account-state, which is mounted on verifyAuth alone so a non-provider ' +
+      'learns WHY rather than receiving a bare 403. `legacy-authz-parity` refused that, ' +
+      'correctly: this entry also supersedes /api/provider/compliance, which IS provider-gated, ' +
+      'so at `authenticated` it was a strictly weaker route to compliance detail than the route ' +
+      'it replaces. Compliance is null for a non-provider today, but that is a property of the ' +
+      'service and the contract is what a future change reads. ' +
+      'The discovery property survives the tightening, which is why this is not a regression: ' +
+      '`requireProviderRole` admits EVERY provider role - suspended, unapproved, pending, ' +
+      'mid-activation - so the caller who actually needs to know why they cannot work still ' +
+      'gets the checklist that explains it. The only callers now refused are non-providers, ' +
+      'who have no activation state to discover, and they receive ROLE_REQUIRED - a structured ' +
+      'v1 code a client can branch on, carrying the same information ' +
+      'nextStep: ROLE_NOT_PERMITTED carried. Nothing was lost; a rung was gained. ' +
+      'Authorization is also in the SIGNATURE: the uid comes from the token and there is no ' +
+      'parameter with which to name another account. A denied account loads nothing, so ' +
+      'compliance and the three summaries are null rather than zeroed - "we did not look" and ' +
+      '"nothing outstanding" are different answers.',
+  },
+  {
     id: 'provider.publicProfile.get',
     domain: 'account',
     method: 'get',
