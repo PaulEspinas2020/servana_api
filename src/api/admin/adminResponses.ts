@@ -269,6 +269,158 @@ export const ADMIN_RESPONSES: Record<string, AdminResponseSchema> = {
       'an already-resolved report is a 404, not a repeat.',
   },
 
+  // ── catalog ───────────────────────────────────────────────────────────────
+  // The canonical catalog. NOTE: /api/admin/catalog is one of only six prefixes
+  // src/app.ts exempts from parityMiddleware, so unlike the rest of the admin
+  // surface these responses carry no injected alias keys — what is declared IS
+  // the wire.
+
+  'GET /api/admin/catalog/summary': {
+    derivedFrom: 'catalogAdminService.getCatalogSummary',
+    schema: {
+      type: 'object',
+      required: ['categories', 'subcategories', 'services'],
+      properties: {
+        categories: { type: 'integer' },
+        subcategories: { type: 'integer' },
+        services: { type: 'integer' },
+        activeServices: { type: 'integer' },
+        archivedServices: {
+          type: 'integer',
+          description: 'Archived rows SURVIVE — they are excluded from reads, not deleted.',
+        },
+        servicesWithoutProviders: {
+          type: 'integer',
+          description:
+            'Services nobody can perform. A non-zero value is catalogue that a customer can '
+            + 'browse and not book.',
+        },
+      },
+    },
+  },
+
+  'GET /api/admin/catalog/categories': {
+    derivedFrom: 'catalogAdminService.listCategories',
+    schema: { type: 'array', items: { $ref: '#/components/schemas/AdminCatalogCategory' } },
+    note: 'Archived categories are excluded unless `includeArchived` is set.',
+  },
+
+  'GET /api/admin/catalog/services': {
+    derivedFrom: 'catalogAdminService.listServices -> mapService',
+    schema: {
+      type: 'object',
+      required: ['items', 'meta'],
+      properties: {
+        items: { type: 'array', items: { $ref: '#/components/schemas/AdminCatalogService' } },
+        meta: {
+          type: 'object',
+          required: ['total', 'page', 'limit'],
+          properties: {
+            total: {
+              type: 'integer',
+              description:
+                'From a window COUNT carried on the rows themselves — so it is 0 when the '
+                + 'page is empty, including a page beyond the end.',
+            },
+            page: { type: 'integer' },
+            limit: { type: 'integer' },
+          },
+        },
+      },
+    },
+    note:
+      'A THIRD pagination shape on this surface. The admin bookings, onboarding and '
+      + 'provider lists use `rows/total/page/limit` at the top level; the communications '
+      + 'events list uses `total/page/limit/items`; users and customers put the array under '
+      + '`data` with `meta` beside it. This one nests `meta` INSIDE the payload. Four '
+      + 'conventions, documented rather than reconciled.',
+  },
+
+  'GET /api/admin/catalog/services/:serviceId': {
+    derivedFrom: 'catalogAdminService.getService',
+    schema: { $ref: '#/components/schemas/AdminCatalogService' },
+  },
+
+  'GET /api/admin/catalog/services/:serviceId/providers': {
+    derivedFrom: 'catalogAdminService.getServiceProviders',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description: 'Providers who can perform this service. Empty is what servicesWithoutProviders counts.',
+    },
+  },
+
+  'GET /api/admin/catalog/subcategories': {
+    derivedFrom: 'catalogAdminService.listSubcategories',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description: 'Optionally filtered by categoryId. Archived excluded unless asked for.',
+    },
+  },
+
+  'GET /api/admin/catalog/content-gaps': {
+    derivedFrom: 'catalogAdminService.getCatalogContentGaps',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description:
+        'Legacy families that still carry provider intent — an employee_services link — but '
+        + 'have produced NO canonical specific service. These are real service areas a '
+        + 'provider was approved for, so the approvals stay visible rather than being '
+        + 'deleted; what to create under them is a product decision, not a migration.',
+    },
+    note: 'An empty list means the legacy tree is fully represented in the canonical catalog.',
+  },
+
+  // ── provider-catalog ──────────────────────────────────────────────────────
+  // The canonical offering tree, and the mappings that connect it to the legacy
+  // service families the eligibility engine still falls back to.
+
+  'GET /api/admin/provider-catalog/overview': {
+    derivedFrom: 'providerCatalogService.getCatalogOverview',
+    schema: {
+      type: 'object',
+      additionalProperties: true,
+      description:
+        'The offering tree with its publish and mapping state. Filterable by search, status '
+        + 'and mobileProtected.',
+    },
+  },
+
+  'GET /api/admin/provider-catalog/audit': {
+    derivedFrom: 'providerCatalogService.getCatalogAuditTrail',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description: 'Who changed the catalog and what they changed. Append-only.',
+    },
+  },
+
+  'GET /api/admin/provider-catalog/policy-dimensions': {
+    derivedFrom: 'providerCatalogService.getCatalogPolicyDimensions',
+    schema: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description:
+        'The dimensions an offering policy may be expressed over. A client should populate '
+        + 'its policy editor from here rather than hard-coding them.',
+    },
+  },
+
+  'POST /api/admin/provider-catalog/offerings/:offeringId/publish-preview': {
+    derivedFrom: 'providerCatalogService.getPublishPreview — the publish DRY RUN',
+    schema: {
+      type: 'object',
+      additionalProperties: true,
+      description:
+        'What publishing WOULD do. Nothing is written. It exists for the same reason the '
+        + 'permission-change preview does: the consequences of a catalog publish reach every '
+        + 'customer browsing, and seeing them afterwards in an audit trail is too late.',
+    },
+    note: 'Pair it with the publish route — preview, read, then publish.',
+  },
+
   // ── bookings ──────────────────────────────────────────────────────────────
   // The operations surface. Assignment is how a job reaches a provider, which
   // is why TAB 02 treated these five as the priority when they were empty.
@@ -2850,6 +3002,72 @@ export const ADMIN_SCHEMAS: Record<string, unknown> = {
       },
       validationErrors: { type: 'array', items: { type: 'string' } },
     },
+  },
+
+  AdminCatalogCategory: {
+    type: 'object',
+    required: ['id', 'name', 'slug', 'status', 'displayOrder'],
+    properties: {
+      id: { type: 'integer' },
+      name: { type: 'string' },
+      slug: { type: 'string', description: 'Derived by slugify. The stable handle a URL uses.' },
+      description: { type: ['string', 'null'] },
+      imageUrl: { type: ['string', 'null'] },
+      status: {
+        type: 'string',
+        enum: ['draft', 'active', 'inactive', 'archived'],
+        description:
+          'From CATALOG_STATUSES. `archived` rows SURVIVE — they are excluded from reads, '
+          + 'not deleted, so an archived deep link resolves to an honest "unavailable" '
+          + 'rather than a 404.',
+      },
+      displayOrder: { type: 'integer', description: 'Set by the reorder route, not by name.' },
+      subcategoryCount: { type: 'integer' },
+      serviceCount: { type: 'integer' },
+    },
+  },
+
+  AdminCatalogService: {
+    type: 'object',
+    required: ['id', 'subcategoryId', 'categoryId', 'name', 'slug', 'status', 'bookable'],
+    description: 'One catalog service, with its ancestry denormalised onto the row.',
+    properties: {
+      id: { type: 'integer', description: 'The CANONICAL services.id — what the eligibility engine keys capability on.' },
+      subcategoryId: { type: 'integer' },
+      subcategoryName: { type: 'string', description: "Coalesced to ''." },
+      categoryId: { type: 'integer' },
+      categoryName: { type: 'string', description: "Coalesced to ''." },
+      name: { type: 'string' },
+      slug: { type: 'string' },
+      status: { type: 'string', enum: ['draft', 'active', 'inactive', 'archived'] },
+      displayOrder: { type: 'integer' },
+      bookable: {
+        type: 'boolean',
+        description:
+          'Whether a customer can actually book it. NOT the same as `status: active` — an '
+          + 'active service with no provider who can perform it is not bookable, which is '
+          + 'what servicesWithoutProviders on the summary counts.',
+      },
+      providerCount: { type: 'integer', description: 'Coalesced to 0.' },
+      basePrice: { $ref: '#/components/schemas/MoneyMajorAdmin' },
+      unit: { type: ['string', 'null'] },
+      basePriceSummary: {
+        type: ['string', 'null'],
+        description:
+          'PRE-RENDERED display text carrying its own peso mark, e.g. "P350 per hour". Not '
+          + 'a number and not to be parsed — render basePrice if you need to format it '
+          + 'yourself.',
+      },
+      updatedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+    },
+  },
+
+  MoneyMajorAdmin: {
+    type: ['number', 'null'],
+    description:
+      'UNIT: PHP MAJOR units — pesos. CURRENCY: PHP. A real JSON number: catalogAdminService '
+      + 'passes it through `money()`, which is `Number(v)`, so it does NOT arrive as the '
+      + 'string a numeric column would otherwise yield. See TAB 04.',
   },
 
   UtcTimestamp: {

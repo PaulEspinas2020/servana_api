@@ -47,7 +47,7 @@ import { staleFiles, toOpenApiPath, pathParams } from '../scripts/generate-admin
  */
 const FLOOR = {
   operations: 251,
-  authoredResponses: 105,
+  authoredResponses: 116,
 };
 
 /** Operations whose guard this reader cannot name. Must stay zero. */
@@ -231,10 +231,28 @@ describe('admin surface — authored schemas', () => {
   });
 
   it('makes every authored schema name the service it was read from', () => {
+    /**
+     * `module.function`, not merely "contains a dot".
+     *
+     * The looser form caught three entries of mine that named a module and no
+     * function — "technicianService - SELECT * FROM ...", "adminGuestService -
+     * duplicate detection", "providerCatalogService - the publish DRY RUN".
+     * Each was detected, which is the gate working; but a check that only
+     * demands SOME dot will pass the next one that has a dot somewhere in its
+     * prose.
+     *
+     * The point of `derivedFrom` is that a reader can open the function and
+     * re-check the schema against it. A name they cannot resolve to a function
+     * is a citation that does not cite.
+     */
+    const NAMES_A_FUNCTION = /[A-Za-z][\w]*\.[a-z][\w]*/;
+    const vague: string[] = [];
     for (const [key, entry] of Object.entries(ADMIN_RESPONSES)) {
       expect(entry.derivedFrom).toBeTruthy();
-      expect(`${key}: ${entry.derivedFrom}`).toMatch(/\.(ts|[A-Za-z]+)/);
+      if (!NAMES_A_FUNCTION.test(entry.derivedFrom)) vague.push(key);
     }
+    // Named, not counted: whoever trips this needs the operation.
+    expect(vague).toEqual([]);
   });
 });
 
