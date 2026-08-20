@@ -18,11 +18,11 @@
 
 | | |
 | --- | --- |
-| Capabilities | 61 |
-| Canonical endpoints mounted | 113 |
+| Capabilities | 62 |
+| Canonical endpoints mounted | 114 |
 | Canonical endpoints planned | 0 |
 | Legacy mappings tracked | 125 |
-| Converged (one route family) | 53 |
+| Converged (one route family) | 54 |
 | Role-split over ONE service | 4 |
 | Single-surface | 4 |
 | **Divergent (forked truth)** | **0** |
@@ -82,6 +82,7 @@ direction of whoever wrote it.
 | Browse the service catalog | SHARED | ⚠ mixed | planned | legacy | — | — |
 | Search services | ROLE_SPLIT_SHARED_SERVICE | ⚠ mixed | planned | — | — | — |
 | Ask whether this client build may still run | SHARED | planned | — | planned | — | — |
+| Fetch the contract this process implements | SHARED | planned | planned | planned | planned | planned |
 | Read the support cases I raised on a booking | SHARED | planned | planned | — | — | — |
 | A provider's own job queue | SHARED | — | — | **migrated** | **migrated** | — |
 | Read a provider's public profile | SHARED | planned | planned | — | — | planned |
@@ -514,6 +515,20 @@ Legacy still aliased for this capability:
   - none
 
 No role split, and no role at all — the caller is a BUILD, not a person. The endpoint is public because the client being recalled may be too old to authenticate, and a kill switch reachable only with a credential cannot kill the builds that most need it. Every surface reads the same floor from the same file and applies the same comparison; a per-surface answer would let two clients disagree about whether the same version is supported. The web surfaces are listed because they reload and so are never stranded — they may read it, and it will never block them.
+
+### Fetch the contract this process implements
+
+- key: `core:contractDiscovery` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `api/v1/domains/health`
+- route families: `/openapi.json`
+
+Canonical:
+  - `GET /api/v1/openapi.json`
+
+Legacy still aliased for this capability:
+  - none
+
+No role split. Every client generates types from the same document, so a per-surface projection would defeat the point — the value is that all five are reading one contract. AUTHENTICATED rather than public, unlike buildProvenance: four fields of provenance exist to be checkable by somebody holding no credential, but a full API surface is a map, and every client that wants it already holds a token. The same digest also rides on every /api/v1 response in x-contract-sha256, so a client asks "am I stale?" without calling this at all.
 
 ### Read the support cases I raised on a booking
 

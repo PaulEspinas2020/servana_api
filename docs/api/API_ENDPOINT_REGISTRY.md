@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**113 implemented** · **0 planned** · 113 total.
+**114 implemented** · **0 planned** · 114 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -164,6 +164,7 @@ Accept a small, closed set of scrubbed worker-app events. No free text, ever.
 |---|---|---|---|---|---|---|---|
 | `GET` | `/api/v1/client-config` | **live** | public | — | `ClientConfig` | yes | platform |
 | `GET` | `/api/v1/health` | **live** | public | — | `BuildInfo` | yes | platform |
+| `GET` | `/api/v1/openapi.json` | **live** | any signed-in | — | `OpenApiDocument` | yes | platform |
 
 ### `GET /api/v1/client-config`
 
@@ -185,6 +186,17 @@ The commit this build was made from. Public, and carries nothing else.
 - **Domain service** — `api/v1/domains/health.readBuildInfo`
 - **Error codes** — `INTERNAL`
 - **Callers** — Cust Mobile — · Cust Web — · Prov Mobile — · Prov Web — · Admin —
+- **Legacy it replaces** — none; new capability.
+
+### `GET /api/v1/openapi.json`
+
+The OpenAPI document this process implements, with its sha256 in a header.
+
+> TAB 08. Before this the document was served at no path at all, so a client could only compare its pin against a git CHECKOUT — a statement about a repository, not about a server. The portal reported its pin going stale twice in one session and could not tell a shape change from an annotation-only one without diffing 530 kB by hand. AUTHENTICATED, not public, unlike health.build. Build provenance is four fields and exists to be checkable by someone who has no credential; a full API surface is a map, and every client that needs it already holds a token. `health.build` stays public because a provenance check that needs a credential can only be run by someone who already has one — that argument does not transfer to the whole contract. Every /api/v1 response also carries the same digest in x-contract-sha256, so a client detects staleness with one cheap request and no parsing, which is what the book asked for. This endpoint is for when the answer is yes and it wants the document. Answers in the usual v1 envelope. A bare document would be marginally more convenient for a generator pointed straight at the URL, and it would be the only endpoint of ninety-five that did not answer { data } — an exception to that shape is how the shape stops being relied upon.
+
+- **Domain service** — `api/v1/domains/health.servedContract`
+- **Error codes** — `INTERNAL`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Callers** — Cust Mobile · · Cust Web · · Prov Mobile · · Prov Web · · Admin ·
 - **Legacy it replaces** — none; new capability.
 
 ## identity
@@ -1588,6 +1600,7 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `POST /api/v1/telemetry` | — | — | · | · | — |
 | `GET /api/v1/client-config` | · | — | · | — | — |
 | `GET /api/v1/health` | — | — | — | — | — |
+| `GET /api/v1/openapi.json` | · | · | · | · | · |
 | `GET /api/v1/catalog/summary` | · | · | — | — | — |
 | `GET /api/v1/catalog/services` | · | · | — | — | — |
 | `GET /api/v1/catalog/services/:serviceId` | · | · | — | — | — |

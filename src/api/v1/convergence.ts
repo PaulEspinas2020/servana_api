@@ -261,6 +261,27 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'the same four fields from the same stamp; there is no projection to differ on.',
   },
   {
+    key: 'contractDiscovery',
+    title: 'Fetch the contract this process implements',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['health.contract'],
+    // Names the module the ENDPOINT reaches, matching the contract entry's
+    // domainService. The handler lives in domains/health and delegates to
+    // api/v1/contractDigest.servedContract, which the rationale below names —
+    // the gate compares reachability, and a module no endpoint reaches is the
+    // drift it exists to catch.
+    domainModule: 'api/v1/domains/health.servedContract',
+    surfaces: CLIENT_SURFACES,
+    roleSplitRationale:
+      'No role split. Every client generates types from the same document, so a per-surface ' +
+      'projection would defeat the point — the value is that all five are reading one ' +
+      'contract. AUTHENTICATED rather than public, unlike buildProvenance: four fields of ' +
+      'provenance exist to be checkable by somebody holding no credential, but a full API ' +
+      'surface is a map, and every client that wants it already holds a token. The same ' +
+      'digest also rides on every /api/v1 response in x-contract-sha256, so a client asks ' +
+      '"am I stale?" without calling this at all.',
+  },
+  {
     key: 'workerTelemetry',
     title: 'Report that the product is working',
     source: 'api/v1/convergence (core)',

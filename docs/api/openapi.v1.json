@@ -308,6 +308,82 @@
         "description": "Reads dist/BUILD_INFO.json, which deploy.yml stamps on every deploy. It answers the one question a deploy cannot otherwise be asked from outside: which commit is actually serving. A deploy whose migration step fails stops short of the PM2 restart, so the old code keeps serving and nothing outward says so."
       }
     },
+    "/api/v1/openapi.json": {
+      "get": {
+        "operationId": "health.contract",
+        "summary": "The OpenAPI document this process implements, with its sha256 in a header.",
+        "tags": [
+          "health"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "api/v1/domains/health.servedContract",
+        "x-legacy": [],
+        "x-callers": {
+          "customerMobile": "planned",
+          "customerWeb": "planned",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "planned"
+        },
+        "x-observability-owner": "platform",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/OpenApiDocument"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "TAB 08. Before this the document was served at no path at all, so a client could only compare its pin against a git CHECKOUT — a statement about a repository, not about a server. The portal reported its pin going stale twice in one session and could not tell a shape change from an annotation-only one without diffing 530 kB by hand. AUTHENTICATED, not public, unlike health.build. Build provenance is four fields and exists to be checkable by someone who has no credential; a full API surface is a map, and every client that needs it already holds a token. `health.build` stays public because a provenance check that needs a credential can only be run by someone who already has one — that argument does not transfer to the whole contract. Every /api/v1 response also carries the same digest in x-contract-sha256, so a client detects staleness with one cheap request and no parsing, which is what the book asked for. This endpoint is for when the answer is yes and it wants the document. Answers in the usual v1 envelope. A bare document would be marginally more convenient for a generator pointed straight at the URL, and it would be the only endpoint of ninety-five that did not answer { data } — an exception to that shape is how the shape stops being relied upon."
+      }
+    },
     "/api/v1/catalog/summary": {
       "get": {
         "operationId": "catalog.summary",
@@ -19512,6 +19588,31 @@
           }
         }
       },
+      "OpenApiDocument": {
+        "type": "object",
+        "description": "An OpenAPI 3.1 document — this one, as the running process derives it, under the usual v1 `data` key. It is NOT the committed docs/api/openapi.v1.json: that file answers what the repository says, which a checkout already answers. This is derived from the same V1_CONTRACT that register.ts mounts the routers from, so there is no second copy that can go stale. The response carries x-contract-sha256 and an ETag of the same digest. The digest is sha256(JSON.stringify(document)) with no indentation — a client holding a pinned copy reproduces it by parsing that file and stringifying it the same way. It is deliberately NOT the hash of the response body, which carries a per-request id and would differ every time. See TAB 08.",
+        "additionalProperties": true,
+        "properties": {
+          "openapi": {
+            "type": "string",
+            "enum": [
+              "3.1.0"
+            ]
+          },
+          "info": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "paths": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "components": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
       "MoneyMajor": {
         "type": [
           "number",
@@ -19601,6 +19702,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 113,
-  "x-total-count": 113
+  "x-implemented-count": 114,
+  "x-total-count": 114
 }

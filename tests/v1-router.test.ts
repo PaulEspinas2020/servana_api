@@ -899,6 +899,10 @@ describe('every implemented contract entry is reachable at its declared path', (
   const CASES: Record<string, () => Promise<Call>> = {
     'catalog.browse': () => call('GET', '/api/v1/catalog', { auth: false }),
     'health.build': () => call('GET', '/api/v1/health', { auth: false }),
+    // AUTHENTICATED, unlike health.build. Build provenance is four fields and
+    // exists to be checkable by someone holding no credential; a full API
+    // surface is a map, and every client that wants it already has a token.
+    'health.contract': () => call('GET', '/api/v1/openapi.json'),
     // auth: false is the assertion, not a convenience. The client this answers
     // may be too old to authenticate — it is the one being recalled.
     'clientConfig.read': () => call('GET', '/api/v1/client-config', { auth: false }),
@@ -1155,6 +1159,10 @@ describe('every implemented contract entry is reachable at its declared path', (
       expect(res.body).not.toHaveProperty('status');
       expect(res.body).not.toHaveProperty('success');
       expect(res.headers.get('x-request-id')).toBeTruthy();
+      // TAB 08: the contract digest rides on EVERY v1 response, so a client
+      // detects a stale pin with one cheap request and no parsing — rather than
+      // fetching 330 kB of document to learn whether it needed to.
+      expect(res.headers.get('x-contract-sha256')).toMatch(/^[0-9a-f]{64}$/);
     });
   }
 });

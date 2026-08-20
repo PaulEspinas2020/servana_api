@@ -15,9 +15,9 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 113 |
+| Mounted endpoints | 114 |
 | `public` | 22 |
-| `authenticated` | 59 |
+| `authenticated` | 60 |
 | `provider` | 26 |
 | `admin` | 6 |
 | Object-scoped | 43 |
@@ -195,6 +195,7 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `customer.profile.get` | GET /customer/profile | `authenticated` | · ● ● ● | — |
 | `customer.profile.patch` | PATCH /customer/profile | `authenticated` | · ● ● ● | — |
 | `health.build` | GET /health | `public` | ● ● ● ● | — |
+| `health.contract` | GET /openapi.json | `authenticated` | · ● ● ● | — |
 | `home.feed` | GET /home | `authenticated` | · ● ● ● | — |
 | `home.sections` | GET /home/sections | `authenticated` | · ● ● ● | — |
 | `identity.me` | GET /me | `authenticated` | · ● ● ● | — |
@@ -267,7 +268,7 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-58 of 113 endpoints are probeable; the other
+59 of 114 endpoints are probeable; the other
 55 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.

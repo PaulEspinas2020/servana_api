@@ -3472,6 +3472,28 @@ export const SCHEMAS: Record<string, unknown> = {
    * accept `number | string` everywhere defensively; it has to accept it
    * exactly where `MoneyRaw` says so.
    */
+  OpenApiDocument: {
+    type: 'object',
+    description:
+      'An OpenAPI 3.1 document — this one, as the running process derives it, under the '
+      + 'usual v1 `data` key. It is NOT the committed docs/api/openapi.v1.json: that file '
+      + 'answers what the repository says, which a checkout already answers. This is '
+      + 'derived from the same V1_CONTRACT that register.ts mounts the routers from, so '
+      + 'there is no second copy that can go stale.'
+      + ' '
+      + 'The response carries x-contract-sha256 and an ETag of the same digest. The digest '
+      + 'is sha256(JSON.stringify(document)) with no indentation — a client holding a '
+      + 'pinned copy reproduces it by parsing that file and stringifying it the same way. '
+      + 'It is deliberately NOT the hash of the response body, which carries a per-request '
+      + 'id and would differ every time. See TAB 08.',
+    additionalProperties: true,
+    properties: {
+      openapi: { type: 'string', enum: ['3.1.0'] },
+      info: { type: 'object', additionalProperties: true },
+      paths: { type: 'object', additionalProperties: true },
+      components: { type: 'object', additionalProperties: true },
+    },
+  },
   MoneyMajor: {
     type: ['number', 'null'],
     description:
