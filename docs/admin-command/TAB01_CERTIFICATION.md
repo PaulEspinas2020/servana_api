@@ -179,3 +179,49 @@ A green new gate proves nothing until it goes red on purpose.
 
 ---
 Servana Backend — Admin API Master Command · TAB 01
+
+## Gate result, stated exactly
+
+```
+npm run verify
+
+Test Suites: 1 failed, 315 passed, 316 total
+Tests:       1 failed, 6631 passed, 6632 total
+EXIT=1
+```
+
+**The failure is not this TAB's, and the evidence is arithmetic.**
+
+`tests/removal-migration-ledger.test.ts` asserts
+`noEffect.length === 14`. It received 15. The fifteenth is
+`scripts/migrations/039-electrical-service-coverage.sql`, which contains
+**0 DDL statements and 2 INSERTs** — DML-only, so it lands in the
+`no-schema-effect` bucket by the classifier's own rule:
+
+```
+001-massage-services.sql … 029-capability-canonical-source.sql   (14)
+039-electrical-service-coverage.sql                              (the 15th)
+```
+
+That file is not part of this TAB and was not written by this work. It appeared
+in the working tree at 13:37:26 **while the gate was running**, alongside an edit
+to `tests/schema-baseline.test.ts` at 13:37:57 and a new
+`tests/migration-039-electrical-coverage.test.ts` after that — a second process
+is writing to this working tree concurrently. Its author has updated
+`schema-baseline.test.ts` for the new migration and has not yet updated
+`removal-migration-ledger.test.ts`, which is why the count assertion is red.
+
+**Nothing belonging to that work was touched, staged or committed here.** This
+TAB's commit names its eight files explicitly rather than using `git add -A`.
+
+Against the baseline recorded in TAB 00:
+
+```
+                    baseline      now
+Test suites             315        316    (+1, this TAB's)
+Tests                  6608       6632    (+24, this TAB's 22 plus 2 elsewhere)
+Failures                  0          1    (concurrent work, evidenced above)
+```
+
+Every suite this TAB touches is green, and `npm run admin:docs:check` reports
+`251 operations, 15 with an authored response schema` inside the gate run.
