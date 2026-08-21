@@ -1532,6 +1532,1084 @@
         }
       }
     },
+    "/api/v1/provider/services/overview": {
+      "get": {
+        "operationId": "provider.services.overview",
+        "summary": "Everything about the caller's services: readiness, pause state, actions, applications.",
+        "tags": [
+          "provider-services"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/serviceApplicationService.getProviderServicesOverview",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/worker/services-overview",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-services",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderServicesOverview"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "NOT subsumed by provider.services.list, and the mandate asked the question directly. That entry returns four fields per row - id, name, status, isActive. This one carries the readiness VERDICT and its reasons, the pause reason, the actions the server will actually honour, and the applications: the whole management screen. Both are published because a client rendering a chip should not pay for the fan-out, and a client rendering the screen cannot rebuild it from four fields without re-deriving readiness on the device - which is precisely the duplicate-truth this contract exists to stop."
+      }
+    },
+    "/api/v1/provider/services/{serviceId}/eligibility": {
+      "get": {
+        "operationId": "provider.services.eligibility",
+        "summary": "May the caller apply for this service, and if not, why?",
+        "tags": [
+          "provider-services"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/serviceApplicationService.evaluateApplicationEligibility",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/worker/services/:serviceId/eligibility",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-services",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "serviceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "service_families.id - a FAMILY id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ServiceApplicationEligibility"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "CACHING, since the mandate asked: do NOT cache this. It is a composite of provider account state, activation, service availability, offering policy and any open application - five things that change independently and none of them on this route. A cached ELIGIBLE offers a button the submit will refuse; a cached refusal hides work a provider has just become eligible for. Read it when the screen opens and again before offering the action. It is a READ - safe to repeat, and cheap relative to being wrong. The submit re-evaluates server-side regardless, so a race here is a refusal rather than a bad approval."
+      }
+    },
+    "/api/v1/provider/services/{serviceId}/pause": {
+      "patch": {
+        "operationId": "provider.services.pause",
+        "summary": "Stop being offered work for one service, without giving it up.",
+        "tags": [
+          "provider-services"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/technicianService.pauseService",
+        "x-legacy": [
+          {
+            "method": "PATCH",
+            "path": "/api/worker/services/:serviceId/pause",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-services",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "serviceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "service_families.id - a FAMILY id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderServicePause"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderServiceState"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PROVIDER_SERVICE_ALREADY_PAUSED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "NOT idempotent, and published as such rather than wished otherwise. A repeat is refused with PROVIDER_SERVICE_ALREADY_PAUSED - a DISTINCT code, because the commonest way to reach it is a retry after a request that committed and then timed out. A client that cannot tell that from a genuine conflict shows an error for an operation that worked. Treat it as success-equivalent when retrying. The canonical capability table is updated alongside the legacy row: a pause that touched only one would leave matching offering work the provider has stepped back from."
+      }
+    },
+    "/api/v1/provider/services/{serviceId}/reactivate": {
+      "patch": {
+        "operationId": "provider.services.reactivate",
+        "summary": "Resume being offered work for a paused service.",
+        "tags": [
+          "provider-services"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/technicianService.reactivateService",
+        "x-legacy": [
+          {
+            "method": "PATCH",
+            "path": "/api/worker/services/:serviceId/reactivate",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-services",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "serviceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "service_families.id - a FAMILY id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderServiceState"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PROVIDER_SERVICE_NOT_PAUSED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "The matched pair of pause, and the one with the most direct effect on earnings: a provider who cannot reactivate is a provider not being offered work. Migrate the two together - a canonical pause whose reactivate is still legacy can strand somebody."
+      }
+    },
+    "/api/v1/provider/service-applications": {
+      "get": {
+        "operationId": "provider.serviceApplications.list",
+        "summary": "Every service application the caller has made.",
+        "tags": [
+          "provider-services"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/serviceApplicationService.getApplicationsByWorker",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/worker/service-applications",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-services",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ServiceApplicationList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "provider.serviceApplications.create",
+        "summary": "Apply for a service.",
+        "tags": [
+          "provider-services"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/serviceApplicationService.submitApplication",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/worker/service-applications",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-services",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceApplicationSubmit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ServiceApplication"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "`requirementsVersion` is the version the provider was SHOWN. It travels so the server can distinguish an application made against the current requirements from one made against a set that has since changed - the difference between approving and asking for more. Eligibility is re-evaluated server-side here regardless of what the eligibility read said, so a stale client view is a refusal rather than a bad approval."
+      }
+    },
+    "/api/v1/provider/service-applications/{applicationId}": {
+      "get": {
+        "operationId": "provider.serviceApplications.get",
+        "summary": "One application, scoped to the caller.",
+        "tags": [
+          "provider-services"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/serviceApplicationService.getApplicationByWorker",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/worker/service-applications/:applicationId",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-services",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "applicationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "worker_service_applications.id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ServiceApplication"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "provider.serviceApplications.withdraw",
+        "summary": "Withdraw an application the provider no longer wants reviewed.",
+        "tags": [
+          "provider-services"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/serviceApplicationService.cancelApplication",
+        "x-legacy": [
+          {
+            "method": "DELETE",
+            "path": "/api/worker/service-applications/:applicationId",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-services",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "applicationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "worker_service_applications.id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ServiceApplication"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "The EIGHTH operation in a cluster the Master Command lists as seven PATHS - service-applications/:id carries both GET and DELETE. Counting paths undercounts the work, and a provider who can apply but not withdraw is stuck waiting on a review they no longer want."
+      }
+    },
+    "/api/v1/provider/service-applications/{applicationId}/resubmit": {
+      "post": {
+        "operationId": "provider.serviceApplications.resubmit",
+        "summary": "Resubmit an application that came back needing more.",
+        "tags": [
+          "provider-services"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/serviceApplicationService.resubmitApplication",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/worker/service-applications/:applicationId/resubmit",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-services",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "applicationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "worker_service_applications.id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceApplicationResubmit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ServiceApplication"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT | STALE_STATE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "`expectedVersion` is REQUIRED and is optimistic concurrency (18), not decoration: between loading an application and resubmitting it, a reviewer may have decided. Without it a resubmission silently overwrites a decision the provider never saw. A mismatch is STALE_STATE - the code a client already reloads on - rather than a validation error, because nothing about the request was malformed."
+      }
+    },
     "/api/v1/notifications": {
       "get": {
         "operationId": "notifications.list",
@@ -14052,6 +15130,8 @@
                   "PROVIDER_NOT_APPROVED",
                   "PROVIDER_REJECTED",
                   "PROVIDER_ROLE_REQUIRED",
+                  "PROVIDER_SERVICE_ALREADY_PAUSED",
+                  "PROVIDER_SERVICE_NOT_PAUSED",
                   "PROVIDER_SUSPENDED",
                   "RATE_LIMITED",
                   "READ_POINTER_INVALID",
@@ -19192,6 +20272,319 @@
         },
         "description": "IDEMPOTENT by construction: the upsert is COALESCE(policy_acknowledged_at, now()), so a second acceptance returns the ORIGINAL moment rather than moving it. The instant somebody agreed is a fact and a double tap must not rewrite it. Note that the timestamp is pinned to the PROVIDER rather than to the policy version, so re-accepting a revised agreement returns the first date."
       },
+      "ProviderServiceState": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "The employee_services row after the change. `service_id` is a FAMILY id (service_families.id) - migration 024 renamed the coarse families to that table and the 95 canonical bookable services to `services`, and this column was never remapped.",
+        "properties": {
+          "service_id": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused"
+            ]
+          },
+          "pause_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProviderServicePause": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "The body is optional in full; a pause with no reason is accepted.",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Shown to Servana, not to customers. Blank is treated as absent."
+          }
+        }
+      },
+      "ProviderServicesOverview": {
+        "type": "object",
+        "required": [
+          "services",
+          "applications"
+        ],
+        "description": "The whole service-management screen in one read: what the provider holds, whether each is currently offered and WHY NOT, and every application. Distinct from ProviderServiceList, which is four fields for a chip.",
+        "properties": {
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "providerServiceId": {
+                  "type": "string",
+                  "description": "providerUid:serviceId. A handle, not a stored key."
+                },
+                "serviceId": {
+                  "type": "integer",
+                  "description": "A FAMILY id - service_families.id."
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "category": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "approvalState": {
+                  "type": "string"
+                },
+                "operationalState": {
+                  "type": "string",
+                  "enum": [
+                    "ACTIVE",
+                    "INACTIVE"
+                  ]
+                },
+                "qualificationState": {
+                  "type": "string"
+                },
+                "readinessState": {
+                  "type": "string",
+                  "enum": [
+                    "READY",
+                    "BLOCKED"
+                  ],
+                  "description": "Whether this service is being OFFERED right now. Composite of account status, activation and the pause flag - so BLOCKED with an empty reason list would be a bug, not a silent state."
+                },
+                "readinessReasons": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Why it is blocked. Empty exactly when READY."
+                },
+                "pauseReason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "approvedAt": {
+                  "$ref": "#/components/schemas/UtcTimestamp"
+                },
+                "updatedAt": {
+                  "$ref": "#/components/schemas/UtcTimestamp"
+                },
+                "availableActions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "PAUSE",
+                      "REACTIVATE"
+                    ]
+                  },
+                  "description": "What the server will HONOUR. A client deriving buttons from operationalState instead would offer PAUSE on an already-paused service and get a 409."
+                }
+              }
+            }
+          },
+          "applications": {
+            "$ref": "#/components/schemas/ServiceApplicationList"
+          }
+        }
+      },
+      "ServiceApplication": {
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "additionalProperties": true,
+        "description": "One application and where it has got to. Always the caller's own.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "serviceId": {
+            "type": "integer",
+            "description": "A FAMILY id - service_families.id."
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "description": "Pass back as `expectedVersion` when resubmitting. It is what stops a resubmission silently overwriting a reviewer decision made in the meantime."
+          },
+          "requirementsVersion": {
+            "type": "integer"
+          },
+          "providerReasonCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "providerReasonDetail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "submittedAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          }
+        }
+      },
+      "ServiceApplicationList": {
+        "type": "array",
+        "description": "Newest first.",
+        "items": {
+          "$ref": "#/components/schemas/ServiceApplication"
+        }
+      },
+      "ServiceApplicationSubmit": {
+        "type": "object",
+        "required": [
+          "serviceId",
+          "clientRequestId",
+          "requirementsVersion"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "serviceId": {
+            "type": "integer",
+            "description": "A FAMILY id - service_families.id."
+          },
+          "requirementsVersion": {
+            "type": "integer",
+            "description": "The version the provider was SHOWN, from the eligibility read. It lets the server tell an application made against current requirements from one made against a set that has since changed."
+          },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128,
+            "description": "REQUIRED. Looked up on (worker_uid, client_request_id) BEFORE anything is written, so a replay returns the original application rather than a second one."
+          }
+        }
+      },
+      "ServiceApplicationResubmit": {
+        "type": "object",
+        "required": [
+          "clientRequestId",
+          "expectedVersion"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "description": "REQUIRED. Optimistic concurrency, not decoration: a reviewer may have decided between the load and the resubmit. A mismatch answers STALE_STATE - reload and show the provider what changed."
+          },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128
+          }
+        }
+      },
+      "ServiceApplicationEligibility": {
+        "type": "object",
+        "required": [
+          "eligible",
+          "code",
+          "nextAction"
+        ],
+        "description": "DO NOT CACHE. A composite of provider account state, activation, service availability, offering policy and any open application - five things that change independently and none of them on this route. A cached ELIGIBLE offers a button the submit refuses; a cached refusal hides work the provider has just become eligible for. Read it when the screen opens and again before offering the action. The submit re-evaluates server-side regardless, so a race is a refusal rather than a bad approval.",
+        "properties": {
+          "eligible": {
+            "type": "boolean"
+          },
+          "code": {
+            "type": "string",
+            "description": "Why. ELIGIBLE, ALREADY_APPROVED, APPLICATION_PENDING, ADDITIONAL_INFORMATION_REQUIRED, PROVIDER_ACCOUNT_NOT_ACTIVE, SERVICE_NOT_AVAILABLE, APPLICATION_CLOSED, or a service-policy code. Branch on THIS, never on the message."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable. Not a stable interface."
+          },
+          "nextAction": {
+            "type": "string",
+            "enum": [
+              "APPLY",
+              "VIEW_SERVICE",
+              "VIEW_APPLICATION",
+              "CONTACT_SUPPORT",
+              "NONE"
+            ],
+            "description": "Where to send the provider. NONE means there is nothing they can do here."
+          },
+          "service": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "category": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "catalogVersion": {
+                "type": "integer"
+              }
+            }
+          },
+          "applicationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The open application, when one is why this is refused."
+          },
+          "requirementsVersion": {
+            "type": "integer",
+            "description": "Pass to the submit as `requirementsVersion` - this is the version being shown."
+          },
+          "requirements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
       "ProviderActivation": {
         "type": "object",
         "required": [
@@ -21607,6 +23000,9 @@
       "name": "provider-jobs"
     },
     {
+      "name": "provider-services"
+    },
+    {
       "name": "reviews"
     },
     {
@@ -21620,6 +23016,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 123,
-  "x-total-count": 124
+  "x-implemented-count": 132,
+  "x-total-count": 133
 }

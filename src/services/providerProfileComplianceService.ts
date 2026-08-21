@@ -800,8 +800,13 @@ export const getProfileCenter = async (providerUid: string) => {
     calculateCompliance(providerUid),
     getVerificationTimeline(providerUid, 20),
     dbQuery.query(
+      // `service_families`, not `services`: employee_services.service_id is a
+      // FAMILY id and has been since migration 024 renamed the two tables past
+      // each other. Joining `services` compared it against a different id space
+      // and, as a LEFT JOIN, silently returned an unrelated service's name.
+      // See providerProfileService.listServices for the full account.
       `SELECT es.service_id, s.name, COALESCE(es.status,'active') AS status
-       FROM ${s}.employee_services es LEFT JOIN ${s}.services s ON s.id = es.service_id
+       FROM ${s}.employee_services es LEFT JOIN ${s}.service_families s ON s.id = es.service_id
        WHERE es.employee_uid = $1 ORDER BY s.name`,
       [providerUid],
     ),

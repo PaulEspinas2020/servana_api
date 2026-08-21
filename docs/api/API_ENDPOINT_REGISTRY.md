@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**123 implemented** · **1 planned** · 124 total.
+**132 implemented** · **1 planned** · 133 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -421,6 +421,130 @@ Cancels a job the provider had already accepted, subject to the notice policy.
 - **Legacy it replaces**
   - `POST /api/provider/bookings/:bookingId/cancel` — **ALIAS_TEMPORARILY** — The live Provider Web / Provider Mobile cancel. It ALREADY runs the executor and the same providerCancellationWindow guard — this entry gives it a canonical path and a v1 error vocabulary, it does not give it a second implementation.
   - `GET /api/provider/bookings/:bookingId/cancellation-eligibility` — **KEEP** — NOT a duplicate. It answers "may I cancel, and until when" without cancelling, from the same evaluateCancellation function. The canonical successor for that question is the availableActions block on GET /bookings/:id/transitions.
+
+## provider-services
+
+| Method | Path | Status | Auth | Request | Response | Idem | Owner |
+|---|---|---|---|---|---|---|---|
+| `GET` | `/api/v1/provider/services/overview` | **live** | provider (role 2/4) | — | `ProviderServicesOverview` | yes | provider-services |
+| `GET` | `/api/v1/provider/services/:serviceId/eligibility` | **live** | provider (role 2/4) | — | `ServiceApplicationEligibility` | yes | provider-services |
+| `PATCH` | `/api/v1/provider/services/:serviceId/pause` | **live** | provider (role 2/4) | `ProviderServicePause` | `ProviderServiceState` | no | provider-services |
+| `PATCH` | `/api/v1/provider/services/:serviceId/reactivate` | **live** | provider (role 2/4) | — | `ProviderServiceState` | no | provider-services |
+| `GET` | `/api/v1/provider/service-applications` | **live** | provider (role 2/4) | — | `ServiceApplicationList` | yes | provider-services |
+| `GET` | `/api/v1/provider/service-applications/:applicationId` | **live** | provider (role 2/4) | — | `ServiceApplication` | yes | provider-services |
+| `POST` | `/api/v1/provider/service-applications` | **live** | provider (role 2/4) | `ServiceApplicationSubmit` | `ServiceApplication` | no | provider-services |
+| `POST` | `/api/v1/provider/service-applications/:applicationId/resubmit` | **live** | provider (role 2/4) | `ServiceApplicationResubmit` | `ServiceApplication` | no | provider-services |
+| `DELETE` | `/api/v1/provider/service-applications/:applicationId` | **live** | provider (role 2/4) | — | `ServiceApplication` | no | provider-services |
+
+### `GET /api/v1/provider/services/overview`
+
+Everything about the caller's services: readiness, pause state, actions, applications.
+
+> NOT subsumed by provider.services.list, and the mandate asked the question directly. That entry returns four fields per row - id, name, status, isActive. This one carries the readiness VERDICT and its reasons, the pause reason, the actions the server will actually honour, and the applications: the whole management screen. Both are published because a client rendering a chip should not pay for the fan-out, and a client rendering the screen cannot rebuild it from four fields without re-deriving readiness on the device - which is precisely the duplicate-truth this contract exists to stop.
+
+- **Domain service** — `services/serviceApplicationService.getProviderServicesOverview`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/worker/services-overview` — **ALIAS_TEMPORARILY** — Same service, same projection.
+
+### `GET /api/v1/provider/services/:serviceId/eligibility`
+
+May the caller apply for this service, and if not, why?
+
+> CACHING, since the mandate asked: do NOT cache this. It is a composite of provider account state, activation, service availability, offering policy and any open application - five things that change independently and none of them on this route. A cached ELIGIBLE offers a button the submit will refuse; a cached refusal hides work a provider has just become eligible for. Read it when the screen opens and again before offering the action. It is a READ - safe to repeat, and cheap relative to being wrong. The submit re-evaluates server-side regardless, so a race here is a refusal rather than a bad approval.
+
+- **Domain service** — `services/serviceApplicationService.evaluateApplicationEligibility`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `serviceId` (integer) service_families.id - a FAMILY id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/worker/services/:serviceId/eligibility` — **ALIAS_TEMPORARILY** — Same service. Reads the canonical offering policy, not a copy of it.
+
+### `PATCH /api/v1/provider/services/:serviceId/pause`
+
+Stop being offered work for one service, without giving it up.
+
+> NOT idempotent, and published as such rather than wished otherwise. A repeat is refused with PROVIDER_SERVICE_ALREADY_PAUSED - a DISTINCT code, because the commonest way to reach it is a retry after a request that committed and then timed out. A client that cannot tell that from a genuine conflict shows an error for an operation that worked. Treat it as success-equivalent when retrying. The canonical capability table is updated alongside the legacy row: a pause that touched only one would leave matching offering work the provider has stepped back from.
+
+- **Domain service** — `services/technicianService.pauseService`
+- **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `PROVIDER_SERVICE_ALREADY_PAUSED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `serviceId` (integer) service_families.id - a FAMILY id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `PATCH /api/worker/services/:serviceId/pause` — **ALIAS_TEMPORARILY** — Same service. Writes the canonical capability grant as well as the legacy row.
+
+### `PATCH /api/v1/provider/services/:serviceId/reactivate`
+
+Resume being offered work for a paused service.
+
+> The matched pair of pause, and the one with the most direct effect on earnings: a provider who cannot reactivate is a provider not being offered work. Migrate the two together - a canonical pause whose reactivate is still legacy can strand somebody.
+
+- **Domain service** — `services/technicianService.reactivateService`
+- **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `PROVIDER_SERVICE_NOT_PAUSED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `serviceId` (integer) service_families.id - a FAMILY id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `PATCH /api/worker/services/:serviceId/reactivate` — **ALIAS_TEMPORARILY** — Same service. The matched pair of pause - migrate them together.
+
+### `GET /api/v1/provider/service-applications`
+
+Every service application the caller has made.
+
+- **Domain service** — `services/serviceApplicationService.getApplicationsByWorker`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/worker/service-applications` — **ALIAS_TEMPORARILY** — Same service. The legacy envelope wraps it as { success, applications }.
+
+### `GET /api/v1/provider/service-applications/:applicationId`
+
+One application, scoped to the caller.
+
+- **Domain service** — `services/serviceApplicationService.getApplicationByWorker`
+- **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Path params** — `applicationId` (string) worker_service_applications.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/worker/service-applications/:applicationId` — **ALIAS_TEMPORARILY** — Same service. Scoped on worker_uid in SQL, so another provider id is a 404.
+
+### `POST /api/v1/provider/service-applications`
+
+Apply for a service.
+
+> `requirementsVersion` is the version the provider was SHOWN. It travels so the server can distinguish an application made against the current requirements from one made against a set that has since changed - the difference between approving and asking for more. Eligibility is re-evaluated server-side here regardless of what the eligibility read said, so a stale client view is a refusal rather than a bad approval.
+
+- **Domain service** — `services/serviceApplicationService.submitApplication`
+- **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/worker/service-applications` — **ALIAS_TEMPORARILY** — Same service, same replay lookup.
+
+### `POST /api/v1/provider/service-applications/:applicationId/resubmit`
+
+Resubmit an application that came back needing more.
+
+> `expectedVersion` is REQUIRED and is optimistic concurrency (18), not decoration: between loading an application and resubmitting it, a reviewer may have decided. Without it a resubmission silently overwrites a decision the provider never saw. A mismatch is STALE_STATE - the code a client already reloads on - rather than a validation error, because nothing about the request was malformed.
+
+- **Domain service** — `services/serviceApplicationService.resubmitApplication`
+- **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `STALE_STATE`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `applicationId` (string) worker_service_applications.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/worker/service-applications/:applicationId/resubmit` — **ALIAS_TEMPORARILY** — Same service, same expectedVersion check.
+
+### `DELETE /api/v1/provider/service-applications/:applicationId`
+
+Withdraw an application the provider no longer wants reviewed.
+
+> The EIGHTH operation in a cluster the Master Command lists as seven PATHS - service-applications/:id carries both GET and DELETE. Counting paths undercounts the work, and a provider who can apply but not withdraw is stuck waiting on a review they no longer want.
+
+- **Domain service** — `services/serviceApplicationService.cancelApplication`
+- **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Path params** — `applicationId` (string) worker_service_applications.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `DELETE /api/worker/service-applications/:applicationId` — **ALIAS_TEMPORARILY** — Same service. Scoped on worker_uid in SQL, so another provider id is a 404 rather than a withdrawable target.
 
 ## notifications
 
@@ -1745,6 +1869,15 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `GET /api/v1/bookings/:bookingId/timeline` | ⏳ | · | — | — | — |
 | `GET /api/v1/provider/jobs` | — | — | ✅ | ✅ | — |
 | `GET /api/v1/provider/jobs/:bookingId` | — | — | ✅ | ✅ | — |
+| `GET /api/v1/provider/services/overview` | — | — | · | · | — |
+| `GET /api/v1/provider/services/:serviceId/eligibility` | — | — | · | · | — |
+| `PATCH /api/v1/provider/services/:serviceId/pause` | — | — | · | · | — |
+| `PATCH /api/v1/provider/services/:serviceId/reactivate` | — | — | · | · | — |
+| `GET /api/v1/provider/service-applications` | — | — | · | · | — |
+| `GET /api/v1/provider/service-applications/:applicationId` | — | — | · | · | — |
+| `POST /api/v1/provider/service-applications` | — | — | · | · | — |
+| `POST /api/v1/provider/service-applications/:applicationId/resubmit` | — | — | · | · | — |
+| `DELETE /api/v1/provider/service-applications/:applicationId` | — | — | · | · | — |
 | `GET /api/v1/notifications` | ⏳ | ⏳ | ⏳ | ✅ | · |
 | `GET /api/v1/notifications/unread-count` | ⏳ | ⏳ | ⏳ | ✅ | · |
 | `PATCH /api/v1/notifications/:key/read` | ⏳ | ⏳ | ⏳ | ✅ | · |

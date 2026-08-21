@@ -312,6 +312,18 @@ export const V1_ERROR_STATUS = {
   /** Authenticated, but the account may not sign in at all. */
   ACCOUNT_DISABLED: 403,
   /**
+   * Pause was asked for on a service that is ALREADY paused.
+   *
+   * A distinct code because the commonest way to reach it is a RETRY: the
+   * update's WHERE clause matches only an active row, so a client whose first
+   * request timed out after committing sees this on the second. A client that
+   * cannot tell it from a genuine conflict shows an error for an operation that
+   * succeeded. Treat it as success-equivalent when retrying.
+   */
+  PROVIDER_SERVICE_ALREADY_PAUSED: 409,
+  /** The mirror image, for reactivate on a service that is not paused. */
+  PROVIDER_SERVICE_NOT_PAUSED: 409,
+  /**
    * The session is valid but too OLD for this operation.
    *
    * Distinct from `TOKEN_EXPIRED` on purpose, and the distinction is the whole

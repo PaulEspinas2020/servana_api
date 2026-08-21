@@ -34,15 +34,15 @@ installed.
 
 | | |
 | --- | --- |
-| Legacy mappings tracked | 136 |
-| In the retirement plan | 117 |
+| Legacy mappings tracked | 145 |
+| In the retirement plan | 126 |
 | `KEEP` (not a duplicate of anything) | 6 |
 | `ROLE_SPECIFIC` (different auth/action, same service) | 13 |
-| `ALIAS_TEMPORARILY` | 104 |
+| `ALIAS_TEMPORARILY` | 113 |
 | `CANONICALIZE` | 12 |
 | `RETIRE` | 1 |
 | **Retirable today** | **0** |
-| Blocked | 117 |
+| Blocked | 126 |
 
 Nothing is retirable today, and the reason is the same for all of them: no client has migrated, because the v1 namespace is not deployed. The schedule is the order things become retirable, not a queue of pending deletions.
 
@@ -159,7 +159,16 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `PUT /api/worker/bookings/:bookingId/start` | ALIAS_TEMPORARILY | `provider.jobs.start` | Provider Web has not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
 | `GET /api/worker/job-cards` | ALIAS_TEMPORARILY | `provider.jobs.list` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
 | `GET /api/worker/job-cards/:bookingId` | ALIAS_TEMPORARILY | `provider.jobs.get` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `GET /api/worker/service-applications` | ALIAS_TEMPORARILY | `provider.serviceApplications.list` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/worker/service-applications` | ALIAS_TEMPORARILY | `provider.serviceApplications.create` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/worker/service-applications/:applicationId` | ALIAS_TEMPORARILY | `provider.serviceApplications.get` | Provider Mobile, Provider Web have not migrated | 90d |
+| `DELETE /api/worker/service-applications/:applicationId` | ALIAS_TEMPORARILY | `provider.serviceApplications.withdraw` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/worker/service-applications/:applicationId/resubmit` | ALIAS_TEMPORARILY | `provider.serviceApplications.resubmit` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/worker/services-overview` | ALIAS_TEMPORARILY | `provider.services.overview` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/worker/services-overview` | ALIAS_TEMPORARILY | `provider.services.list` | Provider Web has not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `GET /api/worker/services/:serviceId/eligibility` | ALIAS_TEMPORARILY | `provider.services.eligibility` | Provider Mobile, Provider Web have not migrated | 90d |
+| `PATCH /api/worker/services/:serviceId/pause` | ALIAS_TEMPORARILY | `provider.services.pause` | Provider Mobile, Provider Web have not migrated | 90d |
+| `PATCH /api/worker/services/:serviceId/reactivate` | ALIAS_TEMPORARILY | `provider.services.reactivate` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/worker/time-off` | ALIAS_TEMPORARILY | `provider.timeOff.list` | Provider Web has not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
 | `POST /api/worker/time-off` | ALIAS_TEMPORARILY | `provider.timeOff.create` | Provider Web has not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
 | `DELETE /api/worker/time-off/:id` | ALIAS_TEMPORARILY | `provider.timeOff.cancel` | Provider Web has not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |

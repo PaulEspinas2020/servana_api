@@ -18,11 +18,11 @@
 
 | | |
 | --- | --- |
-| Capabilities | 65 |
-| Canonical endpoints mounted | 123 |
+| Capabilities | 66 |
+| Canonical endpoints mounted | 132 |
 | Canonical endpoints planned | 1 |
-| Legacy mappings tracked | 136 |
-| Converged (one route family) | 57 |
+| Legacy mappings tracked | 145 |
+| Converged (one route family) | 58 |
 | Role-split over ONE service | 4 |
 | Single-surface | 4 |
 | **Divergent (forked truth)** | **0** |
@@ -89,6 +89,7 @@ direction of whoever wrote it.
 | Read the support cases I raised on a booking | SHARED | planned | planned | — | — | — |
 | A provider's own job queue | SHARED | — | — | **migrated** | **migrated** | — |
 | Read a provider's public profile | SHARED | planned | planned | — | — | planned |
+| Decide what work I am offered | SHARED | — | — | planned | planned | — |
 | Resolve a refund review | SINGLE_SURFACE | — | — | — | — | legacy |
 | Read the reschedule history of a booking | SHARED | planned | planned | planned | **migrated** | planned |
 | Report that the product is working | SINGLE_SURFACE | — | — | planned | — | — |
@@ -634,6 +635,36 @@ Legacy still aliased for this capability:
   - none
 
 No role split. One public projection, and the disclosure rules are the provider disclosure policy — not a per-caller decision made at the route.
+
+### Decide what work I am offered
+
+- key: `core:providerServiceCatalogue` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/serviceApplicationService, services/technicianService`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/service-applications`
+  - `GET /api/v1/provider/service-applications/:applicationId`
+  - `GET /api/v1/provider/service-applications`
+  - `POST /api/v1/provider/service-applications/:applicationId/resubmit`
+  - `DELETE /api/v1/provider/service-applications/:applicationId`
+  - `GET /api/v1/provider/services/:serviceId/eligibility`
+  - `GET /api/v1/provider/services/overview`
+  - `PATCH /api/v1/provider/services/:serviceId/pause`
+  - `PATCH /api/v1/provider/services/:serviceId/reactivate`
+
+Legacy still aliased for this capability:
+  - `DELETE /api/worker/service-applications/:applicationId`
+  - `GET /api/worker/service-applications`
+  - `GET /api/worker/service-applications/:applicationId`
+  - `GET /api/worker/services-overview`
+  - `GET /api/worker/services/:serviceId/eligibility`
+  - `PATCH /api/worker/services/:serviceId/pause`
+  - `PATCH /api/worker/services/:serviceId/reactivate`
+  - `POST /api/worker/service-applications`
+  - `POST /api/worker/service-applications/:applicationId/resubmit`
+
+No role split. One capability rather than two because a read and a write here act on the SAME row: a pause and an approval both change what matching offers, and splitting them would let a pause be published canonically while the reactivate that undoes it stayed legacy. Held separately from providerProfile because a service list looked like part of a profile and is not - it is the input to matching, and it is the only provider-facing surface whose state decides earnings. `provider.services.list` stays in the account capability: it is the four-field chip, and the overview here is the management screen.
 
 ### Resolve a refund review
 

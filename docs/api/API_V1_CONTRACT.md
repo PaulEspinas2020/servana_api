@@ -237,7 +237,7 @@ Each names the legacy route it will replace and why it was not adapted here.
 quietly become "half-built".
 
 <!-- BEGIN GENERATED: v1-planned -->
-**1 planned entry today**, against 123 implemented.
+**1 planned entry today**, against 132 implemented.
 
 | Path | Domain | Successor to | Why it is not built here |
 |---|---|---|---|

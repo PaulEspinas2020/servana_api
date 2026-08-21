@@ -2693,6 +2693,207 @@ export const SCHEMAS: Record<string, unknown> = {
       'returns the first date.',
   },
 
+  ProviderServiceState: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'The employee_services row after the change. `service_id` is a FAMILY id ' +
+      '(service_families.id) - migration 024 renamed the coarse families to that table and the ' +
+      '95 canonical bookable services to `services`, and this column was never remapped.',
+    properties: {
+      service_id: { type: 'integer' },
+      status: { type: 'string', enum: ['active', 'paused'] },
+      pause_reason: { type: ['string', 'null'] },
+    },
+  },
+
+  ProviderServicePause: {
+    type: 'object',
+    additionalProperties: false,
+    description: 'The body is optional in full; a pause with no reason is accepted.',
+    properties: {
+      reason: {
+        type: 'string',
+        description: 'Shown to Servana, not to customers. Blank is treated as absent.',
+      },
+    },
+  },
+
+  ProviderServicesOverview: {
+    type: 'object',
+    required: ['services', 'applications'],
+    description:
+      'The whole service-management screen in one read: what the provider holds, whether each ' +
+      'is currently offered and WHY NOT, and every application. Distinct from ' +
+      'ProviderServiceList, which is four fields for a chip.',
+    properties: {
+      services: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            providerServiceId: { type: 'string', description: 'providerUid:serviceId. A handle, not a stored key.' },
+            serviceId: { type: 'integer', description: 'A FAMILY id - service_families.id.' },
+            name: { type: ['string', 'null'] },
+            category: { type: ['string', 'null'] },
+            approvalState: { type: 'string' },
+            operationalState: { type: 'string', enum: ['ACTIVE', 'INACTIVE'] },
+            qualificationState: { type: 'string' },
+            readinessState: {
+              type: 'string',
+              enum: ['READY', 'BLOCKED'],
+              description:
+                'Whether this service is being OFFERED right now. Composite of account status, ' +
+                'activation and the pause flag - so BLOCKED with an empty reason list would be ' +
+                'a bug, not a silent state.',
+            },
+            readinessReasons: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Why it is blocked. Empty exactly when READY.',
+            },
+            pauseReason: { type: ['string', 'null'] },
+            approvedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+            updatedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+            availableActions: {
+              type: 'array',
+              items: { type: 'string', enum: ['PAUSE', 'REACTIVATE'] },
+              description:
+                'What the server will HONOUR. A client deriving buttons from ' +
+                'operationalState instead would offer PAUSE on an already-paused service and ' +
+                'get a 409.',
+            },
+          },
+        },
+      },
+      applications: { $ref: '#/components/schemas/ServiceApplicationList' },
+    },
+  },
+
+  ServiceApplication: {
+    type: 'object',
+    required: ['id', 'status'],
+    additionalProperties: true,
+    description: "One application and where it has got to. Always the caller\'s own.",
+    properties: {
+      id: { type: 'string' },
+      serviceId: { type: 'integer', description: 'A FAMILY id - service_families.id.' },
+      status: { type: 'string' },
+      version: {
+        type: 'integer',
+        description:
+          'Pass back as `expectedVersion` when resubmitting. It is what stops a resubmission ' +
+          'silently overwriting a reviewer decision made in the meantime.',
+      },
+      requirementsVersion: { type: 'integer' },
+      providerReasonCode: { type: ['string', 'null'] },
+      providerReasonDetail: { type: ['string', 'null'] },
+      submittedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      updatedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+    },
+  },
+
+  ServiceApplicationList: {
+    type: 'array',
+    description: 'Newest first.',
+    items: { $ref: '#/components/schemas/ServiceApplication' },
+  },
+
+  ServiceApplicationSubmit: {
+    type: 'object',
+    required: ['serviceId', 'clientRequestId', 'requirementsVersion'],
+    additionalProperties: false,
+    properties: {
+      serviceId: { type: 'integer', description: 'A FAMILY id - service_families.id.' },
+      requirementsVersion: {
+        type: 'integer',
+        description:
+          'The version the provider was SHOWN, from the eligibility read. It lets the server ' +
+          'tell an application made against current requirements from one made against a set ' +
+          'that has since changed.',
+      },
+      clientRequestId: {
+        type: 'string',
+        minLength: 16,
+        maxLength: 128,
+        description:
+          'REQUIRED. Looked up on (worker_uid, client_request_id) BEFORE anything is written, ' +
+          'so a replay returns the original application rather than a second one.',
+      },
+    },
+  },
+
+  ServiceApplicationResubmit: {
+    type: 'object',
+    required: ['clientRequestId', 'expectedVersion'],
+    additionalProperties: false,
+    properties: {
+      expectedVersion: {
+        type: 'integer',
+        description:
+          'REQUIRED. Optimistic concurrency, not decoration: a reviewer may have decided ' +
+          'between the load and the resubmit. A mismatch answers STALE_STATE - reload and ' +
+          'show the provider what changed.',
+      },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+
+  ServiceApplicationEligibility: {
+    type: 'object',
+    required: ['eligible', 'code', 'nextAction'],
+    description:
+      'DO NOT CACHE. A composite of provider account state, activation, service availability, ' +
+      'offering policy and any open application - five things that change independently and ' +
+      'none of them on this route. A cached ELIGIBLE offers a button the submit refuses; a ' +
+      'cached refusal hides work the provider has just become eligible for. Read it when the ' +
+      'screen opens and again before offering the action. The submit re-evaluates server-side ' +
+      'regardless, so a race is a refusal rather than a bad approval.',
+    properties: {
+      eligible: { type: 'boolean' },
+      code: {
+        type: 'string',
+        description:
+          'Why. ELIGIBLE, ALREADY_APPROVED, APPLICATION_PENDING, ' +
+          'ADDITIONAL_INFORMATION_REQUIRED, PROVIDER_ACCOUNT_NOT_ACTIVE, SERVICE_NOT_AVAILABLE, ' +
+          'APPLICATION_CLOSED, or a service-policy code. Branch on THIS, never on the message.',
+      },
+      message: { type: 'string', description: 'Human-readable. Not a stable interface.' },
+      nextAction: {
+        type: 'string',
+        enum: ['APPLY', 'VIEW_SERVICE', 'VIEW_APPLICATION', 'CONTACT_SUPPORT', 'NONE'],
+        description: 'Where to send the provider. NONE means there is nothing they can do here.',
+      },
+      service: {
+        type: ['object', 'null'],
+        properties: {
+          id: { type: 'integer' },
+          name: { type: 'string' },
+          category: { type: ['string', 'null'] },
+          catalogVersion: { type: 'integer' },
+        },
+      },
+      applicationId: { type: ['string', 'null'], description: 'The open application, when one is why this is refused.' },
+      requirementsVersion: {
+        type: 'integer',
+        description: 'Pass to the submit as `requirementsVersion` - this is the version being shown.',
+      },
+      requirements: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            type: { type: 'string' },
+            required: { type: 'boolean' },
+            state: { type: 'string' },
+            description: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
+
   ProviderActivation: {
     type: 'object',
     required: [

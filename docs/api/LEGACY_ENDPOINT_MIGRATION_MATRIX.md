@@ -7,11 +7,11 @@ Every route the app mounts outside `/api/v1`: **519**.
 
 | Disposition | Count | Meaning |
 |---|---:|---|
-| `ALIAS_TEMPORARILY` | 98 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
+| `ALIAS_TEMPORARILY` | 106 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
 | `CANONICALIZE` | 11 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
 | `ROLE_SPECIFIC` | 13 | Legitimately separate: different auth, action or payload — same domain service. |
 | `RETIRE` | 1 | No caller and no successor. Delete once telemetry confirms zero traffic. |
-| `KEEP` | 396 | Not a duplicate of anything canonical. Untouched by this command. |
+| `KEEP` | 388 | Not a duplicate of anything canonical. Untouched by this command. |
 
 ## Retirement criteria
 
@@ -27,7 +27,7 @@ build knows how to call.
 
 Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 
-## ALIAS_TEMPORARILY (98)
+## ALIAS_TEMPORARILY (106)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
@@ -107,7 +107,15 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `POST` | `/api/worker/time-off` | `/api/v1/provider/time-off` | IDENTICAL engine call, and it carries the same bookingConflicts and conflictNotice. Time off is created even when it overlaps confirmed work - a provider who is ill must be able to record it - but the work is still theirs, and a response that did not say so would leave them assuming leave cancels their jobs. |
 | `DELETE` | `/api/worker/time-off/:id` | `/api/v1/provider/time-off/:timeOffId` | IDENTICAL engine call. Cancels rather than deletes; the row survives as history. |
 | `POST` | `/api/provider/activation/policy-acknowledgement` | `/api/v1/provider/activation/policy-acknowledgement` | Same service. Idempotent there and here, by the same COALESCE. |
-| `GET` | `/api/worker/services-overview` | `/api/v1/provider/services` | The live provider services screen. Same `employee_services` qualification; the canonical entry projects it keyed on services.id with the active flag matching actually selects on. |
+| `GET` | `/api/worker/service-applications` | `/api/v1/provider/service-applications` | Same service. The legacy envelope wraps it as { success, applications }. |
+| `GET` | `/api/worker/service-applications/:applicationId` | `/api/v1/provider/service-applications/:applicationId` | Same service. Scoped on worker_uid in SQL, so another provider id is a 404. |
+| `POST` | `/api/worker/service-applications` | `/api/v1/provider/service-applications` | Same service, same replay lookup. |
+| `POST` | `/api/worker/service-applications/:applicationId/resubmit` | `/api/v1/provider/service-applications/:applicationId/resubmit` | Same service, same expectedVersion check. |
+| `DELETE` | `/api/worker/service-applications/:applicationId` | `/api/v1/provider/service-applications/:applicationId` | Same service. Scoped on worker_uid in SQL, so another provider id is a 404 rather than a withdrawable target. |
+| `PATCH` | `/api/worker/services/:serviceId/pause` | `/api/v1/provider/services/:serviceId/pause` | Same service. Writes the canonical capability grant as well as the legacy row. |
+| `PATCH` | `/api/worker/services/:serviceId/reactivate` | `/api/v1/provider/services/:serviceId/reactivate` | Same service. The matched pair of pause - migrate them together. |
+| `GET` | `/api/worker/services/:serviceId/eligibility` | `/api/v1/provider/services/:serviceId/eligibility` | Same service. Reads the canonical offering policy, not a copy of it. |
+| `GET` | `/api/worker/services-overview` | `/api/v1/provider/services/overview` | Same service, same projection. |
 | `POST` | `/api/provider/fcm-token` | `/api/v1/me/devices` | ServanaWorker and Provider Web. Multi-device already, and dual-written by the canonical service so a device registered either way stays reachable. |
 | `DELETE` | `/api/provider/fcm-token` | `/api/v1/me/devices` | Same operation, provider-gated. Both reach one service. |
 | `GET` | `/api/worker/job-cards/:bookingId` | `/api/v1/provider/jobs/:bookingId` | Provider Web. Same service and view function. |
@@ -170,7 +178,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 |---|---|---|---|
 | `GET` | `/api/workers/:uid/earnings-history` | `/api/v1/provider/earnings/transactions` | Takes the provider uid from the URL and has no auth, so it answers for anybody. No located caller in any of the five clients. Carried over from the planned placeholder this entry replaces; delete once telemetry confirms zero traffic. |
 
-## KEEP (396)
+## KEEP (388)
 
 Mounted, not superseded, not a duplicate. Listed so the inventory is complete and so a
 later domain command starts from a route list rather than from a grep.
@@ -300,14 +308,6 @@ later domain command starts from a route list rather than from a grep.
 | `POST` | `/api/provider/support/tickets/:ticketKey/close` | `src/routes/provider.routes.ts:195` |
 | `POST` | `/api/provider/support/tickets/:ticketKey/reopen` | `src/routes/provider.routes.ts:196` |
 | `POST` | `/api/provider/safety/check-in` | `src/routes/provider.routes.ts:199` |
-| `GET` | `/api/worker/service-applications` | `src/routes/provider.routes.ts:202` |
-| `GET` | `/api/worker/service-applications/:applicationId` | `src/routes/provider.routes.ts:203` |
-| `POST` | `/api/worker/service-applications` | `src/routes/provider.routes.ts:204` |
-| `POST` | `/api/worker/service-applications/:applicationId/resubmit` | `src/routes/provider.routes.ts:205` |
-| `DELETE` | `/api/worker/service-applications/:applicationId` | `src/routes/provider.routes.ts:206` |
-| `PATCH` | `/api/worker/services/:serviceId/pause` | `src/routes/provider.routes.ts:209` |
-| `PATCH` | `/api/worker/services/:serviceId/reactivate` | `src/routes/provider.routes.ts:210` |
-| `GET` | `/api/worker/services/:serviceId/eligibility` | `src/routes/provider.routes.ts:211` |
 | `GET` | `/api/provider/bookings/:bookingId/evidence` | `src/routes/provider.routes.ts:232` |
 | `POST` | `/api/provider/bookings/:bookingId/evidence` | `src/routes/provider.routes.ts:233` |
 | `DELETE` | `/api/provider/bookings/:bookingId/evidence/:evidenceId` | `src/routes/provider.routes.ts:234` |

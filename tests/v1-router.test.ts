@@ -193,6 +193,9 @@ jest.mock('../src/services/bookingAccessService', () => {
   };
 });
 jest.mock('../src/services/technicianService', () => ({
+  // TAB 05.
+  pauseService: jest.fn().mockResolvedValue({ service_id: 7, status: 'paused', pause_reason: 'Away' }),
+  reactivateService: jest.fn().mockResolvedValue({ service_id: 7, status: 'active', pause_reason: null }),
   getJobCardsByWorker: jest.fn().mockResolvedValue([{ id: 1 }, { id: 2 }]),
   getJobCardByWorker: jest.fn(async (_uid: string, bookingId: number) => (bookingId === 404 ? null : { id: bookingId })),
 }));
@@ -802,6 +805,27 @@ jest.mock('../src/services/providerActivationService', () => ({
   getActivationRequirements: jest.fn().mockResolvedValue([]),
   refreshActivationEligibility: jest.fn().mockResolvedValue('ACTIVE'),
 }));
+/**
+ * TAB 05. These reach real queries that 404 or 409 against the empty fake, so
+ * the routing this suite exists to prove would never be reached. Mocked at the
+ * SERVICE — the behaviour they encode (pause is not idempotent, resubmit needs
+ * expectedVersion) is asserted in `tests/provider-services-v1.test.ts`.
+ */
+jest.mock('../src/services/serviceApplicationService', () => ({
+  __esModule: true,
+  getProviderServicesOverview: jest.fn().mockResolvedValue({ services: [], applications: [] }),
+  evaluateApplicationEligibility: jest.fn().mockResolvedValue({
+    eligible: true, code: 'ELIGIBLE', message: 'ok', nextAction: 'APPLY',
+    service: { id: 7, name: 'Aircon Cleaning', category: null, catalogVersion: 1 },
+    applicationId: null, requirementsVersion: 1, requirements: [],
+  }),
+  getApplicationsByWorker: jest.fn().mockResolvedValue([]),
+  getApplicationByWorker: jest.fn().mockResolvedValue({ id: 'app-1', status: 'submitted', version: 1 }),
+  submitApplication: jest.fn().mockResolvedValue({ id: 'app-1', status: 'submitted', version: 1 }),
+  resubmitApplication: jest.fn().mockResolvedValue({ id: 'app-1', status: 'submitted', version: 2 }),
+  cancelApplication: jest.fn().mockResolvedValue({ id: 'app-1', status: 'cancelled', version: 2 }),
+}));
+
 jest.mock('../src/services/providerAutoOnlineEngine', () => ({
   // Fire-and-forget on the upload and delete paths. Mocked so the router suite
   // does not reach the real engine; that it RUNS at all is asserted in
@@ -1138,6 +1162,30 @@ describe('every implemented contract entry is reachable at its declared path', (
     'provider.profile.get': () => call('GET', '/api/v1/provider/profile', { role: 'provider' }),
     'provider.activation.get': () =>
       call('GET', '/api/v1/provider/activation', { role: 'provider' }),
+    'provider.services.overview': () =>
+      call('GET', '/api/v1/provider/services/overview', { role: 'provider' }),
+    'provider.services.eligibility': () =>
+      call('GET', '/api/v1/provider/services/7/eligibility', { role: 'provider' }),
+    'provider.services.pause': () =>
+      call('PATCH', '/api/v1/provider/services/7/pause', { role: 'provider', body: { reason: 'Away' } }),
+    'provider.services.reactivate': () =>
+      call('PATCH', '/api/v1/provider/services/7/reactivate', { role: 'provider' }),
+    'provider.serviceApplications.list': () =>
+      call('GET', '/api/v1/provider/service-applications', { role: 'provider' }),
+    'provider.serviceApplications.get': () =>
+      call('GET', '/api/v1/provider/service-applications/app-1', { role: 'provider' }),
+    'provider.serviceApplications.create': () =>
+      call('POST', '/api/v1/provider/service-applications', {
+        role: 'provider',
+        body: { serviceId: 7, requirementsVersion: 1, clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.serviceApplications.resubmit': () =>
+      call('POST', '/api/v1/provider/service-applications/app-1/resubmit', {
+        role: 'provider',
+        body: { expectedVersion: 1, clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.serviceApplications.withdraw': () =>
+      call('DELETE', '/api/v1/provider/service-applications/app-1', { role: 'provider' }),
     'provider.activation.acknowledgePolicy': () =>
       call('POST', '/api/v1/provider/activation/policy-acknowledgement', {
         role: 'provider',

@@ -15,10 +15,10 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 123 |
+| Mounted endpoints | 132 |
 | `public` | 22 |
 | `authenticated` | 60 |
-| `provider` | 35 |
+| `provider` | 44 |
 | `admin` | 6 |
 | Object-scoped | 43 |
 | Object-scoped WITH an ownership rule | 43 |
@@ -243,7 +243,16 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `provider.profile.patch` | PATCH /provider/profile | `provider` | · · ● · | — |
 | `provider.publicProfile.get` | GET /providers/:providerUid/profile | `authenticated` | · ● ● ● | — |
 | `provider.publicProfile.preview` | GET /provider/public-profile | `provider` | · · ● · | — |
+| `provider.serviceApplications.create` | POST /provider/service-applications | `provider` | · · ● · | — |
+| `provider.serviceApplications.get` | GET /provider/service-applications/:applicationId | `provider` | · · ● · | — |
+| `provider.serviceApplications.list` | GET /provider/service-applications | `provider` | · · ● · | — |
+| `provider.serviceApplications.resubmit` | POST /provider/service-applications/:applicationId/resubmit | `provider` | · · ● · | — |
+| `provider.serviceApplications.withdraw` | DELETE /provider/service-applications/:applicationId | `provider` | · · ● · | — |
+| `provider.services.eligibility` | GET /provider/services/:serviceId/eligibility | `provider` | · · ● · | — |
 | `provider.services.list` | GET /provider/services | `provider` | · · ● · | — |
+| `provider.services.overview` | GET /provider/services/overview | `provider` | · · ● · | — |
+| `provider.services.pause` | PATCH /provider/services/:serviceId/pause | `provider` | · · ● · | — |
+| `provider.services.reactivate` | PATCH /provider/services/:serviceId/reactivate | `provider` | · · ● · | — |
 | `provider.timeOff.cancel` | DELETE /provider/time-off/:timeOffId | `provider` | · · ● · | — |
 | `provider.timeOff.create` | POST /provider/time-off | `provider` | · · ● · | — |
 | `provider.timeOff.list` | GET /provider/time-off | `provider` | · · ● · | — |
@@ -277,8 +286,8 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-64 of 123 endpoints are probeable; the other
-59 are writes and are never probed, because a POST to
+68 of 132 endpoints are probeable; the other
+64 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.
 

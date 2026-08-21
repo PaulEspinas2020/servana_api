@@ -336,6 +336,33 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'toProviderProjection / toAdminProjection), not different truths.',
   },
   {
+    key: 'providerServiceCatalogue',
+    title: 'Decide what work I am offered',
+    source: 'api/v1/convergence (core)',
+    contractIds: [
+      'provider.serviceApplications.create',
+      'provider.serviceApplications.get',
+      'provider.serviceApplications.list',
+      'provider.serviceApplications.resubmit',
+      'provider.serviceApplications.withdraw',
+      'provider.services.eligibility',
+      'provider.services.overview',
+      'provider.services.pause',
+      'provider.services.reactivate',
+    ],
+    domainModule: 'services/serviceApplicationService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split. One capability rather than two because a read and a write here act on '
+      + 'the SAME row: a pause and an approval both change what matching offers, and splitting '
+      + 'them would let a pause be published canonically while the reactivate that undoes it '
+      + 'stayed legacy. Held separately from providerProfile because a service list looked like '
+      + 'part of a profile and is not - it is the input to matching, and it is the only '
+      + 'provider-facing surface whose state decides earnings. `provider.services.list` stays '
+      + 'in the account capability: it is the four-field chip, and the overview here is the '
+      + 'management screen.',
+  },
+  {
     key: 'bookingTransitions',
     title: 'Move a booking through its state machine',
     source: 'api/v1/convergence (core)',

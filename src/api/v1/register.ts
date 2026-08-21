@@ -368,6 +368,7 @@ import { handlers as catalogHandlers } from './domains/catalog';
 import { handlers as identityHandlers } from './domains/identity';
 import { handlers as bookingHandlers } from './domains/bookings';
 import { handlers as providerJobHandlers } from './domains/providerJobs';
+import { handlers as providerServiceHandlers } from './domains/providerServices';
 import { handlers as notificationHandlers } from './domains/notifications';
 import { handlers as reviewHandlers } from './domains/reviews';
 import { handlers as settingsHandlers } from './domains/settings';
@@ -398,6 +399,7 @@ export const V1_HANDLERS: V1Handlers = {
   ...identityHandlers,
   ...bookingHandlers,
   ...providerJobHandlers,
+  ...providerServiceHandlers,
   ...notificationHandlers,
   ...reviewHandlers,
   ...settingsHandlers,

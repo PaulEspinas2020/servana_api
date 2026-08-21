@@ -757,6 +757,297 @@ export const V1_CONTRACT: ContractEntry[] = [
   },
 
   // ───────────────────────────────────────────────────────────────────────────
+  // Provider services and service applications (TAB 05)
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: 'provider.services.overview',
+    domain: 'provider-services',
+    method: 'get',
+    path: '/provider/services/overview',
+    summary: "Everything about the caller's services: readiness, pause state, actions, applications.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderServicesOverview',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/serviceApplicationService.getProviderServicesOverview',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/worker/services-overview',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same projection.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+    notes:
+      'NOT subsumed by provider.services.list, and the mandate asked the question directly. ' +
+      'That entry returns four fields per row - id, name, status, isActive. This one carries ' +
+      'the readiness VERDICT and its reasons, the pause reason, the actions the server will ' +
+      'actually honour, and the applications: the whole management screen. Both are published ' +
+      'because a client rendering a chip should not pay for the fan-out, and a client rendering ' +
+      'the screen cannot rebuild it from four fields without re-deriving readiness on the ' +
+      'device - which is precisely the duplicate-truth this contract exists to stop.',
+  },
+  {
+    id: 'provider.services.eligibility',
+    domain: 'provider-services',
+    method: 'get',
+    path: '/provider/services/:serviceId/eligibility',
+    summary: 'May the caller apply for this service, and if not, why?',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ServiceApplicationEligibility',
+    errors: ['VALIDATION_FAILED'],
+    params: [{ name: 'serviceId', type: 'integer', description: 'service_families.id - a FAMILY id' }],
+    status: 'implemented',
+    domainService: 'services/serviceApplicationService.evaluateApplicationEligibility',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/worker/services/:serviceId/eligibility',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. Reads the canonical offering policy, not a copy of it.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+    notes:
+      'CACHING, since the mandate asked: do NOT cache this. It is a composite of provider ' +
+      'account state, activation, service availability, offering policy and any open ' +
+      'application - five things that change independently and none of them on this route. A ' +
+      'cached ELIGIBLE offers a button the submit will refuse; a cached refusal hides work a ' +
+      'provider has just become eligible for. Read it when the screen opens and again before ' +
+      'offering the action. It is a READ - safe to repeat, and cheap relative to being wrong. ' +
+      'The submit re-evaluates server-side regardless, so a race here is a refusal rather than ' +
+      'a bad approval.',
+  },
+  {
+    id: 'provider.services.pause',
+    domain: 'provider-services',
+    method: 'patch',
+    path: '/provider/services/:serviceId/pause',
+    summary: 'Stop being offered work for one service, without giving it up.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      "The UPDATE's own WHERE clause matches only a row whose status is active, so the second " +
+      'run changes nothing. It is NOT silent: the handler answers ' +
+      'PROVIDER_SERVICE_ALREADY_PAUSED so a client can tell a retry from a real conflict.',
+    requestSchema: 'ProviderServicePause',
+    responseSchema: 'ProviderServiceState',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'PROVIDER_SERVICE_ALREADY_PAUSED'],
+    params: [{ name: 'serviceId', type: 'integer', description: 'service_families.id - a FAMILY id' }],
+    status: 'implemented',
+    domainService: 'services/technicianService.pauseService',
+    legacy: [
+      {
+        method: 'patch',
+        path: '/api/worker/services/:serviceId/pause',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. Writes the canonical capability grant as well as the legacy row.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+    notes:
+      'NOT idempotent, and published as such rather than wished otherwise. A repeat is refused ' +
+      'with PROVIDER_SERVICE_ALREADY_PAUSED - a DISTINCT code, because the commonest way to ' +
+      'reach it is a retry after a request that committed and then timed out. A client that ' +
+      'cannot tell that from a genuine conflict shows an error for an operation that worked. ' +
+      'Treat it as success-equivalent when retrying. ' +
+      'The canonical capability table is updated alongside the legacy row: a pause that touched ' +
+      'only one would leave matching offering work the provider has stepped back from.',
+  },
+  {
+    id: 'provider.services.reactivate',
+    domain: 'provider-services',
+    method: 'patch',
+    path: '/provider/services/:serviceId/reactivate',
+    summary: 'Resume being offered work for a paused service.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      'The mirror of pause: the WHERE clause matches only a paused row, and a repeat answers ' +
+      'PROVIDER_SERVICE_NOT_PAUSED rather than silently succeeding.',
+    responseSchema: 'ProviderServiceState',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'PROVIDER_SERVICE_NOT_PAUSED'],
+    params: [{ name: 'serviceId', type: 'integer', description: 'service_families.id - a FAMILY id' }],
+    status: 'implemented',
+    domainService: 'services/technicianService.reactivateService',
+    legacy: [
+      {
+        method: 'patch',
+        path: '/api/worker/services/:serviceId/reactivate',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. The matched pair of pause - migrate them together.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+    notes:
+      'The matched pair of pause, and the one with the most direct effect on earnings: a ' +
+      'provider who cannot reactivate is a provider not being offered work. Migrate the two ' +
+      'together - a canonical pause whose reactivate is still legacy can strand somebody.',
+  },
+  {
+    id: 'provider.serviceApplications.list',
+    domain: 'provider-services',
+    method: 'get',
+    path: '/provider/service-applications',
+    summary: "Every service application the caller has made.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ServiceApplicationList',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/serviceApplicationService.getApplicationsByWorker',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/worker/service-applications',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. The legacy envelope wraps it as { success, applications }.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+  },
+  {
+    id: 'provider.serviceApplications.get',
+    domain: 'provider-services',
+    method: 'get',
+    path: '/provider/service-applications/:applicationId',
+    summary: 'One application, scoped to the caller.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ServiceApplication',
+    errors: ['NOT_FOUND'],
+    params: [{ name: 'applicationId', type: 'string', description: 'worker_service_applications.id' }],
+    status: 'implemented',
+    domainService: 'services/serviceApplicationService.getApplicationByWorker',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/worker/service-applications/:applicationId',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. Scoped on worker_uid in SQL, so another provider id is a 404.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+  },
+  {
+    id: 'provider.serviceApplications.create',
+    domain: 'provider-services',
+    method: 'post',
+    path: '/provider/service-applications',
+    summary: 'Apply for a service.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A REQUIRED clientRequestId of 16-128 characters, looked up on ' +
+      '(worker_uid, client_request_id) BEFORE anything is written, so a replay returns the ' +
+      'original application rather than queueing a second for the same service.',
+    requestSchema: 'ServiceApplicationSubmit',
+    responseSchema: 'ServiceApplication',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    status: 'implemented',
+    domainService: 'services/serviceApplicationService.submitApplication',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/worker/service-applications',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same replay lookup.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+    notes:
+      '`requirementsVersion` is the version the provider was SHOWN. It travels so the server ' +
+      'can distinguish an application made against the current requirements from one made ' +
+      'against a set that has since changed - the difference between approving and asking for ' +
+      'more. Eligibility is re-evaluated server-side here regardless of what the eligibility ' +
+      'read said, so a stale client view is a refusal rather than a bad approval.',
+  },
+  {
+    id: 'provider.serviceApplications.resubmit',
+    domain: 'provider-services',
+    method: 'post',
+    path: '/provider/service-applications/:applicationId/resubmit',
+    summary: 'Resubmit an application that came back needing more.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id', 'row-lock'],
+    replayGuard:
+      'A REQUIRED clientRequestId, plus the whole resubmission running inside a transaction ' +
+      'that takes FOR UPDATE on the application row - so two resubmissions serialise rather ' +
+      'than interleaving, and the second sees the first.',
+    requestSchema: 'ServiceApplicationResubmit',
+    responseSchema: 'ServiceApplication',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'STALE_STATE', 'CONFLICT'],
+    params: [{ name: 'applicationId', type: 'string', description: 'worker_service_applications.id' }],
+    status: 'implemented',
+    domainService: 'services/serviceApplicationService.resubmitApplication',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/worker/service-applications/:applicationId/resubmit',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same expectedVersion check.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+    notes:
+      '`expectedVersion` is REQUIRED and is optimistic concurrency (18), not decoration: ' +
+      'between loading an application and resubmitting it, a reviewer may have decided. ' +
+      'Without it a resubmission silently overwrites a decision the provider never saw. A ' +
+      'mismatch is STALE_STATE - the code a client already reloads on - rather than a ' +
+      'validation error, because nothing about the request was malformed.',
+  },
+  {
+    id: 'provider.serviceApplications.withdraw',
+    domain: 'provider-services',
+    method: 'delete',
+    path: '/provider/service-applications/:applicationId',
+    summary: 'Withdraw an application the provider no longer wants reviewed.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      "The UPDATE matches only an application still in a withdrawable state, so a repeat " +
+      'changes nothing and the application stays cancelled once.',
+    responseSchema: 'ServiceApplication',
+    errors: ['NOT_FOUND', 'CONFLICT'],
+    params: [{ name: 'applicationId', type: 'string', description: 'worker_service_applications.id' }],
+    status: 'implemented',
+    domainService: 'services/serviceApplicationService.cancelApplication',
+    legacy: [
+      {
+        method: 'delete',
+        path: '/api/worker/service-applications/:applicationId',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Scoped on worker_uid in SQL, so another provider id is a 404 rather ' +
+          'than a withdrawable target.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+    notes:
+      'The EIGHTH operation in a cluster the Master Command lists as seven PATHS - ' +
+      'service-applications/:id carries both GET and DELETE. Counting paths undercounts the ' +
+      'work, and a provider who can apply but not withdraw is stuck waiting on a review they ' +
+      'no longer want.',
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Notifications
   // ───────────────────────────────────────────────────────────────────────────
   {
