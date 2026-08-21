@@ -2427,6 +2427,272 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  ProviderFieldRegistry: {
+    type: 'object',
+    required: ['version', 'fields'],
+    description:
+      'STATIC per deployment. Names no account and reads no row, so it is the one response in ' +
+      'this domain a client may cache hard. `version` is what tells a client the vocabulary moved.',
+    properties: {
+      version: { type: 'integer' },
+      fields: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['id', 'label', 'classification', 'editable', 'customerVisible', 'masked'],
+          properties: {
+            id: { type: 'string' },
+            label: { type: 'string' },
+            classification: { type: 'string', enum: ['public', 'private', 'operational', 'internal'] },
+            editable: {
+              type: 'string',
+              enum: ['direct', 'review', 'reverification', 'admin'],
+              description:
+                'HOW the field changes, not whether it may. `review` means the provider proposes ' +
+                'and a human decides; `reverification` means an identity flow owns it; `admin` ' +
+                'means Servana sets it. A field marked `review` is still not necessarily ' +
+                'submittable through the profile PATCH - see requestBody allowedBody there.',
+            },
+            customerVisible: { type: 'boolean' },
+            masked: { type: 'boolean' },
+            recentAuthRequired: {
+              type: 'boolean',
+              description:
+                'True when changing it demands a FRESH interactive sign-in, not merely a valid ' +
+                'session. A refusal on that ground answers ACCOUNT_RECENT_AUTH_REQUIRED, which a ' +
+                'client must not treat as an expired token: refreshing succeeds and changes nothing.',
+            },
+          },
+        },
+      },
+    },
+  },
+
+  ProviderPublicProfilePreview: {
+    type: 'object',
+    required: ['providerProfileId', 'displayName', 'version'],
+    description:
+      "The caller\'s OWN public profile, plus any revision awaiting review. NOT the same " +
+      'resource as the customer-facing provider profile, despite the shared words: this one ' +
+      'carries `pendingRevision`, which is UNREVIEWED text together with the moderator reason ' +
+      'code and message. None of that is public, and none of it appears at a customer seat.',
+    properties: {
+      providerProfileId: { type: 'string' },
+      displayName: { type: 'string' },
+      photoUrl: { type: ['string', 'null'] },
+      biography: { type: ['string', 'null'] },
+      skills: { type: 'array', items: { type: 'string' } },
+      languages: { type: 'array', items: { type: 'string' } },
+      experienceSummary: { type: ['string', 'null'] },
+      publicRating: {
+        type: ['object', 'null'],
+        additionalProperties: true,
+        description: 'The same aggregate the customer-facing rating endpoint serves.',
+      },
+      version: { type: 'integer', description: 'public_profile_version. Bumps when a revision is published.' },
+      pendingRevision: {
+        type: ['object', 'null'],
+        description:
+          'The revision awaiting review, or null when none is. PROVIDER-ONLY: it contains text ' +
+          'no reviewer has approved and the reason a previous attempt was refused.',
+        properties: {
+          id: { type: ['string', 'integer'] },
+          fields: { type: 'object', additionalProperties: true },
+          state: { type: 'string', enum: ['pending_review', 'action_required'] },
+          providerReasonCode: { type: ['string', 'null'] },
+          providerReasonDetail: { type: ['string', 'null'] },
+          submittedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+          version: { type: 'integer' },
+        },
+      },
+    },
+  },
+
+  ProviderCertification: {
+    type: 'object',
+    required: ['id', 'certificationType', 'state'],
+    description:
+      'One certification and its review state. `credentialMask` is what is STORED - the full ' +
+      'credential number is never on this wire and is never written to this table.',
+    properties: {
+      id: { type: ['string', 'integer'] },
+      certificationType: { type: 'string' },
+      issuingAuthority: { type: ['string', 'null'] },
+      credentialMask: { type: ['string', 'null'], description: 'Last four digits only, already masked at write time.' },
+      issueDate: { type: ['string', 'null'] },
+      expiresAt: { type: ['string', 'null'] },
+      state: {
+        type: 'string',
+        description:
+          'DERIVED at read time: a verified certification whose expiry has passed reads ' +
+          '`expired`, so an expiry that lapses overnight does not need a job to notice it.',
+      },
+      relatedDocumentId: { type: ['string', 'null'] },
+      renewalOfId: { type: ['string', 'integer', 'null'] },
+      providerReasonCode: { type: ['string', 'null'] },
+      providerReasonDetail: { type: ['string', 'null'] },
+      version: { type: 'integer' },
+      createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      updatedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+    },
+  },
+
+  ProviderCertificationList: {
+    type: 'array',
+    description: 'Newest first. The LIST the activation projection carries only a count of.',
+    items: { $ref: '#/components/schemas/ProviderCertification' },
+  },
+
+  ProviderCertificationSubmit: {
+    type: 'object',
+    required: ['certificationType', 'issuingAuthority', 'relatedDocumentId', 'clientRequestId'],
+    additionalProperties: false,
+    description:
+      'Submits for REVIEW. `relatedDocumentId` must already be a document belonging to the ' +
+      'caller - the file is uploaded first, then attested here.',
+    properties: {
+      certificationType: { type: 'string', maxLength: 80 },
+      issuingAuthority: { type: 'string', maxLength: 160 },
+      relatedDocumentId: {
+        type: 'integer',
+        description: "A worker_requirement id owned by the caller. 404 otherwise, and deliberately " +
+          'not distinguishing "not yours" from "not there" - that difference enumerates ids.',
+      },
+      credentialLast4: {
+        type: ['string', 'null'],
+        maxLength: 4,
+        description: 'The LAST FOUR only. Stored masked; the full number must never be sent.',
+      },
+      issueDate: { type: ['string', 'null'] },
+      expiresAt: { type: ['string', 'null'] },
+      renewalOfId: {
+        type: ['string', 'null'],
+        description: 'A certification of the caller\'s this one replaces. Ownership checked.',
+      },
+      clientRequestId: {
+        type: 'string',
+        minLength: 16,
+        maxLength: 128,
+        description:
+          'REQUIRED. Deduped by a unique index on (provider_uid, client_request_id), so a retry ' +
+          'returns the first submission rather than queueing a second for a human to review.',
+      },
+    },
+  },
+
+  ProviderVerificationTimeline: {
+    type: 'array',
+    description:
+      'What has happened to the caller\'s documents, certifications and activation, newest ' +
+      'first. HISTORY - a different question from the activation checklist, with its own ' +
+      'retention. Carries the PROVIDER-facing reason code and detail; internal reviewer notes ' +
+      'are not selected by the query at all.',
+    items: {
+      type: 'object',
+      required: ['id', 'domain', 'eventType'],
+      properties: {
+        id: { type: ['string', 'integer'] },
+        domain: { type: 'string', description: 'document | certification | activation' },
+        sourceType: { type: ['string', 'null'] },
+        sourceId: { type: ['string', 'integer', 'null'] },
+        eventType: { type: 'string' },
+        providerReasonCode: { type: ['string', 'null'] },
+        providerReasonDetail: { type: ['string', 'null'] },
+        createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      },
+    },
+  },
+
+  ProviderContactChangeRequest: {
+    type: 'object',
+    required: ['kind', 'target', 'clientRequestId'],
+    additionalProperties: false,
+    description:
+      'STEP ONE OF TWO. Sends a code to the NEW address; nothing changes until the confirm. ' +
+      'Requires a FRESH interactive sign-in - a valid session is not sufficient, because this ' +
+      'is the operation that decides how the account is recovered.',
+    properties: {
+      kind: { type: 'string', enum: ['email', 'mobile'] },
+      target: {
+        type: 'string',
+        description:
+          'The new address. NORMALISED server-side: a mobile is accepted as 09xx, 9xx or +63xx ' +
+          'and stored one way, so a provider is never refused for formatting.',
+      },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+
+  ProviderContactChangeStarted: {
+    type: 'object',
+    description:
+      'What a client needs to drive step two. Carries NO code and no full target - the code ' +
+      'goes to the address being claimed, which is the entire point of the flow.',
+    additionalProperties: true,
+    properties: {
+      requestId: { type: ['string', 'integer'] },
+      kind: { type: 'string', enum: ['email', 'mobile'] },
+      expiresAt: { $ref: '#/components/schemas/UtcTimestamp' },
+    },
+  },
+
+  ProviderContactChangeConfirm: {
+    type: 'object',
+    required: ['requestId', 'code'],
+    additionalProperties: false,
+    description:
+      'STEP TWO OF TWO. Re-asserts recent auth rather than trusting step one: the two calls are ' +
+      'minutes apart and the window can close between them.',
+    properties: {
+      requestId: {
+        type: 'string',
+        description:
+          'Looked up by id AND provider_uid together, so another provider\'s request id is a ' +
+          '404 rather than a confirmable target.',
+      },
+      code: { type: 'string', pattern: '^[0-9]{6}$' },
+    },
+  },
+
+  ProviderContactChangeResult: {
+    type: 'object',
+    additionalProperties: true,
+    description: 'The committed change. The code is spent; a second confirm finds nothing to spend.',
+  },
+
+  ProviderPolicyAcknowledgement: {
+    type: 'object',
+    additionalProperties: false,
+    description: 'Acceptance of the provider agreement. The body is optional in full.',
+    properties: {
+      policyVersion: {
+        type: ['string', 'null'],
+        maxLength: 64,
+        description:
+          'RECORDED, not validated. Refusing an unknown value would block acceptance whenever ' +
+          'the agreement is revised before the app is, and a provider who cannot accept cannot ' +
+          'work.',
+      },
+    },
+  },
+
+  ProviderPolicyAcknowledgementResult: {
+    type: 'object',
+    required: ['acknowledgedAt'],
+    properties: {
+      acknowledgedAt: {
+        $ref: '#/components/schemas/UtcTimestamp',
+      },
+      policyVersion: { type: ['string', 'null'] },
+    },
+    description:
+      'IDEMPOTENT by construction: the upsert is COALESCE(policy_acknowledged_at, now()), so a ' +
+      'second acceptance returns the ORIGINAL moment rather than moving it. The instant somebody ' +
+      'agreed is a fact and a double tap must not rewrite it. Note that the timestamp is pinned ' +
+      'to the PROVIDER rather than to the policy version, so re-accepting a revised agreement ' +
+      'returns the first date.',
+  },
+
   ProviderActivation: {
     type: 'object',
     required: [

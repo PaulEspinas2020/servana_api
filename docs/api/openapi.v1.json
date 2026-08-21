@@ -3847,6 +3847,881 @@
         "description": "A SIBLING of provider.profile.get rather than more fields on it. `ProviderProfile` is also the response schema of provider.publicProfile.get - what a stranger sees - so widening it would put a compliance checklist in the shape customers read, one seat-computation bug from disclosure. Separate resources also let this one fan out to the readiness and activation engines without charging the customer browse screen for it (56). auth is `provider`, and the first draft had it as `authenticated` to mirror /api/provider/account-state, which is mounted on verifyAuth alone so a non-provider learns WHY rather than receiving a bare 403. `legacy-authz-parity` refused that, correctly: this entry also supersedes /api/provider/compliance, which IS provider-gated, so at `authenticated` it was a strictly weaker route to compliance detail than the route it replaces. Compliance is null for a non-provider today, but that is a property of the service and the contract is what a future change reads. The discovery property survives the tightening, which is why this is not a regression: `requireProviderRole` admits EVERY provider role - suspended, unapproved, pending, mid-activation - so the caller who actually needs to know why they cannot work still gets the checklist that explains it. The only callers now refused are non-providers, who have no activation state to discover, and they receive ROLE_REQUIRED - a structured v1 code a client can branch on, carrying the same information nextStep: ROLE_NOT_PERMITTED carried. Nothing was lost; a rung was gained. Authorization is also in the SIGNATURE: the uid comes from the token and there is no parameter with which to name another account. A denied account loads nothing, so compliance and the three summaries are null rather than zeroed - \"we did not look\" and \"nothing outstanding\" are different answers."
       }
     },
+    "/api/v1/provider/profile-fields": {
+      "get": {
+        "operationId": "provider.fieldRegistry.get",
+        "summary": "The provider profile field registry: classification, how each field is edited, visibility.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerProfileComplianceService.PROFILE_FIELD_REGISTRY",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/profile-fields",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderFieldRegistry"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "STATIC per deployment - it names no account and reads no row, so it is the one entry in this domain a client may cache hard. It is versioned so a client can tell when the vocabulary moved. Kept a separate resource rather than folded into the profile read for exactly that reason: a per-provider response cannot be cached, and merging the two would have made a constant uncacheable to save one call."
+      }
+    },
+    "/api/v1/provider/public-profile": {
+      "get": {
+        "operationId": "provider.publicProfile.preview",
+        "summary": "The caller's OWN public profile as published, plus any revision awaiting review.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerProfileComplianceService.getPublicProfile",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/public-profile-preview",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderPublicProfilePreview"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "NOT the same resource as provider.publicProfile.get, and the difference is a disclosure boundary rather than a naming preference. This one carries `pendingRevision` - the provider's UNREVIEWED proposed text, together with the moderator's reason code and message. None of that is public. Matching these two routes on the shared words \"public profile\" would either have lost the pending-revision surface or, if the field had been added to the shared schema instead, published unreviewed content and internal review notes to every customer browsing for a provider. The seat differs too: this is `self` only, taken from the token, with no parameter naming another account."
+      }
+    },
+    "/api/v1/provider/certifications": {
+      "get": {
+        "operationId": "provider.certifications.list",
+        "summary": "The caller's certifications and their review state.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerProfileComplianceService.listCertifications",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/certifications",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderCertificationList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "The LIST, which provider.activation.get carries only a COUNT of. A summary is enough to render a checklist and cannot render the screen where a provider sees which credential expired - so this is promoted rather than subsumed. `credentialMask` is what is stored and what travels; the full credential number is never on this wire."
+      },
+      "post": {
+        "operationId": "provider.certifications.create",
+        "summary": "Submits a certification for review, against a document already uploaded.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerProfileComplianceService.submitCertification",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/certifications",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderCertificationSubmit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderCertification"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Ownership is enforced on BOTH references before the insert: `relatedDocumentId` must be a worker_requirement belonging to the caller, and `renewalOfId` a certification of theirs. A 404 either way, deliberately not distinguishing \"not yours\" from \"not there\" - the difference would enumerate ids."
+      }
+    },
+    "/api/v1/provider/verification-timeline": {
+      "get": {
+        "operationId": "provider.verificationTimeline.get",
+        "summary": "What has happened to the caller's documents, certifications and activation, newest first.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerProfileComplianceService.getVerificationTimeline",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/verification-timeline",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Events to return, 1-100, default 50"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderVerificationTimeline"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "HISTORY, and a separate resource from the activation checklist on purpose: a checklist answers \"what must I do now\" and a timeline answers \"what happened\", they have different retention questions, and carrying fifty events into every activation read would be a data-minimisation failure on a screen that does not display them. Carries the provider-facing reason code and detail; internal reviewer notes are not selected."
+      }
+    },
+    "/api/v1/provider/contact-changes": {
+      "post": {
+        "operationId": "provider.contactChanges.request",
+        "summary": "Starts a change of verified email or mobile. Sends a code to the NEW address.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerContactChangeService.requestContactChange",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/contact-changes",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderContactChangeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderContactChangeStarted"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "ACCOUNT_RECENT_AUTH_REQUIRED | TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "STEP ONE OF TWO. Migrate this and provider.contactChanges.confirm together or not at all: a canonical request whose confirm is still legacy is one flow split across two contracts, and a client that gets halfway leaves a provider unable to finish changing the address their account recovers through. The handler passes the DECODED token, not just the uid, because `assertRecentAuth` reads Firebase `auth_time`. A v1 successor that passed only the uid would silently drop the recent-auth requirement - privilege escalation arriving as a migration, on the one operation that changes how an account is recovered."
+      }
+    },
+    "/api/v1/provider/contact-changes/confirm": {
+      "post": {
+        "operationId": "provider.contactChanges.confirm",
+        "summary": "Completes a contact change by presenting the code sent to the new address.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerContactChangeService.confirmContactChange",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/contact-changes/confirm",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderContactChangeConfirm"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderContactChangeResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "ACCOUNT_RECENT_AUTH_REQUIRED | TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "STEP TWO OF TWO. Re-asserts recent auth rather than trusting that step one did: the two calls are minutes apart and the window can close between them. The request row is looked up by id AND provider_uid together, so a request id belonging to somebody else is a 404 rather than a confirmable target."
+      }
+    },
+    "/api/v1/provider/activation/policy-acknowledgement": {
+      "post": {
+        "operationId": "provider.activation.acknowledgePolicy",
+        "summary": "Records that the provider accepted the Servana provider agreement.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerActivationService.acknowledgeProviderPolicy",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/activation/policy-acknowledgement",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderPolicyAcknowledgement"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderPolicyAcknowledgementResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Idempotent by CONSTRUCTION, not by a guard: the upsert is COALESCE(policy_acknowledged_at, now()), so a second acceptance returns the ORIGINAL date rather than moving it. That is the right behaviour for a consent record - the moment somebody agreed is a fact, and a double tap must not rewrite it. FINDING, recorded and deliberately NOT changed here: because the timestamp is pinned to the provider rather than to the policy version, acknowledging a REVISED agreement is indistinguishable from re-acknowledging the old one, and `policyVersion` is accepted but not returned. Whether a revised agreement needs a fresh acceptance is a legal question about consent, not an API question, and changing consent semantics unilaterally inside a migration TAB would be the wrong place to answer it. Raised in docs/PROVIDER_ACTIVATION_DISPOSITION.md for the product owner."
+      }
+    },
     "/api/v1/providers/{providerUid}/profile": {
       "get": {
         "operationId": "provider.publicProfile.get",
@@ -13105,6 +13980,7 @@
                   "ACCOUNT_DISABLED",
                   "ACCOUNT_FIELD_NOT_WRITABLE",
                   "ACCOUNT_LINK_REQUIRED",
+                  "ACCOUNT_RECENT_AUTH_REQUIRED",
                   "ACCOUNT_UNVERIFIED",
                   "ADDRESS_LIMIT_REACHED",
                   "ADDRESS_NOT_FOUND",
@@ -17838,6 +18714,484 @@
           }
         }
       },
+      "ProviderFieldRegistry": {
+        "type": "object",
+        "required": [
+          "version",
+          "fields"
+        ],
+        "description": "STATIC per deployment. Names no account and reads no row, so it is the one response in this domain a client may cache hard. `version` is what tells a client the vocabulary moved.",
+        "properties": {
+          "version": {
+            "type": "integer"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "label",
+                "classification",
+                "editable",
+                "customerVisible",
+                "masked"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "classification": {
+                  "type": "string",
+                  "enum": [
+                    "public",
+                    "private",
+                    "operational",
+                    "internal"
+                  ]
+                },
+                "editable": {
+                  "type": "string",
+                  "enum": [
+                    "direct",
+                    "review",
+                    "reverification",
+                    "admin"
+                  ],
+                  "description": "HOW the field changes, not whether it may. `review` means the provider proposes and a human decides; `reverification` means an identity flow owns it; `admin` means Servana sets it. A field marked `review` is still not necessarily submittable through the profile PATCH - see requestBody allowedBody there."
+                },
+                "customerVisible": {
+                  "type": "boolean"
+                },
+                "masked": {
+                  "type": "boolean"
+                },
+                "recentAuthRequired": {
+                  "type": "boolean",
+                  "description": "True when changing it demands a FRESH interactive sign-in, not merely a valid session. A refusal on that ground answers ACCOUNT_RECENT_AUTH_REQUIRED, which a client must not treat as an expired token: refreshing succeeds and changes nothing."
+                }
+              }
+            }
+          }
+        }
+      },
+      "ProviderPublicProfilePreview": {
+        "type": "object",
+        "required": [
+          "providerProfileId",
+          "displayName",
+          "version"
+        ],
+        "description": "The caller's OWN public profile, plus any revision awaiting review. NOT the same resource as the customer-facing provider profile, despite the shared words: this one carries `pendingRevision`, which is UNREVIEWED text together with the moderator reason code and message. None of that is public, and none of it appears at a customer seat.",
+        "properties": {
+          "providerProfileId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "photoUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "biography": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "experienceSummary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "publicRating": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "The same aggregate the customer-facing rating endpoint serves."
+          },
+          "version": {
+            "type": "integer",
+            "description": "public_profile_version. Bumps when a revision is published."
+          },
+          "pendingRevision": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The revision awaiting review, or null when none is. PROVIDER-ONLY: it contains text no reviewer has approved and the reason a previous attempt was refused.",
+            "properties": {
+              "id": {
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "fields": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending_review",
+                  "action_required"
+                ]
+              },
+              "providerReasonCode": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "providerReasonDetail": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "submittedAt": {
+                "$ref": "#/components/schemas/UtcTimestamp"
+              },
+              "version": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "ProviderCertification": {
+        "type": "object",
+        "required": [
+          "id",
+          "certificationType",
+          "state"
+        ],
+        "description": "One certification and its review state. `credentialMask` is what is STORED - the full credential number is never on this wire and is never written to this table.",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "integer"
+            ]
+          },
+          "certificationType": {
+            "type": "string"
+          },
+          "issuingAuthority": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "credentialMask": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last four digits only, already masked at write time."
+          },
+          "issueDate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "description": "DERIVED at read time: a verified certification whose expiry has passed reads `expired`, so an expiry that lapses overnight does not need a job to notice it."
+          },
+          "relatedDocumentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "renewalOfId": {
+            "type": [
+              "string",
+              "integer",
+              "null"
+            ]
+          },
+          "providerReasonCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "providerReasonDetail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          }
+        }
+      },
+      "ProviderCertificationList": {
+        "type": "array",
+        "description": "Newest first. The LIST the activation projection carries only a count of.",
+        "items": {
+          "$ref": "#/components/schemas/ProviderCertification"
+        }
+      },
+      "ProviderCertificationSubmit": {
+        "type": "object",
+        "required": [
+          "certificationType",
+          "issuingAuthority",
+          "relatedDocumentId",
+          "clientRequestId"
+        ],
+        "additionalProperties": false,
+        "description": "Submits for REVIEW. `relatedDocumentId` must already be a document belonging to the caller - the file is uploaded first, then attested here.",
+        "properties": {
+          "certificationType": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "issuingAuthority": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "relatedDocumentId": {
+            "type": "integer",
+            "description": "A worker_requirement id owned by the caller. 404 otherwise, and deliberately not distinguishing \"not yours\" from \"not there\" - that difference enumerates ids."
+          },
+          "credentialLast4": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 4,
+            "description": "The LAST FOUR only. Stored masked; the full number must never be sent."
+          },
+          "issueDate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "renewalOfId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A certification of the caller's this one replaces. Ownership checked."
+          },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128,
+            "description": "REQUIRED. Deduped by a unique index on (provider_uid, client_request_id), so a retry returns the first submission rather than queueing a second for a human to review."
+          }
+        }
+      },
+      "ProviderVerificationTimeline": {
+        "type": "array",
+        "description": "What has happened to the caller's documents, certifications and activation, newest first. HISTORY - a different question from the activation checklist, with its own retention. Carries the PROVIDER-facing reason code and detail; internal reviewer notes are not selected by the query at all.",
+        "items": {
+          "type": "object",
+          "required": [
+            "id",
+            "domain",
+            "eventType"
+          ],
+          "properties": {
+            "id": {
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "domain": {
+              "type": "string",
+              "description": "document | certification | activation"
+            },
+            "sourceType": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sourceId": {
+              "type": [
+                "string",
+                "integer",
+                "null"
+              ]
+            },
+            "eventType": {
+              "type": "string"
+            },
+            "providerReasonCode": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "providerReasonDetail": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "createdAt": {
+              "$ref": "#/components/schemas/UtcTimestamp"
+            }
+          }
+        }
+      },
+      "ProviderContactChangeRequest": {
+        "type": "object",
+        "required": [
+          "kind",
+          "target",
+          "clientRequestId"
+        ],
+        "additionalProperties": false,
+        "description": "STEP ONE OF TWO. Sends a code to the NEW address; nothing changes until the confirm. Requires a FRESH interactive sign-in - a valid session is not sufficient, because this is the operation that decides how the account is recovered.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "email",
+              "mobile"
+            ]
+          },
+          "target": {
+            "type": "string",
+            "description": "The new address. NORMALISED server-side: a mobile is accepted as 09xx, 9xx or +63xx and stored one way, so a provider is never refused for formatting."
+          },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128
+          }
+        }
+      },
+      "ProviderContactChangeStarted": {
+        "type": "object",
+        "description": "What a client needs to drive step two. Carries NO code and no full target - the code goes to the address being claimed, which is the entire point of the flow.",
+        "additionalProperties": true,
+        "properties": {
+          "requestId": {
+            "type": [
+              "string",
+              "integer"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "email",
+              "mobile"
+            ]
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          }
+        }
+      },
+      "ProviderContactChangeConfirm": {
+        "type": "object",
+        "required": [
+          "requestId",
+          "code"
+        ],
+        "additionalProperties": false,
+        "description": "STEP TWO OF TWO. Re-asserts recent auth rather than trusting step one: the two calls are minutes apart and the window can close between them.",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "description": "Looked up by id AND provider_uid together, so another provider's request id is a 404 rather than a confirmable target."
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$"
+          }
+        }
+      },
+      "ProviderContactChangeResult": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "The committed change. The code is spent; a second confirm finds nothing to spend."
+      },
+      "ProviderPolicyAcknowledgement": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Acceptance of the provider agreement. The body is optional in full.",
+        "properties": {
+          "policyVersion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 64,
+            "description": "RECORDED, not validated. Refusing an unknown value would block acceptance whenever the agreement is revised before the app is, and a provider who cannot accept cannot work."
+          }
+        }
+      },
+      "ProviderPolicyAcknowledgementResult": {
+        "type": "object",
+        "required": [
+          "acknowledgedAt"
+        ],
+        "properties": {
+          "acknowledgedAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "policyVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "description": "IDEMPOTENT by construction: the upsert is COALESCE(policy_acknowledged_at, now()), so a second acceptance returns the ORIGINAL moment rather than moving it. The instant somebody agreed is a fact and a double tap must not rewrite it. Note that the timestamp is pinned to the PROVIDER rather than to the policy version, so re-accepting a revised agreement returns the first date."
+      },
       "ProviderActivation": {
         "type": "object",
         "required": [
@@ -20266,6 +21620,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 115,
-  "x-total-count": 116
+  "x-implemented-count": 123,
+  "x-total-count": 124
 }

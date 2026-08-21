@@ -34,15 +34,15 @@ installed.
 
 | | |
 | --- | --- |
-| Legacy mappings tracked | 128 |
-| In the retirement plan | 109 |
+| Legacy mappings tracked | 136 |
+| In the retirement plan | 117 |
 | `KEEP` (not a duplicate of anything) | 6 |
 | `ROLE_SPECIFIC` (different auth/action, same service) | 13 |
-| `ALIAS_TEMPORARILY` | 96 |
+| `ALIAS_TEMPORARILY` | 104 |
 | `CANONICALIZE` | 12 |
 | `RETIRE` | 1 |
 | **Retirable today** | **0** |
-| Blocked | 109 |
+| Blocked | 117 |
 
 Nothing is retirable today, and the reason is the same for all of them: no client has migrated, because the v1 namespace is not deployed. The schedule is the order things become retirable, not a queue of pending deletions.
 
@@ -100,8 +100,13 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `POST /api/chat/conversations/:id/messages/:msgId/report` | ALIAS_TEMPORARILY | `conversations.messages.report` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/chat/conversations/:id/read` | ALIAS_TEMPORARILY | `conversations.read` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
 | `GET /api/provider/account-state` | ALIAS_TEMPORARILY | `provider.activation.get` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/activation/policy-acknowledgement` | ALIAS_TEMPORARILY | `provider.activation.acknowledgePolicy` | Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/provider/bookings/:bookingId/cancel` | ALIAS_TEMPORARILY | `provider.jobs.cancel` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `GET /api/provider/certifications` | ALIAS_TEMPORARILY | `provider.certifications.list` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/certifications` | ALIAS_TEMPORARILY | `provider.certifications.create` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/compliance` | ALIAS_TEMPORARILY | `provider.activation.get` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/contact-changes` | ALIAS_TEMPORARILY | `provider.contactChanges.request` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/contact-changes/confirm` | ALIAS_TEMPORARILY | `provider.contactChanges.confirm` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/document-types` | ALIAS_TEMPORARILY | `provider.documents.types` | Provider Web has not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
 | `GET /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.list` | Provider Mobile has not migrated | 90d |
 | `POST /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.create` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
@@ -119,7 +124,10 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `DELETE /api/provider/notifications/:key` | CANONICALIZE | `notifications.dismiss` | Customer Mobile, Customer Web, Provider Mobile have not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 90d |
 | `GET /api/provider/payouts` | ALIAS_TEMPORARILY | `provider.earnings.payouts` | Provider Mobile has not migrated | 90d |
 | `GET /api/provider/profile` | ALIAS_TEMPORARILY | `provider.profile.get` | Provider Mobile, Admin Web have not migrated | 90d |
+| `GET /api/provider/profile-fields` | ALIAS_TEMPORARILY | `provider.fieldRegistry.get` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/provider/public-profile-preview` | ALIAS_TEMPORARILY | `provider.publicProfile.preview` | Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/provider/public-profile-revisions` | ALIAS_TEMPORARILY | `provider.profile.patch` | Provider Mobile has not migrated | 90d |
+| `GET /api/provider/verification-timeline` | ALIAS_TEMPORARILY | `provider.verificationTimeline.get` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/providers/:providerUid/rating` | ALIAS_TEMPORARILY | `reviews.provider.rating` | Customer Mobile, Customer Web have not migrated | 90d |
 | `GET /api/providers/:providerUid/reviews` | ALIAS_TEMPORARILY | `reviews.provider.list` | Customer Mobile, Customer Web have not migrated | 90d |
 | `GET /api/services/:serviceId/level2` | CANONICALIZE | `catalog.categories.subcategories` | Customer Mobile, Customer Web have not migrated; marked CANONICALIZE — this path is still the canonical one for its callers | 90d |

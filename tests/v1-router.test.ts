@@ -755,8 +755,53 @@ jest.mock('../src/services/providerProfileComplianceService', () => {
       mimeType: 'image/png',
     }),
     deleteDocument: jest.fn().mockResolvedValue(undefined),
+    // TAB 04. `listCertifications` and `getVerificationTimeline` map rows to an
+    // array and answer [] against the empty fake, so they are left REAL — the
+    // routing is what this suite proves, and a mock there would prove less.
+    // These two throw 404/400 on an empty database instead, so they are faked.
+    getPublicProfile: jest.fn().mockResolvedValue({
+      providerProfileId: 'uid-under-test', displayName: 'Ana R.', photoUrl: null,
+      biography: null, skills: [], languages: [], experienceSummary: null,
+      publicRating: null, version: 1, pendingRevision: null,
+    }),
+    submitCertification: jest.fn().mockResolvedValue({
+      id: '5', certificationType: 'electrical', issuingAuthority: 'TESDA',
+      credentialMask: null, issueDate: null, expiresAt: null, state: 'under_review',
+      relatedDocumentId: '1', renewalOfId: null, providerReasonCode: null,
+      providerReasonDetail: null, version: 1,
+      createdAt: '2026-08-21T00:00:00.000Z', updatedAt: '2026-08-21T00:00:00.000Z',
+    }),
   };
 });
+
+/**
+ * TAB 04. The contact-change flow needs the DECODED token for
+ * `assertRecentAuth`, which this suite's fake auth does not mint — and a real
+ * `assertRecentAuth` would refuse every request here for want of an `auth_time`.
+ *
+ * Mocked at the SERVICE, not by removing the check: that the handler passes the
+ * decoded token rather than the bare uid is asserted in
+ * `tests/provider-contact-change-v1.test.ts`, which is where the precondition
+ * belongs. This suite proves routing.
+ */
+jest.mock('../src/services/providerContactChangeService', () => ({
+  __esModule: true,
+  requestContactChange: jest.fn().mockResolvedValue({
+    requestId: '1', kind: 'email', expiresAt: '2026-08-21T00:15:00.000Z',
+  }),
+  confirmContactChange: jest.fn().mockResolvedValue({ kind: 'email', confirmed: true }),
+  assertRecentAuth: jest.fn(),
+}));
+
+jest.mock('../src/services/providerActivationService', () => ({
+  __esModule: true,
+  acknowledgeProviderPolicy: jest.fn().mockResolvedValue({
+    acknowledgedAt: '2026-08-21T00:00:00.000Z', policyVersion: 'v1',
+  }),
+  previewActivationEligibility: jest.fn().mockResolvedValue('ACTIVE'),
+  getActivationRequirements: jest.fn().mockResolvedValue([]),
+  refreshActivationEligibility: jest.fn().mockResolvedValue('ACTIVE'),
+}));
 jest.mock('../src/services/providerAutoOnlineEngine', () => ({
   // Fire-and-forget on the upload and delete paths. Mocked so the router suite
   // does not reach the real engine; that it RUNS at all is asserted in
@@ -1093,6 +1138,39 @@ describe('every implemented contract entry is reachable at its declared path', (
     'provider.profile.get': () => call('GET', '/api/v1/provider/profile', { role: 'provider' }),
     'provider.activation.get': () =>
       call('GET', '/api/v1/provider/activation', { role: 'provider' }),
+    'provider.activation.acknowledgePolicy': () =>
+      call('POST', '/api/v1/provider/activation/policy-acknowledgement', {
+        role: 'provider',
+        body: { policyVersion: 'v1' },
+      }),
+    'provider.fieldRegistry.get': () =>
+      call('GET', '/api/v1/provider/profile-fields', { role: 'provider' }),
+    'provider.publicProfile.preview': () =>
+      call('GET', '/api/v1/provider/public-profile', { role: 'provider' }),
+    'provider.certifications.list': () =>
+      call('GET', '/api/v1/provider/certifications', { role: 'provider' }),
+    'provider.certifications.create': () =>
+      call('POST', '/api/v1/provider/certifications', {
+        role: 'provider',
+        body: {
+          certificationType: 'electrical',
+          issuingAuthority: 'TESDA',
+          relatedDocumentId: 1,
+          clientRequestId: 'client-request-id-000001',
+        },
+      }),
+    'provider.verificationTimeline.get': () =>
+      call('GET', '/api/v1/provider/verification-timeline', { role: 'provider' }),
+    'provider.contactChanges.request': () =>
+      call('POST', '/api/v1/provider/contact-changes', {
+        role: 'provider',
+        body: { kind: 'email', target: 'new@example.com', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.contactChanges.confirm': () =>
+      call('POST', '/api/v1/provider/contact-changes/confirm', {
+        role: 'provider',
+        body: { requestId: '1', code: '123456' },
+      }),
     'provider.profile.patch': () =>
       call('PATCH', '/api/v1/provider/profile', {
         role: 'provider',

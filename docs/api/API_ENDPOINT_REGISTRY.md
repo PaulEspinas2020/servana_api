@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**115 implemented** · **1 planned** · 116 total.
+**123 implemented** · **1 planned** · 124 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -558,6 +558,14 @@ Releases this device, or every device for the account.
 | `GET` | `/api/v1/provider/profile` | **live** | provider (role 2/4) | — | `ProviderProfile` | yes | account |
 | `PATCH` | `/api/v1/provider/profile` | **live** | provider (role 2/4) | `ProviderProfilePatch` | `ProviderProfileRevision` | no | account |
 | `GET` | `/api/v1/provider/activation` | **live** | provider (role 2/4) | — | `ProviderActivation` | yes | account |
+| `GET` | `/api/v1/provider/profile-fields` | **live** | provider (role 2/4) | — | `ProviderFieldRegistry` | yes | account |
+| `GET` | `/api/v1/provider/public-profile` | **live** | provider (role 2/4) | — | `ProviderPublicProfilePreview` | yes | account |
+| `GET` | `/api/v1/provider/certifications` | **live** | provider (role 2/4) | — | `ProviderCertificationList` | yes | account |
+| `POST` | `/api/v1/provider/certifications` | **live** | provider (role 2/4) | `ProviderCertificationSubmit` | `ProviderCertification` | no | account |
+| `GET` | `/api/v1/provider/verification-timeline` | **live** | provider (role 2/4) | — | `ProviderVerificationTimeline` | yes | account |
+| `POST` | `/api/v1/provider/contact-changes` | **live** | provider (role 2/4) | `ProviderContactChangeRequest` | `ProviderContactChangeStarted` | no | account |
+| `POST` | `/api/v1/provider/contact-changes/confirm` | **live** | provider (role 2/4) | `ProviderContactChangeConfirm` | `ProviderContactChangeResult` | no | account |
+| `POST` | `/api/v1/provider/activation/policy-acknowledgement` | **live** | provider (role 2/4) | `ProviderPolicyAcknowledgement` | `ProviderPolicyAcknowledgementResult` | yes | account |
 | `GET` | `/api/v1/providers/:providerUid/profile` | **live** | any signed-in | — | `ProviderProfile` | yes | account |
 | `GET` | `/api/v1/provider/documents` | **live** | provider (role 2/4) | — | `ProviderDocumentList` | yes | account |
 | `GET` | `/api/v1/provider/document-types` | **live** | provider (role 2/4) | — | `ProviderDocumentTypeCatalog` | yes | account |
@@ -747,6 +755,103 @@ The caller's own activation checklist: why they cannot work yet, and what to do.
 - **Legacy it replaces**
   - `GET /api/provider/account-state` — **ALIAS_TEMPORARILY** — The live discovery endpoint. FULLY subsumed: every key it returns - account, verification, profile, documents, application, activation, access, checklist, nextStep - is carried here, from the same service, unchanged.
   - `GET /api/provider/compliance` — **ALIAS_TEMPORARILY** — Returns `calculateCompliance` verbatim, which this entry carries as `compliance` from the SAME computation - not a second call, so the two cannot disagree.
+
+### `GET /api/v1/provider/profile-fields`
+
+The provider profile field registry: classification, how each field is edited, visibility.
+
+> STATIC per deployment - it names no account and reads no row, so it is the one entry in this domain a client may cache hard. It is versioned so a client can tell when the vocabulary moved. Kept a separate resource rather than folded into the profile read for exactly that reason: a per-provider response cannot be cached, and merging the two would have made a constant uncacheable to save one call.
+
+- **Domain service** — `services/providerProfileComplianceService.PROFILE_FIELD_REGISTRY`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/profile-fields` — **ALIAS_TEMPORARILY** — Returns the same frozen registry constant. No per-provider data of any kind.
+
+### `GET /api/v1/provider/public-profile`
+
+The caller's OWN public profile as published, plus any revision awaiting review.
+
+> NOT the same resource as provider.publicProfile.get, and the difference is a disclosure boundary rather than a naming preference. This one carries `pendingRevision` - the provider's UNREVIEWED proposed text, together with the moderator's reason code and message. None of that is public. Matching these two routes on the shared words "public profile" would either have lost the pending-revision surface or, if the field had been added to the shared schema instead, published unreviewed content and internal review notes to every customer browsing for a provider. The seat differs too: this is `self` only, taken from the token, with no parameter naming another account.
+
+- **Domain service** — `services/providerProfileComplianceService.getPublicProfile`
+- **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/public-profile-preview` — **ALIAS_TEMPORARILY** — The provider previewing their own published profile. Same service.
+
+### `GET /api/v1/provider/certifications`
+
+The caller's certifications and their review state.
+
+> The LIST, which provider.activation.get carries only a COUNT of. A summary is enough to render a checklist and cannot render the screen where a provider sees which credential expired - so this is promoted rather than subsumed. `credentialMask` is what is stored and what travels; the full credential number is never on this wire.
+
+- **Domain service** — `services/providerProfileComplianceService.listCertifications`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/certifications` — **ALIAS_TEMPORARILY** — Same service, same projection.
+
+### `POST /api/v1/provider/certifications`
+
+Submits a certification for review, against a document already uploaded.
+
+> Ownership is enforced on BOTH references before the insert: `relatedDocumentId` must be a worker_requirement belonging to the caller, and `renewalOfId` a certification of theirs. A 404 either way, deliberately not distinguishing "not yours" from "not there" - the difference would enumerate ids.
+
+- **Domain service** — `services/providerProfileComplianceService.submitCertification`
+- **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/certifications` — **ALIAS_TEMPORARILY** — Same service. Identical validation and ownership checks.
+
+### `GET /api/v1/provider/verification-timeline`
+
+What has happened to the caller's documents, certifications and activation, newest first.
+
+> HISTORY, and a separate resource from the activation checklist on purpose: a checklist answers "what must I do now" and a timeline answers "what happened", they have different retention questions, and carrying fifty events into every activation read would be a data-minimisation failure on a screen that does not display them. Carries the provider-facing reason code and detail; internal reviewer notes are not selected.
+
+- **Domain service** — `services/providerProfileComplianceService.getVerificationTimeline`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Query** — `limit` (integer) Events to return, 1-100, default 50
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/verification-timeline` — **ALIAS_TEMPORARILY** — Same service. The limit is clamped to 100 there and here, by the same code.
+
+### `POST /api/v1/provider/contact-changes`
+
+Starts a change of verified email or mobile. Sends a code to the NEW address.
+
+> STEP ONE OF TWO. Migrate this and provider.contactChanges.confirm together or not at all: a canonical request whose confirm is still legacy is one flow split across two contracts, and a client that gets halfway leaves a provider unable to finish changing the address their account recovers through. The handler passes the DECODED token, not just the uid, because `assertRecentAuth` reads Firebase `auth_time`. A v1 successor that passed only the uid would silently drop the recent-auth requirement - privilege escalation arriving as a migration, on the one operation that changes how an account is recovered.
+
+- **Domain service** — `services/providerContactChangeService.requestContactChange`
+- **Error codes** — `ACCOUNT_RECENT_AUTH_REQUIRED`, `CONFLICT`, `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/contact-changes` — **ALIAS_TEMPORARILY** — Same service, same recent-auth precondition. STEP ONE of two - see the confirm entry.
+
+### `POST /api/v1/provider/contact-changes/confirm`
+
+Completes a contact change by presenting the code sent to the new address.
+
+> STEP TWO OF TWO. Re-asserts recent auth rather than trusting that step one did: the two calls are minutes apart and the window can close between them. The request row is looked up by id AND provider_uid together, so a request id belonging to somebody else is a 404 rather than a confirmable target.
+
+- **Domain service** — `services/providerContactChangeService.confirmContactChange`
+- **Error codes** — `ACCOUNT_RECENT_AUTH_REQUIRED`, `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/contact-changes/confirm` — **ALIAS_TEMPORARILY** — Same service. STEP TWO of two - see the request entry.
+
+### `POST /api/v1/provider/activation/policy-acknowledgement`
+
+Records that the provider accepted the Servana provider agreement.
+
+> Idempotent by CONSTRUCTION, not by a guard: the upsert is COALESCE(policy_acknowledged_at, now()), so a second acceptance returns the ORIGINAL date rather than moving it. That is the right behaviour for a consent record - the moment somebody agreed is a fact, and a double tap must not rewrite it. FINDING, recorded and deliberately NOT changed here: because the timestamp is pinned to the provider rather than to the policy version, acknowledging a REVISED agreement is indistinguishable from re-acknowledging the old one, and `policyVersion` is accepted but not returned. Whether a revised agreement needs a fresh acceptance is a legal question about consent, not an API question, and changing consent semantics unilaterally inside a migration TAB would be the wrong place to answer it. Raised in docs/PROVIDER_ACTIVATION_DISPOSITION.md for the product owner.
+
+- **Domain service** — `services/providerActivationService.acknowledgeProviderPolicy`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/activation/policy-acknowledgement` — **ALIAS_TEMPORARILY** — Same service. Idempotent there and here, by the same COALESCE.
 
 ### `GET /api/v1/providers/:providerUid/profile`
 
@@ -1664,6 +1769,14 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `GET /api/v1/provider/profile` | — | — | ⏳ | ✅ | · |
 | `PATCH /api/v1/provider/profile` | — | — | ⏳ | ✅ | — |
 | `GET /api/v1/provider/activation` | — | — | · | · | — |
+| `GET /api/v1/provider/profile-fields` | — | — | · | · | — |
+| `GET /api/v1/provider/public-profile` | — | — | · | · | — |
+| `GET /api/v1/provider/certifications` | — | — | · | · | — |
+| `POST /api/v1/provider/certifications` | — | — | · | · | — |
+| `GET /api/v1/provider/verification-timeline` | — | — | · | · | — |
+| `POST /api/v1/provider/contact-changes` | — | — | · | · | — |
+| `POST /api/v1/provider/contact-changes/confirm` | — | — | · | · | — |
+| `POST /api/v1/provider/activation/policy-acknowledgement` | — | — | · | · | — |
 | `GET /api/v1/providers/:providerUid/profile` | · | · | — | — | · |
 | `GET /api/v1/provider/documents` | — | — | ⏳ | ✅ | — |
 | `GET /api/v1/provider/document-types` | — | — | ✅ | ⏳ | — |

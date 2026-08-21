@@ -1506,6 +1506,269 @@ export const V1_CONTRACT: ContractEntry[] = [
       '"nothing outstanding" are different answers.',
   },
   {
+    id: 'provider.fieldRegistry.get',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/profile-fields',
+    summary: 'The provider profile field registry: classification, how each field is edited, visibility.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderFieldRegistry',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerProfileComplianceService.PROFILE_FIELD_REGISTRY',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/profile-fields',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Returns the same frozen registry constant. No per-provider data of any kind.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'STATIC per deployment - it names no account and reads no row, so it is the one entry in ' +
+      'this domain a client may cache hard. It is versioned so a client can tell when the ' +
+      'vocabulary moved. Kept a separate resource rather than folded into the profile read for ' +
+      'exactly that reason: a per-provider response cannot be cached, and merging the two would ' +
+      'have made a constant uncacheable to save one call.',
+  },
+  {
+    id: 'provider.publicProfile.preview',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/public-profile',
+    summary: "The caller's OWN public profile as published, plus any revision awaiting review.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderPublicProfilePreview',
+    errors: ['NOT_FOUND'],
+    status: 'implemented',
+    domainService: 'services/providerProfileComplianceService.getPublicProfile',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/public-profile-preview',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'The provider previewing their own published profile. Same service.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'NOT the same resource as provider.publicProfile.get, and the difference is a disclosure ' +
+      'boundary rather than a naming preference. This one carries `pendingRevision` - the ' +
+      "provider's UNREVIEWED proposed text, together with the moderator's reason code and " +
+      'message. None of that is public. Matching these two routes on the shared words "public ' +
+      'profile" would either have lost the pending-revision surface or, if the field had been ' +
+      'added to the shared schema instead, published unreviewed content and internal review ' +
+      'notes to every customer browsing for a provider. The seat differs too: this is `self` ' +
+      'only, taken from the token, with no parameter naming another account.',
+  },
+  {
+    id: 'provider.certifications.list',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/certifications',
+    summary: "The caller's certifications and their review state.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderCertificationList',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerProfileComplianceService.listCertifications',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/certifications',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same projection.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'The LIST, which provider.activation.get carries only a COUNT of. A summary is enough to ' +
+      'render a checklist and cannot render the screen where a provider sees which credential ' +
+      'expired - so this is promoted rather than subsumed. `credentialMask` is what is stored ' +
+      'and what travels; the full credential number is never on this wire.',
+  },
+  {
+    id: 'provider.certifications.create',
+    domain: 'account',
+    method: 'post',
+    path: '/provider/certifications',
+    summary: 'Submits a certification for review, against a document already uploaded.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id', 'unique-constraint'],
+    replayGuard:
+      'A REQUIRED clientRequestId, collapsed by a unique index on ' +
+      '(provider_uid, client_request_id) with ON CONFLICT DO UPDATE of a no-op column. A retry ' +
+      'on a flaky connection returns the first submission rather than queueing a second for a ' +
+      'human to review.',
+    requestSchema: 'ProviderCertificationSubmit',
+    responseSchema: 'ProviderCertification',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND'],
+    status: 'implemented',
+    domainService: 'services/providerProfileComplianceService.submitCertification',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/certifications',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. Identical validation and ownership checks.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'Ownership is enforced on BOTH references before the insert: `relatedDocumentId` must be ' +
+      "a worker_requirement belonging to the caller, and `renewalOfId` a certification of " +
+      'theirs. A 404 either way, deliberately not distinguishing "not yours" from "not there" - ' +
+      'the difference would enumerate ids.',
+  },
+  {
+    id: 'provider.verificationTimeline.get',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/verification-timeline',
+    summary: 'What has happened to the caller\'s documents, certifications and activation, newest first.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderVerificationTimeline',
+    errors: [],
+    query: [
+      { name: 'limit', type: 'integer', required: false, description: 'Events to return, 1-100, default 50' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerProfileComplianceService.getVerificationTimeline',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/verification-timeline',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. The limit is clamped to 100 there and here, by the same code.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'HISTORY, and a separate resource from the activation checklist on purpose: a checklist ' +
+      'answers "what must I do now" and a timeline answers "what happened", they have different ' +
+      'retention questions, and carrying fifty events into every activation read would be a ' +
+      'data-minimisation failure on a screen that does not display them. Carries the ' +
+      'provider-facing reason code and detail; internal reviewer notes are not selected.',
+  },
+  {
+    id: 'provider.contactChanges.request',
+    domain: 'account',
+    method: 'post',
+    path: '/provider/contact-changes',
+    summary: 'Starts a change of verified email or mobile. Sends a code to the NEW address.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A REQUIRED clientRequestId. Without it a provider tapping twice on a slow connection ' +
+      'starts two change requests against the same target and receives two codes, only one of ' +
+      'which will be accepted.',
+    requestSchema: 'ProviderContactChangeRequest',
+    responseSchema: 'ProviderContactChangeStarted',
+    errors: ['VALIDATION_FAILED', 'CONFLICT', 'ACCOUNT_RECENT_AUTH_REQUIRED'],
+    status: 'implemented',
+    domainService: 'services/providerContactChangeService.requestContactChange',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/contact-changes',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same recent-auth precondition. STEP ONE of two - see the confirm entry.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'STEP ONE OF TWO. Migrate this and provider.contactChanges.confirm together or not at ' +
+      'all: a canonical request whose confirm is still legacy is one flow split across two ' +
+      'contracts, and a client that gets halfway leaves a provider unable to finish changing ' +
+      'the address their account recovers through. ' +
+      'The handler passes the DECODED token, not just the uid, because `assertRecentAuth` reads ' +
+      'Firebase `auth_time`. A v1 successor that passed only the uid would silently drop the ' +
+      "recent-auth requirement - privilege escalation arriving as a migration, on the one " +
+      'operation that changes how an account is recovered.',
+  },
+  {
+    id: 'provider.contactChanges.confirm',
+    domain: 'account',
+    method: 'post',
+    path: '/provider/contact-changes/confirm',
+    summary: 'Completes a contact change by presenting the code sent to the new address.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['single-use-token', 'row-lock'],
+    replayGuard:
+      'The code is consumed inside a transaction that takes FOR UPDATE on the request row, so ' +
+      'two confirmations of the same request serialise and the second finds it already spent.',
+    requestSchema: 'ProviderContactChangeConfirm',
+    responseSchema: 'ProviderContactChangeResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT', 'ACCOUNT_RECENT_AUTH_REQUIRED'],
+    status: 'implemented',
+    domainService: 'services/providerContactChangeService.confirmContactChange',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/contact-changes/confirm',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. STEP TWO of two - see the request entry.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'STEP TWO OF TWO. Re-asserts recent auth rather than trusting that step one did: the two ' +
+      'calls are minutes apart and the window can close between them. The request row is looked ' +
+      'up by id AND provider_uid together, so a request id belonging to somebody else is a 404 ' +
+      'rather than a confirmable target.',
+  },
+  {
+    id: 'provider.activation.acknowledgePolicy',
+    domain: 'account',
+    method: 'post',
+    path: '/provider/activation/policy-acknowledgement',
+    summary: 'Records that the provider accepted the Servana provider agreement.',
+    auth: 'provider',
+    idempotent: true,
+    requestSchema: 'ProviderPolicyAcknowledgement',
+    responseSchema: 'ProviderPolicyAcknowledgementResult',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/providerActivationService.acknowledgeProviderPolicy',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/activation/policy-acknowledgement',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. Idempotent there and here, by the same COALESCE.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'Idempotent by CONSTRUCTION, not by a guard: the upsert is ' +
+      'COALESCE(policy_acknowledged_at, now()), so a second acceptance returns the ORIGINAL ' +
+      'date rather than moving it. That is the right behaviour for a consent record - the ' +
+      'moment somebody agreed is a fact, and a double tap must not rewrite it. ' +
+      'FINDING, recorded and deliberately NOT changed here: because the timestamp is pinned to ' +
+      'the provider rather than to the policy version, acknowledging a REVISED agreement is ' +
+      'indistinguishable from re-acknowledging the old one, and `policyVersion` is accepted but ' +
+      'not returned. Whether a revised agreement needs a fresh acceptance is a legal question ' +
+      'about consent, not an API question, and changing consent semantics unilaterally inside a ' +
+      'migration TAB would be the wrong place to answer it. Raised in ' +
+      'docs/PROVIDER_ACTIVATION_DISPOSITION.md for the product owner.',
+  },
+  {
     id: 'provider.publicProfile.get',
     domain: 'account',
     method: 'get',

@@ -18,23 +18,23 @@
 
 | | |
 | --- | --- |
-| Capabilities | 63 |
-| Canonical endpoints mounted | 115 |
+| Capabilities | 65 |
+| Canonical endpoints mounted | 123 |
 | Canonical endpoints planned | 1 |
-| Legacy mappings tracked | 128 |
-| Converged (one route family) | 55 |
+| Legacy mappings tracked | 136 |
+| Converged (one route family) | 57 |
 | Role-split over ONE service | 4 |
 | Single-surface | 4 |
 | **Divergent (forked truth)** | **0** |
 | Broken (names a missing endpoint) | 0 |
-| Surface × capability cells on canonical | 35 |
-| Surface × capability cells still legacy | 91 |
+| Surface × capability cells on canonical | 34 |
+| Surface × capability cells still legacy | 92 |
 
 **0 divergent capabilities.** Every capability whose
 endpoints span more than one route family names exactly one domain service — the
 role split is a permission boundary, never a second implementation.
 
-**35 cells on canonical.** Each one is derived from that client's published manifest — the endpoints it calls, generated from its own source with a file:line per call site — and never asserted here by hand. A client with no manifest reads legacy, planned or n/a regardless of what it may already have shipped, because nothing in this repository has verified it; see src/api/v1/client-manifests/.
+**34 cells on canonical.** Each one is derived from that client's published manifest — the endpoints it calls, generated from its own source with a file:line per call site — and never asserted here by hand. A client with no manifest reads legacy, planned or n/a regardless of what it may already have shipped, because nothing in this repository has verified it; see src/api/v1/client-manifests/.
 
 ## 2. Legend
 
@@ -68,8 +68,10 @@ direction of whoever wrote it.
 | Read and change my account record | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | ⚠ mixed | planned |
 | Find out why I cannot work yet, and what to do about it | SHARED | — | — | planned | planned | — |
 | Read and change my availability, and book time off | SHARED | — | — | ⚠ mixed | legacy | — |
+| Attest a credential, and see what became of it | SHARED | — | — | planned | planned | — |
+| Change the verified email or mobile my account recovers through | SHARED | — | — | planned | planned | — |
 | Submit, read, preview and withdraw my documents | SHARED | — | — | ⚠ mixed | ⚠ mixed | — |
-| Read and change my provider profile | SHARED | — | — | legacy | **migrated** | planned |
+| Read and change my provider profile | SHARED | — | — | ⚠ mixed | ⚠ mixed | planned |
 | Read the services I am approved for | SHARED | — | — | **migrated** | planned | — |
 | Read my security posture | SHARED | planned | planned | planned | planned | planned |
 | Read and change my settings | SHARED | planned | planned | **migrated** | planned | planned |
@@ -223,15 +225,19 @@ No role split. One identity record for every account, and the ROLE-specific data
 ### Find out why I cannot work yet, and what to do about it
 
 - key: `accountPolicy:providerActivation` · declared in `services/account/accountPolicy`
-- verdict: **SHARED** · domain service: `services/account/providerActivationProjection`
+- verdict: **SHARED** · domain service: `services/account/providerActivationProjection, services/providerActivationService, services/providerProfileComplianceService`
 - route families: `/provider`
 
 Canonical:
+  - `POST /api/v1/provider/activation/policy-acknowledgement`
   - `GET /api/v1/provider/activation`
+  - `GET /api/v1/provider/verification-timeline`
 
 Legacy still aliased for this capability:
   - `GET /api/provider/account-state`
   - `GET /api/provider/compliance`
+  - `GET /api/provider/verification-timeline`
+  - `POST /api/provider/activation/policy-acknowledgement`
 
 DELIBERATELY not folded into providerProfile, and that separation is the whole design. The ProviderProfile schema serves two seats - the provider reading their own, and a CUSTOMER reading somebody else's - so an activation checklist added to it would be declared, in the published contract, as travelling on the endpoint customers read. Rendering a provider card and driving an onboarding checklist are different purposes over different data, and separate capabilities let authorization, retention and caching differ per purpose instead of all three being set by whichever purpose is laxest. No role split within the capability: both provider surfaces perform the identical operation and receive the identical DTO. Auth is `provider`, which is STRICTER than the account-state route it supersedes and equal to the compliance route it also supersedes - the parity gate refused the looser first draft, because compliance detail must not become reachable one rung lower as a side effect of a migration. The discovery property survives: requireProviderRole admits every provider role including suspended and unapproved, so the caller who needs to know why they cannot work still gets the checklist, and a non-provider receives the branchable ROLE_REQUIRED. The uid comes from the token and no parameter can name another account.
 
@@ -256,6 +262,38 @@ Legacy still aliased for this capability:
   - `PUT /api/worker/availability`
 
 No role split. The canonical route reads and writes the SAME engine matching consumes, which is the release gate: a provider editing one source while matching reads another is a provider who is unbookable for reasons nobody can see.
+
+### Attest a credential, and see what became of it
+
+- key: `accountPolicy:providerCertifications` · declared in `services/account/accountPolicy`
+- verdict: **SHARED** · domain service: `services/providerProfileComplianceService`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/certifications`
+  - `GET /api/v1/provider/certifications`
+
+Legacy still aliased for this capability:
+  - `GET /api/provider/certifications`
+  - `POST /api/provider/certifications`
+
+No role split. Separate from providerDocuments because the two are a FILE and an ASSERTION ABOUT a file, and they fail differently: a document can be unreadable, a certification can be expired or revoked while its document is perfectly legible. The submission carries only the last four digits of a credential, masked at write time, so the full number never reaches this table or this wire.
+
+### Change the verified email or mobile my account recovers through
+
+- key: `accountPolicy:providerContactChanges` · declared in `services/account/accountPolicy`
+- verdict: **SHARED** · domain service: `services/providerContactChangeService`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/contact-changes/confirm`
+  - `POST /api/v1/provider/contact-changes`
+
+Legacy still aliased for this capability:
+  - `POST /api/provider/contact-changes`
+  - `POST /api/provider/contact-changes/confirm`
+
+No role split, and deliberately its OWN capability rather than part of the profile: this is the only provider-facing operation that changes how an account is recovered, and it is the only one demanding a FRESH interactive sign-in rather than a valid session. Folding it into providerProfile would have put an operation with a stricter precondition behind the same name as one without, which is how a precondition gets dropped in a migration. Two steps, one capability: a canonical request whose confirm is still legacy is one flow split across two contracts.
 
 ### Submit, read, preview and withdraw my documents
 
@@ -282,15 +320,19 @@ Provider-only, and it must stay that way. The projection carries review STATE an
 ### Read and change my provider profile
 
 - key: `accountPolicy:providerProfile` · declared in `services/account/accountPolicy`
-- verdict: **SHARED** · domain service: `services/account/providerProfileService`
+- verdict: **SHARED** · domain service: `services/account/providerProfileService, services/providerProfileComplianceService`
 - route families: `/provider`
 
 Canonical:
+  - `GET /api/v1/provider/profile-fields`
   - `GET /api/v1/provider/profile`
   - `PATCH /api/v1/provider/profile`
+  - `GET /api/v1/provider/public-profile`
 
 Legacy still aliased for this capability:
   - `GET /api/provider/profile`
+  - `GET /api/provider/profile-fields`
+  - `GET /api/provider/public-profile-preview`
   - `POST /api/provider/public-profile-revisions`
 
 Role-specific by DATA and by WORKFLOW. A provider profile field is classified, and editing a reviewable one submits a revision rather than writing a column — the compliance service owns that, and the canonical PATCH delegates to it instead of reimplementing it.

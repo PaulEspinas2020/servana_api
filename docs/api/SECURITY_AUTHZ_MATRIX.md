@@ -15,10 +15,10 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 115 |
+| Mounted endpoints | 123 |
 | `public` | 22 |
 | `authenticated` | 60 |
-| `provider` | 27 |
+| `provider` | 35 |
 | `admin` | 6 |
 | Object-scoped | 43 |
 | Object-scoped WITH an ownership rule | 43 |
@@ -213,9 +213,14 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `notifications.markAllRead` | POST /notifications/read-all | `authenticated` | · ● ● ● | — |
 | `notifications.markRead` | PATCH /notifications/:key/read | `authenticated` | · ● ● ● | — |
 | `notifications.unreadCount` | GET /notifications/unread-count | `authenticated` | · ● ● ● | — |
+| `provider.activation.acknowledgePolicy` | POST /provider/activation/policy-acknowledgement | `provider` | · · ● · | — |
 | `provider.activation.get` | GET /provider/activation | `provider` | · · ● · | — |
 | `provider.availability.get` | GET /provider/availability | `provider` | · · ● · | — |
 | `provider.availability.patch` | PATCH /provider/availability | `provider` | · · ● · | — |
+| `provider.certifications.create` | POST /provider/certifications | `provider` | · · ● · | — |
+| `provider.certifications.list` | GET /provider/certifications | `provider` | · · ● · | — |
+| `provider.contactChanges.confirm` | POST /provider/contact-changes/confirm | `provider` | · · ● · | — |
+| `provider.contactChanges.request` | POST /provider/contact-changes | `provider` | · · ● · | — |
 | `provider.documents.create` | POST /provider/documents | `provider` | · · ● · | — |
 | `provider.documents.delete` | DELETE /provider/documents/:documentId | `provider` | · · ● · | ✔ addressId |
 | `provider.documents.list` | GET /provider/documents | `provider` | · · ● · | — |
@@ -224,6 +229,7 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `provider.earnings.payouts` | GET /provider/earnings/payouts | `provider` | · · ● · | — |
 | `provider.earnings.summary` | GET /provider/earnings/summary | `provider` | · · ● · | — |
 | `provider.earnings.transactions` | GET /provider/earnings/transactions | `provider` | · · ● · | — |
+| `provider.fieldRegistry.get` | GET /provider/profile-fields | `provider` | · · ● · | — |
 | `provider.jobs.accept` | POST /provider/jobs/:bookingId/accept | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.arrived` | POST /provider/jobs/:bookingId/arrived | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.cancel` | POST /provider/jobs/:bookingId/cancel | `provider` | · · ● · | ✔ bookingId |
@@ -236,10 +242,12 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `provider.profile.get` | GET /provider/profile | `provider` | · · ● · | — |
 | `provider.profile.patch` | PATCH /provider/profile | `provider` | · · ● · | — |
 | `provider.publicProfile.get` | GET /providers/:providerUid/profile | `authenticated` | · ● ● ● | — |
+| `provider.publicProfile.preview` | GET /provider/public-profile | `provider` | · · ● · | — |
 | `provider.services.list` | GET /provider/services | `provider` | · · ● · | — |
 | `provider.timeOff.cancel` | DELETE /provider/time-off/:timeOffId | `provider` | · · ● · | — |
 | `provider.timeOff.create` | POST /provider/time-off | `provider` | · · ● · | — |
 | `provider.timeOff.list` | GET /provider/time-off | `provider` | · · ● · | — |
+| `provider.verificationTimeline.get` | GET /provider/verification-timeline | `provider` | · · ● · | — |
 | `reviews.provider.list` | GET /reviews/providers/:providerUid | `public` | ● ● ● ● | — |
 | `reviews.provider.rating` | GET /reviews/providers/:providerUid/rating | `public` | ● ● ● ● | — |
 | `search.query` | GET /search | `public` | ● ● ● ● | — |
@@ -269,8 +277,8 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-60 of 115 endpoints are probeable; the other
-55 are writes and are never probed, because a POST to
+64 of 123 endpoints are probeable; the other
+59 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.
 

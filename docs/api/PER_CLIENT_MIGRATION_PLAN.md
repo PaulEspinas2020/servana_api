@@ -14,7 +14,7 @@
 > [`CROSS_CLIENT_MIGRATION_PLAN.md`](CROSS_CLIENT_MIGRATION_PLAN.md), which is
 > hand-written because an argument is not derivable. This is what each client
 > actually has to change, and it is generated because a hand-maintained list of
-> 115 endpoints across five clients is stale the day after it is written.
+> 123 endpoints across five clients is stale the day after it is written.
 
 ## How to read this
 
@@ -63,7 +63,7 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Read and change my account record | planned | `GET /api/auth/me`, `PUT /api/user/updateprofile` | `GET /api/v1/me`, `PATCH /api/v1/me` |
 | Read and change my customer profile | planned | `GET /api/user/profile`, `PUT /api/user/updateprofile` | `GET /api/v1/customer/profile`, `PATCH /api/v1/customer/profile` |
 | Read and change my notification preferences | planned | `GET /api/provider/notification-preferences`, `GET /api/workers/:uid/notification-preferences`, `PUT /api/provider/notification-preferences`, `PUT /api/workers/:uid/notification-preferences` | `GET /api/v1/me/notification-preferences`, `PATCH /api/v1/me/notification-preferences`, `GET /api/v1/settings/notification-preferences`, `PUT /api/v1/settings/notification-preferences` |
-| Read and change my provider profile | planned | `GET /api/provider/profile`, `POST /api/provider/public-profile-revisions` | `GET /api/v1/provider/profile`, `PATCH /api/v1/provider/profile` |
+| Read and change my provider profile | planned | `GET /api/provider/profile`, `GET /api/provider/profile-fields`, `GET /api/provider/public-profile-preview`, `POST /api/provider/public-profile-revisions` | `GET /api/v1/provider/profile-fields`, `GET /api/v1/provider/profile`, `PATCH /api/v1/provider/profile`, `GET /api/v1/provider/public-profile` |
 | Read and change my settings | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/settings`, `PATCH /api/v1/me/settings` |
 | Read booking-code state | planned | _no legacy equivalent — this is new_ | `GET /api/v1/bookings/:bookingId/otp/status` |
 | Read my notification inbox | planned | `GET /api/user/notifications` | `GET /api/v1/notifications` |
@@ -87,24 +87,27 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 41 |
-| Already on canonical | 23 |
+| Capabilities that apply | 43 |
+| Already on canonical | 22 |
 | Still on a legacy route | 1 |
-| Partially migrated | 7 |
-| No equivalent called today | 10 |
+| Partially migrated | 8 |
+| No equivalent called today | 12 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
 | Additional work | ⚠ mixed | `GET /api/additional/booking/:bookingId`, `POST /api/additional/request/:userId` | `POST /api/v1/bookings/:bookingId/additional-work`, `GET /api/v1/bookings/:bookingId/additional-work` |
 | Attach a file to a conversation | planned | `POST /api/chat/attachments/upload` | `POST /api/v1/conversations/:conversationId/attachments` |
+| Attest a credential, and see what became of it | planned | `GET /api/provider/certifications`, `POST /api/provider/certifications` | `POST /api/v1/provider/certifications`, `GET /api/v1/provider/certifications` |
+| Change the verified email or mobile my account recovers through | planned | `POST /api/provider/contact-changes`, `POST /api/provider/contact-changes/confirm` | `POST /api/v1/provider/contact-changes/confirm`, `POST /api/v1/provider/contact-changes` |
 | Fetch the contract this process implements | planned | _no legacy equivalent — this is new_ | `GET /api/v1/openapi.json` |
-| Find out why I cannot work yet, and what to do about it | planned | `GET /api/provider/account-state`, `GET /api/provider/compliance` | `GET /api/v1/provider/activation` |
+| Find out why I cannot work yet, and what to do about it | planned | `GET /api/provider/account-state`, `GET /api/provider/compliance`, `GET /api/provider/verification-timeline`, `POST /api/provider/activation/policy-acknowledgement` | `POST /api/v1/provider/activation/policy-acknowledgement`, `GET /api/v1/provider/activation`, `GET /api/v1/provider/verification-timeline` |
 | Move a booking through its state machine | ⚠ mixed | `POST /api/admin/bookings/:id/assign`, `POST /api/admin/bookings/:id/reassign`, `PUT /api/worker/bookings/:bookingId/accept`, `PUT /api/worker/bookings/:bookingId/arrived`, `PUT /api/worker/bookings/:bookingId/complete`, `PUT /api/worker/bookings/:bookingId/decline`, `PUT /api/worker/bookings/:bookingId/en-route`, `PUT /api/worker/bookings/:bookingId/start` | `POST /api/v1/provider/jobs/:bookingId/accept`, `POST /api/v1/provider/jobs/:bookingId/decline`, `POST /api/v1/provider/jobs/:bookingId/en-route`, `POST /api/v1/provider/jobs/:bookingId/arrived`, `POST /api/v1/provider/jobs/:bookingId/start`, `POST /api/v1/provider/jobs/:bookingId/complete`, `POST /api/v1/admin/bookings/:bookingId/assign`, `POST /api/v1/admin/bookings/:bookingId/reassign` |
 | Read a booking | planned | `GET /api/:id`, `GET /api/:id/timeline`, `GET /api/users/:userId/bookings` | `GET /api/v1/bookings`, `GET /api/v1/bookings/:bookingId`, `GET /api/v1/bookings/:bookingId/timeline`, `GET /api/v1/bookings/:bookingId/transitions` |
 | Read a booking's payment and price breakdown | planned | _no legacy equivalent — this is new_ | `GET /api/v1/bookings/:bookingId/payment` |
 | Read and change my account record | ⚠ mixed | `GET /api/auth/me`, `PUT /api/user/updateprofile` | `GET /api/v1/me`, `PATCH /api/v1/me` |
 | Read and change my availability, and book time off | legacy | `DELETE /api/worker/time-off/:id`, `GET /api/worker/availability`, `GET /api/worker/time-off`, `POST /api/worker/time-off`, `PUT /api/worker/availability` | `GET /api/v1/provider/availability`, `PATCH /api/v1/provider/availability`, `DELETE /api/v1/provider/time-off/:timeOffId`, `POST /api/v1/provider/time-off`, `GET /api/v1/provider/time-off` |
 | Read and change my notification preferences | ⚠ mixed | `GET /api/provider/notification-preferences`, `GET /api/workers/:uid/notification-preferences`, `PUT /api/provider/notification-preferences`, `PUT /api/workers/:uid/notification-preferences` | `GET /api/v1/me/notification-preferences`, `PATCH /api/v1/me/notification-preferences`, `GET /api/v1/settings/notification-preferences`, `PUT /api/v1/settings/notification-preferences` |
+| Read and change my provider profile | ⚠ mixed | `GET /api/provider/profile`, `GET /api/provider/profile-fields`, `GET /api/provider/public-profile-preview`, `POST /api/provider/public-profile-revisions` | `GET /api/v1/provider/profile-fields`, `GET /api/v1/provider/profile`, `PATCH /api/v1/provider/profile`, `GET /api/v1/provider/public-profile` |
 | Read and change my settings | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/settings`, `PATCH /api/v1/me/settings` |
 | Read my security posture | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/security` |
 | Read the services I am approved for | planned | `GET /api/worker/services-overview` | `GET /api/v1/provider/services` |
@@ -184,22 +187,24 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 44 |
+| Capabilities that apply | 46 |
 | Already on canonical | 12 |
-| Still on a legacy route | 17 |
-| Partially migrated | 5 |
-| No equivalent called today | 10 |
+| Still on a legacy route | 16 |
+| Partially migrated | 6 |
+| No equivalent called today | 12 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
 | Advance the read pointer | legacy | `POST /api/chat/conversations/:id/read` | `POST /api/v1/conversations/:conversationId/read` |
 | Ask whether this client build may still run | planned | _no legacy equivalent — this is new_ | `GET /api/v1/client-config` |
 | Attach a file to a conversation | planned | `POST /api/chat/attachments/upload` | `POST /api/v1/conversations/:conversationId/attachments` |
+| Attest a credential, and see what became of it | planned | `GET /api/provider/certifications`, `POST /api/provider/certifications` | `POST /api/v1/provider/certifications`, `GET /api/v1/provider/certifications` |
 | Booking codes (OTP) | planned | `POST /api/:bookingId/resend-otp`, `POST /api/:id/confirm-otp` | `POST /api/v1/bookings/:bookingId/otp/request`, `POST /api/v1/bookings/:bookingId/otp/verify` |
 | Browse the service catalog | legacy | `GET /api/:serviceId/options-with-addons`, `GET /api/catalog`, `GET /api/catalog/services`, `GET /api/catalog/services/:serviceId`, `GET /api/catalog/services/:serviceId/serviceability`, `GET /api/catalog/summary`, `GET /api/services/:serviceId/level2`, `GET /api/services/:serviceId/options-with-addons`, `GET /api/services/full` | `GET /api/v1/catalog`, `GET /api/v1/catalog/summary`, `GET /api/v1/catalog/categories`, `GET /api/v1/catalog/categories/:categoryId`, `GET /api/v1/catalog/categories/:categoryId/subcategories`, `GET /api/v1/catalog/subcategories/:subcategoryId`, `GET /api/v1/catalog/subcategories/:subcategoryId/services`, `GET /api/v1/catalog/services`, `GET /api/v1/catalog/services/:serviceId`, `GET /api/v1/catalog/services/:serviceId/serviceability` |
+| Change the verified email or mobile my account recovers through | planned | `POST /api/provider/contact-changes`, `POST /api/provider/contact-changes/confirm` | `POST /api/v1/provider/contact-changes/confirm`, `POST /api/v1/provider/contact-changes` |
 | Dismiss one notification | planned | `DELETE /api/provider/notifications/:key` | `DELETE /api/v1/notifications/:key` |
 | Fetch the contract this process implements | planned | _no legacy equivalent — this is new_ | `GET /api/v1/openapi.json` |
-| Find out why I cannot work yet, and what to do about it | planned | `GET /api/provider/account-state`, `GET /api/provider/compliance` | `GET /api/v1/provider/activation` |
+| Find out why I cannot work yet, and what to do about it | planned | `GET /api/provider/account-state`, `GET /api/provider/compliance`, `GET /api/provider/verification-timeline`, `POST /api/provider/activation/policy-acknowledgement` | `POST /api/v1/provider/activation/policy-acknowledgement`, `GET /api/v1/provider/activation`, `GET /api/v1/provider/verification-timeline` |
 | How many unread I have | legacy | `GET /api/user/notifications/unread-count` | `GET /api/v1/notifications/unread-count` |
 | List my conversations with unread counts | legacy | `GET /api/chat/conversations` | `GET /api/v1/conversations` |
 | Mark everything read | legacy | `POST /api/user/notifications/mark-all-read` | `POST /api/v1/notifications/read-all` |
@@ -213,7 +218,7 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Read and change my account record | ⚠ mixed | `GET /api/auth/me`, `PUT /api/user/updateprofile` | `GET /api/v1/me`, `PATCH /api/v1/me` |
 | Read and change my availability, and book time off | ⚠ mixed | `DELETE /api/worker/time-off/:id`, `GET /api/worker/availability`, `GET /api/worker/time-off`, `POST /api/worker/time-off`, `PUT /api/worker/availability` | `GET /api/v1/provider/availability`, `PATCH /api/v1/provider/availability`, `DELETE /api/v1/provider/time-off/:timeOffId`, `POST /api/v1/provider/time-off`, `GET /api/v1/provider/time-off` |
 | Read and change my notification preferences | legacy | `GET /api/provider/notification-preferences`, `GET /api/workers/:uid/notification-preferences`, `PUT /api/provider/notification-preferences`, `PUT /api/workers/:uid/notification-preferences` | `GET /api/v1/me/notification-preferences`, `PATCH /api/v1/me/notification-preferences`, `GET /api/v1/settings/notification-preferences`, `PUT /api/v1/settings/notification-preferences` |
-| Read and change my provider profile | legacy | `GET /api/provider/profile`, `POST /api/provider/public-profile-revisions` | `GET /api/v1/provider/profile`, `PATCH /api/v1/provider/profile` |
+| Read and change my provider profile | ⚠ mixed | `GET /api/provider/profile`, `GET /api/provider/profile-fields`, `GET /api/provider/public-profile-preview`, `POST /api/provider/public-profile-revisions` | `GET /api/v1/provider/profile-fields`, `GET /api/v1/provider/profile`, `PATCH /api/v1/provider/profile`, `GET /api/v1/provider/public-profile` |
 | Read my notification inbox | legacy | `GET /api/user/notifications` | `GET /api/v1/notifications` |
 | Read my security posture | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/security` |
 | Read one conversation and its participants | legacy | `GET /api/chat/conversations/:id` | `GET /api/v1/conversations/:conversationId` |

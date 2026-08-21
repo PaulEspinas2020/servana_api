@@ -262,6 +262,110 @@ reads.
 
 ---
 
+## TAB 04 — the dispositions, executed
+
+All eleven now have a **closed** disposition. Eight v1 operations were published;
+the v1 surface moved **97 paths / 116 operations → 104 / 124**.
+
+| # | Legacy route | Disposition | Canonical successor |
+|---|---|---|---|
+| 1 | `/api/provider/account-state` | SUBSUMED | `GET /api/v1/provider/activation` |
+| 2 | `/api/provider/compliance` | SUBSUMED | `GET /api/v1/provider/activation` |
+| 3 | `/api/provider/profile-center` | PARTIAL — stays | activation half subsumed; profile/revision half remains |
+| 4 | `/api/provider/certifications` | **PROMOTED** | `GET` + `POST /api/v1/provider/certifications` |
+| 5 | `/api/provider/verification-timeline` | **PROMOTED** | `GET /api/v1/provider/verification-timeline` |
+| 6 | `/api/provider/profile-fields` | **PROMOTED** | `GET /api/v1/provider/profile-fields` |
+| 7 | `/api/provider/public-profile-preview` | **PROMOTED — and NOT the customer route** | `GET /api/v1/provider/public-profile` |
+| 8 | `/api/provider/public-profile-revisions` | ALREADY MAPPED | `PATCH /api/v1/provider/profile` |
+| 9 | `/api/provider/contact-changes` | **PROMOTED (pair)** | `POST /api/v1/provider/contact-changes` |
+| 10 | `/api/provider/contact-changes/confirm` | **PROMOTED (pair)** | `POST /api/v1/provider/contact-changes/confirm` |
+| 11 | `/api/provider/activation/policy-acknowledgement` | **PROMOTED** | `POST /api/v1/provider/activation/policy-acknowledgement` |
+
+Every legacy path stays mounted and unchanged, mapped `ALIAS_TEMPORARILY`. No
+protected client requires a release.
+
+### #7 resolved — and it was the trap TAB 01 refused to walk into
+
+TAB 01 recorded `public-profile-preview` as *"successor likely already exists"*
+and declined to assert it without a field-by-field comparison. The comparison:
+
+`getPublicProfile` returns **`pendingRevision`** — the provider's **unreviewed**
+proposed text, with `providerReasonCode` and `providerReasonDetail`, which are
+the moderator's reasons for refusing a previous attempt.
+
+Merging the two routes on the shared words "public profile" had two possible
+outcomes and both are bad. Drop the field, and a provider loses the screen that
+says a change is pending and why the last one was rejected. Add it to the shared
+schema instead, and **unreviewed text and internal moderation notes travel on the
+endpoint customers read**.
+
+They are separate resources at separate seats.
+`tests/provider-public-profile-preview-boundary.test.ts` pins the boundary — and
+asserts the *schema description* carries the reason, because a boundary that
+exists only in a test is one somebody deletes to make the test pass.
+
+That is the **third** near-miss from a shared noun in this programme, after
+`support/cases/{id}/messages` → `/v1/conversations/{id}/messages` and
+`reputation/summary` → `/v1/provider/earnings/summary`.
+
+### The precondition a migration would have dropped silently
+
+`requestContactChange` and `confirmContactChange` both call
+`assertRecentAuth(decoded)`, which reads the Firebase `auth_time` claim and
+demands a **fresh interactive sign-in** — not merely a valid session — before the
+address an account recovers through may be changed.
+
+A v1 handler passing only `uid` would compile, route, and answer 200 in every
+routing suite, having removed that requirement from the one provider operation
+that decides how an account is recovered. The handlers pass the decoded token;
+`tests/provider-contact-change-v1.test.ts` asserts the **argument**, and
+mutation-verified that passing a bare uid fails it.
+
+### A new error code, because the alternative was a second dialect
+
+The v1 vocabulary had no way to say "your session is valid but too old".
+`ACCOUNT_RECENT_AUTH_REQUIRED: 401` was added, distinct from `TOKEN_EXPIRED` on
+purpose: an expired token is fixed by a silent refresh, a stale one is not. A
+client that cannot tell them apart refreshes, succeeds, retries, is refused
+identically, and loops forever.
+
+### A 500 that was a 404
+
+`asApiError` mapped only errors carrying a `code`. The compliance and
+contact-change services predate that vocabulary and throw
+`Object.assign(new Error(msg), { statusCode })` with no code at all — so every
+one of those refusals reached a v1 client as **INTERNAL 500**: a 404 for a
+document that is not yours, a 422 for a malformed mobile number. Both a lie and
+unactionable. Now mapped by status, with the message withheld on anything
+unmapped so §21 still holds.
+
+### Consent semantics — a finding, deliberately not changed
+
+`acknowledgeProviderPolicy` upserts `COALESCE(policy_acknowledged_at, now())`, so
+it is idempotent by construction and a double tap returns the **original**
+moment. That is right: the instant somebody agreed is a fact.
+
+But the timestamp is pinned to the **provider**, not to the policy version, and
+`policyVersion` is accepted and not returned. So **acknowledging a revised
+agreement is indistinguishable from re-acknowledging the old one.**
+
+Whether a revised agreement needs fresh acceptance is a question about consent
+with legal weight, not an API question. Changing it unilaterally inside a
+migration TAB would be the wrong place to answer it. **Raised here for the
+product owner.**
+
+### What TAB 04 did not do
+
+- The **document-count divergence** (readiness-driven vs catalog-driven) is still
+  unreconciled and still pinned by test. It needs a decision about which source
+  owns the answer, which is a product question rather than a migration one.
+- `/api/provider/profile-center` stays. Its remaining half — masked contact
+  details, the public profile, active services, timeline, version — is a
+  profile-and-revision surface, and now that #5 and #7 are canonical it is the
+  last legacy route in this cluster still doing real work.
+
+---
+
 ## What TAB 01 did not do
 
 - **Certifications, timeline, contact changes, policy acknowledgement and the
