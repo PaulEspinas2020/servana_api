@@ -7,11 +7,11 @@ Every route the app mounts outside `/api/v1`: **519**.
 
 | Disposition | Count | Meaning |
 |---|---:|---|
-| `ALIAS_TEMPORARILY` | 114 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
+| `ALIAS_TEMPORARILY` | 119 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
 | `CANONICALIZE` | 11 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
 | `ROLE_SPECIFIC` | 13 | Legitimately separate: different auth, action or payload — same domain service. |
 | `RETIRE` | 1 | No caller and no successor. Delete once telemetry confirms zero traffic. |
-| `KEEP` | 380 | Not a duplicate of anything canonical. Untouched by this command. |
+| `KEEP` | 375 | Not a duplicate of anything canonical. Untouched by this command. |
 
 ## Retirement criteria
 
@@ -27,7 +27,7 @@ build knows how to call.
 
 Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 
-## ALIAS_TEMPORARILY (114)
+## ALIAS_TEMPORARILY (119)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
@@ -70,6 +70,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `GET` | `/api/workers/:workerId/job-cards` | `/api/v1/provider/jobs` | ServanaWorker calls this. Takes the provider uid from the PATH; it is now behind verifyAuth + verifyOwnership, but the parameter remains a BOLA shape that v1 removes. Retirement gated on a ServanaWorker release. |
 | `GET` | `/api/workers/:uid/notification-preferences` | `/api/v1/settings/notification-preferences` | ServanaWorker. Same service, uid taken from the path instead of the token. |
 | `PUT` | `/api/workers/:uid/notification-preferences` | `/api/v1/settings/notification-preferences` | ServanaWorker. Same service. |
+| `POST` | `/api/:bookingId/mark-cash-paid` | `/api/v1/bookings/:bookingId/cash-collected` | Mounted directly under /api, unlike every sibling. Same service; this entry gives it a path consistent with /bookings/:bookingId/payment. |
 | `POST` | `/api/:bookingId/paymongo/create` | `/api/v1/bookings/:bookingId/payment-intents` | The live customer checkout call. Identical domain service — this entry adds the booking-scoped authorization and refuses a provider, which the legacy route does not do. Kept until Customer Web and Customer Mobile migrate. |
 | `GET` | `/api/additional/booking/:bookingId` | `/api/v1/bookings/:bookingId/additional-work` | Already booking-scoped and already the same service. The canonical path differs only in living under the booking it belongs to, which is what §60 asks for. |
 | `POST` | `/api/additional/request/:userId` | `/api/v1/bookings/:bookingId/additional-work` | The live Provider Web call. Its :userId segment is legacy and has never been treated as identity — the provider comes from the token in both paths, and both call the same additionalService instance. |
@@ -127,6 +128,10 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `DELETE` | `/api/provider/fcm-token` | `/api/v1/me/devices` | Same operation, provider-gated. Both reach one service. |
 | `GET` | `/api/worker/job-cards/:bookingId` | `/api/v1/provider/jobs/:bookingId` | Provider Web. Same service and view function. |
 | `GET` | `/api/worker/job-cards` | `/api/v1/provider/jobs` | Provider Web calls this today. Same service, same view function, legacy envelope (a bare array). |
+| `GET` | `/api/provider/bookings/:bookingId/evidence` | `/api/v1/provider/jobs/:bookingId/evidence` | Same service. The path moves under /provider/jobs to sit with the transitions. |
+| `POST` | `/api/provider/bookings/:bookingId/evidence` | `/api/v1/provider/jobs/:bookingId/evidence` | SAME implementation after TAB 07 extracted it. clientRequestId is OPTIONAL there and REQUIRED here - demanding one on the legacy route would break shipped clients. |
+| `DELETE` | `/api/provider/bookings/:bookingId/evidence/:evidenceId` | `/api/v1/provider/jobs/:bookingId/evidence/:evidenceId` | Same service. Soft removal, scoped by worker uid inside the UPDATE. |
+| `GET` | `/api/provider/bookings/:bookingId/cancellation-eligibility` | `/api/v1/provider/jobs/:bookingId/cancellation-eligibility` | Same policy function, same context loader. Only the path and envelope differ. |
 | `POST` | `/api/provider/bookings/:bookingId/cancel` | `/api/v1/provider/jobs/:bookingId/cancel` | The live Provider Web / Provider Mobile cancel. It ALREADY runs the executor and the same providerCancellationWindow guard — this entry gives it a canonical path and a v1 error vocabulary, it does not give it a second implementation. |
 | `PUT` | `/api/worker/bookings/:bookingId/accept` | `/api/v1/provider/jobs/:bookingId/accept` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
 | `PUT` | `/api/worker/bookings/:bookingId/decline` | `/api/v1/provider/jobs/:bookingId/decline` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
@@ -186,7 +191,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 |---|---|---|---|
 | `GET` | `/api/workers/:uid/earnings-history` | `/api/v1/provider/earnings/transactions` | Takes the provider uid from the URL and has no auth, so it answers for anybody. No located caller in any of the five clients. Carried over from the planned placeholder this entry replaces; delete once telemetry confirms zero traffic. |
 
-## KEEP (380)
+## KEEP (375)
 
 Mounted, not superseded, not a duplicate. Listed so the inventory is complete and so a
 later domain command starts from a route list rather than from a grep.
@@ -232,7 +237,6 @@ later domain command starts from a route list rather than from a grep.
 | `GET` | `/api/workers/:uid/disbursement-history` | `src/routes/technician.routes.ts:189` |
 | `POST` | `/api/:bookingId/gcash-submit` | `src/routes/payment.routes.ts:8` |
 | `POST` | `/api/:bookingId/approve` | `src/routes/payment.routes.ts:9` |
-| `POST` | `/api/:bookingId/mark-cash-paid` | `src/routes/payment.routes.ts:10` |
 | `POST` | `/api/paymongo/webhook` | `src/routes/payment.routes.ts:12` |
 | `POST` | `/api/additional/:id/payment` | `src/routes/additional.routes.ts:30` |
 | `POST` | `/api/additional/:id/worker-decision` | `src/routes/additional.routes.ts:31` |
@@ -309,10 +313,6 @@ later domain command starts from a route list rather than from a grep.
 | `POST` | `/api/provider/support/tickets/:ticketKey/replies` | `src/routes/provider.routes.ts:194` |
 | `POST` | `/api/provider/support/tickets/:ticketKey/close` | `src/routes/provider.routes.ts:195` |
 | `POST` | `/api/provider/support/tickets/:ticketKey/reopen` | `src/routes/provider.routes.ts:196` |
-| `GET` | `/api/provider/bookings/:bookingId/evidence` | `src/routes/provider.routes.ts:232` |
-| `POST` | `/api/provider/bookings/:bookingId/evidence` | `src/routes/provider.routes.ts:233` |
-| `DELETE` | `/api/provider/bookings/:bookingId/evidence/:evidenceId` | `src/routes/provider.routes.ts:234` |
-| `GET` | `/api/provider/bookings/:bookingId/cancellation-eligibility` | `src/routes/provider.routes.ts:236` |
 | `GET` | `/api/worker/services` | `src/routes/provider.routes.ts:254` |
 | `DELETE` | `/api/worker/services/:serviceId` | `src/routes/provider.routes.ts:255` |
 | `GET` | `/api/admin/provider/reconciliation` | `src/routes/provider.routes.ts:258` |

@@ -15,6 +15,9 @@ import { getIdentity } from "../services/identityService";
 import * as userService from "../services/user.service";
 import mongoDb from "../db/mongodbQuery";
 import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
+// MOVED to a service in TAB 07: a domain module importing from a controller runs the
+// dependency the wrong way. One definition, imported by both surfaces.
+import { assertOwnBooking, loadCancellationContext } from "../services/booking/providerBookingOwnership";
 import * as notificationService from "../services/notification.service";
 import { getProviderAggregate } from "../services/customerReviewService";
 import { BookingResponseConflict } from "../services/bookingResponseConflict";
@@ -2460,19 +2463,6 @@ export const getBookingDisputeStatus = async (req: Request, res: Response) => {
  *
  * The window is evaluated against SERVER time, never a client timestamp.
  */
-const loadCancellationContext = async (bookingId: number, uid: string) => {
-  const schema = dbSchema || "";
-  const res = await dbQuery.query(
-    `SELECT bw.status AS worker_status, b.schedule
-       FROM ${schema}.booking_workers bw
-       JOIN ${schema}.bookings b ON b.id = bw.booking_id
-      WHERE bw.booking_id = $1 AND bw.worker_uid = $2
-      ORDER BY bw.id DESC LIMIT 1`,
-    [bookingId, uid]
-  );
-  return res.rowCount ? res.rows[0] : null;
-};
-
 export const getCancellationEligibility = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
@@ -2562,17 +2552,6 @@ const CANCELLATION_BLOCK_MESSAGES: Record<string, string> = {
  * theirs before touching evidence, so a guessed booking id 404s rather than
  * revealing that it exists (§54, enumeration).
  */
-const assertOwnBooking = async (bookingId: number, uid: string) => {
-  const schema = dbSchema || "";
-  const res = await dbQuery.query(
-    `SELECT status FROM ${schema}.booking_workers
-      WHERE booking_id = $1 AND worker_uid = $2
-      ORDER BY id DESC LIMIT 1`,
-    [bookingId, uid]
-  );
-  return res.rowCount ? String(res.rows[0].status ?? "") : null;
-};
-
 export const getBookingEvidence = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
@@ -2611,6 +2590,17 @@ export const getBookingEvidence = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * DELEGATED to `bookingEvidenceService.submitEvidence` (TAB 07).
+ *
+ * Wire behaviour is UNCHANGED: the same status codes, the same error codes, the
+ * same 201 carrying `approved: false`. What moved is the orchestration, so the
+ * canonical route is not a second copy of these rules (§10).
+ *
+ * The one addition is optional: a caller that supplies `clientRequestId` gets a
+ * retry collapsed onto the original file instead of a second one. Callers that
+ * do not — which is every shipped client today — behave exactly as before.
+ */
 export const uploadBookingEvidence = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
@@ -2623,75 +2613,31 @@ export const uploadBookingEvidence = async (req: Request, res: Response) => {
     if (!workerStatus) {
       return res.status(404).json({ success: false, message: "Booking not found" });
     }
-    // Evidence belongs to a visit in progress. A booking that is finished,
-    // declined or cancelled must not accept new files.
-    if (!["ACCEPTED", "EN_ROUTE", "ARRIVED", "IN_PROGRESS"].includes(workerStatus.toUpperCase())) {
-      return res.status(409).json({
-        success: false,
-        code: "NOT_ACCEPTING_EVIDENCE",
-        message: "This booking is not accepting evidence.",
-      });
-    }
 
-    const { file, requirementCode } = req.body ?? {};
-    const requirement = evidenceService.findRequirement(String(requirementCode ?? ""));
-    if (!requirement) {
-      return res.status(422).json({
-        success: false,
-        code: "UNKNOWN_REQUIREMENT",
-        message: "Unknown evidence requirement.",
-      });
-    }
-
-    const existing = await evidenceService.listEvidence(bookingId, uid);
-    if (evidenceService.countFor(requirement.code, existing) >= requirement.maxCount) {
-      return res.status(409).json({
-        success: false,
-        code: "TOO_MANY_FILES",
-        message: `You can attach at most ${requirement.maxCount} for this requirement. Remove one first.`,
-      });
-    }
-
-    // Content-based validation (LJ-08). The declared type must be allowed AND
-    // match the actual bytes.
-    const validation = validateDataUri(file, {
-      allowed: requirement.acceptedMimeTypes as readonly AllowedUploadMime[],
-      maxBytes: requirement.maxBytes,
-    });
-    if (!validation.ok) {
-      return res.status(422).json({
-        success: false,
-        code: validation.code,
-        message: validation.message,
-      });
-    }
-
-    // §18. A photo taken at a customer address carries GPS in EXIF by default;
-    // storing it would attach a precise home location to every file.
-    const cleaned = stripImageMetadata(validation.buffer, validation.mime);
-    const dataUri = `data:${validation.mime};base64,${cleaned.toString("base64")}`;
-
-    const fileUrl = await uploadFileToStorage(
-      `booking-evidence/${bookingId}`,
-      `${uid}_${requirement.code}_${Date.now()}`,
-      dataUri
-    );
-
-    const item = await evidenceService.attachEvidence({
+    const { file, requirementCode, clientRequestId } = req.body ?? {};
+    const item = await evidenceService.submitEvidence({
       bookingId,
       workerUid: uid,
-      requirement,
-      fileUrl,
-      mimeType: validation.mime,
-      bytes: cleaned.length,
+      workerStatus,
+      requirementCode: String(requirementCode ?? ""),
+      file,
+      clientRequestId: typeof clientRequestId === "string" ? clientRequestId : null,
     });
 
     // §19: attached is not approved. The client must not read 201 as accepted.
+    const { replayed, ...evidence } = item;
     return res.status(201).json({
       status: "success",
-      data: { ...item, approved: false },
+      data: { ...evidence, approved: false },
     });
-  } catch {
+  } catch (error: any) {
+    if (error?.name === "EvidenceError") {
+      return res.status(error.status).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
+    }
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };

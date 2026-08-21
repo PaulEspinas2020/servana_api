@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**140 implemented** · **1 planned** · 141 total.
+**145 implemented** · **1 planned** · 146 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -238,6 +238,7 @@ The authenticated caller, whatever their role.
 | `GET` | `/api/v1/bookings` | **live** | any signed-in | — | `BookingList` | yes | bookings |
 | `GET` | `/api/v1/bookings/:bookingId` | **live** | any signed-in | — | `Booking` | yes | bookings |
 | `GET` | `/api/v1/bookings/:bookingId/timeline` | **live** | any signed-in | — | `BookingTimeline` | yes | bookings |
+| `POST` | `/api/v1/bookings/:bookingId/cash-collected` | **live** | any signed-in | — | `CashCollectionResult` | yes | finance |
 | `POST` | `/api/v1/bookings/:bookingId/cancel` | **live** | any signed-in | `BookingActionRequest` | `BookingTransitionResult` | no | bookings |
 | `GET` | `/api/v1/bookings/:bookingId/transitions` | **live** | any signed-in | — | `BookingTransitionList` | yes | bookings |
 
@@ -277,6 +278,19 @@ A booking's operational history, voiced for the customer.
   - `GET /api/:id/timeline` — **ALIAS_TEMPORARILY** — Same handler chain; v1 is the unambiguous path.
   - `GET /api/provider/bookings/:bookingId/timeline` — **ROLE_SPECIFIC** — Genuinely role-specific: the shared builder is written from the provider's seat, where "YOU" means the provider. Same domain service, different voicing. Documented rather than merged.
 
+### `POST /api/v1/bookings/:bookingId/cash-collected`
+
+Record that cash was collected for this booking.
+
+> THE PATH was the mandate: /api/:bookingId/mark-cash-paid sits directly under /api, unlike every sibling, so a wildcard added at that level would shadow it. It now sits with /bookings/:bookingId/payment and /bookings/:bookingId/payment-intents. AUTH is `authenticated` and that is deliberate rather than lax. The legacy route is mounted on verifyAuth alone and authorizes in the handler: assertBookingAccess resolves the caller relationship to THIS booking and settlement refuses the CUSTOMER, because a customer declaring their own cash payment is not evidence of anything. Declaring `provider` would have looked stricter and would have locked ADMIN out of support-assisted recovery. The rung that matters is membership of the booking, and it is enforced where it can see which booking is being asked about. IDEMPOTENT by construction: paid_at = COALESCE(paid_at, NOW()), so a repeat reaches the same end state without moving the moment money changed hands, and the ledger event is keyed on the payment id so it is recorded once.
+
+- **Domain service** — `services/paymentService.markCashPaid`
+- **Error codes** — `BOOKING_ACCESS_DENIED`, `INTERNAL`, `NOT_FOUND`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `bookingId` (integer) bookings.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/:bookingId/mark-cash-paid` — **ALIAS_TEMPORARILY** — Mounted directly under /api, unlike every sibling. Same service; this entry gives it a path consistent with /bookings/:bookingId/payment.
+
 ### `POST /api/v1/bookings/:bookingId/cancel`
 
 Cancels the caller's own booking.
@@ -307,6 +321,10 @@ The canonical transition history: one event per state change, oldest first.
 |---|---|---|---|---|---|---|---|
 | `GET` | `/api/v1/provider/jobs` | **live** | provider (role 2/4) | — | `JobCardList` | yes | provider-jobs |
 | `GET` | `/api/v1/provider/jobs/:bookingId` | **live** | provider (role 2/4) | — | `JobCard` | yes | provider-jobs |
+| `GET` | `/api/v1/provider/jobs/:bookingId/evidence` | **live** | provider (role 2/4) | — | `JobEvidenceList` | yes | provider-jobs |
+| `POST` | `/api/v1/provider/jobs/:bookingId/evidence` | **live** | provider (role 2/4) | `JobEvidenceSubmit` | `JobEvidenceItem` | no | provider-jobs |
+| `DELETE` | `/api/v1/provider/jobs/:bookingId/evidence/:evidenceId` | **live** | provider (role 2/4) | — | `JobEvidenceRemoval` | no | provider-jobs |
+| `GET` | `/api/v1/provider/jobs/:bookingId/cancellation-eligibility` | **live** | provider (role 2/4) | — | `CancellationEligibility` | yes | provider-jobs |
 | `POST` | `/api/v1/provider/jobs/:bookingId/accept` | **live** | provider (role 2/4) | `BookingActionRequest` | `BookingTransitionResult` | no | provider-jobs |
 | `POST` | `/api/v1/provider/jobs/:bookingId/decline` | **live** | provider (role 2/4) | `BookingActionRequest` | `BookingTransitionResult` | no | provider-jobs |
 | `POST` | `/api/v1/provider/jobs/:bookingId/en-route` | **live** | provider (role 2/4) | `BookingActionRequest` | `BookingTransitionResult` | no | provider-jobs |
@@ -339,6 +357,58 @@ One job card, scoped to the authenticated provider's own assignment.
 - **Callers** — Cust Mobile — · Cust Web — · Prov Mobile ✅ · Prov Web ✅ · Admin —
 - **Legacy it replaces**
   - `GET /api/worker/job-cards/:bookingId` — **ALIAS_TEMPORARILY** — Provider Web. Same service and view function.
+
+### `GET /api/v1/provider/jobs/:bookingId/evidence`
+
+Evidence attached to this job, the requirements it answers, and what is still blocking.
+
+> Carries the REQUIREMENTS and the BLOCKING set alongside the items, so a client renders "what is still missing" from the server answer rather than deriving it. The blocking calculation is the same one the completion transition consults, so a screen cannot say ready while the POST refuses.
+
+- **Domain service** — `services/bookingEvidenceService.listEvidence + blockingRequirements`
+- **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `bookingId` (integer) bookings.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/bookings/:bookingId/evidence` — **ALIAS_TEMPORARILY** — Same service. The path moves under /provider/jobs to sit with the transitions.
+
+### `POST /api/v1/provider/jobs/:bookingId/evidence`
+
+Attach evidence to a job in progress.
+
+> THE DEFECT THIS CLOSES: attachEvidence was a plain INSERT with no idempotency key of any kind, so a provider whose upload committed and then timed out filed a SECOND photo on the retry. maxCount bounded the damage without avoiding it - the duplicate either ate a slot the provider still needed, or where maxCount is 1 the retry was refused with TOO_MANY_FILES, which reads as "your upload failed" for an upload that succeeded. Evidence is what a DISPUTE is decided on, which is why the key is required here. A replay answers 200 and a new file 201, with `replayed` on the body - neither is an error. `approved: false` is always stated: attached is not accepted (19). EXIF is stripped before storage, because a photo taken at a customer address carries GPS by default and storing it would attach a precise home location to every file.
+
+- **Domain service** — `services/bookingEvidenceService.submitEvidence`
+- **Error codes** — `BOOKING_STATE_CONFLICT`, `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `bookingId` (integer) bookings.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/bookings/:bookingId/evidence` — **ALIAS_TEMPORARILY** — SAME implementation after TAB 07 extracted it. clientRequestId is OPTIONAL there and REQUIRED here - demanding one on the legacy route would break shipped clients.
+
+### `DELETE /api/v1/provider/jobs/:bookingId/evidence/:evidenceId`
+
+Remove a piece of evidence the provider attached.
+
+> SOFT, not hard: the audit trail must survive a provider replacing a photo. Scoped by worker_uid in the UPDATE itself, so one provider cannot remove another evidence even with a guessed id - the scope is in the statement rather than in a check above it.
+
+- **Domain service** — `services/bookingEvidenceService.removeEvidence`
+- **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `bookingId` (integer) bookings.id; `evidenceId` (integer) booking_evidence.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `DELETE /api/provider/bookings/:bookingId/evidence/:evidenceId` — **ALIAS_TEMPORARILY** — Same service. Soft removal, scoped by worker uid inside the UPDATE.
+
+### `GET /api/v1/provider/jobs/:bookingId/cancellation-eligibility`
+
+May this provider cancel, and if not, why?
+
+> The verdict comes from evaluateCancellation - the SAME function the cancel transition calls - so a Cancel button and the POST behind it cannot disagree about the window. The client never calculates the rule. A race between loading this and tapping is still possible and still fine: the POST stays authoritative. The refusal carries a CODE, not only a message, which is what lets a client explain WHY a cancellation is refused instead of showing a bare error. Nothing about the policy was changed here - publishing the read was the task.
+
+- **Domain service** — `services/booking/bookingPolicies.evaluateCancellation`
+- **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `bookingId` (integer) bookings.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/bookings/:bookingId/cancellation-eligibility` — **ALIAS_TEMPORARILY** — Same policy function, same context loader. Only the path and envelope differ.
 
 ### `POST /api/v1/provider/jobs/:bookingId/accept`
 
@@ -1996,6 +2066,11 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `POST /api/v1/provider/safety/check-in` | — | — | · | · | — |
 | `GET /api/v1/provider/safety/incidents` | — | — | · | · | — |
 | `POST /api/v1/provider/safety/incidents` | — | — | · | · | — |
+| `GET /api/v1/provider/jobs/:bookingId/evidence` | — | — | · | · | — |
+| `POST /api/v1/provider/jobs/:bookingId/evidence` | — | — | · | · | — |
+| `DELETE /api/v1/provider/jobs/:bookingId/evidence/:evidenceId` | — | — | · | · | — |
+| `GET /api/v1/provider/jobs/:bookingId/cancellation-eligibility` | — | — | · | · | — |
+| `POST /api/v1/bookings/:bookingId/cash-collected` | — | — | · | · | — |
 | `GET /api/v1/notifications` | ⏳ | ⏳ | ⏳ | ✅ | · |
 | `GET /api/v1/notifications/unread-count` | ⏳ | ⏳ | ⏳ | ✅ | · |
 | `PATCH /api/v1/notifications/:key/read` | ⏳ | ⏳ | ⏳ | ✅ | · |

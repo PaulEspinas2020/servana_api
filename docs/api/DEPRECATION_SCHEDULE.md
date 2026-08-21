@@ -34,15 +34,15 @@ installed.
 
 | | |
 | --- | --- |
-| Legacy mappings tracked | 153 |
-| In the retirement plan | 134 |
+| Legacy mappings tracked | 158 |
+| In the retirement plan | 139 |
 | `KEEP` (not a duplicate of anything) | 6 |
 | `ROLE_SPECIFIC` (different auth/action, same service) | 13 |
-| `ALIAS_TEMPORARILY` | 121 |
+| `ALIAS_TEMPORARILY` | 126 |
 | `CANONICALIZE` | 12 |
 | `RETIRE` | 1 |
 | **Retirable today** | **0** |
-| Blocked | 134 |
+| Blocked | 139 |
 
 Nothing is retirable today, and the reason is the same for all of them: no client has migrated, because the v1 namespace is not deployed. The schedule is the order things become retirable, not a queue of pending deletions.
 
@@ -50,6 +50,7 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 
 | Legacy route | Disposition | Canonical successor | Blocked by | Window |
 | --- | --- | --- | --- | --- |
+| `POST /api/:bookingId/mark-cash-paid` | ALIAS_TEMPORARILY | `bookings.payments.cashCollected` | Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/:bookingId/paymongo/create` | ALIAS_TEMPORARILY | `bookings.payments.intent` | Customer Mobile, Customer Web, Admin Web have not migrated | 90d |
 | `POST /api/:bookingId/resend-otp` | ALIAS_TEMPORARILY | `bookings.otp.request` | Customer Mobile, Customer Web, Admin Web have not migrated | 90d |
 | `GET /api/:id` | ALIAS_TEMPORARILY | `bookings.get` | Customer Mobile, Customer Web, Provider Mobile, Provider Web, Admin Web have not migrated | 90d |
@@ -102,6 +103,10 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `GET /api/provider/account-state` | ALIAS_TEMPORARILY | `provider.activation.get` | Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/provider/activation/policy-acknowledgement` | ALIAS_TEMPORARILY | `provider.activation.acknowledgePolicy` | Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/provider/bookings/:bookingId/cancel` | ALIAS_TEMPORARILY | `provider.jobs.cancel` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `GET /api/provider/bookings/:bookingId/cancellation-eligibility` | ALIAS_TEMPORARILY | `provider.jobs.cancellationEligibility` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/provider/bookings/:bookingId/evidence` | ALIAS_TEMPORARILY | `provider.jobs.evidence.list` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/bookings/:bookingId/evidence` | ALIAS_TEMPORARILY | `provider.jobs.evidence.create` | Provider Mobile, Provider Web have not migrated | 90d |
+| `DELETE /api/provider/bookings/:bookingId/evidence/:evidenceId` | ALIAS_TEMPORARILY | `provider.jobs.evidence.delete` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/certifications` | ALIAS_TEMPORARILY | `provider.certifications.list` | Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/provider/certifications` | ALIAS_TEMPORARILY | `provider.certifications.create` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/compliance` | ALIAS_TEMPORARILY | `provider.activation.get` | Provider Mobile, Provider Web have not migrated | 90d |

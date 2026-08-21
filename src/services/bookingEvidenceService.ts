@@ -20,6 +20,9 @@
  * uploaded files.
  */
 import dbQuery from "../db/dbQuery";
+import { uploadFileToStorage } from "../helpers/firebaseStorageUploader";
+import { validateDataUri, AllowedUploadMime } from "../helpers/fileSignature";
+import { stripImageMetadata } from "../helpers/stripImageMetadata";
 import { db } from "../config";
 
 const dbSchema = db.schema;
@@ -185,6 +188,46 @@ export async function listEvidence(
   }));
 }
 
+/** The projection, in one place, so a fresh insert and a replay read identically. */
+const toEvidenceItem = (r: any): EvidenceItem => ({
+  id: String(r.id),
+  requirementCode: r.requirement_code,
+  stage: r.stage,
+  state: r.state,
+  mimeType: r.mime_type,
+  bytes: Number(r.bytes),
+  createdAt: r.created_at ? new Date(r.created_at).toISOString() : null,
+  reviewNote: r.review_note ?? null,
+});
+
+/**
+ * Attach evidence, or return what a previous attempt already attached.
+ *
+ * ## The defect this closes
+ *
+ * This was a plain INSERT with no idempotency key. A provider on a doorstep
+ * whose upload committed and then timed out retries, and the retry filed a
+ * SECOND piece of evidence against the same requirement.
+ *
+ * `requirement.maxCount` bounded the damage without avoiding it: the duplicate
+ * either consumed a slot the provider still needed, or — where maxCount is 1 —
+ * the retry was refused with TOO_MANY_FILES, which reads as "your upload
+ * failed" for an upload that succeeded. Evidence is what a dispute is decided
+ * on, so both outcomes are wrong.
+ *
+ * ## The mechanism
+ *
+ * `clientRequestId` is generated on the device BEFORE the first attempt and
+ * reused by every retry of it. `ON CONFLICT DO NOTHING` against the partial
+ * unique index from migration 043 makes the second insert a no-op, and the
+ * original row is then re-read and returned. The caller cannot tell a replay
+ * from a first write except by `replayed`, which is the point.
+ *
+ * OPTIONAL rather than required, deliberately. The legacy route has shipped
+ * without it and five clients call it; demanding one would break them. A write
+ * that carries no key behaves exactly as before — which is also why the index
+ * is partial.
+ */
 export async function attachEvidence(params: {
   bookingId: number;
   workerUid: string;
@@ -192,11 +235,15 @@ export async function attachEvidence(params: {
   fileUrl: string;
   mimeType: string;
   bytes: number;
-}): Promise<EvidenceItem> {
+  clientRequestId?: string | null;
+}): Promise<EvidenceItem & { replayed: boolean }> {
+  const clientRequestId = params.clientRequestId?.trim() || null;
+
   const res = await dbQuery.query(
     `INSERT INTO ${dbSchema}.booking_evidence
-       (booking_id, worker_uid, requirement_code, stage, file_url, mime_type, bytes, state)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'UPLOADED')
+       (booking_id, worker_uid, requirement_code, stage, file_url, mime_type, bytes, state, client_request_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'UPLOADED', $8)
+     ON CONFLICT DO NOTHING
      RETURNING id, requirement_code, stage, state, mime_type, bytes, created_at, review_note`,
     [
       params.bookingId,
@@ -206,19 +253,59 @@ export async function attachEvidence(params: {
       params.fileUrl,
       params.mimeType,
       params.bytes,
+      clientRequestId,
     ]
   );
-  const r = res.rows[0];
-  return {
-    id: String(r.id),
-    requirementCode: r.requirement_code,
-    stage: r.stage,
-    state: r.state,
-    mimeType: r.mime_type,
-    bytes: Number(r.bytes),
-    createdAt: r.created_at ? new Date(r.created_at).toISOString() : null,
-    reviewNote: r.review_note ?? null,
-  };
+
+  if (res.rowCount) return { ...toEvidenceItem(res.rows[0]), replayed: false };
+
+  /**
+   * The insert was collapsed. That can only happen when a key was supplied and
+   * a row already carries it, so re-read and return the ORIGINAL.
+   *
+   * Without a key there is no conflict target and nothing to collapse, so
+   * reaching here with a null key means something else refused the write — and
+   * inventing a success for it would be worse than the error.
+   */
+  if (!clientRequestId) {
+    throw new Error('Evidence could not be stored.');
+  }
+
+  const existing = await dbQuery.query(
+    `SELECT id, requirement_code, stage, state, mime_type, bytes, created_at, review_note
+       FROM ${dbSchema}.booking_evidence
+      WHERE booking_id = $1 AND worker_uid = $2 AND client_request_id = $3
+      LIMIT 1`,
+    [params.bookingId, params.workerUid, clientRequestId]
+  );
+  if (!existing.rowCount) throw new Error('Evidence could not be stored.');
+  return { ...toEvidenceItem(existing.rows[0]), replayed: true };
+}
+
+/**
+ * What a previous attempt filed under this key, or null.
+ *
+ * Read BEFORE the expensive part of an upload — the base64 decode, the
+ * magic-byte validation, the EXIF strip and the storage write. A retry that has
+ * already succeeded should not pay for all of that again, and more importantly
+ * should not upload a second copy of the bytes to storage only for the row to
+ * be collapsed afterwards.
+ */
+export async function findEvidenceByClientRequestId(
+  bookingId: number,
+  workerUid: string,
+  clientRequestId: string,
+): Promise<EvidenceItem | null> {
+  const key = clientRequestId?.trim();
+  if (!key) return null;
+  const res = await dbQuery.query(
+    `SELECT id, requirement_code, stage, state, mime_type, bytes, created_at, review_note
+       FROM ${dbSchema}.booking_evidence
+      WHERE booking_id = $1 AND worker_uid = $2 AND client_request_id = $3
+      LIMIT 1`,
+    [bookingId, workerUid, key]
+  );
+  return res.rowCount ? toEvidenceItem(res.rows[0]) : null;
 }
 
 /**
@@ -245,4 +332,122 @@ export async function removeEvidence(
 /** How many live files a requirement already holds — enforces `maxCount`. */
 export function countFor(code: string, items: EvidenceItem[]): number {
   return items.filter((i) => i.requirementCode === code).length;
+}
+
+
+/**
+ * The states a booking accepts evidence in.
+ *
+ * Evidence belongs to a visit IN PROGRESS. A booking that is finished, declined
+ * or cancelled must not accept new files — otherwise a provider could attach
+ * "proof" to a job after the fact, which is exactly what a dispute must not be
+ * decided on.
+ */
+export const EVIDENCE_ACCEPTING_STATES = Object.freeze([
+  'ACCEPTED', 'EN_ROUTE', 'ARRIVED', 'IN_PROGRESS',
+]);
+
+export class EvidenceError extends Error {
+  constructor(
+    readonly code:
+      | 'NOT_ACCEPTING_EVIDENCE'
+      | 'UNKNOWN_REQUIREMENT'
+      | 'TOO_MANY_FILES'
+      | 'EVIDENCE_FILE_INVALID',
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'EvidenceError';
+  }
+}
+
+export interface SubmitEvidenceInput {
+  bookingId: number;
+  workerUid: string;
+  /** The worker's status on this booking, already established by the caller. */
+  workerStatus: string;
+  requirementCode: string;
+  /** A data URI. Validated against the requirement's MIME allow-list by MAGIC BYTES. */
+  file: unknown;
+  clientRequestId?: string | null;
+}
+
+/**
+ * The whole evidence upload, as ONE implementation.
+ *
+ * Extracted from `providerController.uploadBookingEvidence` so the canonical
+ * route does not become a second copy of these rules (§10). Every check that
+ * was there is here, in the same order, with the same codes.
+ *
+ * ## The replay check comes FIRST
+ *
+ * Before the base64 decode, the magic-byte validation, the EXIF strip and the
+ * storage write. A retry that already succeeded must not pay for any of that
+ * again, and — the part that matters — must not upload a second copy of the
+ * bytes to storage only for the database row to be collapsed afterwards. That
+ * would leave an orphaned object nobody references and nobody deletes.
+ *
+ * ## The EXIF strip is not optional
+ *
+ * A photo taken at a customer's address carries GPS in EXIF by default. Storing
+ * it would attach a precise home location to every file, so the bytes are
+ * rewritten before they reach storage rather than after.
+ */
+export async function submitEvidence(input: SubmitEvidenceInput): Promise<EvidenceItem & { replayed: boolean }> {
+  if (!EVIDENCE_ACCEPTING_STATES.includes(String(input.workerStatus).toUpperCase())) {
+    throw new EvidenceError(
+      'NOT_ACCEPTING_EVIDENCE',
+      'This booking is not accepting evidence.',
+      409,
+    );
+  }
+
+  const requirement = findRequirement(String(input.requirementCode ?? ''));
+  if (!requirement) {
+    throw new EvidenceError('UNKNOWN_REQUIREMENT', 'Unknown evidence requirement.', 422);
+  }
+
+  // Replay FIRST — see the docblock.
+  const key = input.clientRequestId?.trim() || null;
+  if (key) {
+    const already = await findEvidenceByClientRequestId(input.bookingId, input.workerUid, key);
+    if (already) return { ...already, replayed: true };
+  }
+
+  const existing = await listEvidence(input.bookingId, input.workerUid);
+  if (countFor(requirement.code, existing) >= requirement.maxCount) {
+    throw new EvidenceError(
+      'TOO_MANY_FILES',
+      `You can attach at most ${requirement.maxCount} for this requirement. Remove one first.`,
+      409,
+    );
+  }
+
+  const validation = validateDataUri(input.file, {
+    allowed: requirement.acceptedMimeTypes as readonly AllowedUploadMime[],
+    maxBytes: requirement.maxBytes,
+  });
+  if (!validation.ok) {
+    throw new EvidenceError('EVIDENCE_FILE_INVALID', validation.message, 422);
+  }
+
+  const cleaned = stripImageMetadata(validation.buffer, validation.mime);
+  const dataUri = `data:${validation.mime};base64,${cleaned.toString('base64')}`;
+
+  const fileUrl = await uploadFileToStorage(
+    `booking-evidence/${input.bookingId}`,
+    `${input.workerUid}_${requirement.code}_${Date.now()}`,
+    dataUri,
+  );
+
+  return attachEvidence({
+    bookingId: input.bookingId,
+    workerUid: input.workerUid,
+    requirement,
+    fileUrl,
+    mimeType: validation.mime,
+    bytes: cleaned.length,
+    clientRequestId: key,
+  });
 }

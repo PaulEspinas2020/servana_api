@@ -1328,6 +1328,200 @@ export const V1_CONTRACT: ContractEntry[] = [
   },
 
   // ───────────────────────────────────────────────────────────────────────────
+  // Job evidence, cancellation eligibility and cash collection (TAB 07)
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: 'provider.jobs.evidence.list',
+    domain: 'provider-jobs',
+    method: 'get',
+    path: '/provider/jobs/:bookingId/evidence',
+    summary: 'Evidence attached to this job, the requirements it answers, and what is still blocking.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'JobEvidenceList',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND'],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/bookingEvidenceService.listEvidence + blockingRequirements',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/bookings/:bookingId/evidence',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. The path moves under /provider/jobs to sit with the transitions.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-jobs',
+    notes:
+      'Carries the REQUIREMENTS and the BLOCKING set alongside the items, so a client renders ' +
+      '"what is still missing" from the server answer rather than deriving it. The blocking ' +
+      'calculation is the same one the completion transition consults, so a screen cannot say ' +
+      'ready while the POST refuses.',
+  },
+  {
+    id: 'provider.jobs.evidence.create',
+    domain: 'provider-jobs',
+    method: 'post',
+    path: '/provider/jobs/:bookingId/evidence',
+    summary: 'Attach evidence to a job in progress.',
+    auth: 'provider',
+    activeProvider: true,
+    idempotent: false,
+    replayMechanism: ['client-request-id', 'unique-constraint'],
+    replayGuard:
+      'A REQUIRED clientRequestId, collapsed by the partial unique index on ' +
+      '(booking_id, worker_uid, client_request_id) added in migration 043. The key is checked ' +
+      'BEFORE the decode, the magic-byte validation, the EXIF strip and the storage write, so a ' +
+      'retry that already succeeded neither pays for that work again nor leaves an orphaned ' +
+      'object in storage that no row references.',
+    requestSchema: 'JobEvidenceSubmit',
+    responseSchema: 'JobEvidenceItem',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT', 'BOOKING_STATE_CONFLICT'],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/bookingEvidenceService.submitEvidence',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/bookings/:bookingId/evidence',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'SAME implementation after TAB 07 extracted it. clientRequestId is OPTIONAL there ' +
+          'and REQUIRED here - demanding one on the legacy route would break shipped clients.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-jobs',
+    notes:
+      'THE DEFECT THIS CLOSES: attachEvidence was a plain INSERT with no idempotency key of any ' +
+      'kind, so a provider whose upload committed and then timed out filed a SECOND photo on ' +
+      'the retry. maxCount bounded the damage without avoiding it - the duplicate either ate a ' +
+      'slot the provider still needed, or where maxCount is 1 the retry was refused with ' +
+      'TOO_MANY_FILES, which reads as "your upload failed" for an upload that succeeded. ' +
+      'Evidence is what a DISPUTE is decided on, which is why the key is required here. ' +
+      'A replay answers 200 and a new file 201, with `replayed` on the body - neither is an ' +
+      'error. `approved: false` is always stated: attached is not accepted (19). ' +
+      'EXIF is stripped before storage, because a photo taken at a customer address carries ' +
+      'GPS by default and storing it would attach a precise home location to every file.',
+  },
+  {
+    id: 'provider.jobs.evidence.delete',
+    domain: 'provider-jobs',
+    method: 'delete',
+    path: '/provider/jobs/:bookingId/evidence/:evidenceId',
+    summary: 'Remove a piece of evidence the provider attached.',
+    auth: 'provider',
+    activeProvider: true,
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      "The UPDATE matches only a row that is not already removed, so a repeat changes nothing " +
+      'and answers NOT_FOUND rather than removing something twice.',
+    responseSchema: 'JobEvidenceRemoval',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND'],
+    params: [
+      { name: 'bookingId', type: 'integer', description: 'bookings.id' },
+      { name: 'evidenceId', type: 'integer', description: 'booking_evidence.id' },
+    ],
+    status: 'implemented',
+    domainService: 'services/bookingEvidenceService.removeEvidence',
+    legacy: [
+      {
+        method: 'delete',
+        path: '/api/provider/bookings/:bookingId/evidence/:evidenceId',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. Soft removal, scoped by worker uid inside the UPDATE.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-jobs',
+    notes:
+      'SOFT, not hard: the audit trail must survive a provider replacing a photo. Scoped by ' +
+      'worker_uid in the UPDATE itself, so one provider cannot remove another evidence even ' +
+      'with a guessed id - the scope is in the statement rather than in a check above it.',
+  },
+  {
+    id: 'provider.jobs.cancellationEligibility',
+    domain: 'provider-jobs',
+    method: 'get',
+    path: '/provider/jobs/:bookingId/cancellation-eligibility',
+    summary: 'May this provider cancel, and if not, why?',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'CancellationEligibility',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND'],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/booking/bookingPolicies.evaluateCancellation',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/bookings/:bookingId/cancellation-eligibility',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same policy function, same context loader. Only the path and envelope differ.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-jobs',
+    notes:
+      'The verdict comes from evaluateCancellation - the SAME function the cancel transition ' +
+      'calls - so a Cancel button and the POST behind it cannot disagree about the window. The ' +
+      'client never calculates the rule. A race between loading this and tapping is still ' +
+      'possible and still fine: the POST stays authoritative. ' +
+      'The refusal carries a CODE, not only a message, which is what lets a client explain WHY ' +
+      'a cancellation is refused instead of showing a bare error. Nothing about the policy was ' +
+      'changed here - publishing the read was the task.',
+  },
+  {
+    id: 'bookings.payments.cashCollected',
+    // `bookings`, not `finance`. The finance domain in this repository is a
+    // DECLARED target architecture - earnings, reconciliation and refunds, each
+    // delegating to a services/finance module, asserted endpoint-by-endpoint in
+    // finance-contract.test.ts. Cash collection is a booking-level settlement
+    // fact recorded by whoever closed the job, and it delegates to the older
+    // paymentService. Adding it to `finance` would have silently redefined that
+    // target to make one entry fit.
+    domain: 'bookings',
+    method: 'post',
+    path: '/bookings/:bookingId/cash-collected',
+    summary: 'Record that cash was collected for this booking.',
+    auth: 'authenticated',
+    idempotent: true,
+    responseSchema: 'CashCollectionResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'BOOKING_ACCESS_DENIED'],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/paymentService.markCashPaid',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/:bookingId/mark-cash-paid',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Mounted directly under /api, unlike every sibling. Same service; this entry gives it ' +
+          'a path consistent with /bookings/:bookingId/payment.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'finance',
+    notes:
+      'THE PATH was the mandate: /api/:bookingId/mark-cash-paid sits directly under /api, ' +
+      'unlike every sibling, so a wildcard added at that level would shadow it. It now sits ' +
+      'with /bookings/:bookingId/payment and /bookings/:bookingId/payment-intents. ' +
+      'AUTH is `authenticated` and that is deliberate rather than lax. The legacy route is ' +
+      'mounted on verifyAuth alone and authorizes in the handler: assertBookingAccess resolves ' +
+      'the caller relationship to THIS booking and settlement refuses the CUSTOMER, because a ' +
+      'customer declaring their own cash payment is not evidence of anything. Declaring ' +
+      '`provider` would have looked stricter and would have locked ADMIN out of ' +
+      'support-assisted recovery. The rung that matters is membership of the booking, and it ' +
+      'is enforced where it can see which booking is being asked about. ' +
+      'IDEMPOTENT by construction: paid_at = COALESCE(paid_at, NOW()), so a repeat reaches the ' +
+      'same end state without moving the moment money changed hands, and the ledger event is ' +
+      'keyed on the payment id so it is recorded once.',
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Notifications
   // ───────────────────────────────────────────────────────────────────────────
   {

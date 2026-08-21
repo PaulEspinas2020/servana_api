@@ -200,6 +200,13 @@ describe('no file may stage provider PII on its own', () => {
     'controllers/providerController.ts':
       'getProviderBookingDetail consumes hasFullDisclosure. Asserted below to hold '
       + 'no list of its own.',
+    'services/bookingEvidenceService.ts':
+      'Which assignment statuses still ACCEPT evidence (TAB 07). A write GATE, not '
+      + 'a disclosure decision: it returns no customer field of any kind, and the '
+      + 'list exists so proof cannot be attached to a job that is already finished, '
+      + 'declined or cancelled. It moved here from providerController when the '
+      + 'upload orchestration was extracted, so it is the same statement of one rule '
+      + 'in a better place rather than a second one.',
   };
 
   it('every file naming the operational set is a reviewed consumer', () => {

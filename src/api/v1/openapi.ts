@@ -3096,6 +3096,140 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  JobEvidenceItem: {
+    type: 'object',
+    required: ['id', 'requirementCode', 'stage', 'state', 'approved'],
+    description:
+      'One attached file, as STATE. No storage path and no URL travels here. ' +
+      '`approved` is ALWAYS false on write: attached is not accepted, and a client must not ' +
+      'read a 201 as a review decision.',
+    properties: {
+      id: { type: 'string' },
+      requirementCode: { type: 'string' },
+      stage: { type: 'string', enum: ['BEFORE_SERVICE', 'AFTER_SERVICE'] },
+      state: { type: 'string' },
+      mimeType: { type: ['string', 'null'] },
+      bytes: { type: 'integer' },
+      createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      reviewNote: { type: ['string', 'null'] },
+      approved: { type: 'boolean' },
+      replayed: {
+        type: 'boolean',
+        description:
+          'True when this call matched a file already attached under the same clientRequestId. ' +
+          'A replay answers 200 and a new file 201; NEITHER is an error.',
+      },
+    },
+  },
+
+  JobEvidenceList: {
+    type: 'object',
+    required: ['requirements', 'items', 'blocking'],
+    description:
+      'The requirements, what has been attached, and what is still BLOCKING - so a client ' +
+      'renders "what is missing" from the server answer rather than deriving it and disagreeing.',
+    properties: {
+      requirements: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            code: { type: 'string' },
+            stage: { type: 'string', enum: ['BEFORE_SERVICE', 'AFTER_SERVICE'] },
+            label: { type: 'string' },
+            required: { type: 'boolean' },
+            maxCount: { type: 'integer' },
+            maxBytes: { type: 'integer' },
+            acceptedMimeTypes: { type: 'array', items: { type: 'string' } },
+          },
+        },
+      },
+      items: { type: 'array', items: { $ref: '#/components/schemas/JobEvidenceItem' } },
+      blocking: {
+        type: 'object',
+        description:
+          'Requirements not yet satisfied, per stage. Computed by the SAME function the ' +
+          'completion transition consults, so this screen cannot say ready while the POST refuses.',
+        properties: {
+          BEFORE_SERVICE: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          AFTER_SERVICE: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        },
+      },
+    },
+  },
+
+  JobEvidenceSubmit: {
+    type: 'object',
+    required: ['requirementCode', 'file', 'clientRequestId'],
+    additionalProperties: false,
+    description:
+      'The file is a DATA URI, validated against the requirement MIME allow-list by MAGIC ' +
+      'BYTES rather than by its declared type. Image metadata is stripped before storage: a ' +
+      'photo taken at a customer address carries GPS in EXIF by default.',
+    properties: {
+      requirementCode: { type: 'string', maxLength: 60 },
+      file: {
+        type: 'string',
+        description: 'data:<mime>;base64,<payload>. Size and type are bounded per requirement.',
+      },
+      clientRequestId: {
+        type: 'string',
+        minLength: 16,
+        maxLength: 128,
+        description:
+          'REQUIRED here, unlike on the legacy route. Generate it BEFORE the first attempt and ' +
+          'reuse it for every retry: it is what stops a doorstep retry filing a second photo, ' +
+          'and evidence is what a dispute is decided on.',
+      },
+    },
+  },
+
+  JobEvidenceRemoval: {
+    type: 'object',
+    required: ['evidenceId', 'removed'],
+    description: 'SOFT removal - the audit trail survives a provider replacing a photo.',
+    properties: {
+      evidenceId: { type: 'string' },
+      removed: { type: 'boolean' },
+    },
+  },
+
+  CancellationEligibility: {
+    type: 'object',
+    required: ['bookingId'],
+    additionalProperties: true,
+    description:
+      'Whether this provider may cancel, and WHY NOT. The verdict comes from the same policy ' +
+      'function the cancel transition calls, so the button and the POST behind it cannot ' +
+      'disagree. Branch on the CODE, never on the message - the message is for a human.',
+    properties: {
+      bookingId: { type: 'integer' },
+      allowed: { type: 'boolean' },
+      code: {
+        type: 'string',
+        description:
+          'The reason, as something a client can branch on. This is what lets a screen explain ' +
+          'a refusal instead of showing a bare error.',
+      },
+      reason: { type: ['string', 'null'], description: 'Human-readable. Not a stable interface.' },
+    },
+  },
+
+  CashCollectionResult: {
+    type: 'object',
+    required: ['bookingId', 'status'],
+    description:
+      'IDEMPOTENT: paid_at is COALESCE(paid_at, NOW()), so a repeat reaches the same end state ' +
+      'without moving the moment money changed hands, and the ledger event is keyed on the ' +
+      'payment id so it is recorded once.',
+    properties: {
+      bookingId: { type: 'integer' },
+      status: { type: 'string' },
+      method: { type: 'string' },
+      paidAt: { type: ['string', 'null'], format: 'date-time' },
+    },
+  },
+
   ProviderActivation: {
     type: 'object',
     required: [

@@ -15,13 +15,13 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 140 |
+| Mounted endpoints | 145 |
 | `public` | 22 |
-| `authenticated` | 60 |
-| `provider` | 52 |
+| `authenticated` | 61 |
+| `provider` | 56 |
 | `admin` | 6 |
-| Object-scoped | 43 |
-| Object-scoped WITH an ownership rule | 43 |
+| Object-scoped | 48 |
+| Object-scoped WITH an ownership rule | 48 |
 | **Unguarded** | **0** |
 
 ## 2. Role access, by declared mode
@@ -156,6 +156,7 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `bookings.otp.request` | POST /bookings/:bookingId/otp/request | `authenticated` | · ● ● ● | ✔ bookingId |
 | `bookings.otp.status` | GET /bookings/:bookingId/otp/status | `authenticated` | · ● ● ● | ✔ bookingId |
 | `bookings.otp.verify` | POST /bookings/:bookingId/otp/verify | `authenticated` | · ● ● ● | ✔ bookingId |
+| `bookings.payments.cashCollected` | POST /bookings/:bookingId/cash-collected | `authenticated` | · ● ● ● | ✔ bookingId |
 | `bookings.payments.get` | GET /bookings/:bookingId/payment | `authenticated` | · ● ● ● | ✔ bookingId |
 | `bookings.payments.intent` | POST /bookings/:bookingId/payment-intents | `authenticated` | · ● ● ● | ✔ bookingId |
 | `bookings.refunds.create` | POST /bookings/:bookingId/refunds | `authenticated` | · ● ● ● | ✔ bookingId |
@@ -233,9 +234,13 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `provider.jobs.accept` | POST /provider/jobs/:bookingId/accept | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.arrived` | POST /provider/jobs/:bookingId/arrived | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.cancel` | POST /provider/jobs/:bookingId/cancel | `provider` | · · ● · | ✔ bookingId |
+| `provider.jobs.cancellationEligibility` | GET /provider/jobs/:bookingId/cancellation-eligibility | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.complete` | POST /provider/jobs/:bookingId/complete | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.decline` | POST /provider/jobs/:bookingId/decline | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.enroute` | POST /provider/jobs/:bookingId/en-route | `provider` | · · ● · | ✔ bookingId |
+| `provider.jobs.evidence.create` | POST /provider/jobs/:bookingId/evidence | `provider` | · · ● · | ✔ bookingId |
+| `provider.jobs.evidence.delete` | DELETE /provider/jobs/:bookingId/evidence/:evidenceId | `provider` | · · ● · | ✔ bookingId |
+| `provider.jobs.evidence.list` | GET /provider/jobs/:bookingId/evidence | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.get` | GET /provider/jobs/:bookingId | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.list` | GET /provider/jobs | `provider` | · · ● · | — |
 | `provider.jobs.start` | POST /provider/jobs/:bookingId/start | `provider` | · · ● · | ✔ bookingId |
@@ -294,8 +299,8 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-71 of 140 endpoints are probeable; the other
-69 are writes and are never probed, because a POST to
+73 of 145 endpoints are probeable; the other
+72 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.
 

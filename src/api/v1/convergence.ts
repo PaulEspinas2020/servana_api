@@ -336,6 +336,56 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'toProviderProjection / toAdminProjection), not different truths.',
   },
   {
+    key: 'jobEvidence',
+    title: 'Prove the work happened',
+    source: 'api/v1/convergence (core)',
+    contractIds: [
+      'provider.jobs.evidence.create',
+      'provider.jobs.evidence.delete',
+      'provider.jobs.evidence.list',
+    ],
+    domainModule: 'services/bookingEvidenceService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split: the ASSIGNED provider only, scoped by worker_uid inside every statement '
+      + 'rather than by a check above it. Held apart from settlement and from cancellation '
+      + 'eligibility because the three answer to three different services, and a capability '
+      + 'spanning several is one that cannot be retired or reasoned about as a unit — which is '
+      + 'exactly what cross-platform-convergence refused when this was first declared as one. '
+      + 'Evidence is what a DISPUTE is decided on, which is why the canonical write requires a '
+      + 'replay key that the legacy route only accepts optionally.',
+  },
+  {
+    key: 'jobCancellationEligibility',
+    title: 'Find out whether I may cancel, and why not',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['provider.jobs.cancellationEligibility'],
+    domainModule: 'services/booking/bookingPolicies',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split. A READ of the same policy function the cancel transition itself calls, '
+      + 'so a Cancel button and the POST behind it cannot disagree about the window and the '
+      + 'client never calculates the rule. Separate from the transition capability because it '
+      + 'grants nothing and changes nothing: it exists so a refusal can be EXPLAINED before the '
+      + 'provider commits to the action, rather than arriving as a bare error afterwards.',
+  },
+  {
+    key: 'bookingCashSettlement',
+    title: 'Record that cash changed hands',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['bookings.payments.cashCollected'],
+    domainModule: 'services/paymentService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb', 'admin'] as ClientSurface[]),
+    roleSplitRationale:
+      'ROLE-SPLIT by MEMBERSHIP rather than by role name, and that is the whole design. '
+      + 'Authorization resolves the caller relationship to THIS booking and then refuses the '
+      + 'CUSTOMER - a customer declaring their own cash payment is not evidence of anything - '
+      + 'while admitting the assigned provider and admin, the latter for support-assisted '
+      + 'recovery. Declaring a provider-only role would have looked stricter and locked admin '
+      + 'out of that path. Idempotent by construction: paid_at is COALESCE(paid_at, NOW()), so '
+      + 'a repeat never moves the moment money changed hands.',
+  },
+  {
     key: 'providerPresenceAndSafety',
     title: 'Say whether I am working, where I am, and that I am safe',
     source: 'api/v1/convergence (core)',

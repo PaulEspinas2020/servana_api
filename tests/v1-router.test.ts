@@ -860,6 +860,41 @@ jest.mock('../src/services/providerSafetyService', () => {
   };
 });
 
+/**
+ * TAB 07. Evidence, cancellation eligibility and cash settlement all reach the
+ * database and object storage. Mocked at the SERVICE — the guarantees they
+ * encode (a retried upload returns the original, a customer cannot settle) are
+ * asserted in `tests/provider-evidence-cash-v1.test.ts`.
+ */
+jest.mock('../src/services/booking/providerBookingOwnership', () => ({
+  __esModule: true,
+  assertOwnBooking: jest.fn().mockResolvedValue('ACCEPTED'),
+  loadCancellationContext: jest.fn().mockResolvedValue({
+    worker_status: 'ACCEPTED', schedule: '2026-09-01T02:00:00.000Z',
+  }),
+}));
+
+jest.mock('../src/services/bookingEvidenceService', () => {
+  const actual = jest.requireActual('../src/services/bookingEvidenceService');
+  return {
+    ...actual,
+    listEvidence: jest.fn().mockResolvedValue([]),
+    removeEvidence: jest.fn().mockResolvedValue(true),
+    submitEvidence: jest.fn().mockResolvedValue({
+      id: '7', requirementCode: 'BEFORE_PHOTO', stage: 'BEFORE_SERVICE',
+      state: 'UPLOADED', mimeType: 'image/png', bytes: 3,
+      createdAt: '2026-08-21T00:00:00.000Z', reviewNote: null, replayed: false,
+    }),
+  };
+});
+
+jest.mock('../src/services/paymentService', () => ({
+  __esModule: true,
+  markCashPaid: jest.fn().mockResolvedValue({
+    status: 'PAID', method: 'CASH', paid_at: '2026-08-21T00:00:00.000Z',
+  }),
+}));
+
 jest.mock('../src/services/providerAutoOnlineEngine', () => ({
   // Fire-and-forget on the upload and delete paths. Mocked so the router suite
   // does not reach the real engine; that it RUNS at all is asserted in
@@ -1200,6 +1235,26 @@ describe('every implemented contract entry is reachable at its declared path', (
       call('GET', '/api/v1/provider/services/overview', { role: 'provider' }),
     'provider.presence.get': () =>
       call('GET', '/api/v1/provider/presence', { role: 'provider' }),
+    'provider.jobs.evidence.list': () =>
+      call('GET', '/api/v1/provider/jobs/4242/evidence', { role: 'provider' }),
+    'provider.jobs.evidence.create': () =>
+      call('POST', '/api/v1/provider/jobs/4242/evidence', {
+        role: 'provider',
+        body: {
+          requirementCode: 'BEFORE_PHOTO',
+          file: 'data:image/png;base64,AAAA',
+          clientRequestId: 'client-request-id-000001',
+        },
+      }),
+    'provider.jobs.evidence.delete': () =>
+      call('DELETE', '/api/v1/provider/jobs/4242/evidence/7', { role: 'provider' }),
+    'provider.jobs.cancellationEligibility': () =>
+      call('GET', '/api/v1/provider/jobs/4242/cancellation-eligibility', { role: 'provider' }),
+    'bookings.payments.cashCollected': () =>
+      // Booking 8 is the fixture whose caller is the PROVIDER. Any other id
+      // resolves to 'customer', and this route refuses a customer — which is
+      // the authorization working, not a fixture problem.
+      call('POST', '/api/v1/bookings/8/cash-collected', { role: 'provider' }),
     'provider.presence.goOnline': () =>
       call('POST', '/api/v1/provider/presence/online', {
         role: 'provider', body: { latitude: 14.5547, longitude: 121.0245 },

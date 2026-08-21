@@ -14,7 +14,7 @@
 > [`CROSS_CLIENT_MIGRATION_PLAN.md`](CROSS_CLIENT_MIGRATION_PLAN.md), which is
 > hand-written because an argument is not derivable. This is what each client
 > actually has to change, and it is generated because a hand-maintained list of
-> 140 endpoints across five clients is stale the day after it is written.
+> 145 endpoints across five clients is stale the day after it is written.
 
 ## How to read this
 
@@ -87,11 +87,11 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 45 |
+| Capabilities that apply | 48 |
 | Already on canonical | 22 |
 | Still on a legacy route | 1 |
 | Partially migrated | 8 |
-| No equivalent called today | 14 |
+| No equivalent called today | 17 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
@@ -101,8 +101,10 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Change the verified email or mobile my account recovers through | planned | `POST /api/provider/contact-changes`, `POST /api/provider/contact-changes/confirm` | `POST /api/v1/provider/contact-changes/confirm`, `POST /api/v1/provider/contact-changes` |
 | Decide what work I am offered | planned | `DELETE /api/worker/service-applications/:applicationId`, `GET /api/worker/service-applications`, `GET /api/worker/service-applications/:applicationId`, `GET /api/worker/services-overview`, `GET /api/worker/services/:serviceId/eligibility`, `PATCH /api/worker/services/:serviceId/pause`, `PATCH /api/worker/services/:serviceId/reactivate`, `POST /api/worker/service-applications`, `POST /api/worker/service-applications/:applicationId/resubmit` | `POST /api/v1/provider/service-applications`, `GET /api/v1/provider/service-applications/:applicationId`, `GET /api/v1/provider/service-applications`, `POST /api/v1/provider/service-applications/:applicationId/resubmit`, `DELETE /api/v1/provider/service-applications/:applicationId`, `GET /api/v1/provider/services/:serviceId/eligibility`, `GET /api/v1/provider/services/overview`, `PATCH /api/v1/provider/services/:serviceId/pause`, `PATCH /api/v1/provider/services/:serviceId/reactivate` |
 | Fetch the contract this process implements | planned | _no legacy equivalent — this is new_ | `GET /api/v1/openapi.json` |
+| Find out whether I may cancel, and why not | planned | `GET /api/provider/bookings/:bookingId/cancellation-eligibility` | `GET /api/v1/provider/jobs/:bookingId/cancellation-eligibility` |
 | Find out why I cannot work yet, and what to do about it | planned | `GET /api/provider/account-state`, `GET /api/provider/compliance`, `GET /api/provider/verification-timeline`, `POST /api/provider/activation/policy-acknowledgement` | `POST /api/v1/provider/activation/policy-acknowledgement`, `GET /api/v1/provider/activation`, `GET /api/v1/provider/verification-timeline` |
 | Move a booking through its state machine | ⚠ mixed | `POST /api/admin/bookings/:id/assign`, `POST /api/admin/bookings/:id/reassign`, `PUT /api/worker/bookings/:bookingId/accept`, `PUT /api/worker/bookings/:bookingId/arrived`, `PUT /api/worker/bookings/:bookingId/complete`, `PUT /api/worker/bookings/:bookingId/decline`, `PUT /api/worker/bookings/:bookingId/en-route`, `PUT /api/worker/bookings/:bookingId/start` | `POST /api/v1/provider/jobs/:bookingId/accept`, `POST /api/v1/provider/jobs/:bookingId/decline`, `POST /api/v1/provider/jobs/:bookingId/en-route`, `POST /api/v1/provider/jobs/:bookingId/arrived`, `POST /api/v1/provider/jobs/:bookingId/start`, `POST /api/v1/provider/jobs/:bookingId/complete`, `POST /api/v1/admin/bookings/:bookingId/assign`, `POST /api/v1/admin/bookings/:bookingId/reassign` |
+| Prove the work happened | planned | `DELETE /api/provider/bookings/:bookingId/evidence/:evidenceId`, `GET /api/provider/bookings/:bookingId/evidence`, `POST /api/provider/bookings/:bookingId/evidence` | `POST /api/v1/provider/jobs/:bookingId/evidence`, `DELETE /api/v1/provider/jobs/:bookingId/evidence/:evidenceId`, `GET /api/v1/provider/jobs/:bookingId/evidence` |
 | Read a booking | planned | `GET /api/:id`, `GET /api/:id/timeline`, `GET /api/users/:userId/bookings` | `GET /api/v1/bookings`, `GET /api/v1/bookings/:bookingId`, `GET /api/v1/bookings/:bookingId/timeline`, `GET /api/v1/bookings/:bookingId/transitions` |
 | Read a booking's payment and price breakdown | planned | _no legacy equivalent — this is new_ | `GET /api/v1/bookings/:bookingId/payment` |
 | Read and change my account record | ⚠ mixed | `GET /api/auth/me`, `PUT /api/user/updateprofile` | `GET /api/v1/me`, `PATCH /api/v1/me` |
@@ -112,6 +114,7 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Read and change my settings | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/settings`, `PATCH /api/v1/me/settings` |
 | Read my security posture | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/security` |
 | Read the services I am approved for | planned | `GET /api/worker/services-overview` | `GET /api/v1/provider/services` |
+| Record that cash changed hands | planned | `POST /api/:bookingId/mark-cash-paid` | `POST /api/v1/bookings/:bookingId/cash-collected` |
 | Recover an account and verify a contact | ⚠ mixed | `GET /api/auth/resendverification`, `POST /api/auth/forgot-password`, `POST /api/auth/resend-email-otp`, `POST /api/auth/reset-password`, `POST /api/auth/verify-email-otp` | `POST /api/v1/auth/forgot-password`, `POST /api/v1/auth/reset-password`, `POST /api/v1/auth/verify-email`, `POST /api/v1/auth/resend-verification`, `POST /api/v1/auth/verify-mobile` |
 | Register, sign in, and end a session | ⚠ mixed | `POST /api/auth/admin-signin`, `POST /api/auth/firebase-login`, `POST /api/auth/logout`, `POST /api/auth/provider/register`, `POST /api/auth/refresh`, `POST /api/auth/signin`, `POST /api/auth/signup` | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` |
 | Report a message to moderation | planned | `POST /api/chat/conversations/:id/messages/:msgId/report` | `POST /api/v1/conversations/:conversationId/messages/:messageId/report` |
@@ -189,11 +192,11 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 48 |
+| Capabilities that apply | 51 |
 | Already on canonical | 12 |
 | Still on a legacy route | 16 |
 | Partially migrated | 6 |
-| No equivalent called today | 14 |
+| No equivalent called today | 17 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
@@ -207,6 +210,7 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Decide what work I am offered | planned | `DELETE /api/worker/service-applications/:applicationId`, `GET /api/worker/service-applications`, `GET /api/worker/service-applications/:applicationId`, `GET /api/worker/services-overview`, `GET /api/worker/services/:serviceId/eligibility`, `PATCH /api/worker/services/:serviceId/pause`, `PATCH /api/worker/services/:serviceId/reactivate`, `POST /api/worker/service-applications`, `POST /api/worker/service-applications/:applicationId/resubmit` | `POST /api/v1/provider/service-applications`, `GET /api/v1/provider/service-applications/:applicationId`, `GET /api/v1/provider/service-applications`, `POST /api/v1/provider/service-applications/:applicationId/resubmit`, `DELETE /api/v1/provider/service-applications/:applicationId`, `GET /api/v1/provider/services/:serviceId/eligibility`, `GET /api/v1/provider/services/overview`, `PATCH /api/v1/provider/services/:serviceId/pause`, `PATCH /api/v1/provider/services/:serviceId/reactivate` |
 | Dismiss one notification | planned | `DELETE /api/provider/notifications/:key` | `DELETE /api/v1/notifications/:key` |
 | Fetch the contract this process implements | planned | _no legacy equivalent — this is new_ | `GET /api/v1/openapi.json` |
+| Find out whether I may cancel, and why not | planned | `GET /api/provider/bookings/:bookingId/cancellation-eligibility` | `GET /api/v1/provider/jobs/:bookingId/cancellation-eligibility` |
 | Find out why I cannot work yet, and what to do about it | planned | `GET /api/provider/account-state`, `GET /api/provider/compliance`, `GET /api/provider/verification-timeline`, `POST /api/provider/activation/policy-acknowledgement` | `POST /api/v1/provider/activation/policy-acknowledgement`, `GET /api/v1/provider/activation`, `GET /api/v1/provider/verification-timeline` |
 | How many unread I have | legacy | `GET /api/user/notifications/unread-count` | `GET /api/v1/notifications/unread-count` |
 | List my conversations with unread counts | legacy | `GET /api/chat/conversations` | `GET /api/v1/conversations` |
@@ -214,6 +218,7 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Mark one notification read | legacy | `PATCH /api/user/notifications/:key/read` | `PATCH /api/v1/notifications/:key/read` |
 | Open (or resolve) a booking conversation | legacy | `GET /api/bookings/:bookingId/conversation` | `POST /api/v1/conversations` |
 | Page through a conversation transcript | legacy | `GET /api/chat/conversations/:id/messages` | `GET /api/v1/conversations/:conversationId/messages` |
+| Prove the work happened | planned | `DELETE /api/provider/bookings/:bookingId/evidence/:evidenceId`, `GET /api/provider/bookings/:bookingId/evidence`, `POST /api/provider/bookings/:bookingId/evidence` | `POST /api/v1/provider/jobs/:bookingId/evidence`, `DELETE /api/v1/provider/jobs/:bookingId/evidence/:evidenceId`, `GET /api/v1/provider/jobs/:bookingId/evidence` |
 | Provider earnings summary | legacy | `GET /api/provider/earnings/summary` | `GET /api/v1/provider/earnings/summary` |
 | Provider earnings transactions | legacy | `GET /api/provider/earnings`, `GET /api/provider/ledger` | `GET /api/v1/provider/earnings/transactions` |
 | Provider payouts | legacy | `GET /api/provider/payouts` | `GET /api/v1/provider/earnings/payouts` |
@@ -226,6 +231,7 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Read my security posture | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/security` |
 | Read one conversation and its participants | legacy | `GET /api/chat/conversations/:id` | `GET /api/v1/conversations/:conversationId` |
 | Read the reschedule history of a booking | planned | _no legacy equivalent — this is new_ | `GET /api/v1/bookings/:bookingId/reschedule` |
+| Record that cash changed hands | planned | `POST /api/:bookingId/mark-cash-paid` | `POST /api/v1/bookings/:bookingId/cash-collected` |
 | Recover an account and verify a contact | ⚠ mixed | `GET /api/auth/resendverification`, `POST /api/auth/forgot-password`, `POST /api/auth/resend-email-otp`, `POST /api/auth/reset-password`, `POST /api/auth/verify-email-otp` | `POST /api/v1/auth/forgot-password`, `POST /api/v1/auth/reset-password`, `POST /api/v1/auth/verify-email`, `POST /api/v1/auth/resend-verification`, `POST /api/v1/auth/verify-mobile` |
 | Register, sign in, and end a session | legacy | `POST /api/auth/admin-signin`, `POST /api/auth/firebase-login`, `POST /api/auth/logout`, `POST /api/auth/provider/register`, `POST /api/auth/refresh`, `POST /api/auth/signin`, `POST /api/auth/signup` | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` |
 | Report a message to moderation | planned | `POST /api/chat/conversations/:id/messages/:msgId/report` | `POST /api/v1/conversations/:conversationId/messages/:messageId/report` |

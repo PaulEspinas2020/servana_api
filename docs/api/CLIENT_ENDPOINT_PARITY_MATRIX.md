@@ -18,11 +18,11 @@
 
 | | |
 | --- | --- |
-| Capabilities | 67 |
-| Canonical endpoints mounted | 140 |
+| Capabilities | 70 |
+| Canonical endpoints mounted | 145 |
 | Canonical endpoints planned | 1 |
-| Legacy mappings tracked | 153 |
-| Converged (one route family) | 59 |
+| Legacy mappings tracked | 158 |
+| Converged (one route family) | 62 |
 | Role-split over ONE service | 4 |
 | Single-surface | 4 |
 | **Divergent (forked truth)** | **0** |
@@ -78,6 +78,7 @@ direction of whoever wrote it.
 | Operate the booking queue | SINGLE_SURFACE | — | — | — | — | legacy |
 | Register, sign in, and end a session | SHARED | legacy | ⚠ mixed | legacy | ⚠ mixed | legacy |
 | Recover an account and verify a contact | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | ⚠ mixed | legacy |
+| Record that cash changed hands | SHARED | — | — | planned | planned | — |
 | Read booking-code state | SHARED | planned | planned | **migrated** | **migrated** | planned |
 | Read a booking | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | planned | planned |
 | Move a booking through its state machine | ROLE_SPLIT_SHARED_SERVICE | — | — | **migrated** | ⚠ mixed | legacy |
@@ -86,6 +87,8 @@ direction of whoever wrote it.
 | Search services | ROLE_SPLIT_SHARED_SERVICE | ⚠ mixed | planned | — | — | — |
 | Ask whether this client build may still run | SHARED | planned | — | planned | — | — |
 | Fetch the contract this process implements | SHARED | planned | planned | planned | planned | planned |
+| Find out whether I may cancel, and why not | SHARED | — | — | planned | planned | — |
+| Prove the work happened | SHARED | — | — | planned | planned | — |
 | Read the support cases I raised on a booking | SHARED | planned | planned | — | — | — |
 | A provider's own job queue | SHARED | — | — | **migrated** | **migrated** | — |
 | Say whether I am working, where I am, and that I am safe | SHARED | — | — | planned | planned | — |
@@ -443,6 +446,20 @@ Legacy still aliased for this capability:
 
 No role split. Recovery answers identically whatever the account turns out to be — a route that behaved differently for a provider would tell an unauthenticated caller which addresses belong to providers.
 
+### Record that cash changed hands
+
+- key: `core:bookingCashSettlement` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/paymentService`
+- route families: `/bookings`
+
+Canonical:
+  - `POST /api/v1/bookings/:bookingId/cash-collected`
+
+Legacy still aliased for this capability:
+  - `POST /api/:bookingId/mark-cash-paid`
+
+ROLE-SPLIT by MEMBERSHIP rather than by role name, and that is the whole design. Authorization resolves the caller relationship to THIS booking and then refuses the CUSTOMER - a customer declaring their own cash payment is not evidence of anything - while admitting the assigned provider and admin, the latter for support-assisted recovery. Declaring a provider-only role would have looked stricter and locked admin out of that path. Idempotent by construction: paid_at is COALESCE(paid_at, NOW()), so a repeat never moves the moment money changed hands.
+
 ### Read booking-code state
 
 - key: `core:bookingOtpStatus` · declared in `api/v1/convergence (core)`
@@ -591,6 +608,38 @@ Legacy still aliased for this capability:
   - none
 
 No role split. Every client generates types from the same document, so a per-surface projection would defeat the point — the value is that all five are reading one contract. AUTHENTICATED rather than public, unlike buildProvenance: four fields of provenance exist to be checkable by somebody holding no credential, but a full API surface is a map, and every client that wants it already holds a token. The same digest also rides on every /api/v1 response in x-contract-sha256, so a client asks "am I stale?" without calling this at all.
+
+### Find out whether I may cancel, and why not
+
+- key: `core:jobCancellationEligibility` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/booking/bookingPolicies`
+- route families: `/provider`
+
+Canonical:
+  - `GET /api/v1/provider/jobs/:bookingId/cancellation-eligibility`
+
+Legacy still aliased for this capability:
+  - `GET /api/provider/bookings/:bookingId/cancellation-eligibility`
+
+No role split. A READ of the same policy function the cancel transition itself calls, so a Cancel button and the POST behind it cannot disagree about the window and the client never calculates the rule. Separate from the transition capability because it grants nothing and changes nothing: it exists so a refusal can be EXPLAINED before the provider commits to the action, rather than arriving as a bare error afterwards.
+
+### Prove the work happened
+
+- key: `core:jobEvidence` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/bookingEvidenceService`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/jobs/:bookingId/evidence`
+  - `DELETE /api/v1/provider/jobs/:bookingId/evidence/:evidenceId`
+  - `GET /api/v1/provider/jobs/:bookingId/evidence`
+
+Legacy still aliased for this capability:
+  - `DELETE /api/provider/bookings/:bookingId/evidence/:evidenceId`
+  - `GET /api/provider/bookings/:bookingId/evidence`
+  - `POST /api/provider/bookings/:bookingId/evidence`
+
+No role split: the ASSIGNED provider only, scoped by worker_uid inside every statement rather than by a check above it. Held apart from settlement and from cancellation eligibility because the three answer to three different services, and a capability spanning several is one that cannot be retired or reasoned about as a unit — which is exactly what cross-platform-convergence refused when this was first declared as one. Evidence is what a DISPUTE is decided on, which is why the canonical write requires a replay key that the legacy route only accepts optionally.
 
 ### Read the support cases I raised on a booking
 
