@@ -7,11 +7,11 @@ Every route the app mounts outside `/api/v1`: **519**.
 
 | Disposition | Count | Meaning |
 |---|---:|---|
-| `ALIAS_TEMPORARILY` | 119 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
+| `ALIAS_TEMPORARILY` | 135 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
 | `CANONICALIZE` | 11 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
 | `ROLE_SPECIFIC` | 13 | Legitimately separate: different auth, action or payload — same domain service. |
 | `RETIRE` | 1 | No caller and no successor. Delete once telemetry confirms zero traffic. |
-| `KEEP` | 375 | Not a duplicate of anything canonical. Untouched by this command. |
+| `KEEP` | 359 | Not a duplicate of anything canonical. Untouched by this command. |
 
 ## Retirement criteria
 
@@ -27,7 +27,7 @@ build knows how to call.
 
 Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 
-## ALIAS_TEMPORARILY (119)
+## ALIAS_TEMPORARILY (135)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
@@ -103,6 +103,22 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `GET` | `/api/provider/earnings/summary` | `/api/v1/provider/earnings/summary` | The live provider portal call, now delegating to the same domain service so the two paths return identical figures during migration rather than merely similar ones. |
 | `GET` | `/api/provider/ledger` | `/api/v1/provider/earnings/transactions` | A THIRD reading of the same columns, which used to hardcode every completed booking as "settled" and report failed payouts as money in hand. Superseded entirely. |
 | `GET` | `/api/provider/payouts` | `/api/v1/provider/earnings/payouts` | The live payouts list, now delegating to the same domain service. Both exclude the processor id, servana_share, payout_error and the admin hold fields by projection. |
+| `GET` | `/api/provider/reputation/summary` | `/api/v1/provider/reputation/summary` | Same service, same aggregate. |
+| `GET` | `/api/provider/reviews` | `/api/v1/provider/reviews` | Same service. The provider view of reviews naming them. |
+| `GET` | `/api/provider/reviews/:reviewId` | `/api/v1/provider/reviews/:reviewId` | Same service. A review not naming the caller is a 404. |
+| `POST` | `/api/provider/reviews/:reviewId/response` | `/api/v1/provider/reviews/:reviewId/response` | Same service, same moderation pass. |
+| `POST` | `/api/provider/reviews/:reviewId/report` | `/api/v1/provider/reviews/:reviewId/report` | Same service, same closed reason vocabulary. |
+| `POST` | `/api/provider/review-moderation/:caseId/appeals` | `/api/v1/provider/review-moderation/:caseId/appeals` | Same service, same closed grounds vocabulary. |
+| `GET` | `/api/provider/support/case-categories` | `/api/v1/provider/support/case-categories` | Same service. A frozen list; no per-provider data. |
+| `GET` | `/api/provider/support/cases` | `/api/v1/provider/support/cases` | Same service. Scoped on the caller uid inside the query itself. |
+| `POST` | `/api/provider/support/cases` | `/api/v1/provider/support/cases` | Same service, same validation, same dedupe. |
+| `GET` | `/api/provider/support/cases/:caseId` | `/api/v1/provider/support/cases/:caseId` | Same service. Another provider case id is a 404, not a 403. |
+| `POST` | `/api/provider/support/cases/:caseId/messages` | `/api/v1/provider/support/cases/:caseId/messages` | Same service, same thread. |
+| `POST` | `/api/provider/support/cases/:caseId/withdraw` | `/api/v1/provider/support/cases/:caseId/withdraw` | Same service, same state guard. |
+| `POST` | `/api/provider/support/cases/:caseId/reopen` | `/api/v1/provider/support/cases/:caseId/reopen` | Same service. Published so a provider is not pushed into raising a duplicate. |
+| `POST` | `/api/provider/support/cases/:caseId/appeals` | `/api/v1/provider/support/cases/:caseId/appeals` | Same service. An appeal is a second DECISION, not a second case. |
+| `POST` | `/api/provider/support/cases/:caseId/attachments` | `/api/v1/provider/support/cases/:caseId/attachments` | Same service, same validation. |
+| `GET` | `/api/provider/support/cases/:caseId/attachments/:attachmentId/preview` | `/api/v1/provider/support/cases/:caseId/attachments/:attachmentId/preview` | Same service. Re-authorizes before minting a URL. |
 | `GET` | `/api/provider/notification-preferences` | `/api/v1/me/notification-preferences` | Provider Web. Same uid-keyed table - nothing about it is provider-specific, and the role gate on this path is the reason customers had no way to configure notifications they were already receiving. |
 | `PUT` | `/api/provider/notification-preferences` | `/api/v1/me/notification-preferences` | Provider Web sends a full replace. Both shapes reach one writer, so a provider who has not migrated keeps the exact behaviour they have. |
 | `GET` | `/api/worker/availability` | `/api/v1/provider/availability` | The live provider availability read. Same engine; the legacy shape bridges it to a web schedule. |
@@ -191,7 +207,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 |---|---|---|---|
 | `GET` | `/api/workers/:uid/earnings-history` | `/api/v1/provider/earnings/transactions` | Takes the provider uid from the URL and has no auth, so it answers for anybody. No located caller in any of the five clients. Carried over from the planned placeholder this entry replaces; delete once telemetry confirms zero traffic. |
 
-## KEEP (375)
+## KEEP (359)
 
 Mounted, not superseded, not a duplicate. Listed so the inventory is complete and so a
 later domain command starts from a route list rather than from a grep.
@@ -258,26 +274,10 @@ later domain command starts from a route list rather than from a grep.
 | `GET` | `/api/provider/dashboard` | `src/routes/provider.routes.ts:76` |
 | `GET` | `/api/provider/earnings/:id` | `src/routes/provider.routes.ts:81` |
 | `GET` | `/api/provider/performance` | `src/routes/provider.routes.ts:85` |
-| `GET` | `/api/provider/reputation/summary` | `src/routes/provider.routes.ts:86` |
-| `GET` | `/api/provider/reviews` | `src/routes/provider.routes.ts:87` |
-| `GET` | `/api/provider/reviews/:reviewId` | `src/routes/provider.routes.ts:88` |
-| `POST` | `/api/provider/reviews/:reviewId/response` | `src/routes/provider.routes.ts:89` |
-| `POST` | `/api/provider/reviews/:reviewId/report` | `src/routes/provider.routes.ts:90` |
-| `POST` | `/api/provider/review-moderation/:caseId/appeals` | `src/routes/provider.routes.ts:91` |
 | `GET` | `/api/providers/me/review-status` | `src/routes/provider.routes.ts:94` |
 | `POST` | `/api/providers/me/submit-for-review` | `src/routes/provider.routes.ts:95` |
 | `GET` | `/api/provider/support/tickets` | `src/routes/provider.routes.ts:98` |
 | `POST` | `/api/provider/support/tickets` | `src/routes/provider.routes.ts:99` |
-| `GET` | `/api/provider/support/case-categories` | `src/routes/provider.routes.ts:102` |
-| `GET` | `/api/provider/support/cases` | `src/routes/provider.routes.ts:103` |
-| `POST` | `/api/provider/support/cases` | `src/routes/provider.routes.ts:104` |
-| `GET` | `/api/provider/support/cases/:caseId` | `src/routes/provider.routes.ts:105` |
-| `POST` | `/api/provider/support/cases/:caseId/messages` | `src/routes/provider.routes.ts:106` |
-| `POST` | `/api/provider/support/cases/:caseId/withdraw` | `src/routes/provider.routes.ts:107` |
-| `POST` | `/api/provider/support/cases/:caseId/reopen` | `src/routes/provider.routes.ts:108` |
-| `POST` | `/api/provider/support/cases/:caseId/appeals` | `src/routes/provider.routes.ts:109` |
-| `POST` | `/api/provider/support/cases/:caseId/attachments` | `src/routes/provider.routes.ts:110` |
-| `GET` | `/api/provider/support/cases/:caseId/attachments/:attachmentId/preview` | `src/routes/provider.routes.ts:111` |
 | `GET` | `/api/provider/notifications/unread-count` | `src/routes/provider.routes.ts:119` |
 | `POST` | `/api/provider/notifications/mark-all-read` | `src/routes/provider.routes.ts:120` |
 | `GET` | `/api/provider/notifications` | `src/routes/provider.routes.ts:121` |

@@ -895,6 +895,36 @@ jest.mock('../src/services/paymentService', () => ({
   }),
 }));
 
+/**
+ * TAB 08. Provider support cases and the review write surface both reach the
+ * database. Mocked at the SERVICE — what these routes must NOT be (a customer
+ * conversation, a customer support case, an earnings summary) is asserted in
+ * `tests/provider-support-reviews-v1.test.ts`.
+ */
+jest.mock('../src/services/providerSupportCaseService', () => ({
+  __esModule: true,
+  listCategories: jest.fn().mockResolvedValue([]),
+  listCases: jest.fn().mockResolvedValue([]),
+  getCase: jest.fn().mockResolvedValue({ caseId: 'case-1', status: 'open' }),
+  createCase: jest.fn().mockResolvedValue({ caseId: 'case-1', status: 'open' }),
+  addProviderMessage: jest.fn().mockResolvedValue({ messageId: 'msg-1' }),
+  withdrawCase: jest.fn().mockResolvedValue({ caseId: 'case-1', status: 'withdrawn' }),
+  reopenCase: jest.fn().mockResolvedValue({ caseId: 'case-1', status: 'open' }),
+  appealCase: jest.fn().mockResolvedValue({ appealId: 'app-1' }),
+  uploadAttachment: jest.fn().mockResolvedValue({ attachmentId: 'att-1' }),
+  previewAttachment: jest.fn().mockResolvedValue({ url: 'https://example.test/x', expiresAt: null }),
+}));
+
+jest.mock('../src/services/providerReputationService', () => ({
+  __esModule: true,
+  getProviderReputationSummary: jest.fn().mockResolvedValue({ averageRating: 4.8, reviewCount: 12 }),
+  listOwnedProviderReviews: jest.fn().mockResolvedValue([]),
+  getOwnedProviderReview: jest.fn().mockResolvedValue({ reviewId: 'rev-1', rating: 5 }),
+  submitProviderResponse: jest.fn().mockResolvedValue({ responseId: 'res-1', state: 'published' }),
+  reportOwnedReview: jest.fn().mockResolvedValue({ caseId: 'case-1', state: 'open' }),
+  appealOwnedReview: jest.fn().mockResolvedValue({ appealId: 'app-1', state: 'open' }),
+}));
+
 jest.mock('../src/services/providerAutoOnlineEngine', () => ({
   // Fire-and-forget on the upload and delete paths. Mocked so the router suite
   // does not reach the real engine; that it RUNS at all is asserted in
@@ -1235,6 +1265,57 @@ describe('every implemented contract entry is reachable at its declared path', (
       call('GET', '/api/v1/provider/services/overview', { role: 'provider' }),
     'provider.presence.get': () =>
       call('GET', '/api/v1/provider/presence', { role: 'provider' }),
+    'provider.support.categories': () =>
+      call('GET', '/api/v1/provider/support/case-categories', { role: 'provider' }),
+    'provider.support.cases.list': () =>
+      call('GET', '/api/v1/provider/support/cases', { role: 'provider' }),
+    'provider.support.cases.create': () =>
+      call('POST', '/api/v1/provider/support/cases', {
+        role: 'provider',
+        body: { category: 'payout', subject: 'Missing payout', body: 'A payout has not arrived.', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.support.cases.get': () =>
+      call('GET', '/api/v1/provider/support/cases/case-1', { role: 'provider' }),
+    'provider.support.cases.reply': () =>
+      call('POST', '/api/v1/provider/support/cases/case-1/messages', {
+        role: 'provider', body: { body: 'Any update?', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.support.cases.withdraw': () =>
+      call('POST', '/api/v1/provider/support/cases/case-1/withdraw', {
+        role: 'provider', body: { reason: 'Resolved itself' },
+      }),
+    'provider.support.cases.reopen': () =>
+      call('POST', '/api/v1/provider/support/cases/case-1/reopen', {
+        role: 'provider', body: { reason: 'Happened again' },
+      }),
+    'provider.support.cases.appeal': () =>
+      call('POST', '/api/v1/provider/support/cases/case-1/appeals', {
+        role: 'provider', body: { ground: 'new_evidence', explanation: 'A receipt was missed.', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.support.cases.attach': () =>
+      call('POST', '/api/v1/provider/support/cases/case-1/attachments', {
+        role: 'provider', body: { file: 'data:image/png;base64,AAAA', fileName: 'receipt.png', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.support.cases.attachmentPreview': () =>
+      call('GET', '/api/v1/provider/support/cases/case-1/attachments/att-1/preview', { role: 'provider' }),
+    'provider.reputation.summary': () =>
+      call('GET', '/api/v1/provider/reputation/summary', { role: 'provider' }),
+    'provider.reviews.list': () =>
+      call('GET', '/api/v1/provider/reviews', { role: 'provider' }),
+    'provider.reviews.get': () =>
+      call('GET', '/api/v1/provider/reviews/rev-1', { role: 'provider' }),
+    'provider.reviews.respond': () =>
+      call('POST', '/api/v1/provider/reviews/rev-1/response', {
+        role: 'provider', body: { body: 'Thank you for the feedback.', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.reviews.report': () =>
+      call('POST', '/api/v1/provider/reviews/rev-1/report', {
+        role: 'provider', body: { reason: 'abusive', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.reviews.appeal': () =>
+      call('POST', '/api/v1/provider/review-moderation/case-1/appeals', {
+        role: 'provider', body: { ground: 'factual_error', explanation: 'The job was completed.', clientRequestId: 'client-request-id-000001' },
+      }),
     'provider.jobs.evidence.list': () =>
       call('GET', '/api/v1/provider/jobs/4242/evidence', { role: 'provider' }),
     'provider.jobs.evidence.create': () =>

@@ -34,15 +34,15 @@ installed.
 
 | | |
 | --- | --- |
-| Legacy mappings tracked | 158 |
-| In the retirement plan | 139 |
+| Legacy mappings tracked | 174 |
+| In the retirement plan | 155 |
 | `KEEP` (not a duplicate of anything) | 6 |
 | `ROLE_SPECIFIC` (different auth/action, same service) | 13 |
-| `ALIAS_TEMPORARILY` | 126 |
+| `ALIAS_TEMPORARILY` | 142 |
 | `CANONICALIZE` | 12 |
 | `RETIRE` | 1 |
 | **Retirable today** | **0** |
-| Blocked | 139 |
+| Blocked | 155 |
 
 Nothing is retirable today, and the reason is the same for all of them: no client has migrated, because the v1 namespace is not deployed. The schedule is the order things become retirable, not a queue of pending deletions.
 
@@ -135,10 +135,26 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `GET /api/provider/profile-fields` | ALIAS_TEMPORARILY | `provider.fieldRegistry.get` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/public-profile-preview` | ALIAS_TEMPORARILY | `provider.publicProfile.preview` | Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/provider/public-profile-revisions` | ALIAS_TEMPORARILY | `provider.profile.patch` | Provider Mobile has not migrated | 90d |
+| `GET /api/provider/reputation/summary` | ALIAS_TEMPORARILY | `provider.reputation.summary` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/review-moderation/:caseId/appeals` | ALIAS_TEMPORARILY | `provider.reviews.appeal` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/provider/reviews` | ALIAS_TEMPORARILY | `provider.reviews.list` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/provider/reviews/:reviewId` | ALIAS_TEMPORARILY | `provider.reviews.get` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/reviews/:reviewId/report` | ALIAS_TEMPORARILY | `provider.reviews.report` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/reviews/:reviewId/response` | ALIAS_TEMPORARILY | `provider.reviews.respond` | Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/provider/safety/check-in` | ALIAS_TEMPORARILY | `provider.safety.checkIn` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/safety/emergency-config` | ALIAS_TEMPORARILY | `provider.safety.emergencyConfig` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/safety/incidents` | ALIAS_TEMPORARILY | `provider.safety.incidents.list` | Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/provider/safety/incidents` | ALIAS_TEMPORARILY | `provider.safety.incidents.create` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/provider/support/case-categories` | ALIAS_TEMPORARILY | `provider.support.categories` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/provider/support/cases` | ALIAS_TEMPORARILY | `provider.support.cases.list` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/support/cases` | ALIAS_TEMPORARILY | `provider.support.cases.create` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/provider/support/cases/:caseId` | ALIAS_TEMPORARILY | `provider.support.cases.get` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/support/cases/:caseId/appeals` | ALIAS_TEMPORARILY | `provider.support.cases.appeal` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/support/cases/:caseId/attachments` | ALIAS_TEMPORARILY | `provider.support.cases.attach` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/provider/support/cases/:caseId/attachments/:attachmentId/preview` | ALIAS_TEMPORARILY | `provider.support.cases.attachmentPreview` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/support/cases/:caseId/messages` | ALIAS_TEMPORARILY | `provider.support.cases.reply` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/support/cases/:caseId/reopen` | ALIAS_TEMPORARILY | `provider.support.cases.reopen` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/support/cases/:caseId/withdraw` | ALIAS_TEMPORARILY | `provider.support.cases.withdraw` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/verification-timeline` | ALIAS_TEMPORARILY | `provider.verificationTimeline.get` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/providers/:providerUid/rating` | ALIAS_TEMPORARILY | `reviews.provider.rating` | Customer Mobile, Customer Web have not migrated | 90d |
 | `GET /api/providers/:providerUid/reviews` | ALIAS_TEMPORARILY | `reviews.provider.list` | Customer Mobile, Customer Web have not migrated | 90d |

@@ -3,7 +3,7 @@
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand —
 > `tests/v1-contract.test.ts` fails if this file and the contract disagree.
 
-**145 implemented** · **1 planned** · 146 total.
+**161 implemented** · **1 planned** · 162 total.
 
 A `planned` entry is documented and **not mounted**. It exists so the migration matrix can
 name a canonical successor before that successor is built. Calling one returns 404.
@@ -726,6 +726,222 @@ File a safety incident. A retry carrying the same key returns the original.
 - **Legacy it replaces**
   - `POST /api/provider/safety/incidents` — **ALIAS_TEMPORARILY** — SAME implementation, DIFFERENT disposition on a duplicate: the legacy route answers 409 and keeps doing so, because five clients read it.
 
+## provider-support
+
+| Method | Path | Status | Auth | Request | Response | Idem | Owner |
+|---|---|---|---|---|---|---|---|
+| `GET` | `/api/v1/provider/support/case-categories` | **live** | provider (role 2/4) | — | `ProviderSupportCaseCategoryList` | yes | provider-support |
+| `GET` | `/api/v1/provider/support/cases` | **live** | provider (role 2/4) | — | `ProviderSupportCaseList` | yes | provider-support |
+| `POST` | `/api/v1/provider/support/cases` | **live** | provider (role 2/4) | `ProviderSupportCaseCreate` | `ProviderSupportCase` | no | provider-support |
+| `GET` | `/api/v1/provider/support/cases/:caseId` | **live** | provider (role 2/4) | — | `ProviderSupportCase` | yes | provider-support |
+| `POST` | `/api/v1/provider/support/cases/:caseId/messages` | **live** | provider (role 2/4) | `ProviderSupportCaseMessage` | `ProviderSupportCaseMessageResult` | no | provider-support |
+| `POST` | `/api/v1/provider/support/cases/:caseId/withdraw` | **live** | provider (role 2/4) | `ProviderSupportCaseStateChange` | `ProviderSupportCase` | no | provider-support |
+| `POST` | `/api/v1/provider/support/cases/:caseId/reopen` | **live** | provider (role 2/4) | `ProviderSupportCaseStateChange` | `ProviderSupportCase` | no | provider-support |
+| `POST` | `/api/v1/provider/support/cases/:caseId/appeals` | **live** | provider (role 2/4) | `ProviderSupportCaseAppeal` | `ProviderSupportCaseAppealResult` | no | provider-support |
+| `POST` | `/api/v1/provider/support/cases/:caseId/attachments` | **live** | provider (role 2/4) | `ProviderSupportCaseAttachment` | `ProviderSupportCaseAttachmentResult` | no | provider-support |
+| `GET` | `/api/v1/provider/support/cases/:caseId/attachments/:attachmentId/preview` | **live** | provider (role 2/4) | — | `ProviderSupportCaseAttachmentPreview` | yes | provider-support |
+| `GET` | `/api/v1/provider/reputation/summary` | **live** | provider (role 2/4) | — | `ProviderReputationSummary` | yes | provider-support |
+| `GET` | `/api/v1/provider/reviews` | **live** | provider (role 2/4) | — | `ProviderOwnedReviewList` | yes | provider-support |
+| `GET` | `/api/v1/provider/reviews/:reviewId` | **live** | provider (role 2/4) | — | `ProviderOwnedReview` | yes | provider-support |
+| `POST` | `/api/v1/provider/reviews/:reviewId/response` | **live** | provider (role 2/4) | `ProviderReviewResponse` | `ProviderReviewResponseResult` | no | provider-support |
+| `POST` | `/api/v1/provider/reviews/:reviewId/report` | **live** | provider (role 2/4) | `ProviderReviewReport` | `ProviderReviewReportResult` | no | provider-support |
+| `POST` | `/api/v1/provider/review-moderation/:caseId/appeals` | **live** | provider (role 2/4) | `ProviderReviewAppeal` | `ProviderReviewAppealResult` | no | provider-support |
+
+### `GET /api/v1/provider/support/case-categories`
+
+The categories a provider may open a support case under.
+
+> STATIC per deployment - names no account and reads no provider row, so a client may cache it. Published as its own resource rather than folded into the create request because a category list is what a client needs BEFORE it can compose one.
+
+- **Domain service** — `services/providerSupportCaseService.listCategories`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/support/case-categories` — **ALIAS_TEMPORARILY** — Same service. A frozen list; no per-provider data.
+
+### `GET /api/v1/provider/support/cases`
+
+The caller's own support cases.
+
+> The PROVIDER's cases with Servana. NOT the customer post-service support cases at /v1/bookings/:bookingId/support-cases, which are a different service, a different actor and bound to a booking. Same two words, two resources.
+
+- **Domain service** — `services/providerSupportCaseService.listCases`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Query** — `status` (string) Filter by case status; `limit` (string) Page size
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/support/cases` — **ALIAS_TEMPORARILY** — Same service. Scoped on the caller uid inside the query itself.
+
+### `POST /api/v1/provider/support/cases`
+
+Open a support case with Servana.
+
+> NOT bound to a booking, unlike the customer support-case resource. A provider raising a case about their account, a payout or a policy has no booking to attach it to, and requiring one would have made the commonest case unreportable.
+
+- **Domain service** — `services/providerSupportCaseService.createCase`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/support/cases` — **ALIAS_TEMPORARILY** — Same service, same validation, same dedupe.
+
+### `GET /api/v1/provider/support/cases/:caseId`
+
+One support case and its thread.
+
+- **Domain service** — `services/providerSupportCaseService.getCase`
+- **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Path params** — `caseId` (string) provider_support_cases.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/support/cases/:caseId` — **ALIAS_TEMPORARILY** — Same service. Another provider case id is a 404, not a 403.
+
+### `POST /api/v1/provider/support/cases/:caseId/messages`
+
+Add a message to a case thread.
+
+> THE ONE THE CLASSIFIER NEARLY MISMATCHED. A client mapped this onto /v1/conversations/:id/messages on the word "messages" and it was rejected as false. A case thread is between a provider and SERVANA; a conversation is between a provider and a CUSTOMER about a booking. Different audience, different retention, different authorization - membership of a booking versus ownership of a case. Do not let a shared noun drive a migration.
+
+- **Domain service** — `services/providerSupportCaseService.addProviderMessage`
+- **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `caseId` (string) provider_support_cases.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/support/cases/:caseId/messages` — **ALIAS_TEMPORARILY** — Same service, same thread.
+
+### `POST /api/v1/provider/support/cases/:caseId/withdraw`
+
+Withdraw a case the provider no longer wants worked.
+
+- **Domain service** — `services/providerSupportCaseService.withdrawCase`
+- **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `caseId` (string) provider_support_cases.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/support/cases/:caseId/withdraw` — **ALIAS_TEMPORARILY** — Same service, same state guard.
+
+### `POST /api/v1/provider/support/cases/:caseId/reopen`
+
+Reopen a closed case rather than raising a second one about it.
+
+- **Domain service** — `services/providerSupportCaseService.reopenCase`
+- **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `caseId` (string) provider_support_cases.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/support/cases/:caseId/reopen` — **ALIAS_TEMPORARILY** — Same service. Published so a provider is not pushed into raising a duplicate.
+
+### `POST /api/v1/provider/support/cases/:caseId/appeals`
+
+Appeal the outcome of a support case.
+
+- **Domain service** — `services/providerSupportCaseService.appealCase`
+- **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `caseId` (string) provider_support_cases.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/support/cases/:caseId/appeals` — **ALIAS_TEMPORARILY** — Same service. An appeal is a second DECISION, not a second case.
+
+### `POST /api/v1/provider/support/cases/:caseId/attachments`
+
+Attach a file to a support case.
+
+> A THIRD upload surface, and deliberately NOT merged with job evidence or chat attachments. They share a MECHANISM - validated ingress - and not a RESOURCE: a case attachment is reviewed by Servana, evidence decides a dispute, a chat attachment is a message to a customer. Different audiences, retentions and authorization. The right shared thing is the validator, not the endpoint.
+
+- **Domain service** — `services/providerSupportCaseService.uploadAttachment`
+- **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `UNSUPPORTED_MEDIA_TYPE`, `VALIDATION_FAILED`
+- **Path params** — `caseId` (string) provider_support_cases.id
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/support/cases/:caseId/attachments` — **ALIAS_TEMPORARILY** — Same service, same validation.
+
+### `GET /api/v1/provider/support/cases/:caseId/attachments/:attachmentId/preview`
+
+A short-lived URL for one case attachment.
+
+> Mints a SHORT-LIVED url after re-checking ownership; it never returns a storage path. A separate operation from the case read for exactly that reason - folding it in would turn every case fetch into a file disclosure.
+
+- **Domain service** — `services/providerSupportCaseService.previewAttachment`
+- **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Path params** — `caseId` (string) provider_support_cases.id; `attachmentId` (string) The attachment on that case
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/support/cases/:caseId/attachments/:attachmentId/preview` — **ALIAS_TEMPORARILY** — Same service. Re-authorizes before minting a URL.
+
+### `GET /api/v1/provider/reputation/summary`
+
+The caller's own rating aggregate.
+
+> NOT /v1/provider/earnings/summary, which a client classifier matched this against on the word "summary" and which was rejected as false. One is a rating aggregate and the other is money. They share a noun and nothing else.
+
+- **Domain service** — `services/providerReputationService.getProviderReputationSummary`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/reputation/summary` — **ALIAS_TEMPORARILY** — Same service, same aggregate.
+
+### `GET /api/v1/provider/reviews`
+
+Reviews left about the caller, with their response state.
+
+> DISTINCT from GET /v1/reviews/providers/:providerUid, which is what a CUSTOMER sees when choosing a provider. This one carries response state and moderation state, which are not public.
+
+- **Domain service** — `services/providerReputationService.listOwnedProviderReviews`
+- **Error codes** — `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Query** — `status` (string) Filter by response state; `limit` (string) Page size
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/reviews` — **ALIAS_TEMPORARILY** — Same service. The provider view of reviews naming them.
+
+### `GET /api/v1/provider/reviews/:reviewId`
+
+One review naming the caller.
+
+- **Domain service** — `services/providerReputationService.getOwnedProviderReview`
+- **Error codes** — `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`
+- **Path params** — `reviewId` (string) The review this provider is named in
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `GET /api/provider/reviews/:reviewId` — **ALIAS_TEMPORARILY** — Same service. A review not naming the caller is a 404.
+
+### `POST /api/v1/provider/reviews/:reviewId/response`
+
+Respond publicly to a review.
+
+> PUBLIC-FACING TEXT, so the moderation that applies today applies to the canonical route on day one - providerResponseNeedsModeration runs on the same body before it is published, which is why this delegates rather than reimplements. EDIT AND WITHDRAW, since the mandate asks: neither is published, because neither exists. There is one response per review and the service has no update or delete path for it. That is a deliberate product position rather than an omission - a published reply that can be silently rewritten after a customer has read it is a different product - and it is recorded here so a client team plans for one shot rather than discovering it. Changing it is a product decision with an owner, not a migration.
+
+- **Domain service** — `services/providerReputationService.submitProviderResponse`
+- **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `reviewId` (string) The review this provider is named in
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/reviews/:reviewId/response` — **ALIAS_TEMPORARILY** — Same service, same moderation pass.
+
+### `POST /api/v1/provider/reviews/:reviewId/report`
+
+Report a review as breaching policy.
+
+> A request for REVIEW, not a removal. The reason vocabulary is closed, so a report carries a code a moderator can triage on rather than free text somebody has to read before they can sort it.
+
+- **Domain service** — `services/providerReputationService.reportOwnedReview`
+- **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `reviewId` (string) The review this provider is named in
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/reviews/:reviewId/report` — **ALIAS_TEMPORARILY** — Same service, same closed reason vocabulary.
+
+### `POST /api/v1/provider/review-moderation/:caseId/appeals`
+
+Appeal a moderation decision about a review.
+
+> Keyed on the moderation CASE id, not the review id, and the distinction matters: the thing being appealed is a DECISION, and one review can carry more than one over time. Keying on the review would make the second appeal ambiguous about which decision it contested.
+
+- **Domain service** — `services/providerReputationService.appealOwnedReview`
+- **Error codes** — `CONFLICT`, `INTERNAL`, `NOT_FOUND`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`
+- **Path params** — `caseId` (string) The MODERATION CASE being appealed, not the review
+- **Callers** — Cust Mobile — · Cust Web — · Prov Mobile · · Prov Web · · Admin —
+- **Legacy it replaces**
+  - `POST /api/provider/review-moderation/:caseId/appeals` — **ALIAS_TEMPORARILY** — Same service, same closed grounds vocabulary.
+
 ## notifications
 
 | Method | Path | Status | Auth | Request | Response | Idem | Owner |
@@ -1309,8 +1525,8 @@ The services the caller is approved for, keyed on services.id.
 | `GET` | `/api/v1/reviews/providers/:providerUid/rating` | **live** | public | — | `ProviderRating` | yes | reviews |
 | `POST` | `/api/v1/bookings/:bookingId/review` | **live** | any signed-in | `ReviewInput` | `Review` | no | reviews |
 | `GET` | `/api/v1/bookings/:bookingId/review` | **live** | any signed-in | — | `ReviewOrEligibility` | yes | reviews |
-| `POST` | `/api/v1/bookings/:bookingId/support-cases` | **live** | any signed-in | `SupportCaseInput` | `SupportCase` | no | reviews |
-| `GET` | `/api/v1/bookings/:bookingId/support-cases` | **live** | any signed-in | — | `SupportCaseList` | yes | reviews |
+| `POST` | `/api/v1/bookings/:bookingId/support-cases` | **live** | any signed-in | `SupportCaseInput` | `ProviderSupportCase` | no | reviews |
+| `GET` | `/api/v1/bookings/:bookingId/support-cases` | **live** | any signed-in | — | `ProviderSupportCaseList` | yes | reviews |
 
 ### `GET /api/v1/reviews/providers/:providerUid`
 
@@ -2071,6 +2287,22 @@ Ledger reconciliation: every check, its open breaks, and the platform money tota
 | `DELETE /api/v1/provider/jobs/:bookingId/evidence/:evidenceId` | — | — | · | · | — |
 | `GET /api/v1/provider/jobs/:bookingId/cancellation-eligibility` | — | — | · | · | — |
 | `POST /api/v1/bookings/:bookingId/cash-collected` | — | — | · | · | — |
+| `GET /api/v1/provider/support/case-categories` | — | — | · | · | — |
+| `GET /api/v1/provider/support/cases` | — | — | · | · | — |
+| `POST /api/v1/provider/support/cases` | — | — | · | · | — |
+| `GET /api/v1/provider/support/cases/:caseId` | — | — | · | · | — |
+| `POST /api/v1/provider/support/cases/:caseId/messages` | — | — | · | · | — |
+| `POST /api/v1/provider/support/cases/:caseId/withdraw` | — | — | · | · | — |
+| `POST /api/v1/provider/support/cases/:caseId/reopen` | — | — | · | · | — |
+| `POST /api/v1/provider/support/cases/:caseId/appeals` | — | — | · | · | — |
+| `POST /api/v1/provider/support/cases/:caseId/attachments` | — | — | · | · | — |
+| `GET /api/v1/provider/support/cases/:caseId/attachments/:attachmentId/preview` | — | — | · | · | — |
+| `GET /api/v1/provider/reputation/summary` | — | — | · | · | — |
+| `GET /api/v1/provider/reviews` | — | — | · | · | — |
+| `GET /api/v1/provider/reviews/:reviewId` | — | — | · | · | — |
+| `POST /api/v1/provider/reviews/:reviewId/response` | — | — | · | · | — |
+| `POST /api/v1/provider/reviews/:reviewId/report` | — | — | · | · | — |
+| `POST /api/v1/provider/review-moderation/:caseId/appeals` | — | — | · | · | — |
 | `GET /api/v1/notifications` | ⏳ | ⏳ | ⏳ | ✅ | · |
 | `GET /api/v1/notifications/unread-count` | ⏳ | ⏳ | ⏳ | ✅ | · |
 | `PATCH /api/v1/notifications/:key/read` | ⏳ | ⏳ | ⏳ | ✅ | · |

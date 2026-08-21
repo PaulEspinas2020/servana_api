@@ -4077,6 +4077,2011 @@
         "description": "THE PATH was the mandate: /api/:bookingId/mark-cash-paid sits directly under /api, unlike every sibling, so a wildcard added at that level would shadow it. It now sits with /bookings/:bookingId/payment and /bookings/:bookingId/payment-intents. AUTH is `authenticated` and that is deliberate rather than lax. The legacy route is mounted on verifyAuth alone and authorizes in the handler: assertBookingAccess resolves the caller relationship to THIS booking and settlement refuses the CUSTOMER, because a customer declaring their own cash payment is not evidence of anything. Declaring `provider` would have looked stricter and would have locked ADMIN out of support-assisted recovery. The rung that matters is membership of the booking, and it is enforced where it can see which booking is being asked about. IDEMPOTENT by construction: paid_at = COALESCE(paid_at, NOW()), so a repeat reaches the same end state without moving the moment money changed hands, and the ledger event is keyed on the payment id so it is recorded once."
       }
     },
+    "/api/v1/provider/support/case-categories": {
+      "get": {
+        "operationId": "provider.support.categories",
+        "summary": "The categories a provider may open a support case under.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerSupportCaseService.listCategories",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/support/case-categories",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderSupportCaseCategoryList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "STATIC per deployment - names no account and reads no provider row, so a client may cache it. Published as its own resource rather than folded into the create request because a category list is what a client needs BEFORE it can compose one."
+      }
+    },
+    "/api/v1/provider/support/cases": {
+      "get": {
+        "operationId": "provider.support.cases.list",
+        "summary": "The caller's own support cases.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerSupportCaseService.listCases",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/support/cases",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by case status"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Page size"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderSupportCaseList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "The PROVIDER's cases with Servana. NOT the customer post-service support cases at /v1/bookings/:bookingId/support-cases, which are a different service, a different actor and bound to a booking. Same two words, two resources."
+      },
+      "post": {
+        "operationId": "provider.support.cases.create",
+        "summary": "Open a support case with Servana.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerSupportCaseService.createCase",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/support/cases",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderSupportCaseCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderSupportCase"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "NOT bound to a booking, unlike the customer support-case resource. A provider raising a case about their account, a payout or a policy has no booking to attach it to, and requiring one would have made the commonest case unreportable."
+      }
+    },
+    "/api/v1/provider/support/cases/{caseId}": {
+      "get": {
+        "operationId": "provider.support.cases.get",
+        "summary": "One support case and its thread.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerSupportCaseService.getCase",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/support/cases/:caseId",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "caseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "provider_support_cases.id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderSupportCase"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provider/support/cases/{caseId}/messages": {
+      "post": {
+        "operationId": "provider.support.cases.reply",
+        "summary": "Add a message to a case thread.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerSupportCaseService.addProviderMessage",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/support/cases/:caseId/messages",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "caseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "provider_support_cases.id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderSupportCaseMessage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderSupportCaseMessageResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "THE ONE THE CLASSIFIER NEARLY MISMATCHED. A client mapped this onto /v1/conversations/:id/messages on the word \"messages\" and it was rejected as false. A case thread is between a provider and SERVANA; a conversation is between a provider and a CUSTOMER about a booking. Different audience, different retention, different authorization - membership of a booking versus ownership of a case. Do not let a shared noun drive a migration."
+      }
+    },
+    "/api/v1/provider/support/cases/{caseId}/withdraw": {
+      "post": {
+        "operationId": "provider.support.cases.withdraw",
+        "summary": "Withdraw a case the provider no longer wants worked.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerSupportCaseService.withdrawCase",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/support/cases/:caseId/withdraw",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "caseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "provider_support_cases.id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderSupportCaseStateChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderSupportCase"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provider/support/cases/{caseId}/reopen": {
+      "post": {
+        "operationId": "provider.support.cases.reopen",
+        "summary": "Reopen a closed case rather than raising a second one about it.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerSupportCaseService.reopenCase",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/support/cases/:caseId/reopen",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "caseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "provider_support_cases.id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderSupportCaseStateChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderSupportCase"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provider/support/cases/{caseId}/appeals": {
+      "post": {
+        "operationId": "provider.support.cases.appeal",
+        "summary": "Appeal the outcome of a support case.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerSupportCaseService.appealCase",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/support/cases/:caseId/appeals",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "caseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "provider_support_cases.id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderSupportCaseAppeal"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderSupportCaseAppealResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provider/support/cases/{caseId}/attachments": {
+      "post": {
+        "operationId": "provider.support.cases.attach",
+        "summary": "Attach a file to a support case.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerSupportCaseService.uploadAttachment",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/support/cases/:caseId/attachments",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "caseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "provider_support_cases.id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderSupportCaseAttachment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderSupportCaseAttachmentResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "UNSUPPORTED_MEDIA_TYPE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "A THIRD upload surface, and deliberately NOT merged with job evidence or chat attachments. They share a MECHANISM - validated ingress - and not a RESOURCE: a case attachment is reviewed by Servana, evidence decides a dispute, a chat attachment is a message to a customer. Different audiences, retentions and authorization. The right shared thing is the validator, not the endpoint."
+      }
+    },
+    "/api/v1/provider/support/cases/{caseId}/attachments/{attachmentId}/preview": {
+      "get": {
+        "operationId": "provider.support.cases.attachmentPreview",
+        "summary": "A short-lived URL for one case attachment.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerSupportCaseService.previewAttachment",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/support/cases/:caseId/attachments/:attachmentId/preview",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "caseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "provider_support_cases.id"
+          },
+          {
+            "name": "attachmentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The attachment on that case"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderSupportCaseAttachmentPreview"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Mints a SHORT-LIVED url after re-checking ownership; it never returns a storage path. A separate operation from the case read for exactly that reason - folding it in would turn every case fetch into a file disclosure."
+      }
+    },
+    "/api/v1/provider/reputation/summary": {
+      "get": {
+        "operationId": "provider.reputation.summary",
+        "summary": "The caller's own rating aggregate.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerReputationService.getProviderReputationSummary",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/reputation/summary",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderReputationSummary"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "NOT /v1/provider/earnings/summary, which a client classifier matched this against on the word \"summary\" and which was rejected as false. One is a rating aggregate and the other is money. They share a noun and nothing else."
+      }
+    },
+    "/api/v1/provider/reviews": {
+      "get": {
+        "operationId": "provider.reviews.list",
+        "summary": "Reviews left about the caller, with their response state.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerReputationService.listOwnedProviderReviews",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/reviews",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by response state"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Page size"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderOwnedReviewList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "DISTINCT from GET /v1/reviews/providers/:providerUid, which is what a CUSTOMER sees when choosing a provider. This one carries response state and moderation state, which are not public."
+      }
+    },
+    "/api/v1/provider/reviews/{reviewId}": {
+      "get": {
+        "operationId": "provider.reviews.get",
+        "summary": "One review naming the caller.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerReputationService.getOwnedProviderReview",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/reviews/:reviewId",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reviewId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The review this provider is named in"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderOwnedReview"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provider/reviews/{reviewId}/response": {
+      "post": {
+        "operationId": "provider.reviews.respond",
+        "summary": "Respond publicly to a review.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerReputationService.submitProviderResponse",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/reviews/:reviewId/response",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reviewId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The review this provider is named in"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderReviewResponse"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderReviewResponseResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "PUBLIC-FACING TEXT, so the moderation that applies today applies to the canonical route on day one - providerResponseNeedsModeration runs on the same body before it is published, which is why this delegates rather than reimplements. EDIT AND WITHDRAW, since the mandate asks: neither is published, because neither exists. There is one response per review and the service has no update or delete path for it. That is a deliberate product position rather than an omission - a published reply that can be silently rewritten after a customer has read it is a different product - and it is recorded here so a client team plans for one shot rather than discovering it. Changing it is a product decision with an owner, not a migration."
+      }
+    },
+    "/api/v1/provider/reviews/{reviewId}/report": {
+      "post": {
+        "operationId": "provider.reviews.report",
+        "summary": "Report a review as breaching policy.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerReputationService.reportOwnedReview",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/reviews/:reviewId/report",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reviewId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The review this provider is named in"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderReviewReport"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderReviewReportResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "A request for REVIEW, not a removal. The reason vocabulary is closed, so a report carries a code a moderator can triage on rather than free text somebody has to read before they can sort it."
+      }
+    },
+    "/api/v1/provider/review-moderation/{caseId}/appeals": {
+      "post": {
+        "operationId": "provider.reviews.appeal",
+        "summary": "Appeal a moderation decision about a review.",
+        "tags": [
+          "provider-support"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerReputationService.appealOwnedReview",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/review-moderation/:caseId/appeals",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-support",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "caseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The MODERATION CASE being appealed, not the review"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderReviewAppeal"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderReviewAppealResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Keyed on the moderation CASE id, not the review id, and the distinction matters: the thing being appealed is a DECISION, and one review can carry more than one over time. Keying on the review would make the second appeal ambiguous about which decision it contested."
+      }
+    },
     "/api/v1/notifications": {
       "get": {
         "operationId": "notifications.list",
@@ -9062,7 +11067,7 @@
                   ],
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/SupportCase"
+                      "$ref": "#/components/schemas/ProviderSupportCase"
                     },
                     "meta": {
                       "type": "object",
@@ -9177,7 +11182,7 @@
                   ],
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/SupportCaseList"
+                      "$ref": "#/components/schemas/ProviderSupportCaseList"
                     },
                     "meta": {
                       "type": "object",
@@ -22615,6 +24620,263 @@
           }
         }
       },
+      "ProviderSupportCaseCategoryList": {
+        "type": "array",
+        "description": "The categories a provider may open a case under. STATIC per deployment - names no account and reads no provider row, so it is cacheable.",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "ProviderSupportCase": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "The PROVIDER's own case with Servana. NOT the customer post-service support case at /v1/bookings/{bookingId}/support-cases, which is a different service and a different actor, and NOT a customer conversation - a case thread is between a provider and Servana, with its own audience, retention and authorization.",
+        "properties": {
+          "caseId": {
+            "type": "string"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "availableActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the server will HONOUR on this case in its current state."
+          }
+        }
+      },
+      "ProviderSupportCaseList": {
+        "type": "array",
+        "description": "The caller's own cases, never another provider's.",
+        "items": {
+          "$ref": "#/components/schemas/ProviderSupportCase"
+        }
+      },
+      "ProviderSupportCaseCreate": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "NOT bound to a booking, unlike the customer support-case resource. A provider raising a case about their account, a payout or a policy has no booking to attach it to.",
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128
+          }
+        }
+      },
+      "ProviderSupportCaseMessage": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A message in the case thread. The thread is between the provider and SERVANA - it is not a customer conversation, however similar the word looks.",
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128
+          }
+        }
+      },
+      "ProviderSupportCaseMessageResult": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "ProviderSupportCaseStateChange": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A reason travels with a state change so the thread records WHY, not only what.",
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "clientRequestId": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderSupportCaseAppeal": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "An appeal is a second DECISION on one case, not a second case.",
+        "properties": {
+          "ground": {
+            "type": "string"
+          },
+          "explanation": {
+            "type": "string"
+          },
+          "clientRequestId": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderSupportCaseAppealResult": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "ProviderSupportCaseAttachment": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A file for Servana to review. A THIRD upload surface, deliberately not merged with job evidence or chat attachments: they share a validated-ingress MECHANISM, not a RESOURCE. Different audience, different retention, different authorization.",
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "data:<mime>;base64,<payload>"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "clientRequestId": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderSupportCaseAttachmentResult": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "ProviderSupportCaseAttachmentPreview": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A SHORT-LIVED url, minted after re-checking ownership. Never a storage path, and a separate operation from the case read so a case fetch is not a file disclosure.",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "mimeType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProviderReputationSummary": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A RATING aggregate. NOT /v1/provider/earnings/summary, which a client classifier matched this against on the word \"summary\" and which was rejected as false - one is a rating, the other is money."
+      },
+      "ProviderOwnedReview": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A review naming the caller, with its RESPONSE and MODERATION state. Distinct from GET /v1/reviews/providers/{providerUid}, which is the public customer view and carries neither."
+      },
+      "ProviderOwnedReviewList": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/ProviderOwnedReview"
+        }
+      },
+      "ProviderReviewResponse": {
+        "type": "object",
+        "required": [
+          "body",
+          "clientRequestId"
+        ],
+        "additionalProperties": false,
+        "description": "PUBLIC-FACING TEXT. The same moderation pass that applies on the legacy route applies here on day one. ONE response per review: there is no edit and no withdraw, which is a deliberate product position rather than a missing endpoint - a published reply that can be silently rewritten after a customer has read it is a different product.",
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128
+          }
+        }
+      },
+      "ProviderReviewResponseResult": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "ProviderReviewReport": {
+        "type": "object",
+        "required": [
+          "reason",
+          "clientRequestId"
+        ],
+        "additionalProperties": false,
+        "description": "A request for REVIEW, not a removal. The reason vocabulary is CLOSED so a report carries a code a moderator can triage on rather than prose somebody must read first.",
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "details": {
+            "type": "string"
+          },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128
+          }
+        }
+      },
+      "ProviderReviewReportResult": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "ProviderReviewAppeal": {
+        "type": "object",
+        "required": [
+          "ground",
+          "clientRequestId"
+        ],
+        "additionalProperties": false,
+        "description": "Keyed on the moderation CASE, not the review: the thing appealed is a DECISION, and one review can carry more than one over time.",
+        "properties": {
+          "ground": {
+            "type": "string"
+          },
+          "explanation": {
+            "type": "string"
+          },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128
+          }
+        }
+      },
+      "ProviderReviewAppealResult": {
+        "type": "object",
+        "additionalProperties": true
+      },
       "ProviderActivation": {
         "type": "object",
         "required": [
@@ -25036,6 +27298,9 @@
       "name": "provider-services"
     },
     {
+      "name": "provider-support"
+    },
+    {
       "name": "reviews"
     },
     {
@@ -25049,6 +27314,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 145,
-  "x-total-count": 146
+  "x-implemented-count": 161,
+  "x-total-count": 162
 }

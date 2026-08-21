@@ -18,11 +18,11 @@
 
 | | |
 | --- | --- |
-| Capabilities | 70 |
-| Canonical endpoints mounted | 145 |
+| Capabilities | 72 |
+| Canonical endpoints mounted | 161 |
 | Canonical endpoints planned | 1 |
-| Legacy mappings tracked | 158 |
-| Converged (one route family) | 62 |
+| Legacy mappings tracked | 174 |
+| Converged (one route family) | 64 |
 | Role-split over ONE service | 4 |
 | Single-surface | 4 |
 | **Divergent (forked truth)** | **0** |
@@ -93,7 +93,9 @@ direction of whoever wrote it.
 | A provider's own job queue | SHARED | — | — | **migrated** | **migrated** | — |
 | Say whether I am working, where I am, and that I am safe | SHARED | — | — | planned | planned | — |
 | Read a provider's public profile | SHARED | planned | planned | — | — | planned |
+| See what customers said about me, and answer it | SHARED | — | — | planned | planned | — |
 | Decide what work I am offered | SHARED | — | — | planned | planned | — |
+| Raise a case with Servana, and follow it | SHARED | — | — | planned | planned | — |
 | Resolve a refund review | SINGLE_SURFACE | — | — | — | — | legacy |
 | Read the reschedule history of a booking | SHARED | planned | planned | planned | **migrated** | planned |
 | Report that the product is working | SINGLE_SURFACE | — | — | planned | — | — |
@@ -714,6 +716,30 @@ Legacy still aliased for this capability:
 
 No role split. One public projection, and the disclosure rules are the provider disclosure policy — not a per-caller decision made at the route.
 
+### See what customers said about me, and answer it
+
+- key: `core:providerReputation` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/providerReputationService`
+- route families: `/provider`
+
+Canonical:
+  - `GET /api/v1/provider/reputation/summary`
+  - `POST /api/v1/provider/review-moderation/:caseId/appeals`
+  - `GET /api/v1/provider/reviews/:reviewId`
+  - `GET /api/v1/provider/reviews`
+  - `POST /api/v1/provider/reviews/:reviewId/report`
+  - `POST /api/v1/provider/reviews/:reviewId/response`
+
+Legacy still aliased for this capability:
+  - `GET /api/provider/reputation/summary`
+  - `GET /api/provider/reviews`
+  - `GET /api/provider/reviews/:reviewId`
+  - `POST /api/provider/review-moderation/:caseId/appeals`
+  - `POST /api/provider/reviews/:reviewId/report`
+  - `POST /api/provider/reviews/:reviewId/response`
+
+No role split, and distinct from the customer-facing review reads (/v1/reviews/providers/:providerUid) because this surface carries RESPONSE and MODERATION state, neither of which is public. The write half is what v1 lacked entirely: a provider could be reviewed canonically and could not answer. A response is public-facing text, so the moderation that applies today applies to the canonical route on day one rather than being added afterwards.
+
 ### Decide what work I am offered
 
 - key: `core:providerServiceCatalogue` · declared in `api/v1/convergence (core)`
@@ -743,6 +769,38 @@ Legacy still aliased for this capability:
   - `POST /api/worker/service-applications/:applicationId/resubmit`
 
 No role split. One capability rather than two because a read and a write here act on the SAME row: a pause and an approval both change what matching offers, and splitting them would let a pause be published canonically while the reactivate that undoes it stayed legacy. Held separately from providerProfile because a service list looked like part of a profile and is not - it is the input to matching, and it is the only provider-facing surface whose state decides earnings. `provider.services.list` stays in the account capability: it is the four-field chip, and the overview here is the management screen.
+
+### Raise a case with Servana, and follow it
+
+- key: `core:providerSupportCases` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/providerSupportCaseService`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/support/cases/:caseId/appeals`
+  - `POST /api/v1/provider/support/cases/:caseId/attachments`
+  - `GET /api/v1/provider/support/cases/:caseId/attachments/:attachmentId/preview`
+  - `POST /api/v1/provider/support/cases`
+  - `GET /api/v1/provider/support/cases/:caseId`
+  - `GET /api/v1/provider/support/cases`
+  - `POST /api/v1/provider/support/cases/:caseId/reopen`
+  - `POST /api/v1/provider/support/cases/:caseId/messages`
+  - `POST /api/v1/provider/support/cases/:caseId/withdraw`
+  - `GET /api/v1/provider/support/case-categories`
+
+Legacy still aliased for this capability:
+  - `GET /api/provider/support/case-categories`
+  - `GET /api/provider/support/cases`
+  - `GET /api/provider/support/cases/:caseId`
+  - `GET /api/provider/support/cases/:caseId/attachments/:attachmentId/preview`
+  - `POST /api/provider/support/cases`
+  - `POST /api/provider/support/cases/:caseId/appeals`
+  - `POST /api/provider/support/cases/:caseId/attachments`
+  - `POST /api/provider/support/cases/:caseId/messages`
+  - `POST /api/provider/support/cases/:caseId/reopen`
+  - `POST /api/provider/support/cases/:caseId/withdraw`
+
+No role split. Held apart from the CUSTOMER post-service support cases (bookings/:bookingId/support-cases, services/reviews/postServiceSupportService) and from customer CONVERSATIONS, and the separation is the point rather than an accident of naming. A provider case is with Servana, is not bound to a booking, and is authorized by OWNERSHIP of the case; a conversation is authorized by MEMBERSHIP of a booking and read by a customer. A client classifier already matched this thread onto /v1/conversations/:id/messages on the word "messages" and was wrong. Three things share the words "support case" in this product and they are three resources.
 
 ### Resolve a refund review
 

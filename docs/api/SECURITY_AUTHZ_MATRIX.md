@@ -15,13 +15,13 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 145 |
+| Mounted endpoints | 161 |
 | `public` | 22 |
 | `authenticated` | 61 |
-| `provider` | 56 |
+| `provider` | 72 |
 | `admin` | 6 |
-| Object-scoped | 48 |
-| Object-scoped WITH an ownership rule | 48 |
+| Object-scoped | 59 |
+| Object-scoped WITH an ownership rule | 59 |
 | **Unguarded** | **0** |
 
 ## 2. Role access, by declared mode
@@ -46,6 +46,14 @@ role; the whole point is that one customer must not read another's booking.
 A booking carries an address and a time when somebody will be at home. A leak of
 it is not a data-protection abstraction — it is telling a stranger where a person
 lives and when they will be there. OWASP puts this first in the API top ten.
+
+### `provider-support` — `:caseId | reviewId`
+
+- predicate: provider_uid = $1 AND id = $2 (the caller uid is the FIRST argument to every service function)
+- enforced by: `services/providerSupportCaseService + services/providerReputationService`
+- proven by: `tests/provider-support-reviews-v1.test.ts`
+- a non-owner receives: 404 NOT_FOUND
+- distinguishes absent from forbidden: **no**
 
 ### `admin-bookings` — `:bookingId`
 
@@ -252,6 +260,12 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `provider.profile.patch` | PATCH /provider/profile | `provider` | · · ● · | — |
 | `provider.publicProfile.get` | GET /providers/:providerUid/profile | `authenticated` | · ● ● ● | — |
 | `provider.publicProfile.preview` | GET /provider/public-profile | `provider` | · · ● · | — |
+| `provider.reputation.summary` | GET /provider/reputation/summary | `provider` | · · ● · | — |
+| `provider.reviews.appeal` | POST /provider/review-moderation/:caseId/appeals | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.reviews.get` | GET /provider/reviews/:reviewId | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.reviews.list` | GET /provider/reviews | `provider` | · · ● · | — |
+| `provider.reviews.report` | POST /provider/reviews/:reviewId/report | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.reviews.respond` | POST /provider/reviews/:reviewId/response | `provider` | · · ● · | ✔ caseId | reviewId |
 | `provider.safety.checkIn` | POST /provider/safety/check-in | `provider` | · · ● · | — |
 | `provider.safety.emergencyConfig` | GET /provider/safety/emergency-config | `provider` | · · ● · | — |
 | `provider.safety.incidents.create` | POST /provider/safety/incidents | `provider` | · · ● · | — |
@@ -266,6 +280,16 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `provider.services.overview` | GET /provider/services/overview | `provider` | · · ● · | — |
 | `provider.services.pause` | PATCH /provider/services/:serviceId/pause | `provider` | · · ● · | — |
 | `provider.services.reactivate` | PATCH /provider/services/:serviceId/reactivate | `provider` | · · ● · | — |
+| `provider.support.cases.appeal` | POST /provider/support/cases/:caseId/appeals | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.support.cases.attach` | POST /provider/support/cases/:caseId/attachments | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.support.cases.attachmentPreview` | GET /provider/support/cases/:caseId/attachments/:attachmentId/preview | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.support.cases.create` | POST /provider/support/cases | `provider` | · · ● · | — |
+| `provider.support.cases.get` | GET /provider/support/cases/:caseId | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.support.cases.list` | GET /provider/support/cases | `provider` | · · ● · | — |
+| `provider.support.cases.reopen` | POST /provider/support/cases/:caseId/reopen | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.support.cases.reply` | POST /provider/support/cases/:caseId/messages | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.support.cases.withdraw` | POST /provider/support/cases/:caseId/withdraw | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.support.categories` | GET /provider/support/case-categories | `provider` | · · ● · | — |
 | `provider.timeOff.cancel` | DELETE /provider/time-off/:timeOffId | `provider` | · · ● · | — |
 | `provider.timeOff.create` | POST /provider/time-off | `provider` | · · ● · | — |
 | `provider.timeOff.list` | GET /provider/time-off | `provider` | · · ● · | — |
@@ -299,8 +323,8 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-73 of 145 endpoints are probeable; the other
-72 are writes and are never probed, because a POST to
+80 of 161 endpoints are probeable; the other
+81 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.
 

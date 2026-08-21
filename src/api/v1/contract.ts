@@ -1522,6 +1522,494 @@ export const V1_CONTRACT: ContractEntry[] = [
   },
 
   // ───────────────────────────────────────────────────────────────────────────
+  // Provider support cases and the review write surface (TAB 08)
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: 'provider.support.categories',
+    domain: 'provider-support',
+    method: 'get',
+    path: '/provider/support/case-categories',
+    summary: "The categories a provider may open a support case under.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderSupportCaseCategoryList',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.listCategories',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/support/case-categories',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. A frozen list; no per-provider data.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'STATIC per deployment - names no account and reads no provider row, so a client may cache it. Published as its own resource rather than folded into the create request because a category list is what a client needs BEFORE it can compose one.',
+  },
+  {
+    id: 'provider.support.cases.list',
+    domain: 'provider-support',
+    method: 'get',
+    path: '/provider/support/cases',
+    summary: "The caller's own support cases.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderSupportCaseList',
+    errors: [],
+    query: [
+      { name: 'status', type: 'string', required: false, description: 'Filter by case status' },
+      { name: 'limit', type: 'string', required: false, description: 'Page size' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.listCases',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/support/cases',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Scoped on the caller uid inside the query itself.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'The PROVIDER\'s cases with Servana. NOT the customer post-service support cases at /v1/bookings/:bookingId/support-cases, which are a different service, a different actor and bound to a booking. Same two words, two resources.',
+  },
+  {
+    id: 'provider.support.cases.create',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/support/cases',
+    summary: "Open a support case with Servana.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId the service dedupes on, so a provider tapping twice on a slow connection raises one case rather than two for a human to triage.',
+    requestSchema: 'ProviderSupportCaseCreate',
+    responseSchema: 'ProviderSupportCase',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.createCase',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/support/cases',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same validation, same dedupe.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'NOT bound to a booking, unlike the customer support-case resource. A provider raising a case about their account, a payout or a policy has no booking to attach it to, and requiring one would have made the commonest case unreportable.',
+  },
+  {
+    id: 'provider.support.cases.get',
+    domain: 'provider-support',
+    method: 'get',
+    path: '/provider/support/cases/:caseId',
+    summary: "One support case and its thread.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderSupportCase',
+    errors: ['NOT_FOUND'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'provider_support_cases.id' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.getCase',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/support/cases/:caseId',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Another provider case id is a 404, not a 403.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+  },
+  {
+    id: 'provider.support.cases.reply',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/support/cases/:caseId/messages',
+    summary: "Add a message to a case thread.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId, so a retry on a lossy link does not post the same message twice into a thread a human is reading.',
+    requestSchema: 'ProviderSupportCaseMessage',
+    responseSchema: 'ProviderSupportCaseMessageResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'provider_support_cases.id' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.addProviderMessage',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/support/cases/:caseId/messages',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same thread.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'THE ONE THE CLASSIFIER NEARLY MISMATCHED. A client mapped this onto /v1/conversations/:id/messages on the word "messages" and it was rejected as false. A case thread is between a provider and SERVANA; a conversation is between a provider and a CUSTOMER about a booking. Different audience, different retention, different authorization - membership of a booking versus ownership of a case. Do not let a shared noun drive a migration.',
+  },
+  {
+    id: 'provider.support.cases.withdraw',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/support/cases/:caseId/withdraw',
+    summary: "Withdraw a case the provider no longer wants worked.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      'The update matches only a case still in a withdrawable state, so a repeat changes nothing and the case stays withdrawn once.',
+    requestSchema: 'ProviderSupportCaseStateChange',
+    responseSchema: 'ProviderSupportCase',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'provider_support_cases.id' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.withdrawCase',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/support/cases/:caseId/withdraw',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same state guard.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+  },
+  {
+    id: 'provider.support.cases.reopen',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/support/cases/:caseId/reopen',
+    summary: "Reopen a closed case rather than raising a second one about it.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      'The update matches only a closed case, so a repeat is refused rather than reopening an already-open case a second time.',
+    requestSchema: 'ProviderSupportCaseStateChange',
+    responseSchema: 'ProviderSupportCase',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'provider_support_cases.id' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.reopenCase',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/support/cases/:caseId/reopen',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Published so a provider is not pushed into raising a duplicate.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+  },
+  {
+    id: 'provider.support.cases.appeal',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/support/cases/:caseId/appeals',
+    summary: "Appeal the outcome of a support case.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId, so a retried appeal does not queue a second one for a human.',
+    requestSchema: 'ProviderSupportCaseAppeal',
+    responseSchema: 'ProviderSupportCaseAppealResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'provider_support_cases.id' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.appealCase',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/support/cases/:caseId/appeals',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. An appeal is a second DECISION, not a second case.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+  },
+  {
+    id: 'provider.support.cases.attach',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/support/cases/:caseId/attachments',
+    summary: "Attach a file to a support case.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId, so a retried upload on a lossy link attaches one file rather than two copies of it.',
+    requestSchema: 'ProviderSupportCaseAttachment',
+    responseSchema: 'ProviderSupportCaseAttachmentResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'UNSUPPORTED_MEDIA_TYPE'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'provider_support_cases.id' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.uploadAttachment',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/support/cases/:caseId/attachments',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same validation.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'A THIRD upload surface, and deliberately NOT merged with job evidence or chat attachments. They share a MECHANISM - validated ingress - and not a RESOURCE: a case attachment is reviewed by Servana, evidence decides a dispute, a chat attachment is a message to a customer. Different audiences, retentions and authorization. The right shared thing is the validator, not the endpoint.',
+  },
+  {
+    id: 'provider.support.cases.attachmentPreview',
+    domain: 'provider-support',
+    method: 'get',
+    path: '/provider/support/cases/:caseId/attachments/:attachmentId/preview',
+    summary: "A short-lived URL for one case attachment.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderSupportCaseAttachmentPreview',
+    errors: ['NOT_FOUND'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'provider_support_cases.id' },
+      { name: 'attachmentId', type: 'string', description: 'The attachment on that case' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.previewAttachment',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/support/cases/:caseId/attachments/:attachmentId/preview',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Re-authorizes before minting a URL.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'Mints a SHORT-LIVED url after re-checking ownership; it never returns a storage path. A separate operation from the case read for exactly that reason - folding it in would turn every case fetch into a file disclosure.',
+  },
+  {
+    id: 'provider.reputation.summary',
+    domain: 'provider-support',
+    method: 'get',
+    path: '/provider/reputation/summary',
+    summary: "The caller's own rating aggregate.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderReputationSummary',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerReputationService.getProviderReputationSummary',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/reputation/summary',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same aggregate.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'NOT /v1/provider/earnings/summary, which a client classifier matched this against on the word "summary" and which was rejected as false. One is a rating aggregate and the other is money. They share a noun and nothing else.',
+  },
+  {
+    id: 'provider.reviews.list',
+    domain: 'provider-support',
+    method: 'get',
+    path: '/provider/reviews',
+    summary: "Reviews left about the caller, with their response state.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderOwnedReviewList',
+    errors: [],
+    query: [
+      { name: 'status', type: 'string', required: false, description: 'Filter by response state' },
+      { name: 'limit', type: 'string', required: false, description: 'Page size' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerReputationService.listOwnedProviderReviews',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/reviews',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. The provider view of reviews naming them.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'DISTINCT from GET /v1/reviews/providers/:providerUid, which is what a CUSTOMER sees when choosing a provider. This one carries response state and moderation state, which are not public.',
+  },
+  {
+    id: 'provider.reviews.get',
+    domain: 'provider-support',
+    method: 'get',
+    path: '/provider/reviews/:reviewId',
+    summary: "One review naming the caller.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderOwnedReview',
+    errors: ['NOT_FOUND'],
+    params: [
+      { name: 'reviewId', type: 'string', description: 'The review this provider is named in' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerReputationService.getOwnedProviderReview',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/reviews/:reviewId',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. A review not naming the caller is a 404.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+  },
+  {
+    id: 'provider.reviews.respond',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/reviews/:reviewId/response',
+    summary: "Respond publicly to a review.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId the service dedupes on, so a retry does not publish the same response twice under one review.',
+    requestSchema: 'ProviderReviewResponse',
+    responseSchema: 'ProviderReviewResponseResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [
+      { name: 'reviewId', type: 'string', description: 'The review this provider is named in' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerReputationService.submitProviderResponse',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/reviews/:reviewId/response',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same moderation pass.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'PUBLIC-FACING TEXT, so the moderation that applies today applies to the canonical route on day one - providerResponseNeedsModeration runs on the same body before it is published, which is why this delegates rather than reimplements. EDIT AND WITHDRAW, since the mandate asks: neither is published, because neither exists. There is one response per review and the service has no update or delete path for it. That is a deliberate product position rather than an omission - a published reply that can be silently rewritten after a customer has read it is a different product - and it is recorded here so a client team plans for one shot rather than discovering it. Changing it is a product decision with an owner, not a migration.',
+  },
+  {
+    id: 'provider.reviews.report',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/reviews/:reviewId/report',
+    summary: "Report a review as breaching policy.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId, so a retried report does not open two moderation cases about one review.',
+    requestSchema: 'ProviderReviewReport',
+    responseSchema: 'ProviderReviewReportResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [
+      { name: 'reviewId', type: 'string', description: 'The review this provider is named in' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerReputationService.reportOwnedReview',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/reviews/:reviewId/report',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same closed reason vocabulary.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'A request for REVIEW, not a removal. The reason vocabulary is closed, so a report carries a code a moderator can triage on rather than free text somebody has to read before they can sort it.',
+  },
+  {
+    id: 'provider.reviews.appeal',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/review-moderation/:caseId/appeals',
+    summary: "Appeal a moderation decision about a review.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId, so a retried appeal does not queue two for one decision.',
+    requestSchema: 'ProviderReviewAppeal',
+    responseSchema: 'ProviderReviewAppealResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'The MODERATION CASE being appealed, not the review' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerReputationService.appealOwnedReview',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/review-moderation/:caseId/appeals',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same closed grounds vocabulary.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'Keyed on the moderation CASE id, not the review id, and the distinction matters: the thing being appealed is a DECISION, and one review can carry more than one over time. Keying on the review would make the second appeal ambiguous about which decision it contested.',
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Notifications
   // ───────────────────────────────────────────────────────────────────────────
   {
@@ -3051,7 +3539,7 @@ export const V1_CONTRACT: ContractEntry[] = [
       '(customer_uid, client_request_id). A retry on a flaky connection returns the original ' +
       'case rather than opening a third for one complaint.',
     requestSchema: 'SupportCaseInput',
-    responseSchema: 'SupportCase',
+    responseSchema: 'ProviderSupportCase',
     errors: [
       'VALIDATION_FAILED', 'SUPPORT_BOOKING_NOT_ELIGIBLE', 'SUPPORT_CASE_LIMIT_REACHED',
     ],
@@ -3084,7 +3572,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'The cases the caller raised on this booking.',
     auth: 'authenticated',
     idempotent: true,
-    responseSchema: 'SupportCaseList',
+    responseSchema: 'ProviderSupportCaseList',
     errors: ['VALIDATION_FAILED'],
     params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
     status: 'implemented',

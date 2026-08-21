@@ -336,6 +336,56 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'toProviderProjection / toAdminProjection), not different truths.',
   },
   {
+    key: 'providerSupportCases',
+    title: 'Raise a case with Servana, and follow it',
+    source: 'api/v1/convergence (core)',
+    contractIds: [
+      'provider.support.cases.appeal',
+      'provider.support.cases.attach',
+      'provider.support.cases.attachmentPreview',
+      'provider.support.cases.create',
+      'provider.support.cases.get',
+      'provider.support.cases.list',
+      'provider.support.cases.reopen',
+      'provider.support.cases.reply',
+      'provider.support.cases.withdraw',
+      'provider.support.categories',
+    ],
+    domainModule: 'services/providerSupportCaseService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split. Held apart from the CUSTOMER post-service support cases '
+      + '(bookings/:bookingId/support-cases, services/reviews/postServiceSupportService) and '
+      + 'from customer CONVERSATIONS, and the separation is the point rather than an accident '
+      + 'of naming. A provider case is with Servana, is not bound to a booking, and is '
+      + 'authorized by OWNERSHIP of the case; a conversation is authorized by MEMBERSHIP of a '
+      + 'booking and read by a customer. A client classifier already matched this thread onto '
+      + '/v1/conversations/:id/messages on the word "messages" and was wrong. Three things '
+      + 'share the words "support case" in this product and they are three resources.',
+  },
+  {
+    key: 'providerReputation',
+    title: 'See what customers said about me, and answer it',
+    source: 'api/v1/convergence (core)',
+    contractIds: [
+      'provider.reputation.summary',
+      'provider.reviews.appeal',
+      'provider.reviews.get',
+      'provider.reviews.list',
+      'provider.reviews.report',
+      'provider.reviews.respond',
+    ],
+    domainModule: 'services/providerReputationService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split, and distinct from the customer-facing review reads '
+      + '(/v1/reviews/providers/:providerUid) because this surface carries RESPONSE and '
+      + 'MODERATION state, neither of which is public. The write half is what v1 lacked '
+      + 'entirely: a provider could be reviewed canonically and could not answer. A response is '
+      + 'public-facing text, so the moderation that applies today applies to the canonical route '
+      + 'on day one rather than being added afterwards.',
+  },
+  {
     key: 'jobEvidence',
     title: 'Prove the work happened',
     source: 'api/v1/convergence (core)',

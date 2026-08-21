@@ -3230,6 +3230,183 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  ProviderSupportCaseCategoryList: {
+    type: 'array',
+    description:
+      'The categories a provider may open a case under. STATIC per deployment - names no ' +
+      'account and reads no provider row, so it is cacheable.',
+    items: { type: 'object', additionalProperties: true },
+  },
+
+  ProviderSupportCase: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      "The PROVIDER's own case with Servana. NOT the customer post-service support case at " +
+      '/v1/bookings/{bookingId}/support-cases, which is a different service and a different ' +
+      'actor, and NOT a customer conversation - a case thread is between a provider and ' +
+      'Servana, with its own audience, retention and authorization.',
+    properties: {
+      caseId: { type: 'string' },
+      category: { type: ['string', 'null'] },
+      status: { type: 'string' },
+      subject: { type: ['string', 'null'] },
+      createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      updatedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      availableActions: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'What the server will HONOUR on this case in its current state.',
+      },
+    },
+  },
+
+  ProviderSupportCaseList: {
+    type: 'array',
+    description: "The caller's own cases, never another provider's.",
+    items: { $ref: '#/components/schemas/ProviderSupportCase' },
+  },
+
+  ProviderSupportCaseCreate: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'NOT bound to a booking, unlike the customer support-case resource. A provider raising a ' +
+      'case about their account, a payout or a policy has no booking to attach it to.',
+    properties: {
+      category: { type: 'string' },
+      subject: { type: 'string' },
+      body: { type: 'string' },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+
+  ProviderSupportCaseMessage: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'A message in the case thread. The thread is between the provider and SERVANA - it is not ' +
+      'a customer conversation, however similar the word looks.',
+    properties: {
+      body: { type: 'string' },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+
+  ProviderSupportCaseMessageResult: { type: 'object', additionalProperties: true },
+  ProviderSupportCaseStateChange: {
+    type: 'object',
+    additionalProperties: true,
+    description: 'A reason travels with a state change so the thread records WHY, not only what.',
+    properties: { reason: { type: 'string' }, clientRequestId: { type: 'string' } },
+  },
+  ProviderSupportCaseAppeal: {
+    type: 'object',
+    additionalProperties: true,
+    description: 'An appeal is a second DECISION on one case, not a second case.',
+    properties: {
+      ground: { type: 'string' },
+      explanation: { type: 'string' },
+      clientRequestId: { type: 'string' },
+    },
+  },
+  ProviderSupportCaseAppealResult: { type: 'object', additionalProperties: true },
+  ProviderSupportCaseAttachment: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'A file for Servana to review. A THIRD upload surface, deliberately not merged with job ' +
+      'evidence or chat attachments: they share a validated-ingress MECHANISM, not a RESOURCE. ' +
+      'Different audience, different retention, different authorization.',
+    properties: {
+      file: { type: 'string', description: 'data:<mime>;base64,<payload>' },
+      fileName: { type: 'string' },
+      clientRequestId: { type: 'string' },
+    },
+  },
+  ProviderSupportCaseAttachmentResult: { type: 'object', additionalProperties: true },
+  ProviderSupportCaseAttachmentPreview: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'A SHORT-LIVED url, minted after re-checking ownership. Never a storage path, and a ' +
+      'separate operation from the case read so a case fetch is not a file disclosure.',
+    properties: {
+      url: { type: 'string' },
+      expiresAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      mimeType: { type: ['string', 'null'] },
+    },
+  },
+
+  ProviderReputationSummary: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'A RATING aggregate. NOT /v1/provider/earnings/summary, which a client classifier matched ' +
+      'this against on the word "summary" and which was rejected as false - one is a rating, the ' +
+      'other is money.',
+  },
+
+  ProviderOwnedReview: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'A review naming the caller, with its RESPONSE and MODERATION state. Distinct from ' +
+      'GET /v1/reviews/providers/{providerUid}, which is the public customer view and carries ' +
+      'neither.',
+  },
+
+  ProviderOwnedReviewList: {
+    type: 'array',
+    items: { $ref: '#/components/schemas/ProviderOwnedReview' },
+  },
+
+  ProviderReviewResponse: {
+    type: 'object',
+    required: ['body', 'clientRequestId'],
+    additionalProperties: false,
+    description:
+      'PUBLIC-FACING TEXT. The same moderation pass that applies on the legacy route applies ' +
+      'here on day one. ONE response per review: there is no edit and no withdraw, which is a ' +
+      'deliberate product position rather than a missing endpoint - a published reply that can ' +
+      'be silently rewritten after a customer has read it is a different product.',
+    properties: {
+      body: { type: 'string' },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+  ProviderReviewResponseResult: { type: 'object', additionalProperties: true },
+
+  ProviderReviewReport: {
+    type: 'object',
+    required: ['reason', 'clientRequestId'],
+    additionalProperties: false,
+    description:
+      'A request for REVIEW, not a removal. The reason vocabulary is CLOSED so a report carries ' +
+      'a code a moderator can triage on rather than prose somebody must read first.',
+    properties: {
+      reason: { type: 'string' },
+      details: { type: 'string' },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+  ProviderReviewReportResult: { type: 'object', additionalProperties: true },
+
+  ProviderReviewAppeal: {
+    type: 'object',
+    required: ['ground', 'clientRequestId'],
+    additionalProperties: false,
+    description:
+      'Keyed on the moderation CASE, not the review: the thing appealed is a DECISION, and one ' +
+      'review can carry more than one over time.',
+    properties: {
+      ground: { type: 'string' },
+      explanation: { type: 'string' },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+  ProviderReviewAppealResult: { type: 'object', additionalProperties: true },
+
   ProviderActivation: {
     type: 'object',
     required: [
