@@ -7,11 +7,11 @@ Every route the app mounts outside `/api/v1`: **519**.
 
 | Disposition | Count | Meaning |
 |---|---:|---|
-| `ALIAS_TEMPORARILY` | 106 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
+| `ALIAS_TEMPORARILY` | 114 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
 | `CANONICALIZE` | 11 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
 | `ROLE_SPECIFIC` | 13 | Legitimately separate: different auth, action or payload — same domain service. |
 | `RETIRE` | 1 | No caller and no successor. Delete once telemetry confirms zero traffic. |
-| `KEEP` | 388 | Not a duplicate of anything canonical. Untouched by this command. |
+| `KEEP` | 380 | Not a duplicate of anything canonical. Untouched by this command. |
 
 ## Retirement criteria
 
@@ -27,7 +27,7 @@ build knows how to call.
 
 Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 
-## ALIAS_TEMPORARILY (106)
+## ALIAS_TEMPORARILY (114)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
@@ -95,6 +95,9 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `GET` | `/api/provider/verification-timeline` | `/api/v1/provider/verification-timeline` | Same service. The limit is clamped to 100 there and here, by the same code. |
 | `POST` | `/api/provider/contact-changes` | `/api/v1/provider/contact-changes` | Same service, same recent-auth precondition. STEP ONE of two - see the confirm entry. |
 | `POST` | `/api/provider/contact-changes/confirm` | `/api/v1/provider/contact-changes/confirm` | Same service. STEP TWO of two - see the request entry. |
+| `GET` | `/api/provider/location/status` | `/api/v1/provider/presence` | Same state, read from the same place. The legacy path says "location" for what is really availability, which is the naming this entry corrects. |
+| `POST` | `/api/provider/location/go-online` | `/api/v1/provider/presence/online` | Same service, same source tag, and the same requireActiveProvider rung. |
+| `POST` | `/api/provider/location/go-offline` | `/api/v1/provider/presence/offline` | Same service. Mounted WITHOUT requireActiveProvider, and this entry matches that deliberately rather than by omission. |
 | `GET` | `/api/provider/earnings` | `/api/v1/provider/earnings/transactions` | The live earnings list. Same domain service now; the v1 shape adds the economic model, the payout block reason and minor-unit amounts. |
 | `GET` | `/api/provider/earnings/summary` | `/api/v1/provider/earnings/summary` | The live provider portal call, now delegating to the same domain service so the two paths return identical figures during migration rather than merely similar ones. |
 | `GET` | `/api/provider/ledger` | `/api/v1/provider/earnings/transactions` | A THIRD reading of the same columns, which used to hardcode every completed booking as "settled" and report failed payouts as money in hand. Superseded entirely. |
@@ -106,7 +109,11 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `GET` | `/api/worker/time-off` | `/api/v1/provider/time-off` | Same engine, same active-only filter. A cancelled period is history rather than a commitment and appears in neither. |
 | `POST` | `/api/worker/time-off` | `/api/v1/provider/time-off` | IDENTICAL engine call, and it carries the same bookingConflicts and conflictNotice. Time off is created even when it overlaps confirmed work - a provider who is ill must be able to record it - but the work is still theirs, and a response that did not say so would leave them assuming leave cancels their jobs. |
 | `DELETE` | `/api/worker/time-off/:id` | `/api/v1/provider/time-off/:timeOffId` | IDENTICAL engine call. Cancels rather than deletes; the row survives as history. |
+| `GET` | `/api/provider/safety/emergency-config` | `/api/v1/provider/safety/emergency-config` | The SAME frozen object, now imported by both surfaces rather than declared twice. |
+| `GET` | `/api/provider/safety/incidents` | `/api/v1/provider/safety/incidents` | Same collection, scoped on the caller uid in the query itself. |
+| `POST` | `/api/provider/safety/incidents` | `/api/v1/provider/safety/incidents` | SAME implementation, DIFFERENT disposition on a duplicate: the legacy route answers 409 and keeps doing so, because five clients read it. |
 | `POST` | `/api/provider/activation/policy-acknowledgement` | `/api/v1/provider/activation/policy-acknowledgement` | Same service. Idempotent there and here, by the same COALESCE. |
+| `POST` | `/api/provider/safety/check-in` | `/api/v1/provider/safety/check-in` | Same service, same closed stage vocabulary. |
 | `GET` | `/api/worker/service-applications` | `/api/v1/provider/service-applications` | Same service. The legacy envelope wraps it as { success, applications }. |
 | `GET` | `/api/worker/service-applications/:applicationId` | `/api/v1/provider/service-applications/:applicationId` | Same service. Scoped on worker_uid in SQL, so another provider id is a 404. |
 | `POST` | `/api/worker/service-applications` | `/api/v1/provider/service-applications` | Same service, same replay lookup. |
@@ -127,6 +134,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `PUT` | `/api/worker/bookings/:bookingId/arrived` | `/api/v1/provider/jobs/:bookingId/arrived` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
 | `PUT` | `/api/worker/bookings/:bookingId/start` | `/api/v1/provider/jobs/:bookingId/start` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
 | `PUT` | `/api/worker/bookings/:bookingId/complete` | `/api/v1/provider/jobs/:bookingId/complete` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
+| `POST` | `/api/worker/location` | `/api/v1/provider/location` | Same storage. The legacy body also carries isOnline and writes it through; this entry deliberately does not accept that field. |
 | `GET` | `/api/booking/:bookingId/provider-location` | `/api/v1/bookings/:bookingId/tracking` | The authenticated position route. Booking-scoped already, but answers in EVERY state — a customer could watch their provider on a booking cancelled last week. This entry adds the state and time-window rules §64 requires. |
 | `POST` | `/api/admin/bookings/:id/reschedule` | `/api/v1/bookings/:bookingId/reschedule` | The admin-only predecessor, and the only reschedule that has ever existed. A bare UPDATE with no optimistic concurrency and no provider-calendar check — two admins moving one booking produced a silent winner. Kept until the portal migrates. |
 | `POST` | `/api/admin/bookings/:id/escalate` | `/api/v1/bookings/:bookingId/disputes` | The admin-only predecessor, and the only way to open a dispute before this. Writes the same booking_escalations row; it does not record a category, the opening role or the state snapshot §66 requires. Kept until the portal migrates. |
@@ -178,7 +186,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 |---|---|---|---|
 | `GET` | `/api/workers/:uid/earnings-history` | `/api/v1/provider/earnings/transactions` | Takes the provider uid from the URL and has no auth, so it answers for anybody. No located caller in any of the five clients. Carried over from the planned placeholder this entry replaces; delete once telemetry confirms zero traffic. |
 
-## KEEP (388)
+## KEEP (380)
 
 Mounted, not superseded, not a duplicate. Listed so the inventory is complete and so a
 later domain command starts from a route list rather than from a grep.
@@ -243,9 +251,6 @@ later domain command starts from a route list rather than from a grep.
 | `GET` | `/api/provider/calendar` | `src/routes/provider.routes.ts:63` |
 | `GET` | `/api/provider/profile-photo-submissions` | `src/routes/provider.routes.ts:67` |
 | `GET` | `/api/provider/profile-photo-submissions/:submissionId/preview` | `src/routes/provider.routes.ts:68` |
-| `GET` | `/api/provider/location/status` | `src/routes/provider.routes.ts:71` |
-| `POST` | `/api/provider/location/go-online` | `src/routes/provider.routes.ts:72` |
-| `POST` | `/api/provider/location/go-offline` | `src/routes/provider.routes.ts:73` |
 | `GET` | `/api/provider/dashboard` | `src/routes/provider.routes.ts:76` |
 | `GET` | `/api/provider/earnings/:id` | `src/routes/provider.routes.ts:81` |
 | `GET` | `/api/provider/performance` | `src/routes/provider.routes.ts:85` |
@@ -288,9 +293,6 @@ later domain command starts from a route list rather than from a grep.
 | `PUT` | `/api/worker/service-area` | `src/routes/provider.routes.ts:156` |
 | `POST` | `/api/worker/profile/photo` | `src/routes/provider.routes.ts:159` |
 | `DELETE` | `/api/worker/profile/photo` | `src/routes/provider.routes.ts:160` |
-| `GET` | `/api/provider/safety/emergency-config` | `src/routes/provider.routes.ts:164` |
-| `GET` | `/api/provider/safety/incidents` | `src/routes/provider.routes.ts:165` |
-| `POST` | `/api/provider/safety/incidents` | `src/routes/provider.routes.ts:166` |
 | `GET` | `/api/provider/security` | `src/routes/provider.routes.ts:169` |
 | `POST` | `/api/provider/security/password` | `src/routes/provider.routes.ts:170` |
 | `POST` | `/api/provider/security/sessions/revoke-all` | `src/routes/provider.routes.ts:172` |
@@ -307,12 +309,10 @@ later domain command starts from a route list rather than from a grep.
 | `POST` | `/api/provider/support/tickets/:ticketKey/replies` | `src/routes/provider.routes.ts:194` |
 | `POST` | `/api/provider/support/tickets/:ticketKey/close` | `src/routes/provider.routes.ts:195` |
 | `POST` | `/api/provider/support/tickets/:ticketKey/reopen` | `src/routes/provider.routes.ts:196` |
-| `POST` | `/api/provider/safety/check-in` | `src/routes/provider.routes.ts:199` |
 | `GET` | `/api/provider/bookings/:bookingId/evidence` | `src/routes/provider.routes.ts:232` |
 | `POST` | `/api/provider/bookings/:bookingId/evidence` | `src/routes/provider.routes.ts:233` |
 | `DELETE` | `/api/provider/bookings/:bookingId/evidence/:evidenceId` | `src/routes/provider.routes.ts:234` |
 | `GET` | `/api/provider/bookings/:bookingId/cancellation-eligibility` | `src/routes/provider.routes.ts:236` |
-| `POST` | `/api/worker/location` | `src/routes/provider.routes.ts:251` |
 | `GET` | `/api/worker/services` | `src/routes/provider.routes.ts:254` |
 | `DELETE` | `/api/worker/services/:serviceId` | `src/routes/provider.routes.ts:255` |
 | `GET` | `/api/admin/provider/reconciliation` | `src/routes/provider.routes.ts:258` |

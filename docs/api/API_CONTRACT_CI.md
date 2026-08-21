@@ -48,7 +48,7 @@ wrong. These assert meaning:
 
 ## 3. Deprecation (§149)
 
-108 legacy aliases carry deprecation headers today:
+116 legacy aliases carry deprecation headers today:
 
 ```
 Deprecation: true

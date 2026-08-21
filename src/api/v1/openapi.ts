@@ -2894,6 +2894,208 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  ProviderPresence: {
+    type: 'object',
+    required: ['isOnline', 'availabilityStatus'],
+    description:
+      'Operational availability, which belongs to the PROVIDER - not to a session, a device or ' +
+      'a job. Nothing incidental changes it: not a closed app, a logout, an expired token, a ' +
+      'dropped socket, a lost network, a restart, a missed heartbeat, a stale location, a ' +
+      'schedule ending or a booking completing. Only an explicit act.',
+    properties: {
+      isOnline: { type: 'boolean' },
+      availabilityStatus: { type: 'string', enum: ['online', 'offline'] },
+      availabilitySource: {
+        type: 'string',
+        description: 'WHO or what last set it. provider_explicit is the provider themselves.',
+      },
+      changedAt: { type: ['string', 'null'], format: 'date-time' },
+      reason: { type: ['string', 'null'] },
+      version: { type: 'integer' },
+      updatedAt: { type: ['string', 'null'], format: 'date-time' },
+    },
+  },
+
+  ProviderPresenceChange: {
+    type: 'object',
+    required: ['isOnline'],
+    properties: {
+      isOnline: { type: 'boolean' },
+      source: { type: 'string' },
+    },
+  },
+
+  ProviderPresenceOnline: {
+    type: 'object',
+    additionalProperties: false,
+    description:
+      'Coordinates are OPTIONAL and are applied only when no location is stored, so going ' +
+      'online never overwrites a fresher fix with a stale one.',
+    properties: {
+      latitude: { type: 'number', minimum: -90, maximum: 90 },
+      longitude: { type: 'number', minimum: -180, maximum: 180 },
+    },
+  },
+
+  ProviderLocationReport: {
+    type: 'object',
+    required: ['latitude', 'longitude'],
+    additionalProperties: false,
+    description:
+      'TRANSPORT ONLY. There is deliberately NO isOnline field: the legacy route accepts one ' +
+      'and writes it through, so a location ping can flip availability as a side effect, which ' +
+      'is exactly what the presence rule forbids. Coordinates are range-checked before storage.',
+    properties: {
+      latitude: { type: 'number', minimum: -90, maximum: 90 },
+      longitude: { type: 'number', minimum: -180, maximum: 180 },
+    },
+  },
+
+  ProviderLocationState: {
+    type: 'object',
+    required: ['latitude', 'longitude', 'isOnline'],
+    description:
+      'The stored fix. `isOnline` is ECHOED, not set - it is whatever presence already held, ' +
+      'returned so a client can see that the ping did not change it.',
+    properties: {
+      latitude: { type: 'number' },
+      longitude: { type: 'number' },
+      isOnline: { type: 'boolean' },
+    },
+  },
+
+  ProviderEmergencyConfig: {
+    type: 'object',
+    required: ['locale', 'country', 'lines', 'disclaimer'],
+    description:
+      'STATIC and market-wide. Names no account and reads no row, so it may be cached hard - ' +
+      'which is the point on a screen somebody opens in an emergency.',
+    properties: {
+      locale: { type: 'string' },
+      country: { type: 'string' },
+      lines: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            label: { type: 'string' },
+            number: { type: 'string', description: 'A tel: URI the device dialer opens.' },
+            dialLabel: { type: 'string' },
+            description: { type: 'string' },
+          },
+        },
+      },
+      disclaimer: {
+        type: 'string',
+        description:
+          'Load-bearing. Servana cannot dispatch emergency services, and a safety screen ' +
+          'implying otherwise would be the most dangerous copy in the product.',
+      },
+    },
+  },
+
+  ProviderSafetyCheckIn: {
+    type: 'object',
+    required: ['bookingId', 'stage'],
+    additionalProperties: false,
+    properties: {
+      bookingId: { type: 'string' },
+      stage: {
+        type: 'string',
+        enum: ['en_route', 'arrived', 'started', 'completed'],
+        description: 'CLOSED vocabulary - a typo is refused rather than becoming a new stage.',
+      },
+    },
+  },
+
+  ProviderSafetyCheckInResult: {
+    type: 'object',
+    required: ['bookingId', 'stage', 'checkedInAt'],
+    description:
+      'APPEND-ONLY and NOT de-duplicated. Two check-ins at one stage are two facts about two ' +
+      'moments, and collapsing them would discard the later one - the more recent evidence that ' +
+      'somebody is still safe.',
+    properties: {
+      bookingId: { type: 'string' },
+      stage: { type: 'string', enum: ['en_route', 'arrived', 'started', 'completed'] },
+      checkedInAt: { $ref: '#/components/schemas/UtcTimestamp' },
+    },
+  },
+
+  ProviderSafetyIncidentSubmit: {
+    type: 'object',
+    required: ['clientIncidentId', 'category', 'severity', 'description'],
+    additionalProperties: false,
+    description:
+      'A retry carrying the same clientIncidentId returns the ORIGINAL report rather than ' +
+      'filing a second one, and mutates nothing - not even reportedAt, which is the moment the ' +
+      'provider says something happened.',
+    properties: {
+      clientIncidentId: {
+        type: 'string',
+        maxLength: 128,
+        description:
+          'REQUIRED. Generate it on the device BEFORE the first attempt, and reuse it for every ' +
+          'retry of that one report. It is the whole replay story.',
+      },
+      category: { type: 'string', maxLength: 64 },
+      severity: { type: 'string', maxLength: 32 },
+      description: {
+        type: 'string',
+        minLength: 10,
+        maxLength: 2000,
+        description: 'At least 10 characters - a one-word incident report helps nobody.',
+      },
+      bookingId: { type: ['string', 'null'] },
+      immediateDanger: { type: 'boolean' },
+      providerSafe: { type: ['boolean', 'null'] },
+      workStopped: { type: 'boolean' },
+      emergencyServicesContacted: { type: ['boolean', 'null'] },
+    },
+  },
+
+  ProviderSafetyIncidentResult: {
+    type: 'object',
+    required: ['incidentId', 'providerSafeReference', 'state', 'replayed'],
+    description:
+      '201 for a newly filed report, 200 for a replay. Neither is an error - a retry that finds ' +
+      'the report already filed SUCCEEDED, and telling a provider otherwise on a doorstep is ' +
+      'the failure this route exists to avoid.',
+    properties: {
+      incidentId: { type: 'string' },
+      providerSafeReference: {
+        type: 'string',
+        description: 'The reference a provider quotes to support. Safe to display.',
+      },
+      state: { type: 'string' },
+      replayed: {
+        type: 'boolean',
+        description: 'True when this call matched a report already filed under the same key.',
+      },
+    },
+  },
+
+  ProviderSafetyIncidentList: {
+    type: 'array',
+    description: "The caller\'s own incidents, newest first. Never another provider\'s.",
+    items: {
+      type: 'object',
+      properties: {
+        incidentId: { type: 'string' },
+        providerSafeReference: { type: 'string' },
+        bookingId: { type: ['string', 'null'] },
+        category: { type: 'string' },
+        severity: { type: 'string' },
+        state: { type: 'string' },
+        immediateDanger: { type: 'boolean' },
+        workStopped: { type: 'boolean' },
+        reportedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+        updatedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+        hasUnreadUpdate: { type: 'boolean' },
+      },
+    },
+  },
+
   ProviderActivation: {
     type: 'object',
     required: [

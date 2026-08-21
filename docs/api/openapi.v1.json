@@ -2610,6 +2610,831 @@
         "description": "`expectedVersion` is REQUIRED and is optimistic concurrency (18), not decoration: between loading an application and resubmitting it, a reviewer may have decided. Without it a resubmission silently overwrites a decision the provider never saw. A mismatch is STALE_STATE - the code a client already reloads on - rather than a validation error, because nothing about the request was malformed."
       }
     },
+    "/api/v1/provider/presence": {
+      "get": {
+        "operationId": "provider.presence.get",
+        "summary": "Whether the caller is currently available for work, and when that was set.",
+        "tags": [
+          "provider-presence"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerOperationalAvailabilityService.getStatus",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/location/status",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-presence",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderPresence"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "PRESENCE IS BOUND TO THE PROVIDER - not to a session, a device or a job. The mandate asks the question directly and this is the answer. 27 lists what must never change it: a closed app, a logout, an expired token, a dropped socket, a lost network, a restarted device or backend, a missed heartbeat, a stale location, a schedule ending, a booking completing. A second device does not get a second presence, and signing out does not go offline - a provider who closed the app on the bus is still available for the job they are travelling to."
+      }
+    },
+    "/api/v1/provider/presence/online": {
+      "post": {
+        "operationId": "provider.presence.goOnline",
+        "summary": "Become available for work.",
+        "tags": [
+          "provider-presence"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerOperationalAvailabilityService.setOnline",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/location/go-online",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-presence",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderPresenceOnline"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderPresenceChange"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Idempotent: going online while already online reaches the same end state. Coordinates are OPTIONAL and are applied only when no location is stored, so going online never overwrites a fresher fix with a stale one. activeProvider: true mirrors the legacy chain exactly. It is on ONLINE and deliberately absent from OFFLINE."
+      }
+    },
+    "/api/v1/provider/presence/offline": {
+      "post": {
+        "operationId": "provider.presence.goOffline",
+        "summary": "Stop being offered work.",
+        "tags": [
+          "provider-presence"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerOperationalAvailabilityService.setOffline",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/location/go-offline",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-presence",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderPresenceChange"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "NO activeProvider rung, and that asymmetry is load-bearing. DENY_ALL in the account-state machine sets canGoOffline: true even for a denied account, because a provider must never be TRAPPED ONLINE - it is the one presence failure with no workaround. Adding the rung here to match its sibling would look like tidying and would strand a suspended provider as available."
+      }
+    },
+    "/api/v1/provider/location": {
+      "post": {
+        "operationId": "provider.location.report",
+        "summary": "Report the provider's current coordinates.",
+        "tags": [
+          "provider-presence"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/technicianService.upsertWorkerLocation",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/worker/location",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-presence",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderLocationReport"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderLocationState"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "TRANSPORT ONLY, and the difference from the legacy route is the point. /api/worker/location accepts isOnline in its body and writes it straight through, so a location ping can flip availability as a side effect - which 27 forbids by name. This route carries COORDINATES ONLY and writes back whatever presence already held. That is not a change to presence semantics: the legacy route is untouched and behaves exactly as before. It is a refusal to carry the hazard into the canonical surface. Coordinates are RANGE-CHECKED before storage - 39 forbids fabricating a location, and a latitude of 999 in a geospatial index is one nobody can later tell from a real fix. RETENTION AND ACCESS: the current fix is a single upserted document per provider, so there is no location HISTORY to retain - a new ping replaces the last. It is readable by the provider themselves, by admin, and by a CUSTOMER only through a booking they own, via GET /api/booking/:id/provider-location, and only while that booking is live. No route on this contract returns another provider location, and this TAB widened nothing."
+      }
+    },
+    "/api/v1/provider/safety/emergency-config": {
+      "get": {
+        "operationId": "provider.safety.emergencyConfig",
+        "summary": "Emergency numbers and guidance for this market.",
+        "tags": [
+          "provider-presence"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerSafetyService.PROVIDER_EMERGENCY_CONFIG",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/safety/emergency-config",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-presence",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderEmergencyConfig"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "STATIC and market-wide. Names no account, reads no row, carries no personal data - so a client may cache it hard, which is the point on a screen somebody opens in an emergency. The disclaimer is load-bearing: Servana cannot dispatch emergency services, and a safety screen implying otherwise would be the most dangerous copy in the product."
+      }
+    },
+    "/api/v1/provider/safety/check-in": {
+      "post": {
+        "operationId": "provider.safety.checkIn",
+        "summary": "Record that the provider is safe at a stage of a job.",
+        "tags": [
+          "provider-presence"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerSafetyService.recordCheckIn",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/safety/check-in",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-presence",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderSafetyCheckIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderSafetyCheckInResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "APPEND-ONLY. The stage vocabulary is closed - en_route, arrived, started, completed - so a typo is refused rather than silently becoming a new stage nobody queries for."
+      }
+    },
+    "/api/v1/provider/safety/incidents": {
+      "get": {
+        "operationId": "provider.safety.incidents.list",
+        "summary": "The caller's own safety incidents, newest first.",
+        "tags": [
+          "provider-presence"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerSafetyService.listIncidents",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/safety/incidents",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-presence",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Events to return, 1-100, default 50"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderSafetyIncidentList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Scoped on uid inside the query. There is no parameter with which to name another provider, so no seat exists at which somebody else incidents are visible."
+      },
+      "post": {
+        "operationId": "provider.safety.incidents.create",
+        "summary": "File a safety incident. A retry carrying the same key returns the original.",
+        "tags": [
+          "provider-presence"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "services/providerSafetyService.submitIncident",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/safety/incidents",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "provider-presence",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderSafetyIncidentSubmit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderSafetyIncidentResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "LATE, OUT OF ORDER, OR TWICE - the mandate asks for all three explicitly. TWICE: collapsed onto one document by clientIncidentId, and this route REPLAYS it with 200 rather than refusing with 409. That is the difference from legacy and it is deliberate: a provider whose first attempt committed and then timed out on a doorstep will retry, and a 409 rendered as a failure tells them their report was never filed - on the one report where believing that is most dangerous. `replayed: true` says which happened, so a client can tell without either being an error. LATE: accepted unconditionally. There is no window and no expiry; reportedAt records when the provider says it happened and the server never overwrites it on a replay. OUT OF ORDER: incidents are independent documents, not a sequence - there is no ordering constraint between two reports and none is enforced. The de-duplication used to be findOne-then-insertOne, which two concurrent retries could both pass, with no unique index anywhere in the codebase to collapse them. That is the requirement this TAB found unmet, and both halves - the atomic upsert AND the index - were needed to close it."
+      }
+    },
     "/api/v1/notifications": {
       "get": {
         "operationId": "notifications.list",
@@ -20585,6 +21410,346 @@
           }
         }
       },
+      "ProviderPresence": {
+        "type": "object",
+        "required": [
+          "isOnline",
+          "availabilityStatus"
+        ],
+        "description": "Operational availability, which belongs to the PROVIDER - not to a session, a device or a job. Nothing incidental changes it: not a closed app, a logout, an expired token, a dropped socket, a lost network, a restart, a missed heartbeat, a stale location, a schedule ending or a booking completing. Only an explicit act.",
+        "properties": {
+          "isOnline": {
+            "type": "boolean"
+          },
+          "availabilityStatus": {
+            "type": "string",
+            "enum": [
+              "online",
+              "offline"
+            ]
+          },
+          "availabilitySource": {
+            "type": "string",
+            "description": "WHO or what last set it. provider_explicit is the provider themselves."
+          },
+          "changedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO 8601 with a UTC designator — always ends in Z. Guaranteed at the driver, not per field: src/db/dbQuery.ts parses OIDs 1114 and 1184 through asUtcIso, which ends in Date.toISOString(). Never Postgres native \"2026-08-11 11:03:23.421016+00\"."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO 8601 with a UTC designator — always ends in Z. Guaranteed at the driver, not per field: src/db/dbQuery.ts parses OIDs 1114 and 1184 through asUtcIso, which ends in Date.toISOString(). Never Postgres native \"2026-08-11 11:03:23.421016+00\"."
+          }
+        }
+      },
+      "ProviderPresenceChange": {
+        "type": "object",
+        "required": [
+          "isOnline"
+        ],
+        "properties": {
+          "isOnline": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderPresenceOnline": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Coordinates are OPTIONAL and are applied only when no location is stored, so going online never overwrites a fresher fix with a stale one.",
+        "properties": {
+          "latitude": {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90
+          },
+          "longitude": {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180
+          }
+        }
+      },
+      "ProviderLocationReport": {
+        "type": "object",
+        "required": [
+          "latitude",
+          "longitude"
+        ],
+        "additionalProperties": false,
+        "description": "TRANSPORT ONLY. There is deliberately NO isOnline field: the legacy route accepts one and writes it through, so a location ping can flip availability as a side effect, which is exactly what the presence rule forbids. Coordinates are range-checked before storage.",
+        "properties": {
+          "latitude": {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90
+          },
+          "longitude": {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180
+          }
+        }
+      },
+      "ProviderLocationState": {
+        "type": "object",
+        "required": [
+          "latitude",
+          "longitude",
+          "isOnline"
+        ],
+        "description": "The stored fix. `isOnline` is ECHOED, not set - it is whatever presence already held, returned so a client can see that the ping did not change it.",
+        "properties": {
+          "latitude": {
+            "type": "number"
+          },
+          "longitude": {
+            "type": "number"
+          },
+          "isOnline": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ProviderEmergencyConfig": {
+        "type": "object",
+        "required": [
+          "locale",
+          "country",
+          "lines",
+          "disclaimer"
+        ],
+        "description": "STATIC and market-wide. Names no account and reads no row, so it may be cached hard - which is the point on a screen somebody opens in an emergency.",
+        "properties": {
+          "locale": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "number": {
+                  "type": "string",
+                  "description": "A tel: URI the device dialer opens."
+                },
+                "dialLabel": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "disclaimer": {
+            "type": "string",
+            "description": "Load-bearing. Servana cannot dispatch emergency services, and a safety screen implying otherwise would be the most dangerous copy in the product."
+          }
+        }
+      },
+      "ProviderSafetyCheckIn": {
+        "type": "object",
+        "required": [
+          "bookingId",
+          "stage"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "bookingId": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "en_route",
+              "arrived",
+              "started",
+              "completed"
+            ],
+            "description": "CLOSED vocabulary - a typo is refused rather than becoming a new stage."
+          }
+        }
+      },
+      "ProviderSafetyCheckInResult": {
+        "type": "object",
+        "required": [
+          "bookingId",
+          "stage",
+          "checkedInAt"
+        ],
+        "description": "APPEND-ONLY and NOT de-duplicated. Two check-ins at one stage are two facts about two moments, and collapsing them would discard the later one - the more recent evidence that somebody is still safe.",
+        "properties": {
+          "bookingId": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "en_route",
+              "arrived",
+              "started",
+              "completed"
+            ]
+          },
+          "checkedInAt": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          }
+        }
+      },
+      "ProviderSafetyIncidentSubmit": {
+        "type": "object",
+        "required": [
+          "clientIncidentId",
+          "category",
+          "severity",
+          "description"
+        ],
+        "additionalProperties": false,
+        "description": "A retry carrying the same clientIncidentId returns the ORIGINAL report rather than filing a second one, and mutates nothing - not even reportedAt, which is the moment the provider says something happened.",
+        "properties": {
+          "clientIncidentId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "REQUIRED. Generate it on the device BEFORE the first attempt, and reuse it for every retry of that one report. It is the whole replay story."
+          },
+          "category": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "severity": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "description": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 2000,
+            "description": "At least 10 characters - a one-word incident report helps nobody."
+          },
+          "bookingId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "immediateDanger": {
+            "type": "boolean"
+          },
+          "providerSafe": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "workStopped": {
+            "type": "boolean"
+          },
+          "emergencyServicesContacted": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProviderSafetyIncidentResult": {
+        "type": "object",
+        "required": [
+          "incidentId",
+          "providerSafeReference",
+          "state",
+          "replayed"
+        ],
+        "description": "201 for a newly filed report, 200 for a replay. Neither is an error - a retry that finds the report already filed SUCCEEDED, and telling a provider otherwise on a doorstep is the failure this route exists to avoid.",
+        "properties": {
+          "incidentId": {
+            "type": "string"
+          },
+          "providerSafeReference": {
+            "type": "string",
+            "description": "The reference a provider quotes to support. Safe to display."
+          },
+          "state": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean",
+            "description": "True when this call matched a report already filed under the same key."
+          }
+        }
+      },
+      "ProviderSafetyIncidentList": {
+        "type": "array",
+        "description": "The caller's own incidents, newest first. Never another provider's.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "incidentId": {
+              "type": "string"
+            },
+            "providerSafeReference": {
+              "type": "string"
+            },
+            "bookingId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "category": {
+              "type": "string"
+            },
+            "severity": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "immediateDanger": {
+              "type": "boolean"
+            },
+            "workStopped": {
+              "type": "boolean"
+            },
+            "reportedAt": {
+              "$ref": "#/components/schemas/UtcTimestamp"
+            },
+            "updatedAt": {
+              "$ref": "#/components/schemas/UtcTimestamp"
+            },
+            "hasUnreadUpdate": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
       "ProviderActivation": {
         "type": "object",
         "required": [
@@ -23000,6 +24165,9 @@
       "name": "provider-jobs"
     },
     {
+      "name": "provider-presence"
+    },
+    {
       "name": "provider-services"
     },
     {
@@ -23016,6 +24184,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 132,
-  "x-total-count": 133
+  "x-implemented-count": 140,
+  "x-total-count": 141
 }

@@ -15,10 +15,10 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 132 |
+| Mounted endpoints | 140 |
 | `public` | 22 |
 | `authenticated` | 60 |
-| `provider` | 44 |
+| `provider` | 52 |
 | `admin` | 6 |
 | Object-scoped | 43 |
 | Object-scoped WITH an ownership rule | 43 |
@@ -239,10 +239,18 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `provider.jobs.get` | GET /provider/jobs/:bookingId | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.list` | GET /provider/jobs | `provider` | · · ● · | — |
 | `provider.jobs.start` | POST /provider/jobs/:bookingId/start | `provider` | · · ● · | ✔ bookingId |
+| `provider.location.report` | POST /provider/location | `provider` | · · ● · | — |
+| `provider.presence.get` | GET /provider/presence | `provider` | · · ● · | — |
+| `provider.presence.goOffline` | POST /provider/presence/offline | `provider` | · · ● · | — |
+| `provider.presence.goOnline` | POST /provider/presence/online | `provider` | · · ● · | — |
 | `provider.profile.get` | GET /provider/profile | `provider` | · · ● · | — |
 | `provider.profile.patch` | PATCH /provider/profile | `provider` | · · ● · | — |
 | `provider.publicProfile.get` | GET /providers/:providerUid/profile | `authenticated` | · ● ● ● | — |
 | `provider.publicProfile.preview` | GET /provider/public-profile | `provider` | · · ● · | — |
+| `provider.safety.checkIn` | POST /provider/safety/check-in | `provider` | · · ● · | — |
+| `provider.safety.emergencyConfig` | GET /provider/safety/emergency-config | `provider` | · · ● · | — |
+| `provider.safety.incidents.create` | POST /provider/safety/incidents | `provider` | · · ● · | — |
+| `provider.safety.incidents.list` | GET /provider/safety/incidents | `provider` | · · ● · | — |
 | `provider.serviceApplications.create` | POST /provider/service-applications | `provider` | · · ● · | — |
 | `provider.serviceApplications.get` | GET /provider/service-applications/:applicationId | `provider` | · · ● · | — |
 | `provider.serviceApplications.list` | GET /provider/service-applications | `provider` | · · ● · | — |
@@ -286,8 +294,8 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-68 of 132 endpoints are probeable; the other
-64 are writes and are never probed, because a POST to
+71 of 140 endpoints are probeable; the other
+69 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.
 

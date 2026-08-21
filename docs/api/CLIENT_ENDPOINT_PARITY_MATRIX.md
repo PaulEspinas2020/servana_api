@@ -18,11 +18,11 @@
 
 | | |
 | --- | --- |
-| Capabilities | 66 |
-| Canonical endpoints mounted | 132 |
+| Capabilities | 67 |
+| Canonical endpoints mounted | 140 |
 | Canonical endpoints planned | 1 |
-| Legacy mappings tracked | 145 |
-| Converged (one route family) | 58 |
+| Legacy mappings tracked | 153 |
+| Converged (one route family) | 59 |
 | Role-split over ONE service | 4 |
 | Single-surface | 4 |
 | **Divergent (forked truth)** | **0** |
@@ -88,6 +88,7 @@ direction of whoever wrote it.
 | Fetch the contract this process implements | SHARED | planned | planned | planned | planned | planned |
 | Read the support cases I raised on a booking | SHARED | planned | planned | — | — | — |
 | A provider's own job queue | SHARED | — | — | **migrated** | **migrated** | — |
+| Say whether I am working, where I am, and that I am safe | SHARED | — | — | planned | planned | — |
 | Read a provider's public profile | SHARED | planned | planned | — | — | planned |
 | Decide what work I am offered | SHARED | — | — | planned | planned | — |
 | Resolve a refund review | SINGLE_SURFACE | — | — | — | — | legacy |
@@ -621,6 +622,34 @@ Legacy still aliased for this capability:
   - `GET /api/workers/:workerId/job-cards`
 
 Genuinely role-specific. "The jobs assigned to me" has no customer equivalent: the query is scoped by worker uid, the card carries earnings and travel fields a customer must never see, and the customer-facing answer to "my bookings" is a different question over a different scope. It reads the same bookings and the same canonical state; it is a provider PROJECTION, not a provider truth.
+
+### Say whether I am working, where I am, and that I am safe
+
+- key: `core:providerPresenceAndSafety` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/providerOperationalAvailabilityService, services/providerSafetyService, services/technicianService`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/location`
+  - `GET /api/v1/provider/presence`
+  - `POST /api/v1/provider/presence/offline`
+  - `POST /api/v1/provider/presence/online`
+  - `POST /api/v1/provider/safety/check-in`
+  - `GET /api/v1/provider/safety/emergency-config`
+  - `POST /api/v1/provider/safety/incidents`
+  - `GET /api/v1/provider/safety/incidents`
+
+Legacy still aliased for this capability:
+  - `GET /api/provider/location/status`
+  - `GET /api/provider/safety/emergency-config`
+  - `GET /api/provider/safety/incidents`
+  - `POST /api/provider/location/go-offline`
+  - `POST /api/provider/location/go-online`
+  - `POST /api/provider/safety/check-in`
+  - `POST /api/provider/safety/incidents`
+  - `POST /api/worker/location`
+
+No role split. Presence and safety are held as ONE capability because they share a failure mode rather than a screen: both are things a provider does on a doorstep, on a link that drops, where a refusal the client renders as an error is worse than the duplicate it was avoiding. That is why the incident write REPLAYS instead of refusing and the check-in is append-only with `none-accepted` declared. Location is the most sensitive data this product holds, and nothing here widened who can read it: a provider reads their own, admin reads it, and a customer reaches it only through a booking they own while it is live.
 
 ### Read a provider's public profile
 

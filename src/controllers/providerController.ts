@@ -33,6 +33,7 @@ import * as availEngine from "../services/providerAvailabilityEngine";
 import * as areaEngine from "../services/providerServiceAreaEngine";
 import * as autoOnlineEngine from "../services/providerAutoOnlineEngine";
 import * as availabilityService from "../services/providerOperationalAvailabilityService";
+import * as providerSafetyService from "../services/providerSafetyService";
 import * as activationService from "../services/providerActivationService";
 import { touchProviderActivity } from "../services/adminProviderService";
 import { getProviderPerformance } from "../services/providerPerformanceService";
@@ -1343,16 +1344,10 @@ const SAFETY_SEVERITY_ICONS: Record<string, string> = {
   level_4: 'bi-shield-fill-exclamation',
 };
 
-const PHILIPPINES_EMERGENCY_CONFIG = {
-  locale: 'en-PH',
-  country: 'Philippines',
-  lines: [
-    { label: 'National Emergency Hotline', number: 'tel:911', dialLabel: '911', description: 'Fire, medical emergency, police' },
-    { label: 'Philippine National Police', number: 'tel:117', dialLabel: '117', description: 'Police assistance' },
-    { label: 'Bureau of Fire Protection', number: 'tel:160', dialLabel: '160', description: 'Fire and rescue' },
-  ],
-  disclaimer: 'Tapping a number opens your device dialer. Servana cannot dispatch emergency services on your behalf.',
-};
+// Imported rather than declared. A second copy of the emergency numbers is a
+// second thing to update when one changes, and this is the screen where being
+// out of date matters most. Same object, both surfaces.
+const PHILIPPINES_EMERGENCY_CONFIG = providerSafetyService.PROVIDER_EMERGENCY_CONFIG;
 
 function toSafetyCaseSummary(doc: any) {
   const state: string = doc.state || 'submitted';
@@ -1380,62 +1375,59 @@ function toSafetyCaseSummary(doc: any) {
   };
 }
 
+/**
+ * DELEGATED to `providerSafetyService.submitIncident` (TAB 06).
+ *
+ * The wire behaviour of this route is UNCHANGED — 201 on a new report, 409 on a
+ * repeat carrying a `clientIncidentId` already used. Five clients read it and §4
+ * does not permit changing that.
+ *
+ * What changed underneath is that the de-duplication is now ATOMIC. It used to
+ * be `findOne` then `insertOne`, which two concurrent retries could both pass —
+ * and a provider reporting an incident is, by definition, on a link where
+ * retries happen. The shared service upserts and relies on a unique index, so
+ * the duplicate this route reports is now a fact rather than a hope.
+ *
+ * The canonical route makes the opposite choice about what to DO with that fact:
+ * it replays the original with 200, because a 409 rendered as a failure tells a
+ * provider their incident was never filed. Both dispositions come from one
+ * implementation.
+ */
 export const submitSafetyIncident = async (req: Request, res: Response) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ status: "failed", message: "Unauthorized" });
 
-    const {
-      clientIncidentId, bookingId, category, severity,
-      immediateDanger, providerSafe, workStopped,
-      emergencyServicesContacted, description,
-    } = req.body;
+    const body = req.body ?? {};
+    const result = await providerSafetyService.submitIncident(uid, {
+      clientIncidentId: String(body.clientIncidentId ?? ''),
+      category: String(body.category ?? ''),
+      severity: String(body.severity ?? ''),
+      description: String(body.description ?? ''),
+      bookingId: body.bookingId ?? null,
+      immediateDanger: !!body.immediateDanger,
+      providerSafe: body.providerSafe !== undefined ? body.providerSafe : null,
+      workStopped: !!body.workStopped,
+      emergencyServicesContacted:
+        body.emergencyServicesContacted !== undefined ? body.emergencyServicesContacted : null,
+    });
 
-    if (!clientIncidentId || !category || !severity || !description) {
-      return res.status(400).json({ status: "failed", message: "clientIncidentId, category, severity, and description are required" });
-    }
-    if (String(description).trim().length < 10) {
-      return res.status(400).json({ status: "failed", message: "description must be at least 10 characters" });
-    }
-
-    const col = (await mongoDb).collection("provider_safety_incidents");
-
-    const existing = await col.findOne({ uid, clientIncidentId }, { projection: { incidentId: 1 } });
-    if (existing) {
+    if (result.replayed) {
       return res.status(409).json({ status: "failed", message: "This incident has already been submitted" });
     }
 
-    const year = new Date().getFullYear();
-    const ref = `SAF-${year}-${Date.now().toString(36).slice(-5).toUpperCase()}`;
-    const incidentId = `inc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-    const now = new Date().toISOString();
-
-    const doc = {
-      uid,
-      incidentId,
-      clientIncidentId: String(clientIncidentId).slice(0, 128),
-      providerSafeReference: ref,
-      bookingId:                    bookingId || null,
-      category:                     String(category).slice(0, 64),
-      severity:                     String(severity).slice(0, 32),
-      state:                        'submitted',
-      immediateDanger:              !!immediateDanger,
-      providerSafe:                 providerSafe !== undefined ? providerSafe : null,
-      workStopped:                  !!workStopped,
-      emergencyServicesContacted:   emergencyServicesContacted !== undefined ? emergencyServicesContacted : null,
-      description:                  String(description).trim().slice(0, 2000),
-      reportedAt:                   now,
-      updatedAt:                    now,
-      hasUnreadUpdate:              false,
-    };
-
-    await col.insertOne(doc);
-
     return res.status(201).json({
       status: "success",
-      data: { caseKey: incidentId, providerSafeReference: ref, state: 'submitted' },
+      data: {
+        caseKey: result.incidentId,
+        providerSafeReference: result.providerSafeReference,
+        state: result.state,
+      },
     });
   } catch (error: any) {
+    if (error?.name === 'SafetyError') {
+      return res.status(400).json({ status: "failed", message: error.message });
+    }
     return res.status(500).json({ status: "failed", message: "Server error" });
   }
 };

@@ -193,6 +193,8 @@ jest.mock('../src/services/bookingAccessService', () => {
   };
 });
 jest.mock('../src/services/technicianService', () => ({
+  // TAB 06.
+  upsertWorkerLocation: jest.fn().mockResolvedValue(undefined),
   // TAB 05.
   pauseService: jest.fn().mockResolvedValue({ service_id: 7, status: 'paused', pause_reason: 'Away' }),
   reactivateService: jest.fn().mockResolvedValue({ service_id: 7, status: 'active', pause_reason: null }),
@@ -826,6 +828,38 @@ jest.mock('../src/services/serviceApplicationService', () => ({
   cancelApplication: jest.fn().mockResolvedValue({ id: 'app-1', status: 'cancelled', version: 2 }),
 }));
 
+/**
+ * TAB 06. Presence and safety reach MongoDB, which this suite has no connection
+ * to. Mocked at the SERVICE — the behaviour they encode (the location ping
+ * cannot flip presence, an incident replay is not an error) is asserted in
+ * `tests/provider-presence-safety-v1.test.ts`.
+ */
+jest.mock('../src/services/providerOperationalAvailabilityService', () => ({
+  __esModule: true,
+  getStatus: jest.fn().mockResolvedValue({
+    availabilityStatus: 'online', availabilitySource: 'provider_explicit',
+    changedByUid: null, changedByRole: null, changedAt: null, reason: null,
+    version: 1, updatedAt: null,
+  }),
+  setOnline: jest.fn().mockResolvedValue(undefined),
+  setOffline: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../src/services/providerSafetyService', () => {
+  const actual = jest.requireActual('../src/services/providerSafetyService');
+  return {
+    ...actual,
+    submitIncident: jest.fn().mockResolvedValue({
+      incidentId: 'inc-1', providerSafeReference: 'SAF-2026-ABCDE',
+      state: 'submitted', replayed: false,
+    }),
+    listIncidents: jest.fn().mockResolvedValue([]),
+    recordCheckIn: jest.fn().mockResolvedValue({
+      bookingId: '4242', stage: 'arrived', checkedInAt: '2026-08-21T00:00:00.000Z',
+    }),
+  };
+});
+
 jest.mock('../src/services/providerAutoOnlineEngine', () => ({
   // Fire-and-forget on the upload and delete paths. Mocked so the router suite
   // does not reach the real engine; that it RUNS at all is asserted in
@@ -1164,6 +1198,36 @@ describe('every implemented contract entry is reachable at its declared path', (
       call('GET', '/api/v1/provider/activation', { role: 'provider' }),
     'provider.services.overview': () =>
       call('GET', '/api/v1/provider/services/overview', { role: 'provider' }),
+    'provider.presence.get': () =>
+      call('GET', '/api/v1/provider/presence', { role: 'provider' }),
+    'provider.presence.goOnline': () =>
+      call('POST', '/api/v1/provider/presence/online', {
+        role: 'provider', body: { latitude: 14.5547, longitude: 121.0245 },
+      }),
+    'provider.presence.goOffline': () =>
+      call('POST', '/api/v1/provider/presence/offline', { role: 'provider' }),
+    'provider.location.report': () =>
+      call('POST', '/api/v1/provider/location', {
+        role: 'provider', body: { latitude: 14.5547, longitude: 121.0245 },
+      }),
+    'provider.safety.emergencyConfig': () =>
+      call('GET', '/api/v1/provider/safety/emergency-config', { role: 'provider' }),
+    'provider.safety.checkIn': () =>
+      call('POST', '/api/v1/provider/safety/check-in', {
+        role: 'provider', body: { bookingId: '4242', stage: 'arrived' },
+      }),
+    'provider.safety.incidents.list': () =>
+      call('GET', '/api/v1/provider/safety/incidents', { role: 'provider' }),
+    'provider.safety.incidents.create': () =>
+      call('POST', '/api/v1/provider/safety/incidents', {
+        role: 'provider',
+        body: {
+          clientIncidentId: 'inc-client-0001',
+          category: 'aggression',
+          severity: 'level_2',
+          description: 'Customer became aggressive on arrival.',
+        },
+      }),
     'provider.services.eligibility': () =>
       call('GET', '/api/v1/provider/services/7/eligibility', { role: 'provider' }),
     'provider.services.pause': () =>

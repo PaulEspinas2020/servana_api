@@ -1048,6 +1048,286 @@ export const V1_CONTRACT: ContractEntry[] = [
   },
 
   // ───────────────────────────────────────────────────────────────────────────
+  // Provider presence, location and safety (TAB 06)
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: 'provider.presence.get',
+    domain: 'provider-presence',
+    method: 'get',
+    path: '/provider/presence',
+    summary: 'Whether the caller is currently available for work, and when that was set.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderPresence',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerOperationalAvailabilityService.getStatus',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/location/status',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same state, read from the same place. The legacy path says "location" for what is ' +
+          'really availability, which is the naming this entry corrects.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'PRESENCE IS BOUND TO THE PROVIDER - not to a session, a device or a job. The mandate ' +
+      'asks the question directly and this is the answer. 27 lists what must never change it: ' +
+      'a closed app, a logout, an expired token, a dropped socket, a lost network, a restarted ' +
+      'device or backend, a missed heartbeat, a stale location, a schedule ending, a booking ' +
+      'completing. A second device does not get a second presence, and signing out does not go ' +
+      'offline - a provider who closed the app on the bus is still available for the job they ' +
+      'are travelling to.',
+  },
+  {
+    id: 'provider.presence.goOnline',
+    domain: 'provider-presence',
+    method: 'post',
+    path: '/provider/presence/online',
+    summary: 'Become available for work.',
+    auth: 'provider',
+    activeProvider: true,
+    idempotent: true,
+    requestSchema: 'ProviderPresenceOnline',
+    responseSchema: 'ProviderPresenceChange',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/providerOperationalAvailabilityService.setOnline',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/location/go-online',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same source tag, and the same requireActiveProvider rung.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'Idempotent: going online while already online reaches the same end state. Coordinates ' +
+      'are OPTIONAL and are applied only when no location is stored, so going online never ' +
+      'overwrites a fresher fix with a stale one. ' +
+      'activeProvider: true mirrors the legacy chain exactly. It is on ONLINE and deliberately ' +
+      'absent from OFFLINE.',
+  },
+  {
+    id: 'provider.presence.goOffline',
+    domain: 'provider-presence',
+    method: 'post',
+    path: '/provider/presence/offline',
+    summary: 'Stop being offered work.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderPresenceChange',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerOperationalAvailabilityService.setOffline',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/location/go-offline',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Mounted WITHOUT requireActiveProvider, and this entry matches that ' +
+          'deliberately rather than by omission.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'NO activeProvider rung, and that asymmetry is load-bearing. DENY_ALL in the ' +
+      'account-state machine sets canGoOffline: true even for a denied account, because a ' +
+      'provider must never be TRAPPED ONLINE - it is the one presence failure with no ' +
+      'workaround. Adding the rung here to match its sibling would look like tidying and would ' +
+      'strand a suspended provider as available.',
+  },
+  {
+    id: 'provider.location.report',
+    domain: 'provider-presence',
+    method: 'post',
+    path: '/provider/location',
+    summary: "Report the provider's current coordinates.",
+    auth: 'provider',
+    activeProvider: true,
+    idempotent: true,
+    requestSchema: 'ProviderLocationReport',
+    responseSchema: 'ProviderLocationState',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/technicianService.upsertWorkerLocation',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/worker/location',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same storage. The legacy body also carries isOnline and writes it through; this ' +
+          'entry deliberately does not accept that field.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'TRANSPORT ONLY, and the difference from the legacy route is the point. ' +
+      '/api/worker/location accepts isOnline in its body and writes it straight through, so a ' +
+      'location ping can flip availability as a side effect - which 27 forbids by name. This ' +
+      'route carries COORDINATES ONLY and writes back whatever presence already held. ' +
+      'That is not a change to presence semantics: the legacy route is untouched and behaves ' +
+      'exactly as before. It is a refusal to carry the hazard into the canonical surface. ' +
+      'Coordinates are RANGE-CHECKED before storage - 39 forbids fabricating a location, and a ' +
+      'latitude of 999 in a geospatial index is one nobody can later tell from a real fix. ' +
+      'RETENTION AND ACCESS: the current fix is a single upserted document per provider, so ' +
+      'there is no location HISTORY to retain - a new ping replaces the last. It is readable ' +
+      'by the provider themselves, by admin, and by a CUSTOMER only through a booking they ' +
+      'own, via GET /api/booking/:id/provider-location, and only while that booking is live. ' +
+      'No route on this contract returns another provider location, and this TAB widened ' +
+      'nothing.',
+  },
+  {
+    id: 'provider.safety.emergencyConfig',
+    domain: 'provider-presence',
+    method: 'get',
+    path: '/provider/safety/emergency-config',
+    summary: 'Emergency numbers and guidance for this market.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderEmergencyConfig',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerSafetyService.PROVIDER_EMERGENCY_CONFIG',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/safety/emergency-config',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'The SAME frozen object, now imported by both surfaces rather than declared twice.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'STATIC and market-wide. Names no account, reads no row, carries no personal data - so a ' +
+      'client may cache it hard, which is the point on a screen somebody opens in an ' +
+      'emergency. The disclaimer is load-bearing: Servana cannot dispatch emergency services, ' +
+      'and a safety screen implying otherwise would be the most dangerous copy in the product.',
+  },
+  {
+    id: 'provider.safety.checkIn',
+    domain: 'provider-presence',
+    method: 'post',
+    path: '/provider/safety/check-in',
+    summary: 'Record that the provider is safe at a stage of a job.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['none-accepted'],
+    replayGuard:
+      'NONE, and accepted deliberately. Two check-ins at one stage are two facts about two ' +
+      'moments, and de-duplicating them would DISCARD the later one - which on this path is ' +
+      'the more recent evidence that somebody is still safe. An extra row is the cheapest ' +
+      'possible failure here; a dropped one is not.',
+    requestSchema: 'ProviderSafetyCheckIn',
+    responseSchema: 'ProviderSafetyCheckInResult',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/providerSafetyService.recordCheckIn',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/safety/check-in',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same closed stage vocabulary.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'APPEND-ONLY. The stage vocabulary is closed - en_route, arrived, started, completed - ' +
+      'so a typo is refused rather than silently becoming a new stage nobody queries for.',
+  },
+  {
+    id: 'provider.safety.incidents.list',
+    domain: 'provider-presence',
+    method: 'get',
+    path: '/provider/safety/incidents',
+    summary: "The caller's own safety incidents, newest first.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderSafetyIncidentList',
+    errors: [],
+    query: [
+      { name: 'limit', type: 'integer', required: false, description: 'Events to return, 1-100, default 50' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSafetyService.listIncidents',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/safety/incidents',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same collection, scoped on the caller uid in the query itself.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'Scoped on uid inside the query. There is no parameter with which to name another ' +
+      'provider, so no seat exists at which somebody else incidents are visible.',
+  },
+  {
+    id: 'provider.safety.incidents.create',
+    domain: 'provider-presence',
+    method: 'post',
+    path: '/provider/safety/incidents',
+    summary: 'File a safety incident. A retry carrying the same key returns the original.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id', 'unique-constraint'],
+    replayGuard:
+      'A REQUIRED clientIncidentId, generated on the device BEFORE the first attempt, applied ' +
+      'through an upsert with $setOnInsert and backed by a unique index on ' +
+      '(uid, clientIncidentId). Every retry of one report collapses onto one document, and a ' +
+      'replay mutates nothing - not even reportedAt, which is the moment a provider says ' +
+      'something happened and is evidence.',
+    requestSchema: 'ProviderSafetyIncidentSubmit',
+    responseSchema: 'ProviderSafetyIncidentResult',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/providerSafetyService.submitIncident',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/safety/incidents',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'SAME implementation, DIFFERENT disposition on a duplicate: the legacy route answers ' +
+          '409 and keeps doing so, because five clients read it.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'LATE, OUT OF ORDER, OR TWICE - the mandate asks for all three explicitly. ' +
+      'TWICE: collapsed onto one document by clientIncidentId, and this route REPLAYS it with ' +
+      '200 rather than refusing with 409. That is the difference from legacy and it is ' +
+      'deliberate: a provider whose first attempt committed and then timed out on a doorstep ' +
+      'will retry, and a 409 rendered as a failure tells them their report was never filed - ' +
+      'on the one report where believing that is most dangerous. `replayed: true` says which ' +
+      'happened, so a client can tell without either being an error. ' +
+      'LATE: accepted unconditionally. There is no window and no expiry; reportedAt records ' +
+      'when the provider says it happened and the server never overwrites it on a replay. ' +
+      'OUT OF ORDER: incidents are independent documents, not a sequence - there is no ordering ' +
+      'constraint between two reports and none is enforced. ' +
+      'The de-duplication used to be findOne-then-insertOne, which two concurrent retries could ' +
+      'both pass, with no unique index anywhere in the codebase to collapse them. That is the ' +
+      "requirement this TAB found unmet, and both halves - the atomic upsert AND the index - " +
+      'were needed to close it.',
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Notifications
   // ───────────────────────────────────────────────────────────────────────────
   {

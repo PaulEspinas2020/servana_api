@@ -14,7 +14,7 @@
 > [`CROSS_CLIENT_MIGRATION_PLAN.md`](CROSS_CLIENT_MIGRATION_PLAN.md), which is
 > hand-written because an argument is not derivable. This is what each client
 > actually has to change, and it is generated because a hand-maintained list of
-> 132 endpoints across five clients is stale the day after it is written.
+> 140 endpoints across five clients is stale the day after it is written.
 
 ## How to read this
 
@@ -87,11 +87,11 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 44 |
+| Capabilities that apply | 45 |
 | Already on canonical | 22 |
 | Still on a legacy route | 1 |
 | Partially migrated | 8 |
-| No equivalent called today | 13 |
+| No equivalent called today | 14 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
@@ -115,6 +115,7 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Recover an account and verify a contact | ⚠ mixed | `GET /api/auth/resendverification`, `POST /api/auth/forgot-password`, `POST /api/auth/resend-email-otp`, `POST /api/auth/reset-password`, `POST /api/auth/verify-email-otp` | `POST /api/v1/auth/forgot-password`, `POST /api/v1/auth/reset-password`, `POST /api/v1/auth/verify-email`, `POST /api/v1/auth/resend-verification`, `POST /api/v1/auth/verify-mobile` |
 | Register, sign in, and end a session | ⚠ mixed | `POST /api/auth/admin-signin`, `POST /api/auth/firebase-login`, `POST /api/auth/logout`, `POST /api/auth/provider/register`, `POST /api/auth/refresh`, `POST /api/auth/signin`, `POST /api/auth/signup` | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` |
 | Report a message to moderation | planned | `POST /api/chat/conversations/:id/messages/:msgId/report` | `POST /api/v1/conversations/:conversationId/messages/:messageId/report` |
+| Say whether I am working, where I am, and that I am safe | planned | `GET /api/provider/location/status`, `GET /api/provider/safety/emergency-config`, `GET /api/provider/safety/incidents`, `POST /api/provider/location/go-offline`, `POST /api/provider/location/go-online`, `POST /api/provider/safety/check-in`, `POST /api/provider/safety/incidents`, `POST /api/worker/location` | `POST /api/v1/provider/location`, `GET /api/v1/provider/presence`, `POST /api/v1/provider/presence/offline`, `POST /api/v1/provider/presence/online`, `POST /api/v1/provider/safety/check-in`, `GET /api/v1/provider/safety/emergency-config`, `POST /api/v1/provider/safety/incidents`, `GET /api/v1/provider/safety/incidents` |
 | Submit, read, preview and withdraw my documents | ⚠ mixed | `DELETE /api/provider/documents/:documentId`, `GET /api/provider/document-types`, `GET /api/provider/documents`, `GET /api/provider/documents/:documentId/preview`, `POST /api/provider/documents` | `POST /api/v1/provider/documents`, `DELETE /api/v1/provider/documents/:documentId`, `GET /api/v1/provider/documents`, `GET /api/v1/provider/documents/:documentId/preview`, `GET /api/v1/provider/document-types` |
 | What is left before my account is usable | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/completion` |
 
@@ -188,11 +189,11 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 47 |
+| Capabilities that apply | 48 |
 | Already on canonical | 12 |
 | Still on a legacy route | 16 |
 | Partially migrated | 6 |
-| No equivalent called today | 13 |
+| No equivalent called today | 14 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
@@ -229,6 +230,7 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Register, sign in, and end a session | legacy | `POST /api/auth/admin-signin`, `POST /api/auth/firebase-login`, `POST /api/auth/logout`, `POST /api/auth/provider/register`, `POST /api/auth/refresh`, `POST /api/auth/signin`, `POST /api/auth/signup` | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` |
 | Report a message to moderation | planned | `POST /api/chat/conversations/:id/messages/:msgId/report` | `POST /api/v1/conversations/:conversationId/messages/:messageId/report` |
 | Report that the product is working | planned | _no legacy equivalent — this is new_ | `POST /api/v1/telemetry` |
+| Say whether I am working, where I am, and that I am safe | planned | `GET /api/provider/location/status`, `GET /api/provider/safety/emergency-config`, `GET /api/provider/safety/incidents`, `POST /api/provider/location/go-offline`, `POST /api/provider/location/go-online`, `POST /api/provider/safety/check-in`, `POST /api/provider/safety/incidents`, `POST /api/worker/location` | `POST /api/v1/provider/location`, `GET /api/v1/provider/presence`, `POST /api/v1/provider/presence/offline`, `POST /api/v1/provider/presence/online`, `POST /api/v1/provider/safety/check-in`, `GET /api/v1/provider/safety/emergency-config`, `POST /api/v1/provider/safety/incidents`, `GET /api/v1/provider/safety/incidents` |
 | Send a message | legacy | `POST /api/chat/conversations/:id/messages` | `POST /api/v1/conversations/:conversationId/messages` |
 | Submit, read, preview and withdraw my documents | ⚠ mixed | `DELETE /api/provider/documents/:documentId`, `GET /api/provider/document-types`, `GET /api/provider/documents`, `GET /api/provider/documents/:documentId/preview`, `POST /api/provider/documents` | `POST /api/v1/provider/documents`, `DELETE /api/v1/provider/documents/:documentId`, `GET /api/v1/provider/documents`, `GET /api/v1/provider/documents/:documentId/preview`, `GET /api/v1/provider/document-types` |
 

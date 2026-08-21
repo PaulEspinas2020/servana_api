@@ -34,15 +34,15 @@ installed.
 
 | | |
 | --- | --- |
-| Legacy mappings tracked | 145 |
-| In the retirement plan | 126 |
+| Legacy mappings tracked | 153 |
+| In the retirement plan | 134 |
 | `KEEP` (not a duplicate of anything) | 6 |
 | `ROLE_SPECIFIC` (different auth/action, same service) | 13 |
-| `ALIAS_TEMPORARILY` | 113 |
+| `ALIAS_TEMPORARILY` | 121 |
 | `CANONICALIZE` | 12 |
 | `RETIRE` | 1 |
 | **Retirable today** | **0** |
-| Blocked | 126 |
+| Blocked | 134 |
 
 Nothing is retirable today, and the reason is the same for all of them: no client has migrated, because the v1 namespace is not deployed. The schedule is the order things become retirable, not a queue of pending deletions.
 
@@ -117,6 +117,9 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `POST /api/provider/fcm-token` | ALIAS_TEMPORARILY | `me.devices.register` | Customer Mobile, Customer Web have not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 90d |
 | `DELETE /api/provider/fcm-token` | ALIAS_TEMPORARILY | `me.devices.release` | Customer Mobile, Customer Web have not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 90d |
 | `GET /api/provider/ledger` | ALIAS_TEMPORARILY | `provider.earnings.transactions` | Provider Mobile has not migrated | 90d |
+| `POST /api/provider/location/go-offline` | ALIAS_TEMPORARILY | `provider.presence.goOffline` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/location/go-online` | ALIAS_TEMPORARILY | `provider.presence.goOnline` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/provider/location/status` | ALIAS_TEMPORARILY | `provider.presence.get` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/notification-preferences` | ALIAS_TEMPORARILY | `me.notificationPreferences.get` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
 | `PUT /api/provider/notification-preferences` | ALIAS_TEMPORARILY | `me.notificationPreferences.patch` | Customer Mobile, Customer Web, Provider Mobile, Admin Web have not migrated | 90d |
 | `GET /api/provider/notification-preferences` | ALIAS_TEMPORARILY | `settings.notificationPreferences.get` | Customer Mobile, Customer Web, Provider Mobile, Provider Web have not migrated | 90d |
@@ -127,6 +130,10 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `GET /api/provider/profile-fields` | ALIAS_TEMPORARILY | `provider.fieldRegistry.get` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/public-profile-preview` | ALIAS_TEMPORARILY | `provider.publicProfile.preview` | Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/provider/public-profile-revisions` | ALIAS_TEMPORARILY | `provider.profile.patch` | Provider Mobile has not migrated | 90d |
+| `POST /api/provider/safety/check-in` | ALIAS_TEMPORARILY | `provider.safety.checkIn` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/provider/safety/emergency-config` | ALIAS_TEMPORARILY | `provider.safety.emergencyConfig` | Provider Mobile, Provider Web have not migrated | 90d |
+| `GET /api/provider/safety/incidents` | ALIAS_TEMPORARILY | `provider.safety.incidents.list` | Provider Mobile, Provider Web have not migrated | 90d |
+| `POST /api/provider/safety/incidents` | ALIAS_TEMPORARILY | `provider.safety.incidents.create` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/provider/verification-timeline` | ALIAS_TEMPORARILY | `provider.verificationTimeline.get` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/providers/:providerUid/rating` | ALIAS_TEMPORARILY | `reviews.provider.rating` | Customer Mobile, Customer Web have not migrated | 90d |
 | `GET /api/providers/:providerUid/reviews` | ALIAS_TEMPORARILY | `reviews.provider.list` | Customer Mobile, Customer Web have not migrated | 90d |
@@ -159,6 +166,7 @@ Nothing is retirable today, and the reason is the same for all of them: no clien
 | `PUT /api/worker/bookings/:bookingId/start` | ALIAS_TEMPORARILY | `provider.jobs.start` | Provider Web has not migrated; Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
 | `GET /api/worker/job-cards` | ALIAS_TEMPORARILY | `provider.jobs.list` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
 | `GET /api/worker/job-cards/:bookingId` | ALIAS_TEMPORARILY | `provider.jobs.get` | Provider Mobile has migrated in code but not shipped, so nothing yet proves the legacy path is unused in the field | 14d |
+| `POST /api/worker/location` | ALIAS_TEMPORARILY | `provider.location.report` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/worker/service-applications` | ALIAS_TEMPORARILY | `provider.serviceApplications.list` | Provider Mobile, Provider Web have not migrated | 90d |
 | `POST /api/worker/service-applications` | ALIAS_TEMPORARILY | `provider.serviceApplications.create` | Provider Mobile, Provider Web have not migrated | 90d |
 | `GET /api/worker/service-applications/:applicationId` | ALIAS_TEMPORARILY | `provider.serviceApplications.get` | Provider Mobile, Provider Web have not migrated | 90d |

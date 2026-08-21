@@ -336,6 +336,32 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'toProviderProjection / toAdminProjection), not different truths.',
   },
   {
+    key: 'providerPresenceAndSafety',
+    title: 'Say whether I am working, where I am, and that I am safe',
+    source: 'api/v1/convergence (core)',
+    contractIds: [
+      'provider.location.report',
+      'provider.presence.get',
+      'provider.presence.goOffline',
+      'provider.presence.goOnline',
+      'provider.safety.checkIn',
+      'provider.safety.emergencyConfig',
+      'provider.safety.incidents.create',
+      'provider.safety.incidents.list',
+    ],
+    domainModule: 'services/providerOperationalAvailabilityService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split. Presence and safety are held as ONE capability because they share a '
+      + 'failure mode rather than a screen: both are things a provider does on a doorstep, on '
+      + 'a link that drops, where a refusal the client renders as an error is worse than the '
+      + 'duplicate it was avoiding. That is why the incident write REPLAYS instead of refusing '
+      + 'and the check-in is append-only with `none-accepted` declared. '
+      + 'Location is the most sensitive data this product holds, and nothing here widened who '
+      + 'can read it: a provider reads their own, admin reads it, and a customer reaches it '
+      + 'only through a booking they own while it is live.',
+  },
+  {
     key: 'providerServiceCatalogue',
     title: 'Decide what work I am offered',
     source: 'api/v1/convergence (core)',
