@@ -46,6 +46,7 @@ import {
   type LegacyMapping,
 } from './contract';
 import { RETIREMENT_CRITERIA } from './legacyTelemetry';
+import { SCHEMAS } from './openapi';
 
 import { ACCOUNT_CAPABILITIES } from '../../services/account/accountPolicy';
 import { EXPERIENCE_CAPABILITIES } from '../../services/booking/experiencePolicy';
@@ -716,6 +717,120 @@ export const parityRow = (capability: CapabilityRecord): ParityRow => {
   };
 };
 
+// ─── The request contract (TAB 03) ────────────────────────────────────────────
+
+/**
+ * What a write operation REQUIRES and PERMITS in its body.
+ *
+ * ## The gap this closes
+ *
+ * Measured before building: the manifest a client is told to diff its call
+ * sites against carried method, path, domain, auth, idempotent and the response
+ * schema — and **no request-body data at all**, for any of its 55 write
+ * operations. It did not even carry `replayMechanism`.
+ *
+ * The consequence was measured by the provider mobile team, not predicted here:
+ * eight of their writes shipped sending bodies this backend refuses. All eight
+ * passed their own tests, because those tests asserted the PATH. A path
+ * assertion proves a call is routable and says nothing about whether it is
+ * acceptable. One of the eight was device registration, whose failure mode is
+ * not an error anybody sees — it is push notifications never arriving, and push
+ * is how a provider learns a job exists.
+ *
+ * The information already existed in `SCHEMAS`. It was simply never published
+ * where a client would read it.
+ *
+ * ## Derived from SCHEMAS, not from the generated document
+ *
+ * `SCHEMAS` is the same map `buildOpenApiDocument()` renders, so the extract and
+ * the OpenAPI document cannot disagree — there is one source and two views of
+ * it, rather than two documents to keep in step.
+ *
+ * ## What this does NOT claim
+ *
+ * Nothing in this backend validates a request body against these schemas. There
+ * is no Ajv, no Joi, no Zod, and `register.ts` never reads `requestSchema`;
+ * every handler enforces its own preconditions in code. So this extract
+ * publishes the DECLARED contract, which is the documented intent, and a client
+ * should read `requiredBody` as "the handler will refuse without this" rather
+ * than as "a validator rejects this". `bodyEnforcement` on the manifest says so
+ * in the artifact itself rather than only here — a client that assumed a
+ * validator would draw the wrong conclusion from a call that succeeded with an
+ * extra field.
+ */
+export interface RequestContract {
+  /** Schema name in `SCHEMAS`, or null when the operation declares no body. */
+  requestSchema: string | null;
+  /** Fields the schema marks required. Empty array = a body with none required. */
+  requiredBody: string[] | null;
+  /** Every top-level field the schema names. */
+  allowedBody: string[] | null;
+  /** False when the schema is `additionalProperties: false`. */
+  additionalBodyAllowed: boolean | null;
+}
+
+/** No body declared. All three are NULL, never empty — the two mean different things. */
+const NO_BODY: RequestContract = Object.freeze({
+  requestSchema: null,
+  requiredBody: null,
+  allowedBody: null,
+  additionalBodyAllowed: null,
+});
+
+/**
+ * Derive one operation's request contract.
+ *
+ * ## Why an unreadable schema THROWS rather than returning empty
+ *
+ * Every request schema today is a plain object — `type`, `properties`, optional
+ * `required`, optional `additionalProperties`. Measured across all 47: not one
+ * uses `$ref`, `allOf`, `oneOf` or `anyOf` at the top level.
+ *
+ * A future one might. If this function answered that with `allowedBody: []`, a
+ * client gating on the extract would read "no field is permitted" and refuse
+ * every call to that endpoint — and the extract would look complete while being
+ * silently wrong, which is the exact failure mode
+ * [[feedback_grep_counts_vs_reading]] describes. An empty allow-list and an
+ * unparsed schema are different answers and must not share a representation.
+ *
+ * So it refuses, naming the schema. A composed request schema is then a build
+ * failure asking somebody to teach this function about composition, which is a
+ * five-minute job, rather than a client outage nobody attributes to it.
+ */
+export const requestContractOf = (entry: ContractEntry): RequestContract => {
+  if (!entry.requestSchema) return NO_BODY;
+
+  const schema = SCHEMAS[entry.requestSchema] as Record<string, any> | undefined;
+  if (!schema) {
+    throw new Error(
+      `contract entry ${entry.id} names requestSchema '${entry.requestSchema}', which is not in SCHEMAS. ` +
+      'The manifest will not publish a body contract it could not read.',
+    );
+  }
+
+  for (const composed of ['$ref', 'allOf', 'oneOf', 'anyOf'] as const) {
+    if (schema[composed] !== undefined) {
+      throw new Error(
+        `request schema '${entry.requestSchema}' (${entry.id}) uses '${composed}', which this ` +
+        'derivation cannot flatten. Returning an empty allow-list would tell every client that ' +
+        'NO field is permitted, so this refuses instead. Teach requestContractOf about composition.',
+      );
+    }
+  }
+
+  const properties = (schema.properties ?? {}) as Record<string, unknown>;
+  const required = Array.isArray(schema.required) ? schema.required.map(String) : [];
+
+  return {
+    requestSchema: entry.requestSchema,
+    // Sorted so the generated artifact is stable across runs: an unstable order
+    // makes every regeneration a diff and `--check` a coin toss.
+    requiredBody: [...required].sort(),
+    allowedBody: Object.keys(properties).sort(),
+    additionalBodyAllowed: schema.additionalProperties !== false,
+  };
+};
+
 // ─── The canonical call manifest (§133, §138) ─────────────────────────────────
 
 export interface ManifestEntry {
@@ -728,10 +843,22 @@ export interface ManifestEntry {
   idempotent: boolean;
   domainService: string;
   responseSchema: string;
+  /**
+   * How a replay is stopped from doing damage. Null for an idempotent read.
+   *
+   * Published BESIDE the body contract deliberately: the distinction between
+   * `client-request-id` (a body field) and `client-idempotency-key` (a header)
+   * caused two of the eight client defects on its own, and a client cannot tell
+   * them apart from the field list alone.
+   */
+  replayMechanism: string[] | null;
   surfaces: ClientSurface[];
   callers: Record<ClientSurface, string>;
   supersedes: string[];
 }
+
+/** `ManifestEntry` carries the request contract inline. */
+export type ManifestEntryWithBody = ManifestEntry & RequestContract;
 
 /**
  * The machine-readable list of every canonical call a client may make.
@@ -741,7 +868,7 @@ export interface ManifestEntry {
  * MOUNTED endpoints: a planned entry is documentation, and a client generating
  * a typed client from it would ship calls to a 404.
  */
-export const canonicalManifest = (): ManifestEntry[] => {
+export const canonicalManifest = (): ManifestEntryWithBody[] => {
   const registry = capabilityRegistry();
   const capabilityOf = (id: string): string | null =>
     registry.find((c) => c.contractIds.includes(id))?.key ?? null;
@@ -757,6 +884,8 @@ export const canonicalManifest = (): ManifestEntry[] => {
       idempotent: e.idempotent,
       domainService: e.domainService,
       responseSchema: e.responseSchema,
+      ...requestContractOf(e),
+      replayMechanism: e.replayMechanism ? [...e.replayMechanism] : null,
       surfaces: CLIENT_SURFACES.filter((s) => e.callers[s] !== 'n/a'),
       callers: Object.fromEntries(
         CLIENT_SURFACES.map((s) => [s, e.callers[s]]),
