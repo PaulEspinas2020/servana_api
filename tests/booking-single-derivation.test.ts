@@ -153,6 +153,15 @@ describe('both legacy derivations delegate to the canonical machine', () => {
       'the assignment status — it never decides what state the booking is in. ' +
       'Shared by formatJobCard and getProviderBookingDetail so the two cannot ' +
       'drift apart, which is the opposite of a second derivation.',
+    'services/bookingEvidenceService.ts':
+      'Evidence GATING (TAB 07). Names the assignment statuses in which a booking ' +
+      'still ACCEPTS evidence — a visit in progress — so that proof cannot be ' +
+      'attached to a job that is finished, declined or cancelled. It never decides ' +
+      'what state the booking is in: the caller establishes the status through ' +
+      'providerBookingOwnership and passes it in, and this module holds no query ' +
+      'with which it could read the columns itself. The list moved here from ' +
+      'providerController when the upload orchestration was extracted, so it is ' +
+      'the same single statement of the rule in a better place rather than a new one.',
     'controllers/bookingActions.ts':
       'Provider ACTION metadata (confirmation and code flags). Holds transition ' +
       'knowledge too, which is pinned to the machine by the agreement test below ' +

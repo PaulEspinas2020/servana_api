@@ -15,13 +15,13 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 114 |
+| Mounted endpoints | 171 |
 | `public` | 22 |
-| `authenticated` | 60 |
-| `provider` | 26 |
+| `authenticated` | 61 |
+| `provider` | 82 |
 | `admin` | 6 |
-| Object-scoped | 43 |
-| Object-scoped WITH an ownership rule | 43 |
+| Object-scoped | 59 |
+| Object-scoped WITH an ownership rule | 59 |
 | **Unguarded** | **0** |
 
 ## 2. Role access, by declared mode
@@ -46,6 +46,22 @@ role; the whole point is that one customer must not read another's booking.
 A booking carries an address and a time when somebody will be at home. A leak of
 it is not a data-protection abstraction — it is telling a stranger where a person
 lives and when they will be there. OWASP puts this first in the API top ten.
+
+### `catalog` — `:none — no object-scoped parameter`
+
+- predicate: active AND provider-visible offerings only; the catalog belongs to Servana
+- enforced by: `services/providerCatalogService`
+- proven by: `tests/provider-remainder-v1.test.ts`
+- a non-owner receives: 403 ROLE_REQUIRED (the role rung, since there is no object to own)
+- distinguishes absent from forbidden: **no**
+
+### `provider-support` — `:caseId | reviewId`
+
+- predicate: provider_uid = $1 AND id = $2 (the caller uid is the FIRST argument to every service function)
+- enforced by: `services/providerSupportCaseService + services/providerReputationService`
+- proven by: `tests/provider-support-reviews-v1.test.ts`
+- a non-owner receives: 404 NOT_FOUND
+- distinguishes absent from forbidden: **no**
 
 ### `admin-bookings` — `:bookingId`
 
@@ -156,6 +172,7 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `bookings.otp.request` | POST /bookings/:bookingId/otp/request | `authenticated` | · ● ● ● | ✔ bookingId |
 | `bookings.otp.status` | GET /bookings/:bookingId/otp/status | `authenticated` | · ● ● ● | ✔ bookingId |
 | `bookings.otp.verify` | POST /bookings/:bookingId/otp/verify | `authenticated` | · ● ● ● | ✔ bookingId |
+| `bookings.payments.cashCollected` | POST /bookings/:bookingId/cash-collected | `authenticated` | · ● ● ● | ✔ bookingId |
 | `bookings.payments.get` | GET /bookings/:bookingId/payment | `authenticated` | · ● ● ● | ✔ bookingId |
 | `bookings.payments.intent` | POST /bookings/:bookingId/payment-intents | `authenticated` | · ● ● ● | ✔ bookingId |
 | `bookings.refunds.create` | POST /bookings/:bookingId/refunds | `authenticated` | · ● ● ● | ✔ bookingId |
@@ -213,8 +230,19 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `notifications.markAllRead` | POST /notifications/read-all | `authenticated` | · ● ● ● | — |
 | `notifications.markRead` | PATCH /notifications/:key/read | `authenticated` | · ● ● ● | — |
 | `notifications.unreadCount` | GET /notifications/unread-count | `authenticated` | · ● ● ● | — |
+| `provider.account.requestDeletion` | POST /provider/account/deletion-request | `provider` | · · ● · | — |
+| `provider.activation.acknowledgePolicy` | POST /provider/activation/policy-acknowledgement | `provider` | · · ● · | — |
+| `provider.activation.get` | GET /provider/activation | `provider` | · · ● · | — |
+| `provider.alerts.dismiss` | DELETE /provider/alerts/:alertKey | `provider` | · · ● · | — |
+| `provider.alerts.list` | GET /provider/alerts | `provider` | · · ● · | — |
 | `provider.availability.get` | GET /provider/availability | `provider` | · · ● · | — |
 | `provider.availability.patch` | PATCH /provider/availability | `provider` | · · ● · | — |
+| `provider.calendar.get` | GET /provider/calendar | `provider` | · · ● · | — |
+| `provider.catalog.offerings` | GET /provider/catalog/offerings | `provider` | · · ● · | — |
+| `provider.certifications.create` | POST /provider/certifications | `provider` | · · ● · | — |
+| `provider.certifications.list` | GET /provider/certifications | `provider` | · · ● · | — |
+| `provider.contactChanges.confirm` | POST /provider/contact-changes/confirm | `provider` | · · ● · | — |
+| `provider.contactChanges.request` | POST /provider/contact-changes | `provider` | · · ● · | — |
 | `provider.documents.create` | POST /provider/documents | `provider` | · · ● · | — |
 | `provider.documents.delete` | DELETE /provider/documents/:documentId | `provider` | · · ● · | ✔ addressId |
 | `provider.documents.list` | GET /provider/documents | `provider` | · · ● · | — |
@@ -222,23 +250,68 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `provider.documents.types` | GET /provider/document-types | `provider` | · · ● · | — |
 | `provider.earnings.payouts` | GET /provider/earnings/payouts | `provider` | · · ● · | — |
 | `provider.earnings.summary` | GET /provider/earnings/summary | `provider` | · · ● · | — |
+| `provider.earnings.transaction` | GET /provider/earnings/transactions/:transactionId | `provider` | · · ● · | — |
 | `provider.earnings.transactions` | GET /provider/earnings/transactions | `provider` | · · ● · | — |
+| `provider.fieldRegistry.get` | GET /provider/profile-fields | `provider` | · · ● · | — |
 | `provider.jobs.accept` | POST /provider/jobs/:bookingId/accept | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.arrived` | POST /provider/jobs/:bookingId/arrived | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.cancel` | POST /provider/jobs/:bookingId/cancel | `provider` | · · ● · | ✔ bookingId |
+| `provider.jobs.cancellationEligibility` | GET /provider/jobs/:bookingId/cancellation-eligibility | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.complete` | POST /provider/jobs/:bookingId/complete | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.decline` | POST /provider/jobs/:bookingId/decline | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.enroute` | POST /provider/jobs/:bookingId/en-route | `provider` | · · ● · | ✔ bookingId |
+| `provider.jobs.evidence.create` | POST /provider/jobs/:bookingId/evidence | `provider` | · · ● · | ✔ bookingId |
+| `provider.jobs.evidence.delete` | DELETE /provider/jobs/:bookingId/evidence/:evidenceId | `provider` | · · ● · | ✔ bookingId |
+| `provider.jobs.evidence.list` | GET /provider/jobs/:bookingId/evidence | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.get` | GET /provider/jobs/:bookingId | `provider` | · · ● · | ✔ bookingId |
 | `provider.jobs.list` | GET /provider/jobs | `provider` | · · ● · | — |
 | `provider.jobs.start` | POST /provider/jobs/:bookingId/start | `provider` | · · ● · | ✔ bookingId |
+| `provider.location.report` | POST /provider/location | `provider` | · · ● · | — |
+| `provider.performance.get` | GET /provider/performance | `provider` | · · ● · | — |
+| `provider.presence.get` | GET /provider/presence | `provider` | · · ● · | — |
+| `provider.presence.goOffline` | POST /provider/presence/offline | `provider` | · · ● · | — |
+| `provider.presence.goOnline` | POST /provider/presence/online | `provider` | · · ● · | — |
 | `provider.profile.get` | GET /provider/profile | `provider` | · · ● · | — |
 | `provider.profile.patch` | PATCH /provider/profile | `provider` | · · ● · | — |
+| `provider.profilePhoto.delete` | DELETE /provider/profile/photo | `provider` | · · ● · | — |
+| `provider.profilePhoto.upload` | POST /provider/profile/photo | `provider` | · · ● · | — |
 | `provider.publicProfile.get` | GET /providers/:providerUid/profile | `authenticated` | · ● ● ● | — |
+| `provider.publicProfile.preview` | GET /provider/public-profile | `provider` | · · ● · | — |
+| `provider.reputation.summary` | GET /provider/reputation/summary | `provider` | · · ● · | — |
+| `provider.reviews.appeal` | POST /provider/review-moderation/:caseId/appeals | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.reviews.get` | GET /provider/reviews/:reviewId | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.reviews.list` | GET /provider/reviews | `provider` | · · ● · | — |
+| `provider.reviews.report` | POST /provider/reviews/:reviewId/report | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.reviews.respond` | POST /provider/reviews/:reviewId/response | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.safety.checkIn` | POST /provider/safety/check-in | `provider` | · · ● · | — |
+| `provider.safety.emergencyConfig` | GET /provider/safety/emergency-config | `provider` | · · ● · | — |
+| `provider.safety.incidents.create` | POST /provider/safety/incidents | `provider` | · · ● · | — |
+| `provider.safety.incidents.list` | GET /provider/safety/incidents | `provider` | · · ● · | — |
+| `provider.schedule.get` | GET /provider/schedule | `provider` | · · ● · | — |
+| `provider.serviceApplications.create` | POST /provider/service-applications | `provider` | · · ● · | — |
+| `provider.serviceApplications.get` | GET /provider/service-applications/:applicationId | `provider` | · · ● · | — |
+| `provider.serviceApplications.list` | GET /provider/service-applications | `provider` | · · ● · | — |
+| `provider.serviceApplications.resubmit` | POST /provider/service-applications/:applicationId/resubmit | `provider` | · · ● · | — |
+| `provider.serviceApplications.withdraw` | DELETE /provider/service-applications/:applicationId | `provider` | · · ● · | — |
+| `provider.services.eligibility` | GET /provider/services/:serviceId/eligibility | `provider` | · · ● · | — |
 | `provider.services.list` | GET /provider/services | `provider` | · · ● · | — |
+| `provider.services.overview` | GET /provider/services/overview | `provider` | · · ● · | — |
+| `provider.services.pause` | PATCH /provider/services/:serviceId/pause | `provider` | · · ● · | — |
+| `provider.services.reactivate` | PATCH /provider/services/:serviceId/reactivate | `provider` | · · ● · | — |
+| `provider.support.cases.appeal` | POST /provider/support/cases/:caseId/appeals | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.support.cases.attach` | POST /provider/support/cases/:caseId/attachments | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.support.cases.attachmentPreview` | GET /provider/support/cases/:caseId/attachments/:attachmentId/preview | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.support.cases.create` | POST /provider/support/cases | `provider` | · · ● · | — |
+| `provider.support.cases.get` | GET /provider/support/cases/:caseId | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.support.cases.list` | GET /provider/support/cases | `provider` | · · ● · | — |
+| `provider.support.cases.reopen` | POST /provider/support/cases/:caseId/reopen | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.support.cases.reply` | POST /provider/support/cases/:caseId/messages | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.support.cases.withdraw` | POST /provider/support/cases/:caseId/withdraw | `provider` | · · ● · | ✔ caseId | reviewId |
+| `provider.support.categories` | GET /provider/support/case-categories | `provider` | · · ● · | — |
 | `provider.timeOff.cancel` | DELETE /provider/time-off/:timeOffId | `provider` | · · ● · | — |
 | `provider.timeOff.create` | POST /provider/time-off | `provider` | · · ● · | — |
 | `provider.timeOff.list` | GET /provider/time-off | `provider` | · · ● · | — |
+| `provider.verificationTimeline.get` | GET /provider/verification-timeline | `provider` | · · ● · | — |
 | `reviews.provider.list` | GET /reviews/providers/:providerUid | `public` | ● ● ● ● | — |
 | `reviews.provider.rating` | GET /reviews/providers/:providerUid/rating | `public` | ● ● ● ● | — |
 | `search.query` | GET /search | `public` | ● ● ● ● | — |
@@ -268,8 +341,8 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-59 of 114 endpoints are probeable; the other
-55 are writes and are never probed, because a POST to
+86 of 171 endpoints are probeable; the other
+85 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.
 

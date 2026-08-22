@@ -757,6 +757,1540 @@ export const V1_CONTRACT: ContractEntry[] = [
   },
 
   // ───────────────────────────────────────────────────────────────────────────
+  // Provider services and service applications (TAB 05)
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: 'provider.services.overview',
+    domain: 'provider-services',
+    method: 'get',
+    path: '/provider/services/overview',
+    summary: "Everything about the caller's services: readiness, pause state, actions, applications.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderServicesOverview',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/serviceApplicationService.getProviderServicesOverview',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/worker/services-overview',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same projection.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+    notes:
+      'NOT subsumed by provider.services.list, and the mandate asked the question directly. ' +
+      'That entry returns four fields per row - id, name, status, isActive. This one carries ' +
+      'the readiness VERDICT and its reasons, the pause reason, the actions the server will ' +
+      'actually honour, and the applications: the whole management screen. Both are published ' +
+      'because a client rendering a chip should not pay for the fan-out, and a client rendering ' +
+      'the screen cannot rebuild it from four fields without re-deriving readiness on the ' +
+      'device - which is precisely the duplicate-truth this contract exists to stop.',
+  },
+  {
+    id: 'provider.services.eligibility',
+    domain: 'provider-services',
+    method: 'get',
+    path: '/provider/services/:serviceId/eligibility',
+    summary: 'May the caller apply for this service, and if not, why?',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ServiceApplicationEligibility',
+    errors: ['VALIDATION_FAILED'],
+    params: [{ name: 'serviceId', type: 'integer', description: 'service_families.id - a FAMILY id' }],
+    status: 'implemented',
+    domainService: 'services/serviceApplicationService.evaluateApplicationEligibility',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/worker/services/:serviceId/eligibility',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. Reads the canonical offering policy, not a copy of it.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+    notes:
+      'CACHING, since the mandate asked: do NOT cache this. It is a composite of provider ' +
+      'account state, activation, service availability, offering policy and any open ' +
+      'application - five things that change independently and none of them on this route. A ' +
+      'cached ELIGIBLE offers a button the submit will refuse; a cached refusal hides work a ' +
+      'provider has just become eligible for. Read it when the screen opens and again before ' +
+      'offering the action. It is a READ - safe to repeat, and cheap relative to being wrong. ' +
+      'The submit re-evaluates server-side regardless, so a race here is a refusal rather than ' +
+      'a bad approval.',
+  },
+  {
+    id: 'provider.services.pause',
+    domain: 'provider-services',
+    method: 'patch',
+    path: '/provider/services/:serviceId/pause',
+    summary: 'Stop being offered work for one service, without giving it up.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      "The UPDATE's own WHERE clause matches only a row whose status is active, so the second " +
+      'run changes nothing. It is NOT silent: the handler answers ' +
+      'PROVIDER_SERVICE_ALREADY_PAUSED so a client can tell a retry from a real conflict.',
+    requestSchema: 'ProviderServicePause',
+    responseSchema: 'ProviderServiceState',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'PROVIDER_SERVICE_ALREADY_PAUSED'],
+    params: [{ name: 'serviceId', type: 'integer', description: 'service_families.id - a FAMILY id' }],
+    status: 'implemented',
+    domainService: 'services/technicianService.pauseService',
+    legacy: [
+      {
+        method: 'patch',
+        path: '/api/worker/services/:serviceId/pause',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. Writes the canonical capability grant as well as the legacy row.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+    notes:
+      'NOT idempotent, and published as such rather than wished otherwise. A repeat is refused ' +
+      'with PROVIDER_SERVICE_ALREADY_PAUSED - a DISTINCT code, because the commonest way to ' +
+      'reach it is a retry after a request that committed and then timed out. A client that ' +
+      'cannot tell that from a genuine conflict shows an error for an operation that worked. ' +
+      'Treat it as success-equivalent when retrying. ' +
+      'The canonical capability table is updated alongside the legacy row: a pause that touched ' +
+      'only one would leave matching offering work the provider has stepped back from.',
+  },
+  {
+    id: 'provider.services.reactivate',
+    domain: 'provider-services',
+    method: 'patch',
+    path: '/provider/services/:serviceId/reactivate',
+    summary: 'Resume being offered work for a paused service.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      'The mirror of pause: the WHERE clause matches only a paused row, and a repeat answers ' +
+      'PROVIDER_SERVICE_NOT_PAUSED rather than silently succeeding.',
+    responseSchema: 'ProviderServiceState',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'PROVIDER_SERVICE_NOT_PAUSED'],
+    params: [{ name: 'serviceId', type: 'integer', description: 'service_families.id - a FAMILY id' }],
+    status: 'implemented',
+    domainService: 'services/technicianService.reactivateService',
+    legacy: [
+      {
+        method: 'patch',
+        path: '/api/worker/services/:serviceId/reactivate',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. The matched pair of pause - migrate them together.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+    notes:
+      'The matched pair of pause, and the one with the most direct effect on earnings: a ' +
+      'provider who cannot reactivate is a provider not being offered work. Migrate the two ' +
+      'together - a canonical pause whose reactivate is still legacy can strand somebody.',
+  },
+  {
+    id: 'provider.serviceApplications.list',
+    domain: 'provider-services',
+    method: 'get',
+    path: '/provider/service-applications',
+    summary: "Every service application the caller has made.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ServiceApplicationList',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/serviceApplicationService.getApplicationsByWorker',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/worker/service-applications',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. The legacy envelope wraps it as { success, applications }.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+  },
+  {
+    id: 'provider.serviceApplications.get',
+    domain: 'provider-services',
+    method: 'get',
+    path: '/provider/service-applications/:applicationId',
+    summary: 'One application, scoped to the caller.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ServiceApplication',
+    errors: ['NOT_FOUND'],
+    params: [{ name: 'applicationId', type: 'string', description: 'worker_service_applications.id' }],
+    status: 'implemented',
+    domainService: 'services/serviceApplicationService.getApplicationByWorker',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/worker/service-applications/:applicationId',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. Scoped on worker_uid in SQL, so another provider id is a 404.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+  },
+  {
+    id: 'provider.serviceApplications.create',
+    domain: 'provider-services',
+    method: 'post',
+    path: '/provider/service-applications',
+    summary: 'Apply for a service.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A REQUIRED clientRequestId of 16-128 characters, looked up on ' +
+      '(worker_uid, client_request_id) BEFORE anything is written, so a replay returns the ' +
+      'original application rather than queueing a second for the same service.',
+    requestSchema: 'ServiceApplicationSubmit',
+    responseSchema: 'ServiceApplication',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    status: 'implemented',
+    domainService: 'services/serviceApplicationService.submitApplication',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/worker/service-applications',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same replay lookup.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+    notes:
+      '`requirementsVersion` is the version the provider was SHOWN. It travels so the server ' +
+      'can distinguish an application made against the current requirements from one made ' +
+      'against a set that has since changed - the difference between approving and asking for ' +
+      'more. Eligibility is re-evaluated server-side here regardless of what the eligibility ' +
+      'read said, so a stale client view is a refusal rather than a bad approval.',
+  },
+  {
+    id: 'provider.serviceApplications.resubmit',
+    domain: 'provider-services',
+    method: 'post',
+    path: '/provider/service-applications/:applicationId/resubmit',
+    summary: 'Resubmit an application that came back needing more.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id', 'row-lock'],
+    replayGuard:
+      'A REQUIRED clientRequestId, plus the whole resubmission running inside a transaction ' +
+      'that takes FOR UPDATE on the application row - so two resubmissions serialise rather ' +
+      'than interleaving, and the second sees the first.',
+    requestSchema: 'ServiceApplicationResubmit',
+    responseSchema: 'ServiceApplication',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'STALE_STATE', 'CONFLICT'],
+    params: [{ name: 'applicationId', type: 'string', description: 'worker_service_applications.id' }],
+    status: 'implemented',
+    domainService: 'services/serviceApplicationService.resubmitApplication',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/worker/service-applications/:applicationId/resubmit',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same expectedVersion check.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+    notes:
+      '`expectedVersion` is REQUIRED and is optimistic concurrency (18), not decoration: ' +
+      'between loading an application and resubmitting it, a reviewer may have decided. ' +
+      'Without it a resubmission silently overwrites a decision the provider never saw. A ' +
+      'mismatch is STALE_STATE - the code a client already reloads on - rather than a ' +
+      'validation error, because nothing about the request was malformed.',
+  },
+  {
+    id: 'provider.serviceApplications.withdraw',
+    domain: 'provider-services',
+    method: 'delete',
+    path: '/provider/service-applications/:applicationId',
+    summary: 'Withdraw an application the provider no longer wants reviewed.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      "The UPDATE matches only an application still in a withdrawable state, so a repeat " +
+      'changes nothing and the application stays cancelled once.',
+    responseSchema: 'ServiceApplication',
+    errors: ['NOT_FOUND', 'CONFLICT'],
+    params: [{ name: 'applicationId', type: 'string', description: 'worker_service_applications.id' }],
+    status: 'implemented',
+    domainService: 'services/serviceApplicationService.cancelApplication',
+    legacy: [
+      {
+        method: 'delete',
+        path: '/api/worker/service-applications/:applicationId',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Scoped on worker_uid in SQL, so another provider id is a 404 rather ' +
+          'than a withdrawable target.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-services',
+    notes:
+      'The EIGHTH operation in a cluster the Master Command lists as seven PATHS - ' +
+      'service-applications/:id carries both GET and DELETE. Counting paths undercounts the ' +
+      'work, and a provider who can apply but not withdraw is stuck waiting on a review they ' +
+      'no longer want.',
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Provider presence, location and safety (TAB 06)
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: 'provider.presence.get',
+    domain: 'provider-presence',
+    method: 'get',
+    path: '/provider/presence',
+    summary: 'Whether the caller is currently available for work, and when that was set.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderPresence',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerOperationalAvailabilityService.getStatus',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/location/status',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same state, read from the same place. The legacy path says "location" for what is ' +
+          'really availability, which is the naming this entry corrects.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'PRESENCE IS BOUND TO THE PROVIDER - not to a session, a device or a job. The mandate ' +
+      'asks the question directly and this is the answer. 27 lists what must never change it: ' +
+      'a closed app, a logout, an expired token, a dropped socket, a lost network, a restarted ' +
+      'device or backend, a missed heartbeat, a stale location, a schedule ending, a booking ' +
+      'completing. A second device does not get a second presence, and signing out does not go ' +
+      'offline - a provider who closed the app on the bus is still available for the job they ' +
+      'are travelling to.',
+  },
+  {
+    id: 'provider.presence.goOnline',
+    domain: 'provider-presence',
+    method: 'post',
+    path: '/provider/presence/online',
+    summary: 'Become available for work.',
+    auth: 'provider',
+    activeProvider: true,
+    idempotent: true,
+    requestSchema: 'ProviderPresenceOnline',
+    responseSchema: 'ProviderPresenceChange',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/providerOperationalAvailabilityService.setOnline',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/location/go-online',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same source tag, and the same requireActiveProvider rung.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'Idempotent: going online while already online reaches the same end state. Coordinates ' +
+      'are OPTIONAL and are applied only when no location is stored, so going online never ' +
+      'overwrites a fresher fix with a stale one. ' +
+      'activeProvider: true mirrors the legacy chain exactly. It is on ONLINE and deliberately ' +
+      'absent from OFFLINE.',
+  },
+  {
+    id: 'provider.presence.goOffline',
+    domain: 'provider-presence',
+    method: 'post',
+    path: '/provider/presence/offline',
+    summary: 'Stop being offered work.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderPresenceChange',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerOperationalAvailabilityService.setOffline',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/location/go-offline',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Mounted WITHOUT requireActiveProvider, and this entry matches that ' +
+          'deliberately rather than by omission.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'NO activeProvider rung, and that asymmetry is load-bearing. DENY_ALL in the ' +
+      'account-state machine sets canGoOffline: true even for a denied account, because a ' +
+      'provider must never be TRAPPED ONLINE - it is the one presence failure with no ' +
+      'workaround. Adding the rung here to match its sibling would look like tidying and would ' +
+      'strand a suspended provider as available.',
+  },
+  {
+    id: 'provider.location.report',
+    domain: 'provider-presence',
+    method: 'post',
+    path: '/provider/location',
+    summary: "Report the provider's current coordinates.",
+    auth: 'provider',
+    activeProvider: true,
+    idempotent: true,
+    requestSchema: 'ProviderLocationReport',
+    responseSchema: 'ProviderLocationState',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/technicianService.upsertWorkerLocation',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/worker/location',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same storage. The legacy body also carries isOnline and writes it through; this ' +
+          'entry deliberately does not accept that field.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'TRANSPORT ONLY, and the difference from the legacy route is the point. ' +
+      '/api/worker/location accepts isOnline in its body and writes it straight through, so a ' +
+      'location ping can flip availability as a side effect - which 27 forbids by name. This ' +
+      'route carries COORDINATES ONLY and writes back whatever presence already held. ' +
+      'That is not a change to presence semantics: the legacy route is untouched and behaves ' +
+      'exactly as before. It is a refusal to carry the hazard into the canonical surface. ' +
+      'Coordinates are RANGE-CHECKED before storage - 39 forbids fabricating a location, and a ' +
+      'latitude of 999 in a geospatial index is one nobody can later tell from a real fix. ' +
+      'RETENTION AND ACCESS: the current fix is a single upserted document per provider, so ' +
+      'there is no location HISTORY to retain - a new ping replaces the last. It is readable ' +
+      'by the provider themselves, by admin, and by a CUSTOMER only through a booking they ' +
+      'own, via GET /api/booking/:id/provider-location, and only while that booking is live. ' +
+      'No route on this contract returns another provider location, and this TAB widened ' +
+      'nothing.',
+  },
+  {
+    id: 'provider.safety.emergencyConfig',
+    domain: 'provider-presence',
+    method: 'get',
+    path: '/provider/safety/emergency-config',
+    summary: 'Emergency numbers and guidance for this market.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderEmergencyConfig',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerSafetyService.PROVIDER_EMERGENCY_CONFIG',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/safety/emergency-config',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'The SAME frozen object, now imported by both surfaces rather than declared twice.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'STATIC and market-wide. Names no account, reads no row, carries no personal data - so a ' +
+      'client may cache it hard, which is the point on a screen somebody opens in an ' +
+      'emergency. The disclaimer is load-bearing: Servana cannot dispatch emergency services, ' +
+      'and a safety screen implying otherwise would be the most dangerous copy in the product.',
+  },
+  {
+    id: 'provider.safety.checkIn',
+    domain: 'provider-presence',
+    method: 'post',
+    path: '/provider/safety/check-in',
+    summary: 'Record that the provider is safe at a stage of a job.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['none-accepted'],
+    replayGuard:
+      'NONE, and accepted deliberately. Two check-ins at one stage are two facts about two ' +
+      'moments, and de-duplicating them would DISCARD the later one - which on this path is ' +
+      'the more recent evidence that somebody is still safe. An extra row is the cheapest ' +
+      'possible failure here; a dropped one is not.',
+    requestSchema: 'ProviderSafetyCheckIn',
+    responseSchema: 'ProviderSafetyCheckInResult',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/providerSafetyService.recordCheckIn',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/safety/check-in',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same closed stage vocabulary.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'APPEND-ONLY. The stage vocabulary is closed - en_route, arrived, started, completed - ' +
+      'so a typo is refused rather than silently becoming a new stage nobody queries for.',
+  },
+  {
+    id: 'provider.safety.incidents.list',
+    domain: 'provider-presence',
+    method: 'get',
+    path: '/provider/safety/incidents',
+    summary: "The caller's own safety incidents, newest first.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderSafetyIncidentList',
+    errors: [],
+    query: [
+      { name: 'limit', type: 'integer', required: false, description: 'Events to return, 1-100, default 50' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSafetyService.listIncidents',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/safety/incidents',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same collection, scoped on the caller uid in the query itself.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'Scoped on uid inside the query. There is no parameter with which to name another ' +
+      'provider, so no seat exists at which somebody else incidents are visible.',
+  },
+  {
+    id: 'provider.safety.incidents.create',
+    domain: 'provider-presence',
+    method: 'post',
+    path: '/provider/safety/incidents',
+    summary: 'File a safety incident. A retry carrying the same key returns the original.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id', 'unique-constraint'],
+    replayGuard:
+      'A REQUIRED clientIncidentId, generated on the device BEFORE the first attempt, applied ' +
+      'through an upsert with $setOnInsert and backed by a unique index on ' +
+      '(uid, clientIncidentId). Every retry of one report collapses onto one document, and a ' +
+      'replay mutates nothing - not even reportedAt, which is the moment a provider says ' +
+      'something happened and is evidence.',
+    requestSchema: 'ProviderSafetyIncidentSubmit',
+    responseSchema: 'ProviderSafetyIncidentResult',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/providerSafetyService.submitIncident',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/safety/incidents',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'SAME implementation, DIFFERENT disposition on a duplicate: the legacy route answers ' +
+          '409 and keeps doing so, because five clients read it.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-presence',
+    notes:
+      'LATE, OUT OF ORDER, OR TWICE - the mandate asks for all three explicitly. ' +
+      'TWICE: collapsed onto one document by clientIncidentId, and this route REPLAYS it with ' +
+      '200 rather than refusing with 409. That is the difference from legacy and it is ' +
+      'deliberate: a provider whose first attempt committed and then timed out on a doorstep ' +
+      'will retry, and a 409 rendered as a failure tells them their report was never filed - ' +
+      'on the one report where believing that is most dangerous. `replayed: true` says which ' +
+      'happened, so a client can tell without either being an error. ' +
+      'LATE: accepted unconditionally. There is no window and no expiry; reportedAt records ' +
+      'when the provider says it happened and the server never overwrites it on a replay. ' +
+      'OUT OF ORDER: incidents are independent documents, not a sequence - there is no ordering ' +
+      'constraint between two reports and none is enforced. ' +
+      'The de-duplication used to be findOne-then-insertOne, which two concurrent retries could ' +
+      'both pass, with no unique index anywhere in the codebase to collapse them. That is the ' +
+      "requirement this TAB found unmet, and both halves - the atomic upsert AND the index - " +
+      'were needed to close it.',
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Job evidence, cancellation eligibility and cash collection (TAB 07)
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: 'provider.jobs.evidence.list',
+    domain: 'provider-jobs',
+    method: 'get',
+    path: '/provider/jobs/:bookingId/evidence',
+    summary: 'Evidence attached to this job, the requirements it answers, and what is still blocking.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'JobEvidenceList',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND'],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/bookingEvidenceService.listEvidence + blockingRequirements',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/bookings/:bookingId/evidence',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. The path moves under /provider/jobs to sit with the transitions.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-jobs',
+    notes:
+      'Carries the REQUIREMENTS and the BLOCKING set alongside the items, so a client renders ' +
+      '"what is still missing" from the server answer rather than deriving it. The blocking ' +
+      'calculation is the same one the completion transition consults, so a screen cannot say ' +
+      'ready while the POST refuses.',
+  },
+  {
+    id: 'provider.jobs.evidence.create',
+    domain: 'provider-jobs',
+    method: 'post',
+    path: '/provider/jobs/:bookingId/evidence',
+    summary: 'Attach evidence to a job in progress.',
+    auth: 'provider',
+    activeProvider: true,
+    idempotent: false,
+    replayMechanism: ['client-request-id', 'unique-constraint'],
+    replayGuard:
+      'A REQUIRED clientRequestId, collapsed by the partial unique index on ' +
+      '(booking_id, worker_uid, client_request_id) added in migration 043. The key is checked ' +
+      'BEFORE the decode, the magic-byte validation, the EXIF strip and the storage write, so a ' +
+      'retry that already succeeded neither pays for that work again nor leaves an orphaned ' +
+      'object in storage that no row references.',
+    requestSchema: 'JobEvidenceSubmit',
+    responseSchema: 'JobEvidenceItem',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT', 'BOOKING_STATE_CONFLICT'],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/bookingEvidenceService.submitEvidence',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/bookings/:bookingId/evidence',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'SAME implementation after TAB 07 extracted it. clientRequestId is OPTIONAL there ' +
+          'and REQUIRED here - demanding one on the legacy route would break shipped clients.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-jobs',
+    notes:
+      'THE DEFECT THIS CLOSES: attachEvidence was a plain INSERT with no idempotency key of any ' +
+      'kind, so a provider whose upload committed and then timed out filed a SECOND photo on ' +
+      'the retry. maxCount bounded the damage without avoiding it - the duplicate either ate a ' +
+      'slot the provider still needed, or where maxCount is 1 the retry was refused with ' +
+      'TOO_MANY_FILES, which reads as "your upload failed" for an upload that succeeded. ' +
+      'Evidence is what a DISPUTE is decided on, which is why the key is required here. ' +
+      'A replay answers 200 and a new file 201, with `replayed` on the body - neither is an ' +
+      'error. `approved: false` is always stated: attached is not accepted (19). ' +
+      'EXIF is stripped before storage, because a photo taken at a customer address carries ' +
+      'GPS by default and storing it would attach a precise home location to every file.',
+  },
+  {
+    id: 'provider.jobs.evidence.delete',
+    domain: 'provider-jobs',
+    method: 'delete',
+    path: '/provider/jobs/:bookingId/evidence/:evidenceId',
+    summary: 'Remove a piece of evidence the provider attached.',
+    auth: 'provider',
+    activeProvider: true,
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      "The UPDATE matches only a row that is not already removed, so a repeat changes nothing " +
+      'and answers NOT_FOUND rather than removing something twice.',
+    responseSchema: 'JobEvidenceRemoval',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND'],
+    params: [
+      { name: 'bookingId', type: 'integer', description: 'bookings.id' },
+      { name: 'evidenceId', type: 'integer', description: 'booking_evidence.id' },
+    ],
+    status: 'implemented',
+    domainService: 'services/bookingEvidenceService.removeEvidence',
+    legacy: [
+      {
+        method: 'delete',
+        path: '/api/provider/bookings/:bookingId/evidence/:evidenceId',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. Soft removal, scoped by worker uid inside the UPDATE.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-jobs',
+    notes:
+      'SOFT, not hard: the audit trail must survive a provider replacing a photo. Scoped by ' +
+      'worker_uid in the UPDATE itself, so one provider cannot remove another evidence even ' +
+      'with a guessed id - the scope is in the statement rather than in a check above it.',
+  },
+  {
+    id: 'provider.jobs.cancellationEligibility',
+    domain: 'provider-jobs',
+    method: 'get',
+    path: '/provider/jobs/:bookingId/cancellation-eligibility',
+    summary: 'May this provider cancel, and if not, why?',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'CancellationEligibility',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND'],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/booking/bookingPolicies.evaluateCancellation',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/bookings/:bookingId/cancellation-eligibility',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same policy function, same context loader. Only the path and envelope differ.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-jobs',
+    notes:
+      'The verdict comes from evaluateCancellation - the SAME function the cancel transition ' +
+      'calls - so a Cancel button and the POST behind it cannot disagree about the window. The ' +
+      'client never calculates the rule. A race between loading this and tapping is still ' +
+      'possible and still fine: the POST stays authoritative. ' +
+      'The refusal carries a CODE, not only a message, which is what lets a client explain WHY ' +
+      'a cancellation is refused instead of showing a bare error. Nothing about the policy was ' +
+      'changed here - publishing the read was the task.',
+  },
+  {
+    id: 'bookings.payments.cashCollected',
+    // `bookings`, not `finance`. The finance domain in this repository is a
+    // DECLARED target architecture - earnings, reconciliation and refunds, each
+    // delegating to a services/finance module, asserted endpoint-by-endpoint in
+    // finance-contract.test.ts. Cash collection is a booking-level settlement
+    // fact recorded by whoever closed the job, and it delegates to the older
+    // paymentService. Adding it to `finance` would have silently redefined that
+    // target to make one entry fit.
+    domain: 'bookings',
+    method: 'post',
+    path: '/bookings/:bookingId/cash-collected',
+    summary: 'Record that cash was collected for this booking.',
+    auth: 'authenticated',
+    idempotent: true,
+    responseSchema: 'CashCollectionResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'BOOKING_ACCESS_DENIED'],
+    params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
+    status: 'implemented',
+    domainService: 'services/paymentService.markCashPaid',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/:bookingId/mark-cash-paid',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Mounted directly under /api, unlike every sibling. Same service; this entry gives it ' +
+          'a path consistent with /bookings/:bookingId/payment.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'finance',
+    notes:
+      'THE PATH was the mandate: /api/:bookingId/mark-cash-paid sits directly under /api, ' +
+      'unlike every sibling, so a wildcard added at that level would shadow it. It now sits ' +
+      'with /bookings/:bookingId/payment and /bookings/:bookingId/payment-intents. ' +
+      'AUTH is `authenticated` and that is deliberate rather than lax. The legacy route is ' +
+      'mounted on verifyAuth alone and authorizes in the handler: assertBookingAccess resolves ' +
+      'the caller relationship to THIS booking and settlement refuses the CUSTOMER, because a ' +
+      'customer declaring their own cash payment is not evidence of anything. Declaring ' +
+      '`provider` would have looked stricter and would have locked ADMIN out of ' +
+      'support-assisted recovery. The rung that matters is membership of the booking, and it ' +
+      'is enforced where it can see which booking is being asked about. ' +
+      'IDEMPOTENT by construction: paid_at = COALESCE(paid_at, NOW()), so a repeat reaches the ' +
+      'same end state without moving the moment money changed hands, and the ledger event is ' +
+      'keyed on the payment id so it is recorded once.',
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Provider support cases and the review write surface (TAB 08)
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: 'provider.support.categories',
+    domain: 'provider-support',
+    method: 'get',
+    path: '/provider/support/case-categories',
+    summary: "The categories a provider may open a support case under.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderSupportCaseCategoryList',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.listCategories',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/support/case-categories',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. A frozen list; no per-provider data.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'STATIC per deployment - names no account and reads no provider row, so a client may cache it. Published as its own resource rather than folded into the create request because a category list is what a client needs BEFORE it can compose one.',
+  },
+  {
+    id: 'provider.support.cases.list',
+    domain: 'provider-support',
+    method: 'get',
+    path: '/provider/support/cases',
+    summary: "The caller's own support cases.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderSupportCaseList',
+    errors: [],
+    query: [
+      { name: 'status', type: 'string', required: false, description: 'Filter by case status' },
+      { name: 'limit', type: 'string', required: false, description: 'Page size' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.listCases',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/support/cases',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Scoped on the caller uid inside the query itself.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'The PROVIDER\'s cases with Servana. NOT the customer post-service support cases at /v1/bookings/:bookingId/support-cases, which are a different service, a different actor and bound to a booking. Same two words, two resources.',
+  },
+  {
+    id: 'provider.support.cases.create',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/support/cases',
+    summary: "Open a support case with Servana.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId the service dedupes on, so a provider tapping twice on a slow connection raises one case rather than two for a human to triage.',
+    requestSchema: 'ProviderSupportCaseCreate',
+    responseSchema: 'ProviderSupportCase',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.createCase',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/support/cases',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same validation, same dedupe.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'NOT bound to a booking, unlike the customer support-case resource. A provider raising a case about their account, a payout or a policy has no booking to attach it to, and requiring one would have made the commonest case unreportable.',
+  },
+  {
+    id: 'provider.support.cases.get',
+    domain: 'provider-support',
+    method: 'get',
+    path: '/provider/support/cases/:caseId',
+    summary: "One support case and its thread.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderSupportCase',
+    errors: ['NOT_FOUND'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'provider_support_cases.id' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.getCase',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/support/cases/:caseId',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Another provider case id is a 404, not a 403.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+  },
+  {
+    id: 'provider.support.cases.reply',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/support/cases/:caseId/messages',
+    summary: "Add a message to a case thread.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId, so a retry on a lossy link does not post the same message twice into a thread a human is reading.',
+    requestSchema: 'ProviderSupportCaseMessage',
+    responseSchema: 'ProviderSupportCaseMessageResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'provider_support_cases.id' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.addProviderMessage',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/support/cases/:caseId/messages',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same thread.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'THE ONE THE CLASSIFIER NEARLY MISMATCHED. A client mapped this onto /v1/conversations/:id/messages on the word "messages" and it was rejected as false. A case thread is between a provider and SERVANA; a conversation is between a provider and a CUSTOMER about a booking. Different audience, different retention, different authorization - membership of a booking versus ownership of a case. Do not let a shared noun drive a migration.',
+  },
+  {
+    id: 'provider.support.cases.withdraw',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/support/cases/:caseId/withdraw',
+    summary: "Withdraw a case the provider no longer wants worked.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      'The update matches only a case still in a withdrawable state, so a repeat changes nothing and the case stays withdrawn once.',
+    requestSchema: 'ProviderSupportCaseStateChange',
+    responseSchema: 'ProviderSupportCase',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'provider_support_cases.id' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.withdrawCase',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/support/cases/:caseId/withdraw',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same state guard.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+  },
+  {
+    id: 'provider.support.cases.reopen',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/support/cases/:caseId/reopen',
+    summary: "Reopen a closed case rather than raising a second one about it.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      'The update matches only a closed case, so a repeat is refused rather than reopening an already-open case a second time.',
+    requestSchema: 'ProviderSupportCaseStateChange',
+    responseSchema: 'ProviderSupportCase',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'provider_support_cases.id' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.reopenCase',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/support/cases/:caseId/reopen',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Published so a provider is not pushed into raising a duplicate.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+  },
+  {
+    id: 'provider.support.cases.appeal',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/support/cases/:caseId/appeals',
+    summary: "Appeal the outcome of a support case.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId, so a retried appeal does not queue a second one for a human.',
+    requestSchema: 'ProviderSupportCaseAppeal',
+    responseSchema: 'ProviderSupportCaseAppealResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'provider_support_cases.id' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.appealCase',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/support/cases/:caseId/appeals',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. An appeal is a second DECISION, not a second case.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+  },
+  {
+    id: 'provider.support.cases.attach',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/support/cases/:caseId/attachments',
+    summary: "Attach a file to a support case.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId, so a retried upload on a lossy link attaches one file rather than two copies of it.',
+    requestSchema: 'ProviderSupportCaseAttachment',
+    responseSchema: 'ProviderSupportCaseAttachmentResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'UNSUPPORTED_MEDIA_TYPE'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'provider_support_cases.id' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.uploadAttachment',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/support/cases/:caseId/attachments',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same validation.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'A THIRD upload surface, and deliberately NOT merged with job evidence or chat attachments. They share a MECHANISM - validated ingress - and not a RESOURCE: a case attachment is reviewed by Servana, evidence decides a dispute, a chat attachment is a message to a customer. Different audiences, retentions and authorization. The right shared thing is the validator, not the endpoint.',
+  },
+  {
+    id: 'provider.support.cases.attachmentPreview',
+    domain: 'provider-support',
+    method: 'get',
+    path: '/provider/support/cases/:caseId/attachments/:attachmentId/preview',
+    summary: "A short-lived URL for one case attachment.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderSupportCaseAttachmentPreview',
+    errors: ['NOT_FOUND'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'provider_support_cases.id' },
+      { name: 'attachmentId', type: 'string', description: 'The attachment on that case' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerSupportCaseService.previewAttachment',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/support/cases/:caseId/attachments/:attachmentId/preview',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Re-authorizes before minting a URL.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'Mints a SHORT-LIVED url after re-checking ownership; it never returns a storage path. A separate operation from the case read for exactly that reason - folding it in would turn every case fetch into a file disclosure.',
+  },
+  {
+    id: 'provider.reputation.summary',
+    domain: 'provider-support',
+    method: 'get',
+    path: '/provider/reputation/summary',
+    summary: "The caller's own rating aggregate.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderReputationSummary',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerReputationService.getProviderReputationSummary',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/reputation/summary',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same aggregate.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'NOT /v1/provider/earnings/summary, which a client classifier matched this against on the word "summary" and which was rejected as false. One is a rating aggregate and the other is money. They share a noun and nothing else.',
+  },
+  {
+    id: 'provider.reviews.list',
+    domain: 'provider-support',
+    method: 'get',
+    path: '/provider/reviews',
+    summary: "Reviews left about the caller, with their response state.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderOwnedReviewList',
+    errors: [],
+    query: [
+      { name: 'status', type: 'string', required: false, description: 'Filter by response state' },
+      { name: 'limit', type: 'string', required: false, description: 'Page size' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerReputationService.listOwnedProviderReviews',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/reviews',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. The provider view of reviews naming them.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'DISTINCT from GET /v1/reviews/providers/:providerUid, which is what a CUSTOMER sees when choosing a provider. This one carries response state and moderation state, which are not public.',
+  },
+  {
+    id: 'provider.reviews.get',
+    domain: 'provider-support',
+    method: 'get',
+    path: '/provider/reviews/:reviewId',
+    summary: "One review naming the caller.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderOwnedReview',
+    errors: ['NOT_FOUND'],
+    params: [
+      { name: 'reviewId', type: 'string', description: 'The review this provider is named in' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerReputationService.getOwnedProviderReview',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/reviews/:reviewId',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. A review not naming the caller is a 404.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+  },
+  {
+    id: 'provider.reviews.respond',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/reviews/:reviewId/response',
+    summary: "Respond publicly to a review.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId the service dedupes on, so a retry does not publish the same response twice under one review.',
+    requestSchema: 'ProviderReviewResponse',
+    responseSchema: 'ProviderReviewResponseResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [
+      { name: 'reviewId', type: 'string', description: 'The review this provider is named in' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerReputationService.submitProviderResponse',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/reviews/:reviewId/response',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same moderation pass.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'PUBLIC-FACING TEXT, so the moderation that applies today applies to the canonical route on day one - providerResponseNeedsModeration runs on the same body before it is published, which is why this delegates rather than reimplements. EDIT AND WITHDRAW, since the mandate asks: neither is published, because neither exists. There is one response per review and the service has no update or delete path for it. That is a deliberate product position rather than an omission - a published reply that can be silently rewritten after a customer has read it is a different product - and it is recorded here so a client team plans for one shot rather than discovering it. Changing it is a product decision with an owner, not a migration.',
+  },
+  {
+    id: 'provider.reviews.report',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/reviews/:reviewId/report',
+    summary: "Report a review as breaching policy.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId, so a retried report does not open two moderation cases about one review.',
+    requestSchema: 'ProviderReviewReport',
+    responseSchema: 'ProviderReviewReportResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [
+      { name: 'reviewId', type: 'string', description: 'The review this provider is named in' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerReputationService.reportOwnedReview',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/reviews/:reviewId/report',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same closed reason vocabulary.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'A request for REVIEW, not a removal. The reason vocabulary is closed, so a report carries a code a moderator can triage on rather than free text somebody has to read before they can sort it.',
+  },
+  {
+    id: 'provider.reviews.appeal',
+    domain: 'provider-support',
+    method: 'post',
+    path: '/provider/review-moderation/:caseId/appeals',
+    summary: "Appeal a moderation decision about a review.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId, so a retried appeal does not queue two for one decision.',
+    requestSchema: 'ProviderReviewAppeal',
+    responseSchema: 'ProviderReviewAppealResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT'],
+    params: [
+      { name: 'caseId', type: 'string', description: 'The MODERATION CASE being appealed, not the review' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerReputationService.appealOwnedReview',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/review-moderation/:caseId/appeals',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same closed grounds vocabulary.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'provider-support',
+    notes:
+      'Keyed on the moderation CASE id, not the review id, and the distinction matters: the thing being appealed is a DECISION, and one review can carry more than one over time. Keying on the review would make the second appeal ambiguous about which decision it contested.',
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // The remainder (TAB 10)
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: 'provider.earnings.transaction',
+    domain: 'finance',
+    method: 'get',
+    path: '/provider/earnings/transactions/:transactionId',
+    summary: "One earning transaction in full.",
+    auth: 'provider',
+    capability: 'canViewEarnings',
+    idempotent: true,
+    responseSchema: 'ProviderEarningTransaction',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND'],
+    params: [
+      { name: 'transactionId', type: 'integer', description: 'The transaction id from the transactions list' },
+    ],
+    status: 'implemented',
+    domainService: 'services/finance/providerEarningsService.getEarningTransaction',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/earnings/:id',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. The legacy path sits directly under /earnings, where it shadows any future literal segment added beside it.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'finance',
+    notes:
+      'THE ACTUAL GAP in this cluster. The book records /api/provider/earnings - the LIST - as the missing per-booking ledger, but that path already delegates to the same canonicalEarningsTransactions the v1 list uses, so it was never missing. What had no successor was /api/provider/earnings/:id, the single-transaction DETAIL, which the book does not name. Measuring the cluster found it; reading the book would not have. capability canViewEarnings is carried because the legacy chain carries it: a provider whose application is not APPROVED holds the role and must not read earnings, and a successor that dropped the rung would be privilege escalation arriving as a migration.',
+  },
+  {
+    id: 'provider.alerts.list',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/alerts',
+    summary: "Operational alerts the provider has not dismissed.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderAlertList',
+    errors: [],
+    status: 'implemented',
+    domainService: 'controllers/providerController.getProviderAlerts',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/alerts',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same projection.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'PROMOTED. Alerts are how a provider learns something needs attention before it costs them work, so leaving them legacy would keep the one surface that explains a restriction on the old contract while the restriction itself became canonical.',
+  },
+  {
+    id: 'provider.alerts.dismiss',
+    domain: 'account',
+    method: 'delete',
+    path: '/provider/alerts/:alertKey',
+    summary: "Dismiss one alert.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      'Dismissing an already-dismissed alert reaches the same end state - the key is either in the dismissed set or it is not, and adding it twice is one membership.',
+    responseSchema: 'ProviderAlertDismissal',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND'],
+    params: [
+      { name: 'alertKey', type: 'string', description: 'The alert key from the list' },
+    ],
+    status: 'implemented',
+    domainService: 'controllers/providerController.dismissAlert',
+    legacy: [
+      {
+        method: 'delete',
+        path: '/api/provider/alerts/:key',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. The parameter is renamed :key -> :alertKey for readability; the value is identical.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+  },
+  {
+    id: 'provider.calendar.get',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/calendar',
+    summary: "The provider's bookings and time off, as a calendar.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderCalendar',
+    errors: [],
+    status: 'implemented',
+    domainService: 'controllers/providerCalendarController.getCalendar → services/providerCalendarService.getProviderCalendar',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/calendar',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. A READ that must stay a read - the service docblock records an account-state read that once upserted.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'PROMOTED. A read path that must not write: the calendar service already carries a note about a sibling read that once upserted a row, and publishing it canonically is the moment to restate that rather than the moment to forget it.',
+  },
+  {
+    id: 'provider.performance.get',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/performance',
+    summary: "The provider's own performance metrics.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderPerformance',
+    errors: [],
+    status: 'implemented',
+    domainService: 'controllers/providerController.getProviderPerformanceMetrics',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/performance',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same computation, same scope.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'PROMOTED. Distinct from the reputation summary (TAB 08): performance is operational - acceptance, punctuality, completion - and reputation is what customers said. A provider can be rated well and perform badly, and collapsing them would hide exactly the case somebody needs to act on.',
+  },
+  {
+    id: 'provider.profilePhoto.upload',
+    domain: 'account',
+    method: 'post',
+    path: '/provider/profile/photo',
+    summary: "Submit a new profile photo for review.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId, so a retry on a lossy link submits one photo for review rather than two.',
+    requestSchema: 'ProviderProfilePhotoUpload',
+    responseSchema: 'ProviderProfilePhotoResult',
+    errors: ['VALIDATION_FAILED', 'UNSUPPORTED_MEDIA_TYPE'],
+    status: 'implemented',
+    domainService: 'controllers/providerController.uploadWorkerProfilePhoto',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/worker/profile/photo',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same validation.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'THIS IS THE CHANNEL TAB 01 NAMED. `photo` is marked editable: review in the profile field registry, and PATCH /provider/profile refuses it by name pointing here - the defect TAB 01 found was that the two allow-lists disagreed about which. A photo is a FILE with MIME, magic-byte and size validation, and the revision table carries jsonb strings, which is why it was never submittable through the profile patch.',
+  },
+  {
+    id: 'provider.profilePhoto.delete',
+    domain: 'account',
+    method: 'delete',
+    path: '/provider/profile/photo',
+    summary: "Remove the current profile photo.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      'Removing an already-removed photo reaches the same end state; there is nothing to remove twice.',
+    responseSchema: 'ProviderProfilePhotoResult',
+    errors: ['NOT_FOUND'],
+    status: 'implemented',
+    domainService: 'controllers/providerController.deleteWorkerProfilePhoto',
+    legacy: [
+      {
+        method: 'delete',
+        path: '/api/worker/profile/photo',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Removing the photo is the other half of changing it, and a provider ' +
+          'who can upload and not remove is stuck with whatever they last submitted.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'A NINTH operation this cluster carries that the book does not list - the book names /api/worker/profile/photo as one path, and it holds both POST and DELETE. Counting paths has undercounted every cluster in this programme.',
+  },
+  {
+    id: 'provider.schedule.get',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/schedule',
+    summary: "The provider's own schedule.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderSchedule',
+    errors: [],
+    status: 'implemented',
+    domainService: 'controllers/providerLocationAccessController.getMySchedule',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/worker/schedule',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Identity from the TOKEN on both - no uid is accepted from the path.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'PROMOTED. Sits in the location-access controller because the same module answers "where is this provider" for a customer tracking a booking they own; this route is the provider asking about THEMSELVES and accepts no uid parameter at all.',
+  },
+  {
+    id: 'provider.catalog.offerings',
+    domain: 'catalog',
+    method: 'get',
+    path: '/provider/catalog/offerings',
+    summary: "Active offerings and their specific services, as a provider sees them.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderCatalogOfferings',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerCatalogService.getOfferingsForProvider',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider-catalog/v1/offerings',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. The legacy path carries its OWN v1 segment under a different prefix, which is what made it ambiguous whether it was inside the canonical surface.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'catalog',
+    notes:
+      'THE MANDATE ASKED whether this is inside or outside the canonical surface, because the legacy path carries a v1 segment of its own under a different prefix - /api/provider-catalog/v1/... - which is a version number belonging to that subsystem and NOT to this contract. It is now unambiguously inside: one /api/v1 prefix, one version, and the old path is an alias. Two things called v1 in one URL space is a question somebody has to stop and answer every time they read it.',
+  },
+  {
+    id: 'provider.account.requestDeletion',
+    domain: 'account',
+    method: 'post',
+    path: '/provider/account/deletion-request',
+    summary: "Request permanent deletion of the provider account.",
+    auth: 'provider',
+    idempotent: true,
+    requestSchema: 'ProviderAccountDeletionRequest',
+    responseSchema: 'ProviderAccountDeletionResult',
+    errors: ['VALIDATION_FAILED', 'CONFLICT'],
+    status: 'implemented',
+    domainService: 'controllers/providerController.requestProviderDeletion',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/account/delete',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. RENAMED on the canonical surface from `delete` to `deletion-request`, because that is what it does.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'ERASURE BEHAVIOUR, since the mandate asks for it explicitly and the honest answer has three parts. WHAT THIS DOES: it RECORDS AN INTENTION. Nothing is erased by this call. It writes deletionStatus, a reason and a timestamp, and that is the whole of its effect - which is why the canonical path says deletion-request rather than delete. THE PRECONDITION: refused with 409 while the provider holds any booking that is not COMPLETED, CANCELLED or REJECTED. A provider cannot delete their way out of work a customer is waiting for. IDEMPOTENT by construction - an upsert keyed on the uid - so a second request confirms the first rather than queueing another. WHAT IS REMOVED AND WHAT IS RETAINED IS NOT DECIDED HERE, and this contract will not invent it. The legacy handler promises deletion "within 30 days" in a MESSAGE STRING: no client can branch on it, and no scheduled job in this repository executes it. That is recorded as an open question with an owner rather than dressed up as a policy. Booking and payment records almost certainly must survive an account deletion for tax and audit reasons, which makes the retention schedule a legal decision rather than an API one - RA 10173 requires a stated retention period, and stating one on this operation without that decision would be worse than stating none.',
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Notifications
   // ───────────────────────────────────────────────────────────────────────────
   {
@@ -1447,6 +2981,328 @@ export const V1_CONTRACT: ContractEntry[] = [
       'message naming where each is actually changed.',
   },
   {
+    id: 'provider.activation.get',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/activation',
+    summary: "The caller's own activation checklist: why they cannot work yet, and what to do.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderActivation',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/account/providerActivationProjection.getProviderActivation',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/account-state',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'The live discovery endpoint. FULLY subsumed: every key it returns - account, ' +
+          'verification, profile, documents, application, activation, access, checklist, ' +
+          'nextStep - is carried here, from the same service, unchanged.',
+      },
+      {
+        method: 'get',
+        path: '/api/provider/compliance',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Returns `calculateCompliance` verbatim, which this entry carries as `compliance` ' +
+          'from the SAME computation - not a second call, so the two cannot disagree.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'A SIBLING of provider.profile.get rather than more fields on it. `ProviderProfile` is ' +
+      'also the response schema of provider.publicProfile.get - what a stranger sees - so ' +
+      'widening it would put a compliance checklist in the shape customers read, one ' +
+      'seat-computation bug from disclosure. Separate resources also let this one fan out to ' +
+      'the readiness and activation engines without charging the customer browse screen for ' +
+      'it (56). ' +
+      'auth is `provider`, and the first draft had it as `authenticated` to mirror ' +
+      '/api/provider/account-state, which is mounted on verifyAuth alone so a non-provider ' +
+      'learns WHY rather than receiving a bare 403. `legacy-authz-parity` refused that, ' +
+      'correctly: this entry also supersedes /api/provider/compliance, which IS provider-gated, ' +
+      'so at `authenticated` it was a strictly weaker route to compliance detail than the route ' +
+      'it replaces. Compliance is null for a non-provider today, but that is a property of the ' +
+      'service and the contract is what a future change reads. ' +
+      'The discovery property survives the tightening, which is why this is not a regression: ' +
+      '`requireProviderRole` admits EVERY provider role - suspended, unapproved, pending, ' +
+      'mid-activation - so the caller who actually needs to know why they cannot work still ' +
+      'gets the checklist that explains it. The only callers now refused are non-providers, ' +
+      'who have no activation state to discover, and they receive ROLE_REQUIRED - a structured ' +
+      'v1 code a client can branch on, carrying the same information ' +
+      'nextStep: ROLE_NOT_PERMITTED carried. Nothing was lost; a rung was gained. ' +
+      'Authorization is also in the SIGNATURE: the uid comes from the token and there is no ' +
+      'parameter with which to name another account. A denied account loads nothing, so ' +
+      'compliance and the three summaries are null rather than zeroed - "we did not look" and ' +
+      '"nothing outstanding" are different answers.',
+  },
+  {
+    id: 'provider.fieldRegistry.get',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/profile-fields',
+    summary: 'The provider profile field registry: classification, how each field is edited, visibility.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderFieldRegistry',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerProfileComplianceService.PROFILE_FIELD_REGISTRY',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/profile-fields',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Returns the same frozen registry constant. No per-provider data of any kind.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'STATIC per deployment - it names no account and reads no row, so it is the one entry in ' +
+      'this domain a client may cache hard. It is versioned so a client can tell when the ' +
+      'vocabulary moved. Kept a separate resource rather than folded into the profile read for ' +
+      'exactly that reason: a per-provider response cannot be cached, and merging the two would ' +
+      'have made a constant uncacheable to save one call.',
+  },
+  {
+    id: 'provider.publicProfile.preview',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/public-profile',
+    summary: "The caller's OWN public profile as published, plus any revision awaiting review.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderPublicProfilePreview',
+    errors: ['NOT_FOUND'],
+    status: 'implemented',
+    domainService: 'services/providerProfileComplianceService.getPublicProfile',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/public-profile-preview',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'The provider previewing their own published profile. Same service.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'NOT the same resource as provider.publicProfile.get, and the difference is a disclosure ' +
+      'boundary rather than a naming preference. This one carries `pendingRevision` - the ' +
+      "provider's UNREVIEWED proposed text, together with the moderator's reason code and " +
+      'message. None of that is public. Matching these two routes on the shared words "public ' +
+      'profile" would either have lost the pending-revision surface or, if the field had been ' +
+      'added to the shared schema instead, published unreviewed content and internal review ' +
+      'notes to every customer browsing for a provider. The seat differs too: this is `self` ' +
+      'only, taken from the token, with no parameter naming another account.',
+  },
+  {
+    id: 'provider.certifications.list',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/certifications',
+    summary: "The caller's certifications and their review state.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderCertificationList',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerProfileComplianceService.listCertifications',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/certifications',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same projection.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'The LIST, which provider.activation.get carries only a COUNT of. A summary is enough to ' +
+      'render a checklist and cannot render the screen where a provider sees which credential ' +
+      'expired - so this is promoted rather than subsumed. `credentialMask` is what is stored ' +
+      'and what travels; the full credential number is never on this wire.',
+  },
+  {
+    id: 'provider.certifications.create',
+    domain: 'account',
+    method: 'post',
+    path: '/provider/certifications',
+    summary: 'Submits a certification for review, against a document already uploaded.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id', 'unique-constraint'],
+    replayGuard:
+      'A REQUIRED clientRequestId, collapsed by a unique index on ' +
+      '(provider_uid, client_request_id) with ON CONFLICT DO UPDATE of a no-op column. A retry ' +
+      'on a flaky connection returns the first submission rather than queueing a second for a ' +
+      'human to review.',
+    requestSchema: 'ProviderCertificationSubmit',
+    responseSchema: 'ProviderCertification',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND'],
+    status: 'implemented',
+    domainService: 'services/providerProfileComplianceService.submitCertification',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/certifications',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. Identical validation and ownership checks.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'Ownership is enforced on BOTH references before the insert: `relatedDocumentId` must be ' +
+      "a worker_requirement belonging to the caller, and `renewalOfId` a certification of " +
+      'theirs. A 404 either way, deliberately not distinguishing "not yours" from "not there" - ' +
+      'the difference would enumerate ids.',
+  },
+  {
+    id: 'provider.verificationTimeline.get',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/verification-timeline',
+    summary: 'What has happened to the caller\'s documents, certifications and activation, newest first.',
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderVerificationTimeline',
+    errors: [],
+    query: [
+      { name: 'limit', type: 'integer', required: false, description: 'Events to return, 1-100, default 50' },
+    ],
+    status: 'implemented',
+    domainService: 'services/providerProfileComplianceService.getVerificationTimeline',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/verification-timeline',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. The limit is clamped to 100 there and here, by the same code.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'HISTORY, and a separate resource from the activation checklist on purpose: a checklist ' +
+      'answers "what must I do now" and a timeline answers "what happened", they have different ' +
+      'retention questions, and carrying fifty events into every activation read would be a ' +
+      'data-minimisation failure on a screen that does not display them. Carries the ' +
+      'provider-facing reason code and detail; internal reviewer notes are not selected.',
+  },
+  {
+    id: 'provider.contactChanges.request',
+    domain: 'account',
+    method: 'post',
+    path: '/provider/contact-changes',
+    summary: 'Starts a change of verified email or mobile. Sends a code to the NEW address.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A REQUIRED clientRequestId. Without it a provider tapping twice on a slow connection ' +
+      'starts two change requests against the same target and receives two codes, only one of ' +
+      'which will be accepted.',
+    requestSchema: 'ProviderContactChangeRequest',
+    responseSchema: 'ProviderContactChangeStarted',
+    errors: ['VALIDATION_FAILED', 'CONFLICT', 'ACCOUNT_RECENT_AUTH_REQUIRED'],
+    status: 'implemented',
+    domainService: 'services/providerContactChangeService.requestContactChange',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/contact-changes',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service, same recent-auth precondition. STEP ONE of two - see the confirm entry.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'STEP ONE OF TWO. Migrate this and provider.contactChanges.confirm together or not at ' +
+      'all: a canonical request whose confirm is still legacy is one flow split across two ' +
+      'contracts, and a client that gets halfway leaves a provider unable to finish changing ' +
+      'the address their account recovers through. ' +
+      'The handler passes the DECODED token, not just the uid, because `assertRecentAuth` reads ' +
+      'Firebase `auth_time`. A v1 successor that passed only the uid would silently drop the ' +
+      "recent-auth requirement - privilege escalation arriving as a migration, on the one " +
+      'operation that changes how an account is recovered.',
+  },
+  {
+    id: 'provider.contactChanges.confirm',
+    domain: 'account',
+    method: 'post',
+    path: '/provider/contact-changes/confirm',
+    summary: 'Completes a contact change by presenting the code sent to the new address.',
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['single-use-token', 'row-lock'],
+    replayGuard:
+      'The code is consumed inside a transaction that takes FOR UPDATE on the request row, so ' +
+      'two confirmations of the same request serialise and the second finds it already spent.',
+    requestSchema: 'ProviderContactChangeConfirm',
+    responseSchema: 'ProviderContactChangeResult',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND', 'CONFLICT', 'ACCOUNT_RECENT_AUTH_REQUIRED'],
+    status: 'implemented',
+    domainService: 'services/providerContactChangeService.confirmContactChange',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/contact-changes/confirm',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. STEP TWO of two - see the request entry.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'STEP TWO OF TWO. Re-asserts recent auth rather than trusting that step one did: the two ' +
+      'calls are minutes apart and the window can close between them. The request row is looked ' +
+      'up by id AND provider_uid together, so a request id belonging to somebody else is a 404 ' +
+      'rather than a confirmable target.',
+  },
+  {
+    id: 'provider.activation.acknowledgePolicy',
+    domain: 'account',
+    method: 'post',
+    path: '/provider/activation/policy-acknowledgement',
+    summary: 'Records that the provider accepted the Servana provider agreement.',
+    auth: 'provider',
+    idempotent: true,
+    requestSchema: 'ProviderPolicyAcknowledgement',
+    responseSchema: 'ProviderPolicyAcknowledgementResult',
+    errors: ['VALIDATION_FAILED'],
+    status: 'implemented',
+    domainService: 'services/providerActivationService.acknowledgeProviderPolicy',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/activation/policy-acknowledgement',
+        disposition: 'ALIAS_TEMPORARILY',
+        note: 'Same service. Idempotent there and here, by the same COALESCE.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'Idempotent by CONSTRUCTION, not by a guard: the upsert is ' +
+      'COALESCE(policy_acknowledged_at, now()), so a second acceptance returns the ORIGINAL ' +
+      'date rather than moving it. That is the right behaviour for a consent record - the ' +
+      'moment somebody agreed is a fact, and a double tap must not rewrite it. ' +
+      'FINDING, recorded and deliberately NOT changed here: because the timestamp is pinned to ' +
+      'the provider rather than to the policy version, acknowledging a REVISED agreement is ' +
+      'indistinguishable from re-acknowledging the old one, and `policyVersion` is accepted but ' +
+      'not returned. Whether a revised agreement needs a fresh acceptance is a legal question ' +
+      'about consent, not an API question, and changing consent semantics unilaterally inside a ' +
+      'migration TAB would be the wrong place to answer it. Raised in ' +
+      'docs/PROVIDER_ACTIVATION_DISPOSITION.md for the product owner.',
+  },
+  {
     id: 'provider.publicProfile.get',
     domain: 'account',
     method: 'get',
@@ -1964,7 +3820,7 @@ export const V1_CONTRACT: ContractEntry[] = [
       '(customer_uid, client_request_id). A retry on a flaky connection returns the original ' +
       'case rather than opening a third for one complaint.',
     requestSchema: 'SupportCaseInput',
-    responseSchema: 'SupportCase',
+    responseSchema: 'ProviderSupportCase',
     errors: [
       'VALIDATION_FAILED', 'SUPPORT_BOOKING_NOT_ELIGIBLE', 'SUPPORT_CASE_LIMIT_REACHED',
     ],
@@ -1997,7 +3853,7 @@ export const V1_CONTRACT: ContractEntry[] = [
     summary: 'The cases the caller raised on this booking.',
     auth: 'authenticated',
     idempotent: true,
-    responseSchema: 'SupportCaseList',
+    responseSchema: 'ProviderSupportCaseList',
     errors: ['VALIDATION_FAILED'],
     params: [{ name: 'bookingId', type: 'integer', description: 'bookings.id' }],
     status: 'implemented',
@@ -2184,7 +4040,15 @@ export const V1_CONTRACT: ContractEntry[] = [
     notes:
       'Mobile + password works only for an account that also has an email: Firebase is the ' +
       'password authority and its password grant is keyed on email. An account with a mobile and ' +
-      'no email gets PASSWORD_NOT_AVAILABLE and must use the token path — stated, not guessed.',
+      'no email gets PASSWORD_NOT_AVAILABLE and must use the token path — stated, not guessed. ' +
+      'REQUIRED FIELDS ARE CONDITIONAL, and the published requiredBody is empty for an ' +
+      'honest reason rather than a missing one: this endpoint accepts EITHER identifier ' +
+      'plus password OR idToken, so no single field is required by every valid call. A ' +
+      'client gate built on requiredBody alone would therefore pass an EMPTY body - read ' +
+      'allowedBody and the schema description, which name the two groups. ' +
+      'identifier, never email: the field accepts a Philippine mobile number in any form a ' +
+      'person types as well as an address, and naming it for one channel would be the ' +
+      'client asserting a constraint this backend does not enforce.',
   },
   {
     id: 'auth.refresh',
@@ -2215,6 +4079,21 @@ export const V1_CONTRACT: ContractEntry[] = [
     ],
     callers: { customerMobile: 'legacy', customerWeb: 'legacy', providerMobile: 'legacy', providerWeb: 'legacy', admin: 'legacy' },
     observability: 'auth',
+    notes:
+      'THE PRECONDITION, STATED ON THE ENTRY because a client reads this and not the alias note: ' +
+      'this endpoint is CALLABLE WITHOUT A VALID ACCESS TOKEN, and must remain so. `auth: ' +
+      '"public"` is the declaration of that. A caller reaches refresh precisely because the ' +
+      'token they would otherwise present has expired, so demanding one would be circular and ' +
+      'the route would be unusable at the only moment it is needed. ' +
+      'The provider mobile client deliberately did NOT migrate its refresh for exactly this ' +
+      'reason - it runs on a transport that sends no Authorization header - and that decision is ' +
+      'correct against this contract rather than a workaround for it. Build the refresh call on ' +
+      'a transport with no auth interceptor. ' +
+      'The credential is `refreshToken` in the BODY, and Google validates it; this backend never ' +
+      'treats an expired ID token as an input here. ' +
+      'RATE LIMITING is per-IP only, and the reason is published on the entry rather than ' +
+      'inferred: the body carries no identifier, so there is nothing to key an account bucket ' +
+      'on, and keying on the unverified token subject would let a caller pick their own counter.',
   },
   {
     id: 'auth.logout',

@@ -8,7 +8,7 @@ The machine-generated matrix in
 derived from `src/api/v1/contract.ts` and covers every route the app mounts.
 
 <!-- BEGIN GENERATED: legacy-route-total -->
-It classifies the **519 routes** mounted outside `/api/v1`, alongside the **114 canonical** ones.
+It classifies the **519 routes** mounted outside `/api/v1`, alongside the **171 canonical** ones.
 <!-- END GENERATED: legacy-route-total -->
 
 This file is the auth slice with the reasoning attached, and

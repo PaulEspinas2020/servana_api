@@ -261,14 +261,56 @@ describe('the declaration has real consumers', () => {
     expect(source).not.toMatch(/FROM \$\{s\}\.provider_availability/);
   });
 
-  it('provider services are keyed on services.id, never a family', () => {
+  /**
+   * CORRECTED (TAB 05). This assertion was exactly backwards, and the database
+   * says so in a constraint.
+   *
+   * It read: "provider services are keyed on services.id, never a family", and
+   * refused any mention of `service_famil` in the query. But the baseline
+   * schema carries
+   *
+   *     ADD CONSTRAINT employee_services_service_id_fkey
+   *       FOREIGN KEY (service_id) REFERENCES servana.service_families(id)
+   *
+   * so the column is FK-constrained to the FAMILY table. It cannot hold a
+   * `services.id` at all unless that number also exists in `service_families`.
+   *
+   * The belief was true once. Migration 024 renamed the two tables past each
+   * other — the old coarse families became `service_families`, and
+   * `catalog_services` (the 95 canonical bookable services) became `services` —
+   * and `employee_services.service_id` was never remapped. The detector was
+   * written after that rename and encoded the pre-rename meaning of the word
+   * "services", which is how it outlived the thing it described.
+   *
+   * Worth noting that the SAME commit (8282e46) added migration 029, which
+   * joins `services s ON s.legacy_service_family_id = es.service_id` — treating
+   * the column as a family id. One rule, two statements, contradicting each
+   * other inside one commit. The executable one was right.
+   *
+   * The cost: `listServices` backs `GET /api/v1/provider/services`, which the
+   * provider mobile app has migrated to. Joining `services sv ON sv.id =
+   * es.service_id` compared a family id against a different id space. As a LEFT
+   * JOIN it raised nothing — where the number happened to exist the provider was
+   * shown a DIFFERENT service's name, and where it did not, null.
+   */
+  it('provider services are keyed on a FAMILY id, because the FK says so', () => {
     const source = read('src/services/account/providerProfileService.ts');
     expect(source).toMatch(/es\.service_id/);
-    // COMMENT-STRIPPED: the docblock explains the rule by naming
-    // service_families, and matching the explanation would pass while the query
-    // was wrong. The same reasoning booking-conversation-lifecycle applies.
     const code = stripComments(source);
-    expect(code).not.toMatch(/service_famil/i);
+    // The name must be resolved through the table the foreign key points at.
+    expect(code).toMatch(/service_families/);
+    // And NOT through the canonical bookable catalog, which is a different id
+    // space with its own sequence since migration 025.
+    expect(code).not.toMatch(/\bservices\s+sv\s+ON\s+sv\.id\s*=\s*es\.service_id/i);
+  });
+
+  it('the schema still constrains that column to the family table', () => {
+    // The citation, asserted rather than quoted, so this pair cannot drift from
+    // the database the way the assertion above did.
+    const baseline = read('scripts/baseline/000-baseline.sql');
+    expect(baseline).toMatch(
+      /employee_services_service_id_fkey[\s\S]{0,200}REFERENCES servana\.service_families\(id\)/,
+    );
   });
 
   it('documents come from worker_requirements, and provider_documents is not invented', () => {

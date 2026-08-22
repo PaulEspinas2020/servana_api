@@ -46,6 +46,8 @@ import {
   type LegacyMapping,
 } from './contract';
 import { RETIREMENT_CRITERIA } from './legacyTelemetry';
+import { SCHEMAS } from './openapi';
+import { BUCKETS, V1_RATE_LIMITS, type BucketName } from './rateLimitPolicy';
 
 import { ACCOUNT_CAPABILITIES } from '../../services/account/accountPolicy';
 import { EXPERIENCE_CAPABILITIES } from '../../services/booking/experiencePolicy';
@@ -333,6 +335,229 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'an admin all reach it and the SAME function decides what each may see. The ' +
       'differences are projections of one canonical state (toCustomerProjection / ' +
       'toProviderProjection / toAdminProjection), not different truths.',
+  },
+  {
+    key: 'providerCatalogOfferings',
+    title: 'See the offerings I could apply for',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['provider.catalog.offerings'],
+    domainModule: 'services/providerCatalogService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split, and its OWN capability rather than part of catalogBrowse — which was the '
+      + 'first draft, and which cross-platform-convergence refused. The public catalog is served '
+      + 'by catalogPublicService to anyone; this is providerCatalogService answering a narrower '
+      + 'question for an authenticated provider, filtered to active and provider-visible '
+      + 'offerings. Two services behind one capability is one nobody can retire or reason about '
+      + 'as a unit, which is exactly what the gate said.',
+  },
+  {
+    key: 'providerOperationalReads',
+    title: 'See my alerts, calendar, performance and schedule',
+    source: 'api/v1/convergence (core)',
+    contractIds: [
+      'provider.alerts.dismiss',
+      'provider.alerts.list',
+      'provider.calendar.get',
+      'provider.performance.get',
+      'provider.schedule.get',
+    ],
+    // Reached by the alerts and performance entries. This capability composes
+    // FOUR controllers — alerts and performance here, the calendar and the
+    // schedule in their own — and the declared module names the one most of it
+    // goes through rather than pretending they are one file.
+    domainModule: 'controllers/providerController',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split. Held as one capability because these are the four operational reads a '
+      + 'provider opens the app to check, and they retire together or not at all: an alert that '
+      + 'says "you have a booking tomorrow" is only useful beside the calendar that shows it. '
+      + 'Named at the controller because that is where the projections still live - lifting six '
+      + 'thin reads into services would be six chances to change a projection by accident on '
+      + 'routes whose only requirement is that the canonical answer equals the legacy one.',
+  },
+  {
+    key: 'providerProfilePhoto',
+    title: 'Change the photo customers see',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['provider.profilePhoto.delete', 'provider.profilePhoto.upload'],
+    domainModule: 'controllers/providerController',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split, and its own capability rather than part of the profile because it is the '
+      + 'CHANNEL the profile PATCH refuses `photo` in favour of. TAB 01 found the two allow-lists '
+      + 'disagreeing about whether a photo was submittable through the revision workflow; it is '
+      + 'not, because a photo is a FILE with MIME, magic-byte and size validation and the '
+      + 'revision table carries jsonb strings. Declaring it separately is what makes that '
+      + 'refusal point at something.',
+  },
+  {
+    key: 'providerAccountLifecycle',
+    title: 'Ask for my account to be deleted',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['provider.account.requestDeletion'],
+    domainModule: 'controllers/providerController',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split. Alone in its capability because it is the only provider-facing operation '
+      + 'that ends the relationship, and because it does NOT do what its legacy name says: it '
+      + 'records an intention and erases nothing. What is removed and what is retained is a '
+      + 'legal decision about retention rather than an API one, and this capability exists so '
+      + 'that question has somewhere to be answered rather than being implied by an endpoint '
+      + 'called delete.',
+  },
+  {
+    key: 'providerSupportCases',
+    title: 'Raise a case with Servana, and follow it',
+    source: 'api/v1/convergence (core)',
+    contractIds: [
+      'provider.support.cases.appeal',
+      'provider.support.cases.attach',
+      'provider.support.cases.attachmentPreview',
+      'provider.support.cases.create',
+      'provider.support.cases.get',
+      'provider.support.cases.list',
+      'provider.support.cases.reopen',
+      'provider.support.cases.reply',
+      'provider.support.cases.withdraw',
+      'provider.support.categories',
+    ],
+    domainModule: 'services/providerSupportCaseService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split. Held apart from the CUSTOMER post-service support cases '
+      + '(bookings/:bookingId/support-cases, services/reviews/postServiceSupportService) and '
+      + 'from customer CONVERSATIONS, and the separation is the point rather than an accident '
+      + 'of naming. A provider case is with Servana, is not bound to a booking, and is '
+      + 'authorized by OWNERSHIP of the case; a conversation is authorized by MEMBERSHIP of a '
+      + 'booking and read by a customer. A client classifier already matched this thread onto '
+      + '/v1/conversations/:id/messages on the word "messages" and was wrong. Three things '
+      + 'share the words "support case" in this product and they are three resources.',
+  },
+  {
+    key: 'providerReputation',
+    title: 'See what customers said about me, and answer it',
+    source: 'api/v1/convergence (core)',
+    contractIds: [
+      'provider.reputation.summary',
+      'provider.reviews.appeal',
+      'provider.reviews.get',
+      'provider.reviews.list',
+      'provider.reviews.report',
+      'provider.reviews.respond',
+    ],
+    domainModule: 'services/providerReputationService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split, and distinct from the customer-facing review reads '
+      + '(/v1/reviews/providers/:providerUid) because this surface carries RESPONSE and '
+      + 'MODERATION state, neither of which is public. The write half is what v1 lacked '
+      + 'entirely: a provider could be reviewed canonically and could not answer. A response is '
+      + 'public-facing text, so the moderation that applies today applies to the canonical route '
+      + 'on day one rather than being added afterwards.',
+  },
+  {
+    key: 'jobEvidence',
+    title: 'Prove the work happened',
+    source: 'api/v1/convergence (core)',
+    contractIds: [
+      'provider.jobs.evidence.create',
+      'provider.jobs.evidence.delete',
+      'provider.jobs.evidence.list',
+    ],
+    domainModule: 'services/bookingEvidenceService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split: the ASSIGNED provider only, scoped by worker_uid inside every statement '
+      + 'rather than by a check above it. Held apart from settlement and from cancellation '
+      + 'eligibility because the three answer to three different services, and a capability '
+      + 'spanning several is one that cannot be retired or reasoned about as a unit — which is '
+      + 'exactly what cross-platform-convergence refused when this was first declared as one. '
+      + 'Evidence is what a DISPUTE is decided on, which is why the canonical write requires a '
+      + 'replay key that the legacy route only accepts optionally.',
+  },
+  {
+    key: 'jobCancellationEligibility',
+    title: 'Find out whether I may cancel, and why not',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['provider.jobs.cancellationEligibility'],
+    domainModule: 'services/booking/bookingPolicies',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split. A READ of the same policy function the cancel transition itself calls, '
+      + 'so a Cancel button and the POST behind it cannot disagree about the window and the '
+      + 'client never calculates the rule. Separate from the transition capability because it '
+      + 'grants nothing and changes nothing: it exists so a refusal can be EXPLAINED before the '
+      + 'provider commits to the action, rather than arriving as a bare error afterwards.',
+  },
+  {
+    key: 'bookingCashSettlement',
+    title: 'Record that cash changed hands',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['bookings.payments.cashCollected'],
+    domainModule: 'services/paymentService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb', 'admin'] as ClientSurface[]),
+    roleSplitRationale:
+      'ROLE-SPLIT by MEMBERSHIP rather than by role name, and that is the whole design. '
+      + 'Authorization resolves the caller relationship to THIS booking and then refuses the '
+      + 'CUSTOMER - a customer declaring their own cash payment is not evidence of anything - '
+      + 'while admitting the assigned provider and admin, the latter for support-assisted '
+      + 'recovery. Declaring a provider-only role would have looked stricter and locked admin '
+      + 'out of that path. Idempotent by construction: paid_at is COALESCE(paid_at, NOW()), so '
+      + 'a repeat never moves the moment money changed hands.',
+  },
+  {
+    key: 'providerPresenceAndSafety',
+    title: 'Say whether I am working, where I am, and that I am safe',
+    source: 'api/v1/convergence (core)',
+    contractIds: [
+      'provider.location.report',
+      'provider.presence.get',
+      'provider.presence.goOffline',
+      'provider.presence.goOnline',
+      'provider.safety.checkIn',
+      'provider.safety.emergencyConfig',
+      'provider.safety.incidents.create',
+      'provider.safety.incidents.list',
+    ],
+    domainModule: 'services/providerOperationalAvailabilityService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split. Presence and safety are held as ONE capability because they share a '
+      + 'failure mode rather than a screen: both are things a provider does on a doorstep, on '
+      + 'a link that drops, where a refusal the client renders as an error is worse than the '
+      + 'duplicate it was avoiding. That is why the incident write REPLAYS instead of refusing '
+      + 'and the check-in is append-only with `none-accepted` declared. '
+      + 'Location is the most sensitive data this product holds, and nothing here widened who '
+      + 'can read it: a provider reads their own, admin reads it, and a customer reaches it '
+      + 'only through a booking they own while it is live.',
+  },
+  {
+    key: 'providerServiceCatalogue',
+    title: 'Decide what work I am offered',
+    source: 'api/v1/convergence (core)',
+    contractIds: [
+      'provider.serviceApplications.create',
+      'provider.serviceApplications.get',
+      'provider.serviceApplications.list',
+      'provider.serviceApplications.resubmit',
+      'provider.serviceApplications.withdraw',
+      'provider.services.eligibility',
+      'provider.services.overview',
+      'provider.services.pause',
+      'provider.services.reactivate',
+    ],
+    domainModule: 'services/serviceApplicationService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split. One capability rather than two because a read and a write here act on '
+      + 'the SAME row: a pause and an approval both change what matching offers, and splitting '
+      + 'them would let a pause be published canonically while the reactivate that undoes it '
+      + 'stayed legacy. Held separately from providerProfile because a service list looked like '
+      + 'part of a profile and is not - it is the input to matching, and it is the only '
+      + 'provider-facing surface whose state decides earnings. `provider.services.list` stays '
+      + 'in the account capability: it is the four-field chip, and the overview here is the '
+      + 'management screen.',
   },
   {
     key: 'bookingTransitions',
@@ -716,6 +941,193 @@ export const parityRow = (capability: CapabilityRecord): ParityRow => {
   };
 };
 
+// ─── The request contract (TAB 03) ────────────────────────────────────────────
+
+/**
+ * What a write operation REQUIRES and PERMITS in its body.
+ *
+ * ## The gap this closes
+ *
+ * Measured before building: the manifest a client is told to diff its call
+ * sites against carried method, path, domain, auth, idempotent and the response
+ * schema — and **no request-body data at all**, for any of its 55 write
+ * operations. It did not even carry `replayMechanism`.
+ *
+ * The consequence was measured by the provider mobile team, not predicted here:
+ * eight of their writes shipped sending bodies this backend refuses. All eight
+ * passed their own tests, because those tests asserted the PATH. A path
+ * assertion proves a call is routable and says nothing about whether it is
+ * acceptable. One of the eight was device registration, whose failure mode is
+ * not an error anybody sees — it is push notifications never arriving, and push
+ * is how a provider learns a job exists.
+ *
+ * The information already existed in `SCHEMAS`. It was simply never published
+ * where a client would read it.
+ *
+ * ## Derived from SCHEMAS, not from the generated document
+ *
+ * `SCHEMAS` is the same map `buildOpenApiDocument()` renders, so the extract and
+ * the OpenAPI document cannot disagree — there is one source and two views of
+ * it, rather than two documents to keep in step.
+ *
+ * ## What this does NOT claim
+ *
+ * Nothing in this backend validates a request body against these schemas. There
+ * is no Ajv, no Joi, no Zod, and `register.ts` never reads `requestSchema`;
+ * every handler enforces its own preconditions in code. So this extract
+ * publishes the DECLARED contract, which is the documented intent, and a client
+ * should read `requiredBody` as "the handler will refuse without this" rather
+ * than as "a validator rejects this". `bodyEnforcement` on the manifest says so
+ * in the artifact itself rather than only here — a client that assumed a
+ * validator would draw the wrong conclusion from a call that succeeded with an
+ * extra field.
+ */
+export interface RequestContract {
+  /** Schema name in `SCHEMAS`, or null when the operation declares no body. */
+  requestSchema: string | null;
+  /** Fields the schema marks required. Empty array = a body with none required. */
+  requiredBody: string[] | null;
+  /** Every top-level field the schema names. */
+  allowedBody: string[] | null;
+  /** False when the schema is `additionalProperties: false`. */
+  additionalBodyAllowed: boolean | null;
+}
+
+/** No body declared. All three are NULL, never empty — the two mean different things. */
+const NO_BODY: RequestContract = Object.freeze({
+  requestSchema: null,
+  requiredBody: null,
+  allowedBody: null,
+  additionalBodyAllowed: null,
+});
+
+/**
+ * Derive one operation's request contract.
+ *
+ * ## Why an unreadable schema THROWS rather than returning empty
+ *
+ * Every request schema today is a plain object — `type`, `properties`, optional
+ * `required`, optional `additionalProperties`. Measured across all 47: not one
+ * uses `$ref`, `allOf`, `oneOf` or `anyOf` at the top level.
+ *
+ * A future one might. If this function answered that with `allowedBody: []`, a
+ * client gating on the extract would read "no field is permitted" and refuse
+ * every call to that endpoint — and the extract would look complete while being
+ * silently wrong, which is the exact failure mode
+ * [[feedback_grep_counts_vs_reading]] describes. An empty allow-list and an
+ * unparsed schema are different answers and must not share a representation.
+ *
+ * So it refuses, naming the schema. A composed request schema is then a build
+ * failure asking somebody to teach this function about composition, which is a
+ * five-minute job, rather than a client outage nobody attributes to it.
+ */
+export const requestContractOf = (entry: ContractEntry): RequestContract => {
+  if (!entry.requestSchema) return NO_BODY;
+
+  const schema = SCHEMAS[entry.requestSchema] as Record<string, any> | undefined;
+  if (!schema) {
+    throw new Error(
+      `contract entry ${entry.id} names requestSchema '${entry.requestSchema}', which is not in SCHEMAS. ` +
+      'The manifest will not publish a body contract it could not read.',
+    );
+  }
+
+  for (const composed of ['$ref', 'allOf', 'oneOf', 'anyOf'] as const) {
+    if (schema[composed] !== undefined) {
+      throw new Error(
+        `request schema '${entry.requestSchema}' (${entry.id}) uses '${composed}', which this ` +
+        'derivation cannot flatten. Returning an empty allow-list would tell every client that ' +
+        'NO field is permitted, so this refuses instead. Teach requestContractOf about composition.',
+      );
+    }
+  }
+
+  const properties = (schema.properties ?? {}) as Record<string, unknown>;
+  const required = Array.isArray(schema.required) ? schema.required.map(String) : [];
+
+  return {
+    requestSchema: entry.requestSchema,
+    // Sorted so the generated artifact is stable across runs: an unstable order
+    // makes every regeneration a diff and `--check` a coin toss.
+    requiredBody: [...required].sort(),
+    allowedBody: Object.keys(properties).sort(),
+    additionalBodyAllowed: schema.additionalProperties !== false,
+  };
+};
+
+// ─── The rate-limit contract (TAB 09) ─────────────────────────────────────────
+
+/**
+ * What throttles an operation, published where a client will read it.
+ *
+ * ## The gap this closes
+ *
+ * `rateLimitPolicy.ts` already holds all of this — every bucket's key, window,
+ * budget and purpose, plus the reason any endpoint has no per-account bucket —
+ * and it renders into a Markdown table in `AUTH_V1_CONTRACT.md` §8. What it did
+ * not do was reach the machine-readable manifest a client is told to pin, so a
+ * client could not tell a THROTTLE from a REFUSAL without reading prose.
+ *
+ * That is the same shape as the request-body gap TAB 03 closed: the information
+ * existed, in a form a document renders, and not in the artifact clients
+ * consume.
+ *
+ * ## Why the buckets are RESOLVED rather than named
+ *
+ * Publishing `['perAccountLogin', 'perIp']` would tell a client which counters
+ * exist and nothing about what they permit. A client backing off needs the
+ * window and the budget, so the spec travels with the name and the client never
+ * has to look a second thing up.
+ *
+ * `skipSuccessfulRequests` matters more than it looks: on the login bucket only
+ * FAILED attempts count, so a client must not treat a successful sign-in as
+ * having spent budget.
+ */
+export interface PublishedRateLimit {
+  bucket: BucketName;
+  /** `identifier` falls back to the IP when the body carries none. */
+  key: 'identifier' | 'ip';
+  windowMs: number;
+  max: number;
+  skipSuccessfulRequests: boolean;
+  purpose: string;
+}
+
+export interface RateLimitContract {
+  limits: PublishedRateLimit[];
+  /**
+   * Present when an endpoint deliberately has NO per-account bucket, carrying
+   * the reason. An absent bucket and a considered exemption look identical from
+   * outside, and this is what tells them apart.
+   */
+  noAccountBucket: string | null;
+}
+
+export const rateLimitContractOf = (entryId: string): RateLimitContract | null => {
+  const policy = V1_RATE_LIMITS[entryId];
+  if (!policy) return null;
+  return {
+    limits: policy.buckets.map((bucket) => {
+      const spec = BUCKETS[bucket];
+      if (!spec) {
+        throw new Error(
+          `rate-limit policy for ${entryId} names bucket '${bucket}', which is not in BUCKETS. ` +
+          'The manifest will not publish a budget it could not resolve.',
+        );
+      }
+      return {
+        bucket,
+        key: spec.key,
+        windowMs: spec.windowMs,
+        max: spec.max,
+        skipSuccessfulRequests: spec.skipSuccessfulRequests,
+        purpose: spec.purpose,
+      };
+    }),
+    noAccountBucket: policy.noAccountBucket ?? null,
+  };
+};
+
 // ─── The canonical call manifest (§133, §138) ─────────────────────────────────
 
 export interface ManifestEntry {
@@ -728,10 +1140,30 @@ export interface ManifestEntry {
   idempotent: boolean;
   domainService: string;
   responseSchema: string;
+  /**
+   * How a replay is stopped from doing damage. Null for an idempotent read.
+   *
+   * Published BESIDE the body contract deliberately: the distinction between
+   * `client-request-id` (a body field) and `client-idempotency-key` (a header)
+   * caused two of the eight client defects on its own, and a client cannot tell
+   * them apart from the field list alone.
+   */
+  replayMechanism: string[] | null;
+  /**
+   * What throttles this operation, or null when nothing does.
+   *
+   * Published so a client can tell a THROTTLE from a REFUSAL and back off
+   * correctly rather than treating a 429 as a failure. A 429 on a v1 route
+   * carries `error.code: RATE_LIMITED` and `retryable: true`.
+   */
+  rateLimit: RateLimitContract | null;
   surfaces: ClientSurface[];
   callers: Record<ClientSurface, string>;
   supersedes: string[];
 }
+
+/** `ManifestEntry` carries the request contract inline. */
+export type ManifestEntryWithBody = ManifestEntry & RequestContract;
 
 /**
  * The machine-readable list of every canonical call a client may make.
@@ -741,7 +1173,7 @@ export interface ManifestEntry {
  * MOUNTED endpoints: a planned entry is documentation, and a client generating
  * a typed client from it would ship calls to a 404.
  */
-export const canonicalManifest = (): ManifestEntry[] => {
+export const canonicalManifest = (): ManifestEntryWithBody[] => {
   const registry = capabilityRegistry();
   const capabilityOf = (id: string): string | null =>
     registry.find((c) => c.contractIds.includes(id))?.key ?? null;
@@ -757,6 +1189,9 @@ export const canonicalManifest = (): ManifestEntry[] => {
       idempotent: e.idempotent,
       domainService: e.domainService,
       responseSchema: e.responseSchema,
+      ...requestContractOf(e),
+      replayMechanism: e.replayMechanism ? [...e.replayMechanism] : null,
+      rateLimit: rateLimitContractOf(e.id),
       surfaces: CLIENT_SURFACES.filter((s) => e.callers[s] !== 'n/a'),
       callers: Object.fromEntries(
         CLIENT_SURFACES.map((s) => [s, e.callers[s]]),

@@ -311,6 +311,35 @@ export const V1_ERROR_STATUS = {
   ACCOUNT_UNVERIFIED: 403,
   /** Authenticated, but the account may not sign in at all. */
   ACCOUNT_DISABLED: 403,
+  /**
+   * Pause was asked for on a service that is ALREADY paused.
+   *
+   * A distinct code because the commonest way to reach it is a RETRY: the
+   * update's WHERE clause matches only an active row, so a client whose first
+   * request timed out after committing sees this on the second. A client that
+   * cannot tell it from a genuine conflict shows an error for an operation that
+   * succeeded. Treat it as success-equivalent when retrying.
+   */
+  PROVIDER_SERVICE_ALREADY_PAUSED: 409,
+  /** The mirror image, for reactivate on a service that is not paused. */
+  PROVIDER_SERVICE_NOT_PAUSED: 409,
+  /**
+   * The session is valid but too OLD for this operation.
+   *
+   * Distinct from `TOKEN_EXPIRED` on purpose, and the distinction is the whole
+   * reason this code exists. An expired token is fixed by a silent refresh; a
+   * stale one is not, because what is demanded here is a fresh INTERACTIVE
+   * sign-in. A client that cannot tell them apart refreshes, succeeds, retries,
+   * is refused identically, and loops.
+   *
+   * Demanded by the contact-change flow, where `assertRecentAuth` requires the
+   * Firebase `auth_time` to be within the recent window before a verified email
+   * or mobile number may be changed. Publishing those routes canonically without
+   * this code would have meant a v1 route that answers 401 with no way to say
+   * which 401 it is — a second dialect, which is what this TAB's guardrail
+   * forbids.
+   */
+  ACCOUNT_RECENT_AUTH_REQUIRED: 401,
   /** Authenticated, but not on this surface. Asserted AFTER authentication so
    *  the admin login box is not an oracle for "is this address an admin". */
   AUDIENCE_MISMATCH: 403,

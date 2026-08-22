@@ -764,7 +764,12 @@ export const ACCOUNT_CAPABILITIES: readonly AccountCapability[] = Object.freeze(
   {
     key: 'providerProfile',
     title: 'Read and change my provider profile',
-    contractIds: ['provider.profile.get', 'provider.profile.patch'],
+    contractIds: [
+      'provider.fieldRegistry.get',
+      'provider.profile.get',
+      'provider.profile.patch',
+      'provider.publicProfile.preview',
+    ],
     domainModule: 'services/account/providerProfileService',
     surfaces: Object.freeze(['providerMobile', 'providerWeb', 'admin'] as ClientSurface[]),
     roleSplitRationale:
@@ -772,6 +777,62 @@ export const ACCOUNT_CAPABILITIES: readonly AccountCapability[] = Object.freeze(
       'editing a reviewable one submits a revision rather than writing a column — the ' +
       'compliance service owns that, and the canonical PATCH delegates to it instead of ' +
       'reimplementing it.',
+  },
+  {
+    key: 'providerActivation',
+    title: 'Find out why I cannot work yet, and what to do about it',
+    contractIds: [
+      'provider.activation.acknowledgePolicy',
+      'provider.activation.get',
+      'provider.verificationTimeline.get',
+    ],
+    domainModule: 'services/account/providerActivationProjection',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'DELIBERATELY not folded into providerProfile, and that separation is the whole design. ' +
+      'The ProviderProfile schema serves two seats - the provider reading their own, and a ' +
+      'CUSTOMER reading somebody else\'s - so an activation checklist added to it would be ' +
+      'declared, in the published contract, as travelling on the endpoint customers read. ' +
+      'Rendering a provider card and driving an onboarding checklist are different purposes ' +
+      'over different data, and separate capabilities let authorization, retention and caching ' +
+      'differ per purpose instead of all three being set by whichever purpose is laxest. ' +
+      'No role split within the capability: both provider surfaces perform the identical ' +
+      'operation and receive the identical DTO. Auth is `provider`, which is STRICTER than the ' +
+      'account-state route it supersedes and equal to the compliance route it also supersedes - ' +
+      'the parity gate refused the looser first draft, because compliance detail must not become ' +
+      'reachable one rung lower as a side effect of a migration. The discovery property survives: ' +
+      'requireProviderRole admits every provider role including suspended and unapproved, so the ' +
+      'caller who needs to know why they cannot work still gets the checklist, and a non-provider ' +
+      'receives the branchable ROLE_REQUIRED. The uid comes from the token and no parameter can ' +
+      'name another account.',
+  },
+  {
+    key: 'providerCertifications',
+    title: 'Attest a credential, and see what became of it',
+    contractIds: ['provider.certifications.create', 'provider.certifications.list'],
+    domainModule: 'services/providerProfileComplianceService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split. Separate from providerDocuments because the two are a FILE and an '
+      + 'ASSERTION ABOUT a file, and they fail differently: a document can be unreadable, a '
+      + 'certification can be expired or revoked while its document is perfectly legible. The '
+      + 'submission carries only the last four digits of a credential, masked at write time, so '
+      + 'the full number never reaches this table or this wire.',
+  },
+  {
+    key: 'providerContactChanges',
+    title: 'Change the verified email or mobile my account recovers through',
+    contractIds: ['provider.contactChanges.confirm', 'provider.contactChanges.request'],
+    domainModule: 'services/providerContactChangeService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split, and deliberately its OWN capability rather than part of the profile: this '
+      + 'is the only provider-facing operation that changes how an account is recovered, and it '
+      + 'is the only one demanding a FRESH interactive sign-in rather than a valid session. '
+      + 'Folding it into providerProfile would have put an operation with a stricter '
+      + 'precondition behind the same name as one without, which is how a precondition gets '
+      + 'dropped in a migration. Two steps, one capability: a canonical request whose confirm '
+      + 'is still legacy is one flow split across two contracts.',
   },
   {
     key: 'providerDocuments',

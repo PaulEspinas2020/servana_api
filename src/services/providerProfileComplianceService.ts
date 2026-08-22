@@ -456,19 +456,57 @@ export const submitCertification = async (providerUid: string, input: {
   return all.find((c: any) => c.id === result.rows[0].id);
 };
 
-export const calculateCompliance = async (providerUid: string) => {
+/**
+ * Everything `computeCompliance` reasons about, loaded ONCE.
+ *
+ * Split out because three readers need these same three lists — the compliance
+ * verdict, the activation projection's document and certification summaries, and
+ * its completion checklist. Before the split, the canonical activation read
+ * would have issued `listDocuments` three times for one screen: once inside
+ * `calculateCompliance`, once inside the account-state machine that also calls
+ * it, and once for the summary. §56 names duplicate queries on a hot read as the
+ * defect; this makes the single load structural rather than remembered.
+ *
+ * `first_name` and `last_name` are selected here and NOT used by
+ * `computeCompliance`. They are the legal-name half of the activation checklist,
+ * and taking them from this row rather than from a second query is what stops
+ * the checklist disagreeing with the compliance verdict about the same account.
+ */
+export interface ComplianceInputs {
+  /** The provider credential row, or null when the uid names no provider. */
+  account: any | null;
+  documents: any[];
+  certifications: any[];
+}
+
+export const loadComplianceInputs = async (providerUid: string): Promise<ComplianceInputs> => {
   const [cred, documents, certifications] = await Promise.all([
     dbQuery.query(
       `SELECT account_status, is_archive, COALESCE(is_email_verified,false) AS email_verified,
-              COALESCE(is_mobile_verified,false) AS mobile_verified
+              COALESCE(is_mobile_verified,false) AS mobile_verified,
+              COALESCE(is_email_verified,false) AS is_email_verified,
+              COALESCE(is_mobile_verified,false) AS is_mobile_verified,
+              first_name, last_name
        FROM ${s}.user_credentials WHERE uid = $1 AND role::int IN (2,4) LIMIT 1`,
       [providerUid],
     ),
     listDocuments(providerUid),
     listCertifications(providerUid),
   ]);
-  if (!cred.rowCount) return { state: 'restricted', version: 1, blockingRequirements: [{ code: 'PROVIDER_NOT_FOUND', severity: 'blocking', action: 'contact-support' }], warnings: [], affectedCapabilities: ['jobs', 'services', 'payouts'] };
-  const account = cred.rows[0];
+  return {
+    account: cred.rowCount ? cred.rows[0] : null,
+    documents,
+    certifications,
+  };
+};
+
+/**
+ * The compliance verdict over already-loaded inputs. Pure, so the activation
+ * projection and the account-state machine cannot reach different verdicts from
+ * the same rows.
+ */
+export const computeCompliance = ({ account, documents, certifications }: ComplianceInputs) => {
+  if (!account) return { state: 'restricted', version: 1, blockingRequirements: [{ code: 'PROVIDER_NOT_FOUND', severity: 'blocking', action: 'contact-support' }], warnings: [], affectedCapabilities: ['jobs', 'services', 'payouts'] };
   const blockingRequirements: any[] = [];
   const warnings: any[] = [];
   if (account.account_status !== 'active' || account.is_archive) blockingRequirements.push({ code: 'ACCOUNT_NOT_ACTIVE', severity: 'blocking', action: 'contact-support' });
@@ -507,6 +545,13 @@ export const calculateCompliance = async (providerUid: string) => {
     version: 1,
   };
 };
+
+/**
+ * The compliance verdict for one provider. Unchanged on the wire: load, then
+ * compute, exactly as this function did inline before the split.
+ */
+export const calculateCompliance = async (providerUid: string) =>
+  computeCompliance(await loadComplianceInputs(providerUid));
 
 export const getPublicProfile = async (providerUid: string) => {
   const result = await dbQuery.query(
@@ -550,12 +595,58 @@ export const getPublicProfile = async (providerUid: string) => {
   };
 };
 
+/**
+ * The fields the PUBLIC-PROFILE REVISION channel actually carries.
+ *
+ * ## The disagreement this replaces
+ *
+ * There were two allow-lists for one write and they did not match.
+ * `PROVIDER_SELF_EDITABLE_FIELDS` is DERIVED from the field registry — every
+ * field marked `editable: 'review'` — and returns SIX ids. This function's
+ * allow-list was a hand-written Set of FIVE. The missing one is `photo`.
+ *
+ * The consequence was a route that contradicted itself within two statements.
+ * `patchProviderProfile` asks `providerMayEdit('photo')`, which consults the
+ * registry and says yes, and its refusal message for everything else prints
+ * `PROVIDER_SELF_EDITABLE_FIELDS` — so it advertises `photo` to the provider as
+ * reviewable. The request then reached here and was refused with a DIFFERENT
+ * code, `FIELD_NOT_EDITABLE`, which is not in the set `provider.profile.patch`
+ * declares it can return. A client gating on the published contract, as TAB 03
+ * requires, could not have handled it.
+ *
+ * ## Why the registry is not the thing that was wrong
+ *
+ * `photo` genuinely IS provider-editable under review. It simply is not editable
+ * THROUGH THIS CHANNEL: a photo is a file, and it has its own submission
+ * pipeline with the MIME, magic-byte and size validation §44 demands. Widening
+ * this allow-list to accept it would create a second, weaker path to change a
+ * customer-visible image — a jsonb string where a validated upload belongs.
+ *
+ * So the registry keeps saying `photo` is reviewable, and this constant says
+ * which channel carries it. `REVIEW_FIELD_CHANNELS` names the exception, and
+ * `tests/provider-profile-patch-channels.test.ts` fails the build when the two
+ * stop covering the registry between them — so a seventh review field cannot be
+ * added without somebody stating where it is submitted.
+ */
+export const PUBLIC_PROFILE_REVISION_FIELDS: readonly string[] = Object.freeze([
+  'displayName', 'biography', 'skills', 'languages', 'experienceSummary',
+]);
+
+/**
+ * Review-editable fields this channel does NOT carry, and where each goes
+ * instead. A refusal that names the alternative is an instruction; one that does
+ * not is a dead end.
+ */
+export const REVIEW_FIELD_CHANNELS: Readonly<Record<string, string>> = Object.freeze({
+  photo: 'POST /api/provider/profile-photo-submissions',
+});
+
 export const submitPublicProfileRevision = async (providerUid: string, input: {
   fields: Record<string, unknown>;
   clientRequestId: string;
 }) => {
   if (!/^[a-zA-Z0-9:_-]{16,128}$/.test(input.clientRequestId)) throw Object.assign(new Error('Invalid client request id'), { statusCode: 400 });
-  const allowed = new Set(['displayName', 'biography', 'skills', 'languages', 'experienceSummary']);
+  const allowed = new Set(PUBLIC_PROFILE_REVISION_FIELDS);
   const fields: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input.fields ?? {})) {
     if (!allowed.has(key)) throw Object.assign(new Error(`Field ${key} is not editable through public profile`), { statusCode: 422, code: 'FIELD_NOT_EDITABLE' });
@@ -595,6 +686,101 @@ export const getVerificationTimeline = async (providerUid: string, limit = 50) =
   }));
 };
 
+/**
+ * The activation summarisers, extracted so ONE derivation serves both readers.
+ *
+ * `getProfileCenter` computed these three inline. The canonical activation
+ * projection (`provider.activation.get`) needs the same three numbers, and a
+ * second inline copy is how [[feedback_one_rule_three_statements]] happens — one
+ * rule stated in three places, disagreeing in all three. These are pure
+ * functions over lists the caller already loaded, so neither reader issues a
+ * query the other has already issued, and neither can drift from the other
+ * without a compile error.
+ *
+ * Pure on purpose: `documentSummary` and `certificationSummary` are counts over
+ * the SAME arrays `calculateCompliance` reasons about, so a caller that has
+ * those arrays must never re-fetch them to count them (§56).
+ */
+export interface DocumentSummary {
+  total: number;
+  verified: number;
+  actionRequired: number;
+}
+
+export const summariseDocuments = (documents: readonly any[]): DocumentSummary => ({
+  total: documents.length,
+  verified: documents.filter((d: any) => d.state === 'verified').length,
+  actionRequired: documents.filter((d: any) =>
+    ['rejected', 'expired', 'action_required'].includes(d.state)).length,
+});
+
+export interface CertificationSummary {
+  total: number;
+  current: number;
+}
+
+export const summariseCertifications = (certifications: readonly any[]): CertificationSummary => ({
+  total: certifications.length,
+  current: certifications.filter((c: any) => c.state === 'verified').length,
+});
+
+export interface CompletionRequirement {
+  id: string;
+  label: string;
+  state: 'completed' | 'pending' | 'blocked';
+  blocking: boolean;
+  route: string;
+}
+
+/**
+ * The provider-facing activation checklist.
+ *
+ * Driven by `DOCUMENT_TYPE_CATALOG`, not by the rows: a required document that
+ * has NEVER been submitted must appear as `blocked`, and a list built from rows
+ * alone shows an empty checklist to the provider who has everything left to do.
+ * Same reasoning `listDocuments`' caller in the v1 document list already applies.
+ *
+ * `account` is the already-loaded credential row rather than a uid, so this
+ * cannot issue a query and cannot therefore disagree with the row its caller
+ * reasoned about.
+ */
+export const buildCompletionRequirements = (
+  account: any,
+  documents: readonly any[],
+): CompletionRequirement[] => [
+  {
+    id: 'verified_contact',
+    label: 'Verify an email or mobile number',
+    state: account.is_email_verified || account.is_mobile_verified ? 'completed' : 'blocked',
+    blocking: true,
+    route: 'SecurityView',
+  },
+  {
+    id: 'legal_name',
+    label: 'Provide your legal name',
+    state: account.first_name && account.last_name ? 'completed' : 'blocked',
+    blocking: true,
+    route: 'ProfileView',
+  },
+  ...DOCUMENT_TYPE_CATALOG.filter((d) => d.required).map((definition) => ({
+    id: `document:${definition.id}`,
+    label: definition.name,
+    state: (documents.some((d: any) => (d.documentTypeId === definition.id || definition.aliases?.includes(d.documentTypeId)) && d.state === 'verified')
+      ? 'completed'
+      : documents.some((d: any) => d.documentTypeId === definition.id || definition.aliases?.includes(d.documentTypeId))
+        ? 'pending'
+        : 'blocked') as CompletionRequirement['state'],
+    blocking: true,
+    route: 'ProviderDocumentsView',
+  })),
+];
+
+/** `complete` only when every requirement is. Anything else is `incomplete`. */
+export const completionStateOf = (
+  requirements: readonly CompletionRequirement[],
+): 'complete' | 'incomplete' =>
+  requirements.every((r) => r.state === 'completed') ? 'complete' : 'incomplete';
+
 export const getProfileCenter = async (providerUid: string) => {
   const [account, publicProfile, documents, certifications, compliance, timeline, services] = await Promise.all([
     dbQuery.query(
@@ -614,26 +800,20 @@ export const getProfileCenter = async (providerUid: string) => {
     calculateCompliance(providerUid),
     getVerificationTimeline(providerUid, 20),
     dbQuery.query(
+      // `service_families`, not `services`: employee_services.service_id is a
+      // FAMILY id and has been since migration 024 renamed the two tables past
+      // each other. Joining `services` compared it against a different id space
+      // and, as a LEFT JOIN, silently returned an unrelated service's name.
+      // See providerProfileService.listServices for the full account.
       `SELECT es.service_id, s.name, COALESCE(es.status,'active') AS status
-       FROM ${s}.employee_services es LEFT JOIN ${s}.services s ON s.id = es.service_id
+       FROM ${s}.employee_services es LEFT JOIN ${s}.service_families s ON s.id = es.service_id
        WHERE es.employee_uid = $1 ORDER BY s.name`,
       [providerUid],
     ),
   ]);
   if (!account.rowCount) throw Object.assign(new Error('Provider not found'), { statusCode: 404 });
   const a = account.rows[0];
-  const completionRequirements = [
-    { id: 'verified_contact', label: 'Verify an email or mobile number', state: a.is_email_verified || a.is_mobile_verified ? 'completed' : 'blocked', blocking: true, route: 'SecurityView' },
-    { id: 'legal_name', label: 'Provide your legal name', state: a.first_name && a.last_name ? 'completed' : 'blocked', blocking: true, route: 'ProfileView' },
-    ...DOCUMENT_TYPE_CATALOG.filter((d) => d.required).map((definition) => ({
-      id: `document:${definition.id}`,
-      label: definition.name,
-      state: documents.some((d: any) => (d.documentTypeId === definition.id || definition.aliases?.includes(d.documentTypeId)) && d.state === 'verified') ? 'completed'
-        : documents.some((d: any) => d.documentTypeId === definition.id || definition.aliases?.includes(d.documentTypeId)) ? 'pending' : 'blocked',
-      blocking: true,
-      route: 'ProviderDocumentsView',
-    })),
-  ];
+  const completionRequirements = buildCompletionRequirements(a, documents);
   return {
     providerProfileId: providerUid,
     accountId: providerUid,
@@ -657,19 +837,12 @@ export const getProfileCenter = async (providerUid: string) => {
       services: services.rows.map((r: any) => ({ serviceId: String(r.service_id), name: r.name, operationalState: r.status })),
     },
     completion: {
-      state: completionRequirements.every((r) => r.state === 'completed') ? 'complete' : 'incomplete',
+      state: completionStateOf(completionRequirements),
       requirements: completionRequirements,
     },
     compliance,
-    documentSummary: {
-      total: documents.length,
-      verified: documents.filter((d: any) => d.state === 'verified').length,
-      actionRequired: documents.filter((d: any) => ['rejected', 'expired', 'action_required'].includes(d.state)).length,
-    },
-    certificationSummary: {
-      total: certifications.length,
-      current: certifications.filter((c: any) => c.state === 'verified').length,
-    },
+    documentSummary: summariseDocuments(documents),
+    certificationSummary: summariseCertifications(certifications),
     timeline,
     fieldRegistryVersion: 1,
     documentCatalogVersion: 1,

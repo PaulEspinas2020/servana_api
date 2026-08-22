@@ -193,6 +193,11 @@ jest.mock('../src/services/bookingAccessService', () => {
   };
 });
 jest.mock('../src/services/technicianService', () => ({
+  // TAB 06.
+  upsertWorkerLocation: jest.fn().mockResolvedValue(undefined),
+  // TAB 05.
+  pauseService: jest.fn().mockResolvedValue({ service_id: 7, status: 'paused', pause_reason: 'Away' }),
+  reactivateService: jest.fn().mockResolvedValue({ service_id: 7, status: 'active', pause_reason: null }),
   getJobCardsByWorker: jest.fn().mockResolvedValue([{ id: 1 }, { id: 2 }]),
   getJobCardByWorker: jest.fn(async (_uid: string, bookingId: number) => (bookingId === 404 ? null : { id: bookingId })),
 }));
@@ -304,6 +309,7 @@ jest.mock('../src/services/finance/bookingPaymentService', () => {
   };
 });
 jest.mock('../src/services/finance/providerEarningsService', () => {
+  // TAB 10: the single-transaction detail.
   const actual = jest.requireActual('../src/services/finance/providerEarningsService');
   return {
     EarningsRangeError: actual.EarningsRangeError,
@@ -315,6 +321,9 @@ jest.mock('../src/services/finance/providerEarningsService', () => {
       currency: 'PHP', payoutWindowHours: 72,
     })),
     listEarningsTransactions: jest.fn(async () => []),
+    // TAB 10: the single-transaction DETAIL, which is what this cluster
+    // actually lacked a successor for.
+    getEarningTransaction: jest.fn(async () => ({ id: 7, bookingId: 4242, amount: '500.00' })),
     listProviderPayouts: jest.fn(async () => []),
   };
 });
@@ -755,8 +764,200 @@ jest.mock('../src/services/providerProfileComplianceService', () => {
       mimeType: 'image/png',
     }),
     deleteDocument: jest.fn().mockResolvedValue(undefined),
+    // TAB 04. `listCertifications` and `getVerificationTimeline` map rows to an
+    // array and answer [] against the empty fake, so they are left REAL — the
+    // routing is what this suite proves, and a mock there would prove less.
+    // These two throw 404/400 on an empty database instead, so they are faked.
+    getPublicProfile: jest.fn().mockResolvedValue({
+      providerProfileId: 'uid-under-test', displayName: 'Ana R.', photoUrl: null,
+      biography: null, skills: [], languages: [], experienceSummary: null,
+      publicRating: null, version: 1, pendingRevision: null,
+    }),
+    submitCertification: jest.fn().mockResolvedValue({
+      id: '5', certificationType: 'electrical', issuingAuthority: 'TESDA',
+      credentialMask: null, issueDate: null, expiresAt: null, state: 'under_review',
+      relatedDocumentId: '1', renewalOfId: null, providerReasonCode: null,
+      providerReasonDetail: null, version: 1,
+      createdAt: '2026-08-21T00:00:00.000Z', updatedAt: '2026-08-21T00:00:00.000Z',
+    }),
   };
 });
+
+/**
+ * TAB 04. The contact-change flow needs the DECODED token for
+ * `assertRecentAuth`, which this suite's fake auth does not mint — and a real
+ * `assertRecentAuth` would refuse every request here for want of an `auth_time`.
+ *
+ * Mocked at the SERVICE, not by removing the check: that the handler passes the
+ * decoded token rather than the bare uid is asserted in
+ * `tests/provider-contact-change-v1.test.ts`, which is where the precondition
+ * belongs. This suite proves routing.
+ */
+jest.mock('../src/services/providerContactChangeService', () => ({
+  __esModule: true,
+  requestContactChange: jest.fn().mockResolvedValue({
+    requestId: '1', kind: 'email', expiresAt: '2026-08-21T00:15:00.000Z',
+  }),
+  confirmContactChange: jest.fn().mockResolvedValue({ kind: 'email', confirmed: true }),
+  assertRecentAuth: jest.fn(),
+}));
+
+jest.mock('../src/services/providerActivationService', () => ({
+  __esModule: true,
+  acknowledgeProviderPolicy: jest.fn().mockResolvedValue({
+    acknowledgedAt: '2026-08-21T00:00:00.000Z', policyVersion: 'v1',
+  }),
+  previewActivationEligibility: jest.fn().mockResolvedValue('ACTIVE'),
+  getActivationRequirements: jest.fn().mockResolvedValue([]),
+  refreshActivationEligibility: jest.fn().mockResolvedValue('ACTIVE'),
+}));
+/**
+ * TAB 05. These reach real queries that 404 or 409 against the empty fake, so
+ * the routing this suite exists to prove would never be reached. Mocked at the
+ * SERVICE — the behaviour they encode (pause is not idempotent, resubmit needs
+ * expectedVersion) is asserted in `tests/provider-services-v1.test.ts`.
+ */
+jest.mock('../src/services/serviceApplicationService', () => ({
+  __esModule: true,
+  getProviderServicesOverview: jest.fn().mockResolvedValue({ services: [], applications: [] }),
+  evaluateApplicationEligibility: jest.fn().mockResolvedValue({
+    eligible: true, code: 'ELIGIBLE', message: 'ok', nextAction: 'APPLY',
+    service: { id: 7, name: 'Aircon Cleaning', category: null, catalogVersion: 1 },
+    applicationId: null, requirementsVersion: 1, requirements: [],
+  }),
+  getApplicationsByWorker: jest.fn().mockResolvedValue([]),
+  getApplicationByWorker: jest.fn().mockResolvedValue({ id: 'app-1', status: 'submitted', version: 1 }),
+  submitApplication: jest.fn().mockResolvedValue({ id: 'app-1', status: 'submitted', version: 1 }),
+  resubmitApplication: jest.fn().mockResolvedValue({ id: 'app-1', status: 'submitted', version: 2 }),
+  cancelApplication: jest.fn().mockResolvedValue({ id: 'app-1', status: 'cancelled', version: 2 }),
+}));
+
+/**
+ * TAB 06. Presence and safety reach MongoDB, which this suite has no connection
+ * to. Mocked at the SERVICE — the behaviour they encode (the location ping
+ * cannot flip presence, an incident replay is not an error) is asserted in
+ * `tests/provider-presence-safety-v1.test.ts`.
+ */
+jest.mock('../src/services/providerOperationalAvailabilityService', () => ({
+  __esModule: true,
+  getStatus: jest.fn().mockResolvedValue({
+    availabilityStatus: 'online', availabilitySource: 'provider_explicit',
+    changedByUid: null, changedByRole: null, changedAt: null, reason: null,
+    version: 1, updatedAt: null,
+  }),
+  setOnline: jest.fn().mockResolvedValue(undefined),
+  setOffline: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../src/services/providerSafetyService', () => {
+  const actual = jest.requireActual('../src/services/providerSafetyService');
+  return {
+    ...actual,
+    submitIncident: jest.fn().mockResolvedValue({
+      incidentId: 'inc-1', providerSafeReference: 'SAF-2026-ABCDE',
+      state: 'submitted', replayed: false,
+    }),
+    listIncidents: jest.fn().mockResolvedValue([]),
+    recordCheckIn: jest.fn().mockResolvedValue({
+      bookingId: '4242', stage: 'arrived', checkedInAt: '2026-08-21T00:00:00.000Z',
+    }),
+  };
+});
+
+/**
+ * TAB 07. Evidence, cancellation eligibility and cash settlement all reach the
+ * database and object storage. Mocked at the SERVICE — the guarantees they
+ * encode (a retried upload returns the original, a customer cannot settle) are
+ * asserted in `tests/provider-evidence-cash-v1.test.ts`.
+ */
+jest.mock('../src/services/booking/providerBookingOwnership', () => ({
+  __esModule: true,
+  assertOwnBooking: jest.fn().mockResolvedValue('ACCEPTED'),
+  loadCancellationContext: jest.fn().mockResolvedValue({
+    worker_status: 'ACCEPTED', schedule: '2026-09-01T02:00:00.000Z',
+  }),
+}));
+
+jest.mock('../src/services/bookingEvidenceService', () => {
+  const actual = jest.requireActual('../src/services/bookingEvidenceService');
+  return {
+    ...actual,
+    listEvidence: jest.fn().mockResolvedValue([]),
+    removeEvidence: jest.fn().mockResolvedValue(true),
+    submitEvidence: jest.fn().mockResolvedValue({
+      id: '7', requirementCode: 'BEFORE_PHOTO', stage: 'BEFORE_SERVICE',
+      state: 'UPLOADED', mimeType: 'image/png', bytes: 3,
+      createdAt: '2026-08-21T00:00:00.000Z', reviewNote: null, replayed: false,
+    }),
+  };
+});
+
+jest.mock('../src/services/paymentService', () => ({
+  __esModule: true,
+  markCashPaid: jest.fn().mockResolvedValue({
+    status: 'PAID', method: 'CASH', paid_at: '2026-08-21T00:00:00.000Z',
+  }),
+}));
+
+/**
+ * TAB 08. Provider support cases and the review write surface both reach the
+ * database. Mocked at the SERVICE — what these routes must NOT be (a customer
+ * conversation, a customer support case, an earnings summary) is asserted in
+ * `tests/provider-support-reviews-v1.test.ts`.
+ */
+/**
+ * TAB 10. The remainder routes run the LEGACY controllers through an adapter, so
+ * the controller module itself is what has to answer. Mocked at the controller
+ * for that reason — that the adapter republishes the controller's own body
+ * unchanged is asserted in `tests/provider-remainder-v1.test.ts`.
+ */
+jest.mock('../src/controllers/providerController', () => ({
+  __esModule: true,
+  getProviderAlerts: (_q: any, r: any) => r.status(200).json({ status: 'success', data: [] }),
+  dismissAlert: (_q: any, r: any) => r.status(200).json({ status: 'success', data: { dismissed: true } }),
+  getProviderPerformanceMetrics: (_q: any, r: any) => r.status(200).json({ status: 'success', data: {} }),
+  uploadWorkerProfilePhoto: (_q: any, r: any) => r.status(201).json({ status: 'success', data: { photoUrl: null } }),
+  deleteWorkerProfilePhoto: (_q: any, r: any) => r.status(200).json({ status: 'success', data: { removed: true } }),
+  requestProviderDeletion: (_q: any, r: any) =>
+    r.status(200).json({ status: 'success', data: null, message: 'Deletion request submitted.' }),
+}));
+jest.mock('../src/controllers/providerCalendarController', () => ({
+  __esModule: true,
+  getCalendar: (_q: any, r: any) => r.status(200).json({ status: 'success', data: { events: [] } }),
+}));
+jest.mock('../src/controllers/providerLocationAccessController', () => ({
+  __esModule: true,
+  getMySchedule: (_q: any, r: any) => r.status(200).json({ status: 'success', data: [] }),
+}));
+jest.mock('../src/controllers/providerCatalogController', () => ({
+  __esModule: true,
+  getOfferingsForProvider: (_q: any, r: any) => r.status(200).json({ status: 'success', data: [] }),
+}));
+
+jest.mock('../src/services/providerSupportCaseService', () => ({
+  __esModule: true,
+  listCategories: jest.fn().mockResolvedValue([]),
+  listCases: jest.fn().mockResolvedValue([]),
+  getCase: jest.fn().mockResolvedValue({ caseId: 'case-1', status: 'open' }),
+  createCase: jest.fn().mockResolvedValue({ caseId: 'case-1', status: 'open' }),
+  addProviderMessage: jest.fn().mockResolvedValue({ messageId: 'msg-1' }),
+  withdrawCase: jest.fn().mockResolvedValue({ caseId: 'case-1', status: 'withdrawn' }),
+  reopenCase: jest.fn().mockResolvedValue({ caseId: 'case-1', status: 'open' }),
+  appealCase: jest.fn().mockResolvedValue({ appealId: 'app-1' }),
+  uploadAttachment: jest.fn().mockResolvedValue({ attachmentId: 'att-1' }),
+  previewAttachment: jest.fn().mockResolvedValue({ url: 'https://example.test/x', expiresAt: null }),
+}));
+
+jest.mock('../src/services/providerReputationService', () => ({
+  __esModule: true,
+  getProviderReputationSummary: jest.fn().mockResolvedValue({ averageRating: 4.8, reviewCount: 12 }),
+  listOwnedProviderReviews: jest.fn().mockResolvedValue([]),
+  getOwnedProviderReview: jest.fn().mockResolvedValue({ reviewId: 'rev-1', rating: 5 }),
+  submitProviderResponse: jest.fn().mockResolvedValue({ responseId: 'res-1', state: 'published' }),
+  reportOwnedReview: jest.fn().mockResolvedValue({ caseId: 'case-1', state: 'open' }),
+  appealOwnedReview: jest.fn().mockResolvedValue({ appealId: 'app-1', state: 'open' }),
+}));
+
 jest.mock('../src/services/providerAutoOnlineEngine', () => ({
   // Fire-and-forget on the upload and delete paths. Mocked so the router suite
   // does not reach the real engine; that it RUNS at all is asserted in
@@ -1091,6 +1292,191 @@ describe('every implemented contract entry is reachable at its declared path', (
     'customer.addresses.setDefault': () =>
       call('POST', '/api/v1/customer/addresses/CAD001/default', { body: {} }),
     'provider.profile.get': () => call('GET', '/api/v1/provider/profile', { role: 'provider' }),
+    'provider.activation.get': () =>
+      call('GET', '/api/v1/provider/activation', { role: 'provider' }),
+    'provider.services.overview': () =>
+      call('GET', '/api/v1/provider/services/overview', { role: 'provider' }),
+    'provider.presence.get': () =>
+      call('GET', '/api/v1/provider/presence', { role: 'provider' }),
+    'provider.support.categories': () =>
+      call('GET', '/api/v1/provider/support/case-categories', { role: 'provider' }),
+    'provider.earnings.transaction': () =>
+      call('GET', '/api/v1/provider/earnings/transactions/7', { role: 'provider' }),
+    'provider.alerts.list': () =>
+      call('GET', '/api/v1/provider/alerts', { role: 'provider' }),
+    'provider.alerts.dismiss': () =>
+      call('DELETE', '/api/v1/provider/alerts/payout-delayed', { role: 'provider' }),
+    'provider.calendar.get': () =>
+      call('GET', '/api/v1/provider/calendar', { role: 'provider' }),
+    'provider.performance.get': () =>
+      call('GET', '/api/v1/provider/performance', { role: 'provider' }),
+    'provider.profilePhoto.upload': () =>
+      call('POST', '/api/v1/provider/profile/photo', {
+        role: 'provider',
+        body: { file: 'data:image/png;base64,AAAA', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.profilePhoto.delete': () =>
+      call('DELETE', '/api/v1/provider/profile/photo', { role: 'provider' }),
+    'provider.schedule.get': () =>
+      call('GET', '/api/v1/provider/schedule', { role: 'provider' }),
+    'provider.catalog.offerings': () =>
+      call('GET', '/api/v1/provider/catalog/offerings', { role: 'provider' }),
+    'provider.account.requestDeletion': () =>
+      call('POST', '/api/v1/provider/account/deletion-request', {
+        role: 'provider', body: { reason: 'Moving abroad' },
+      }),
+    'provider.support.cases.list': () =>
+      call('GET', '/api/v1/provider/support/cases', { role: 'provider' }),
+    'provider.support.cases.create': () =>
+      call('POST', '/api/v1/provider/support/cases', {
+        role: 'provider',
+        body: { category: 'payout', subject: 'Missing payout', body: 'A payout has not arrived.', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.support.cases.get': () =>
+      call('GET', '/api/v1/provider/support/cases/case-1', { role: 'provider' }),
+    'provider.support.cases.reply': () =>
+      call('POST', '/api/v1/provider/support/cases/case-1/messages', {
+        role: 'provider', body: { body: 'Any update?', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.support.cases.withdraw': () =>
+      call('POST', '/api/v1/provider/support/cases/case-1/withdraw', {
+        role: 'provider', body: { reason: 'Resolved itself' },
+      }),
+    'provider.support.cases.reopen': () =>
+      call('POST', '/api/v1/provider/support/cases/case-1/reopen', {
+        role: 'provider', body: { reason: 'Happened again' },
+      }),
+    'provider.support.cases.appeal': () =>
+      call('POST', '/api/v1/provider/support/cases/case-1/appeals', {
+        role: 'provider', body: { ground: 'new_evidence', explanation: 'A receipt was missed.', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.support.cases.attach': () =>
+      call('POST', '/api/v1/provider/support/cases/case-1/attachments', {
+        role: 'provider', body: { file: 'data:image/png;base64,AAAA', fileName: 'receipt.png', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.support.cases.attachmentPreview': () =>
+      call('GET', '/api/v1/provider/support/cases/case-1/attachments/att-1/preview', { role: 'provider' }),
+    'provider.reputation.summary': () =>
+      call('GET', '/api/v1/provider/reputation/summary', { role: 'provider' }),
+    'provider.reviews.list': () =>
+      call('GET', '/api/v1/provider/reviews', { role: 'provider' }),
+    'provider.reviews.get': () =>
+      call('GET', '/api/v1/provider/reviews/rev-1', { role: 'provider' }),
+    'provider.reviews.respond': () =>
+      call('POST', '/api/v1/provider/reviews/rev-1/response', {
+        role: 'provider', body: { body: 'Thank you for the feedback.', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.reviews.report': () =>
+      call('POST', '/api/v1/provider/reviews/rev-1/report', {
+        role: 'provider', body: { reason: 'abusive', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.reviews.appeal': () =>
+      call('POST', '/api/v1/provider/review-moderation/case-1/appeals', {
+        role: 'provider', body: { ground: 'factual_error', explanation: 'The job was completed.', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.jobs.evidence.list': () =>
+      call('GET', '/api/v1/provider/jobs/4242/evidence', { role: 'provider' }),
+    'provider.jobs.evidence.create': () =>
+      call('POST', '/api/v1/provider/jobs/4242/evidence', {
+        role: 'provider',
+        body: {
+          requirementCode: 'BEFORE_PHOTO',
+          file: 'data:image/png;base64,AAAA',
+          clientRequestId: 'client-request-id-000001',
+        },
+      }),
+    'provider.jobs.evidence.delete': () =>
+      call('DELETE', '/api/v1/provider/jobs/4242/evidence/7', { role: 'provider' }),
+    'provider.jobs.cancellationEligibility': () =>
+      call('GET', '/api/v1/provider/jobs/4242/cancellation-eligibility', { role: 'provider' }),
+    'bookings.payments.cashCollected': () =>
+      // Booking 8 is the fixture whose caller is the PROVIDER. Any other id
+      // resolves to 'customer', and this route refuses a customer — which is
+      // the authorization working, not a fixture problem.
+      call('POST', '/api/v1/bookings/8/cash-collected', { role: 'provider' }),
+    'provider.presence.goOnline': () =>
+      call('POST', '/api/v1/provider/presence/online', {
+        role: 'provider', body: { latitude: 14.5547, longitude: 121.0245 },
+      }),
+    'provider.presence.goOffline': () =>
+      call('POST', '/api/v1/provider/presence/offline', { role: 'provider' }),
+    'provider.location.report': () =>
+      call('POST', '/api/v1/provider/location', {
+        role: 'provider', body: { latitude: 14.5547, longitude: 121.0245 },
+      }),
+    'provider.safety.emergencyConfig': () =>
+      call('GET', '/api/v1/provider/safety/emergency-config', { role: 'provider' }),
+    'provider.safety.checkIn': () =>
+      call('POST', '/api/v1/provider/safety/check-in', {
+        role: 'provider', body: { bookingId: '4242', stage: 'arrived' },
+      }),
+    'provider.safety.incidents.list': () =>
+      call('GET', '/api/v1/provider/safety/incidents', { role: 'provider' }),
+    'provider.safety.incidents.create': () =>
+      call('POST', '/api/v1/provider/safety/incidents', {
+        role: 'provider',
+        body: {
+          clientIncidentId: 'inc-client-0001',
+          category: 'aggression',
+          severity: 'level_2',
+          description: 'Customer became aggressive on arrival.',
+        },
+      }),
+    'provider.services.eligibility': () =>
+      call('GET', '/api/v1/provider/services/7/eligibility', { role: 'provider' }),
+    'provider.services.pause': () =>
+      call('PATCH', '/api/v1/provider/services/7/pause', { role: 'provider', body: { reason: 'Away' } }),
+    'provider.services.reactivate': () =>
+      call('PATCH', '/api/v1/provider/services/7/reactivate', { role: 'provider' }),
+    'provider.serviceApplications.list': () =>
+      call('GET', '/api/v1/provider/service-applications', { role: 'provider' }),
+    'provider.serviceApplications.get': () =>
+      call('GET', '/api/v1/provider/service-applications/app-1', { role: 'provider' }),
+    'provider.serviceApplications.create': () =>
+      call('POST', '/api/v1/provider/service-applications', {
+        role: 'provider',
+        body: { serviceId: 7, requirementsVersion: 1, clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.serviceApplications.resubmit': () =>
+      call('POST', '/api/v1/provider/service-applications/app-1/resubmit', {
+        role: 'provider',
+        body: { expectedVersion: 1, clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.serviceApplications.withdraw': () =>
+      call('DELETE', '/api/v1/provider/service-applications/app-1', { role: 'provider' }),
+    'provider.activation.acknowledgePolicy': () =>
+      call('POST', '/api/v1/provider/activation/policy-acknowledgement', {
+        role: 'provider',
+        body: { policyVersion: 'v1' },
+      }),
+    'provider.fieldRegistry.get': () =>
+      call('GET', '/api/v1/provider/profile-fields', { role: 'provider' }),
+    'provider.publicProfile.preview': () =>
+      call('GET', '/api/v1/provider/public-profile', { role: 'provider' }),
+    'provider.certifications.list': () =>
+      call('GET', '/api/v1/provider/certifications', { role: 'provider' }),
+    'provider.certifications.create': () =>
+      call('POST', '/api/v1/provider/certifications', {
+        role: 'provider',
+        body: {
+          certificationType: 'electrical',
+          issuingAuthority: 'TESDA',
+          relatedDocumentId: 1,
+          clientRequestId: 'client-request-id-000001',
+        },
+      }),
+    'provider.verificationTimeline.get': () =>
+      call('GET', '/api/v1/provider/verification-timeline', { role: 'provider' }),
+    'provider.contactChanges.request': () =>
+      call('POST', '/api/v1/provider/contact-changes', {
+        role: 'provider',
+        body: { kind: 'email', target: 'new@example.com', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.contactChanges.confirm': () =>
+      call('POST', '/api/v1/provider/contact-changes/confirm', {
+        role: 'provider',
+        body: { requestId: '1', code: '123456' },
+      }),
     'provider.profile.patch': () =>
       call('PATCH', '/api/v1/provider/profile', {
         role: 'provider',

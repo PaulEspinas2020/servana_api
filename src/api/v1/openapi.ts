@@ -2427,6 +2427,1227 @@ export const SCHEMAS: Record<string, unknown> = {
     },
   },
 
+  ProviderFieldRegistry: {
+    type: 'object',
+    required: ['version', 'fields'],
+    description:
+      'STATIC per deployment. Names no account and reads no row, so it is the one response in ' +
+      'this domain a client may cache hard. `version` is what tells a client the vocabulary moved.',
+    properties: {
+      version: { type: 'integer' },
+      fields: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['id', 'label', 'classification', 'editable', 'customerVisible', 'masked'],
+          properties: {
+            id: { type: 'string' },
+            label: { type: 'string' },
+            classification: { type: 'string', enum: ['public', 'private', 'operational', 'internal'] },
+            editable: {
+              type: 'string',
+              enum: ['direct', 'review', 'reverification', 'admin'],
+              description:
+                'HOW the field changes, not whether it may. `review` means the provider proposes ' +
+                'and a human decides; `reverification` means an identity flow owns it; `admin` ' +
+                'means Servana sets it. A field marked `review` is still not necessarily ' +
+                'submittable through the profile PATCH - see requestBody allowedBody there.',
+            },
+            customerVisible: { type: 'boolean' },
+            masked: { type: 'boolean' },
+            recentAuthRequired: {
+              type: 'boolean',
+              description:
+                'True when changing it demands a FRESH interactive sign-in, not merely a valid ' +
+                'session. A refusal on that ground answers ACCOUNT_RECENT_AUTH_REQUIRED, which a ' +
+                'client must not treat as an expired token: refreshing succeeds and changes nothing.',
+            },
+          },
+        },
+      },
+    },
+  },
+
+  ProviderPublicProfilePreview: {
+    type: 'object',
+    required: ['providerProfileId', 'displayName', 'version'],
+    description:
+      "The caller\'s OWN public profile, plus any revision awaiting review. NOT the same " +
+      'resource as the customer-facing provider profile, despite the shared words: this one ' +
+      'carries `pendingRevision`, which is UNREVIEWED text together with the moderator reason ' +
+      'code and message. None of that is public, and none of it appears at a customer seat.',
+    properties: {
+      providerProfileId: { type: 'string' },
+      displayName: { type: 'string' },
+      photoUrl: { type: ['string', 'null'] },
+      biography: { type: ['string', 'null'] },
+      skills: { type: 'array', items: { type: 'string' } },
+      languages: { type: 'array', items: { type: 'string' } },
+      experienceSummary: { type: ['string', 'null'] },
+      publicRating: {
+        type: ['object', 'null'],
+        additionalProperties: true,
+        description: 'The same aggregate the customer-facing rating endpoint serves.',
+      },
+      version: { type: 'integer', description: 'public_profile_version. Bumps when a revision is published.' },
+      pendingRevision: {
+        type: ['object', 'null'],
+        description:
+          'The revision awaiting review, or null when none is. PROVIDER-ONLY: it contains text ' +
+          'no reviewer has approved and the reason a previous attempt was refused.',
+        properties: {
+          id: { type: ['string', 'integer'] },
+          fields: { type: 'object', additionalProperties: true },
+          state: { type: 'string', enum: ['pending_review', 'action_required'] },
+          providerReasonCode: { type: ['string', 'null'] },
+          providerReasonDetail: { type: ['string', 'null'] },
+          submittedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+          version: { type: 'integer' },
+        },
+      },
+    },
+  },
+
+  ProviderCertification: {
+    type: 'object',
+    required: ['id', 'certificationType', 'state'],
+    description:
+      'One certification and its review state. `credentialMask` is what is STORED - the full ' +
+      'credential number is never on this wire and is never written to this table.',
+    properties: {
+      id: { type: ['string', 'integer'] },
+      certificationType: { type: 'string' },
+      issuingAuthority: { type: ['string', 'null'] },
+      credentialMask: { type: ['string', 'null'], description: 'Last four digits only, already masked at write time.' },
+      issueDate: { type: ['string', 'null'] },
+      expiresAt: { type: ['string', 'null'] },
+      state: {
+        type: 'string',
+        description:
+          'DERIVED at read time: a verified certification whose expiry has passed reads ' +
+          '`expired`, so an expiry that lapses overnight does not need a job to notice it.',
+      },
+      relatedDocumentId: { type: ['string', 'null'] },
+      renewalOfId: { type: ['string', 'integer', 'null'] },
+      providerReasonCode: { type: ['string', 'null'] },
+      providerReasonDetail: { type: ['string', 'null'] },
+      version: { type: 'integer' },
+      createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      updatedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+    },
+  },
+
+  ProviderCertificationList: {
+    type: 'array',
+    description: 'Newest first. The LIST the activation projection carries only a count of.',
+    items: { $ref: '#/components/schemas/ProviderCertification' },
+  },
+
+  ProviderCertificationSubmit: {
+    type: 'object',
+    required: ['certificationType', 'issuingAuthority', 'relatedDocumentId', 'clientRequestId'],
+    additionalProperties: false,
+    description:
+      'Submits for REVIEW. `relatedDocumentId` must already be a document belonging to the ' +
+      'caller - the file is uploaded first, then attested here.',
+    properties: {
+      certificationType: { type: 'string', maxLength: 80 },
+      issuingAuthority: { type: 'string', maxLength: 160 },
+      relatedDocumentId: {
+        type: 'integer',
+        description: "A worker_requirement id owned by the caller. 404 otherwise, and deliberately " +
+          'not distinguishing "not yours" from "not there" - that difference enumerates ids.',
+      },
+      credentialLast4: {
+        type: ['string', 'null'],
+        maxLength: 4,
+        description: 'The LAST FOUR only. Stored masked; the full number must never be sent.',
+      },
+      issueDate: { type: ['string', 'null'] },
+      expiresAt: { type: ['string', 'null'] },
+      renewalOfId: {
+        type: ['string', 'null'],
+        description: 'A certification of the caller\'s this one replaces. Ownership checked.',
+      },
+      clientRequestId: {
+        type: 'string',
+        minLength: 16,
+        maxLength: 128,
+        description:
+          'REQUIRED. Deduped by a unique index on (provider_uid, client_request_id), so a retry ' +
+          'returns the first submission rather than queueing a second for a human to review.',
+      },
+    },
+  },
+
+  ProviderVerificationTimeline: {
+    type: 'array',
+    description:
+      'What has happened to the caller\'s documents, certifications and activation, newest ' +
+      'first. HISTORY - a different question from the activation checklist, with its own ' +
+      'retention. Carries the PROVIDER-facing reason code and detail; internal reviewer notes ' +
+      'are not selected by the query at all.',
+    items: {
+      type: 'object',
+      required: ['id', 'domain', 'eventType'],
+      properties: {
+        id: { type: ['string', 'integer'] },
+        domain: { type: 'string', description: 'document | certification | activation' },
+        sourceType: { type: ['string', 'null'] },
+        sourceId: { type: ['string', 'integer', 'null'] },
+        eventType: { type: 'string' },
+        providerReasonCode: { type: ['string', 'null'] },
+        providerReasonDetail: { type: ['string', 'null'] },
+        createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      },
+    },
+  },
+
+  ProviderContactChangeRequest: {
+    type: 'object',
+    required: ['kind', 'target', 'clientRequestId'],
+    additionalProperties: false,
+    description:
+      'STEP ONE OF TWO. Sends a code to the NEW address; nothing changes until the confirm. ' +
+      'Requires a FRESH interactive sign-in - a valid session is not sufficient, because this ' +
+      'is the operation that decides how the account is recovered.',
+    properties: {
+      kind: { type: 'string', enum: ['email', 'mobile'] },
+      target: {
+        type: 'string',
+        description:
+          'The new address. NORMALISED server-side: a mobile is accepted as 09xx, 9xx or +63xx ' +
+          'and stored one way, so a provider is never refused for formatting.',
+      },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+
+  ProviderContactChangeStarted: {
+    type: 'object',
+    description:
+      'What a client needs to drive step two. Carries NO code and no full target - the code ' +
+      'goes to the address being claimed, which is the entire point of the flow.',
+    additionalProperties: true,
+    properties: {
+      requestId: { type: ['string', 'integer'] },
+      kind: { type: 'string', enum: ['email', 'mobile'] },
+      expiresAt: { $ref: '#/components/schemas/UtcTimestamp' },
+    },
+  },
+
+  ProviderContactChangeConfirm: {
+    type: 'object',
+    required: ['requestId', 'code'],
+    additionalProperties: false,
+    description:
+      'STEP TWO OF TWO. Re-asserts recent auth rather than trusting step one: the two calls are ' +
+      'minutes apart and the window can close between them.',
+    properties: {
+      requestId: {
+        type: 'string',
+        description:
+          'Looked up by id AND provider_uid together, so another provider\'s request id is a ' +
+          '404 rather than a confirmable target.',
+      },
+      code: { type: 'string', pattern: '^[0-9]{6}$' },
+    },
+  },
+
+  ProviderContactChangeResult: {
+    type: 'object',
+    additionalProperties: true,
+    description: 'The committed change. The code is spent; a second confirm finds nothing to spend.',
+  },
+
+  ProviderPolicyAcknowledgement: {
+    type: 'object',
+    additionalProperties: false,
+    description: 'Acceptance of the provider agreement. The body is optional in full.',
+    properties: {
+      policyVersion: {
+        type: ['string', 'null'],
+        maxLength: 64,
+        description:
+          'RECORDED, not validated. Refusing an unknown value would block acceptance whenever ' +
+          'the agreement is revised before the app is, and a provider who cannot accept cannot ' +
+          'work.',
+      },
+    },
+  },
+
+  ProviderPolicyAcknowledgementResult: {
+    type: 'object',
+    required: ['acknowledgedAt'],
+    properties: {
+      acknowledgedAt: {
+        $ref: '#/components/schemas/UtcTimestamp',
+      },
+      policyVersion: { type: ['string', 'null'] },
+    },
+    description:
+      'IDEMPOTENT by construction: the upsert is COALESCE(policy_acknowledged_at, now()), so a ' +
+      'second acceptance returns the ORIGINAL moment rather than moving it. The instant somebody ' +
+      'agreed is a fact and a double tap must not rewrite it. Note that the timestamp is pinned ' +
+      'to the PROVIDER rather than to the policy version, so re-accepting a revised agreement ' +
+      'returns the first date.',
+  },
+
+  ProviderServiceState: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'The employee_services row after the change. `service_id` is a FAMILY id ' +
+      '(service_families.id) - migration 024 renamed the coarse families to that table and the ' +
+      '95 canonical bookable services to `services`, and this column was never remapped.',
+    properties: {
+      service_id: { type: 'integer' },
+      status: { type: 'string', enum: ['active', 'paused'] },
+      pause_reason: { type: ['string', 'null'] },
+    },
+  },
+
+  ProviderServicePause: {
+    type: 'object',
+    additionalProperties: false,
+    description: 'The body is optional in full; a pause with no reason is accepted.',
+    properties: {
+      reason: {
+        type: 'string',
+        description: 'Shown to Servana, not to customers. Blank is treated as absent.',
+      },
+    },
+  },
+
+  ProviderServicesOverview: {
+    type: 'object',
+    required: ['services', 'applications'],
+    description:
+      'The whole service-management screen in one read: what the provider holds, whether each ' +
+      'is currently offered and WHY NOT, and every application. Distinct from ' +
+      'ProviderServiceList, which is four fields for a chip.',
+    properties: {
+      services: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            providerServiceId: { type: 'string', description: 'providerUid:serviceId. A handle, not a stored key.' },
+            serviceId: { type: 'integer', description: 'A FAMILY id - service_families.id.' },
+            name: { type: ['string', 'null'] },
+            category: { type: ['string', 'null'] },
+            approvalState: { type: 'string' },
+            operationalState: { type: 'string', enum: ['ACTIVE', 'INACTIVE'] },
+            qualificationState: { type: 'string' },
+            readinessState: {
+              type: 'string',
+              enum: ['READY', 'BLOCKED'],
+              description:
+                'Whether this service is being OFFERED right now. Composite of account status, ' +
+                'activation and the pause flag - so BLOCKED with an empty reason list would be ' +
+                'a bug, not a silent state.',
+            },
+            readinessReasons: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Why it is blocked. Empty exactly when READY.',
+            },
+            pauseReason: { type: ['string', 'null'] },
+            approvedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+            updatedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+            availableActions: {
+              type: 'array',
+              items: { type: 'string', enum: ['PAUSE', 'REACTIVATE'] },
+              description:
+                'What the server will HONOUR. A client deriving buttons from ' +
+                'operationalState instead would offer PAUSE on an already-paused service and ' +
+                'get a 409.',
+            },
+          },
+        },
+      },
+      applications: { $ref: '#/components/schemas/ServiceApplicationList' },
+    },
+  },
+
+  ServiceApplication: {
+    type: 'object',
+    required: ['id', 'status'],
+    additionalProperties: true,
+    description: "One application and where it has got to. Always the caller\'s own.",
+    properties: {
+      id: { type: 'string' },
+      serviceId: { type: 'integer', description: 'A FAMILY id - service_families.id.' },
+      status: { type: 'string' },
+      version: {
+        type: 'integer',
+        description:
+          'Pass back as `expectedVersion` when resubmitting. It is what stops a resubmission ' +
+          'silently overwriting a reviewer decision made in the meantime.',
+      },
+      requirementsVersion: { type: 'integer' },
+      providerReasonCode: { type: ['string', 'null'] },
+      providerReasonDetail: { type: ['string', 'null'] },
+      submittedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      updatedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+    },
+  },
+
+  ServiceApplicationList: {
+    type: 'array',
+    description: 'Newest first.',
+    items: { $ref: '#/components/schemas/ServiceApplication' },
+  },
+
+  ServiceApplicationSubmit: {
+    type: 'object',
+    required: ['serviceId', 'clientRequestId', 'requirementsVersion'],
+    additionalProperties: false,
+    properties: {
+      serviceId: { type: 'integer', description: 'A FAMILY id - service_families.id.' },
+      requirementsVersion: {
+        type: 'integer',
+        description:
+          'The version the provider was SHOWN, from the eligibility read. It lets the server ' +
+          'tell an application made against current requirements from one made against a set ' +
+          'that has since changed.',
+      },
+      clientRequestId: {
+        type: 'string',
+        minLength: 16,
+        maxLength: 128,
+        description:
+          'REQUIRED. Looked up on (worker_uid, client_request_id) BEFORE anything is written, ' +
+          'so a replay returns the original application rather than a second one.',
+      },
+    },
+  },
+
+  ServiceApplicationResubmit: {
+    type: 'object',
+    required: ['clientRequestId', 'expectedVersion'],
+    additionalProperties: false,
+    properties: {
+      expectedVersion: {
+        type: 'integer',
+        description:
+          'REQUIRED. Optimistic concurrency, not decoration: a reviewer may have decided ' +
+          'between the load and the resubmit. A mismatch answers STALE_STATE - reload and ' +
+          'show the provider what changed.',
+      },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+
+  ServiceApplicationEligibility: {
+    type: 'object',
+    required: ['eligible', 'code', 'nextAction'],
+    description:
+      'DO NOT CACHE. A composite of provider account state, activation, service availability, ' +
+      'offering policy and any open application - five things that change independently and ' +
+      'none of them on this route. A cached ELIGIBLE offers a button the submit refuses; a ' +
+      'cached refusal hides work the provider has just become eligible for. Read it when the ' +
+      'screen opens and again before offering the action. The submit re-evaluates server-side ' +
+      'regardless, so a race is a refusal rather than a bad approval.',
+    properties: {
+      eligible: { type: 'boolean' },
+      code: {
+        type: 'string',
+        description:
+          'Why. ELIGIBLE, ALREADY_APPROVED, APPLICATION_PENDING, ' +
+          'ADDITIONAL_INFORMATION_REQUIRED, PROVIDER_ACCOUNT_NOT_ACTIVE, SERVICE_NOT_AVAILABLE, ' +
+          'APPLICATION_CLOSED, or a service-policy code. Branch on THIS, never on the message.',
+      },
+      message: { type: 'string', description: 'Human-readable. Not a stable interface.' },
+      nextAction: {
+        type: 'string',
+        enum: ['APPLY', 'VIEW_SERVICE', 'VIEW_APPLICATION', 'CONTACT_SUPPORT', 'NONE'],
+        description: 'Where to send the provider. NONE means there is nothing they can do here.',
+      },
+      service: {
+        type: ['object', 'null'],
+        properties: {
+          id: { type: 'integer' },
+          name: { type: 'string' },
+          category: { type: ['string', 'null'] },
+          catalogVersion: { type: 'integer' },
+        },
+      },
+      applicationId: { type: ['string', 'null'], description: 'The open application, when one is why this is refused.' },
+      requirementsVersion: {
+        type: 'integer',
+        description: 'Pass to the submit as `requirementsVersion` - this is the version being shown.',
+      },
+      requirements: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            type: { type: 'string' },
+            required: { type: 'boolean' },
+            state: { type: 'string' },
+            description: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
+
+  ProviderPresence: {
+    type: 'object',
+    required: ['isOnline', 'availabilityStatus'],
+    description:
+      'Operational availability, which belongs to the PROVIDER - not to a session, a device or ' +
+      'a job. Nothing incidental changes it: not a closed app, a logout, an expired token, a ' +
+      'dropped socket, a lost network, a restart, a missed heartbeat, a stale location, a ' +
+      'schedule ending or a booking completing. Only an explicit act.',
+    properties: {
+      isOnline: { type: 'boolean' },
+      availabilityStatus: { type: 'string', enum: ['online', 'offline'] },
+      availabilitySource: {
+        type: 'string',
+        description: 'WHO or what last set it. provider_explicit is the provider themselves.',
+      },
+      changedAt: { type: ['string', 'null'], format: 'date-time' },
+      reason: { type: ['string', 'null'] },
+      version: { type: 'integer' },
+      updatedAt: { type: ['string', 'null'], format: 'date-time' },
+    },
+  },
+
+  ProviderPresenceChange: {
+    type: 'object',
+    required: ['isOnline'],
+    properties: {
+      isOnline: { type: 'boolean' },
+      source: { type: 'string' },
+    },
+  },
+
+  ProviderPresenceOnline: {
+    type: 'object',
+    additionalProperties: false,
+    description:
+      'Coordinates are OPTIONAL and are applied only when no location is stored, so going ' +
+      'online never overwrites a fresher fix with a stale one.',
+    properties: {
+      latitude: { type: 'number', minimum: -90, maximum: 90 },
+      longitude: { type: 'number', minimum: -180, maximum: 180 },
+    },
+  },
+
+  ProviderLocationReport: {
+    type: 'object',
+    required: ['latitude', 'longitude'],
+    additionalProperties: false,
+    description:
+      'TRANSPORT ONLY. There is deliberately NO isOnline field: the legacy route accepts one ' +
+      'and writes it through, so a location ping can flip availability as a side effect, which ' +
+      'is exactly what the presence rule forbids. Coordinates are range-checked before storage.',
+    properties: {
+      latitude: { type: 'number', minimum: -90, maximum: 90 },
+      longitude: { type: 'number', minimum: -180, maximum: 180 },
+    },
+  },
+
+  ProviderLocationState: {
+    type: 'object',
+    required: ['latitude', 'longitude', 'isOnline'],
+    description:
+      'The stored fix. `isOnline` is ECHOED, not set - it is whatever presence already held, ' +
+      'returned so a client can see that the ping did not change it.',
+    properties: {
+      latitude: { type: 'number' },
+      longitude: { type: 'number' },
+      isOnline: { type: 'boolean' },
+    },
+  },
+
+  ProviderEmergencyConfig: {
+    type: 'object',
+    required: ['locale', 'country', 'lines', 'disclaimer'],
+    description:
+      'STATIC and market-wide. Names no account and reads no row, so it may be cached hard - ' +
+      'which is the point on a screen somebody opens in an emergency.',
+    properties: {
+      locale: { type: 'string' },
+      country: { type: 'string' },
+      lines: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            label: { type: 'string' },
+            number: { type: 'string', description: 'A tel: URI the device dialer opens.' },
+            dialLabel: { type: 'string' },
+            description: { type: 'string' },
+          },
+        },
+      },
+      disclaimer: {
+        type: 'string',
+        description:
+          'Load-bearing. Servana cannot dispatch emergency services, and a safety screen ' +
+          'implying otherwise would be the most dangerous copy in the product.',
+      },
+    },
+  },
+
+  ProviderSafetyCheckIn: {
+    type: 'object',
+    required: ['bookingId', 'stage'],
+    additionalProperties: false,
+    properties: {
+      bookingId: { type: 'string' },
+      stage: {
+        type: 'string',
+        enum: ['en_route', 'arrived', 'started', 'completed'],
+        description: 'CLOSED vocabulary - a typo is refused rather than becoming a new stage.',
+      },
+    },
+  },
+
+  ProviderSafetyCheckInResult: {
+    type: 'object',
+    required: ['bookingId', 'stage', 'checkedInAt'],
+    description:
+      'APPEND-ONLY and NOT de-duplicated. Two check-ins at one stage are two facts about two ' +
+      'moments, and collapsing them would discard the later one - the more recent evidence that ' +
+      'somebody is still safe.',
+    properties: {
+      bookingId: { type: 'string' },
+      stage: { type: 'string', enum: ['en_route', 'arrived', 'started', 'completed'] },
+      checkedInAt: { $ref: '#/components/schemas/UtcTimestamp' },
+    },
+  },
+
+  ProviderSafetyIncidentSubmit: {
+    type: 'object',
+    required: ['clientIncidentId', 'category', 'severity', 'description'],
+    additionalProperties: false,
+    description:
+      'A retry carrying the same clientIncidentId returns the ORIGINAL report rather than ' +
+      'filing a second one, and mutates nothing - not even reportedAt, which is the moment the ' +
+      'provider says something happened.',
+    properties: {
+      clientIncidentId: {
+        type: 'string',
+        maxLength: 128,
+        description:
+          'REQUIRED. Generate it on the device BEFORE the first attempt, and reuse it for every ' +
+          'retry of that one report. It is the whole replay story.',
+      },
+      category: { type: 'string', maxLength: 64 },
+      severity: { type: 'string', maxLength: 32 },
+      description: {
+        type: 'string',
+        minLength: 10,
+        maxLength: 2000,
+        description: 'At least 10 characters - a one-word incident report helps nobody.',
+      },
+      bookingId: { type: ['string', 'null'] },
+      immediateDanger: { type: 'boolean' },
+      providerSafe: { type: ['boolean', 'null'] },
+      workStopped: { type: 'boolean' },
+      emergencyServicesContacted: { type: ['boolean', 'null'] },
+    },
+  },
+
+  ProviderSafetyIncidentResult: {
+    type: 'object',
+    required: ['incidentId', 'providerSafeReference', 'state', 'replayed'],
+    description:
+      '201 for a newly filed report, 200 for a replay. Neither is an error - a retry that finds ' +
+      'the report already filed SUCCEEDED, and telling a provider otherwise on a doorstep is ' +
+      'the failure this route exists to avoid.',
+    properties: {
+      incidentId: { type: 'string' },
+      providerSafeReference: {
+        type: 'string',
+        description: 'The reference a provider quotes to support. Safe to display.',
+      },
+      state: { type: 'string' },
+      replayed: {
+        type: 'boolean',
+        description: 'True when this call matched a report already filed under the same key.',
+      },
+    },
+  },
+
+  ProviderSafetyIncidentList: {
+    type: 'array',
+    description: "The caller\'s own incidents, newest first. Never another provider\'s.",
+    items: {
+      type: 'object',
+      properties: {
+        incidentId: { type: 'string' },
+        providerSafeReference: { type: 'string' },
+        bookingId: { type: ['string', 'null'] },
+        category: { type: 'string' },
+        severity: { type: 'string' },
+        state: { type: 'string' },
+        immediateDanger: { type: 'boolean' },
+        workStopped: { type: 'boolean' },
+        reportedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+        updatedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+        hasUnreadUpdate: { type: 'boolean' },
+      },
+    },
+  },
+
+  JobEvidenceItem: {
+    type: 'object',
+    required: ['id', 'requirementCode', 'stage', 'state', 'approved'],
+    description:
+      'One attached file, as STATE. No storage path and no URL travels here. ' +
+      '`approved` is ALWAYS false on write: attached is not accepted, and a client must not ' +
+      'read a 201 as a review decision.',
+    properties: {
+      id: { type: 'string' },
+      requirementCode: { type: 'string' },
+      stage: { type: 'string', enum: ['BEFORE_SERVICE', 'AFTER_SERVICE'] },
+      state: { type: 'string' },
+      mimeType: { type: ['string', 'null'] },
+      bytes: { type: 'integer' },
+      createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      reviewNote: { type: ['string', 'null'] },
+      approved: { type: 'boolean' },
+      replayed: {
+        type: 'boolean',
+        description:
+          'True when this call matched a file already attached under the same clientRequestId. ' +
+          'A replay answers 200 and a new file 201; NEITHER is an error.',
+      },
+    },
+  },
+
+  JobEvidenceList: {
+    type: 'object',
+    required: ['requirements', 'items', 'blocking'],
+    description:
+      'The requirements, what has been attached, and what is still BLOCKING - so a client ' +
+      'renders "what is missing" from the server answer rather than deriving it and disagreeing.',
+    properties: {
+      requirements: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            code: { type: 'string' },
+            stage: { type: 'string', enum: ['BEFORE_SERVICE', 'AFTER_SERVICE'] },
+            label: { type: 'string' },
+            required: { type: 'boolean' },
+            maxCount: { type: 'integer' },
+            maxBytes: { type: 'integer' },
+            acceptedMimeTypes: { type: 'array', items: { type: 'string' } },
+          },
+        },
+      },
+      items: { type: 'array', items: { $ref: '#/components/schemas/JobEvidenceItem' } },
+      blocking: {
+        type: 'object',
+        description:
+          'Requirements not yet satisfied, per stage. Computed by the SAME function the ' +
+          'completion transition consults, so this screen cannot say ready while the POST refuses.',
+        properties: {
+          BEFORE_SERVICE: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          AFTER_SERVICE: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        },
+      },
+    },
+  },
+
+  JobEvidenceSubmit: {
+    type: 'object',
+    required: ['requirementCode', 'file', 'clientRequestId'],
+    additionalProperties: false,
+    description:
+      'The file is a DATA URI, validated against the requirement MIME allow-list by MAGIC ' +
+      'BYTES rather than by its declared type. Image metadata is stripped before storage: a ' +
+      'photo taken at a customer address carries GPS in EXIF by default.',
+    properties: {
+      requirementCode: { type: 'string', maxLength: 60 },
+      file: {
+        type: 'string',
+        description: 'data:<mime>;base64,<payload>. Size and type are bounded per requirement.',
+      },
+      clientRequestId: {
+        type: 'string',
+        minLength: 16,
+        maxLength: 128,
+        description:
+          'REQUIRED here, unlike on the legacy route. Generate it BEFORE the first attempt and ' +
+          'reuse it for every retry: it is what stops a doorstep retry filing a second photo, ' +
+          'and evidence is what a dispute is decided on.',
+      },
+    },
+  },
+
+  JobEvidenceRemoval: {
+    type: 'object',
+    required: ['evidenceId', 'removed'],
+    description: 'SOFT removal - the audit trail survives a provider replacing a photo.',
+    properties: {
+      evidenceId: { type: 'string' },
+      removed: { type: 'boolean' },
+    },
+  },
+
+  CancellationEligibility: {
+    type: 'object',
+    required: ['bookingId'],
+    additionalProperties: true,
+    description:
+      'Whether this provider may cancel, and WHY NOT. The verdict comes from the same policy ' +
+      'function the cancel transition calls, so the button and the POST behind it cannot ' +
+      'disagree. Branch on the CODE, never on the message - the message is for a human.',
+    properties: {
+      bookingId: { type: 'integer' },
+      allowed: { type: 'boolean' },
+      code: {
+        type: 'string',
+        description:
+          'The reason, as something a client can branch on. This is what lets a screen explain ' +
+          'a refusal instead of showing a bare error.',
+      },
+      reason: { type: ['string', 'null'], description: 'Human-readable. Not a stable interface.' },
+    },
+  },
+
+  CashCollectionResult: {
+    type: 'object',
+    required: ['bookingId', 'status'],
+    description:
+      'IDEMPOTENT: paid_at is COALESCE(paid_at, NOW()), so a repeat reaches the same end state ' +
+      'without moving the moment money changed hands, and the ledger event is keyed on the ' +
+      'payment id so it is recorded once.',
+    properties: {
+      bookingId: { type: 'integer' },
+      status: { type: 'string' },
+      method: { type: 'string' },
+      paidAt: { type: ['string', 'null'], format: 'date-time' },
+    },
+  },
+
+  ProviderSupportCaseCategoryList: {
+    type: 'array',
+    description:
+      'The categories a provider may open a case under. STATIC per deployment - names no ' +
+      'account and reads no provider row, so it is cacheable.',
+    items: { type: 'object', additionalProperties: true },
+  },
+
+  ProviderSupportCase: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      "The PROVIDER's own case with Servana. NOT the customer post-service support case at " +
+      '/v1/bookings/{bookingId}/support-cases, which is a different service and a different ' +
+      'actor, and NOT a customer conversation - a case thread is between a provider and ' +
+      'Servana, with its own audience, retention and authorization.',
+    properties: {
+      caseId: { type: 'string' },
+      category: { type: ['string', 'null'] },
+      status: { type: 'string' },
+      subject: { type: ['string', 'null'] },
+      createdAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      updatedAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      availableActions: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'What the server will HONOUR on this case in its current state.',
+      },
+    },
+  },
+
+  ProviderSupportCaseList: {
+    type: 'array',
+    description: "The caller's own cases, never another provider's.",
+    items: { $ref: '#/components/schemas/ProviderSupportCase' },
+  },
+
+  ProviderSupportCaseCreate: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'NOT bound to a booking, unlike the customer support-case resource. A provider raising a ' +
+      'case about their account, a payout or a policy has no booking to attach it to.',
+    properties: {
+      category: { type: 'string' },
+      subject: { type: 'string' },
+      body: { type: 'string' },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+
+  ProviderSupportCaseMessage: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'A message in the case thread. The thread is between the provider and SERVANA - it is not ' +
+      'a customer conversation, however similar the word looks.',
+    properties: {
+      body: { type: 'string' },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+
+  ProviderSupportCaseMessageResult: { type: 'object', additionalProperties: true },
+  ProviderSupportCaseStateChange: {
+    type: 'object',
+    additionalProperties: true,
+    description: 'A reason travels with a state change so the thread records WHY, not only what.',
+    properties: { reason: { type: 'string' }, clientRequestId: { type: 'string' } },
+  },
+  ProviderSupportCaseAppeal: {
+    type: 'object',
+    additionalProperties: true,
+    description: 'An appeal is a second DECISION on one case, not a second case.',
+    properties: {
+      ground: { type: 'string' },
+      explanation: { type: 'string' },
+      clientRequestId: { type: 'string' },
+    },
+  },
+  ProviderSupportCaseAppealResult: { type: 'object', additionalProperties: true },
+  ProviderSupportCaseAttachment: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'A file for Servana to review. A THIRD upload surface, deliberately not merged with job ' +
+      'evidence or chat attachments: they share a validated-ingress MECHANISM, not a RESOURCE. ' +
+      'Different audience, different retention, different authorization.',
+    properties: {
+      file: { type: 'string', description: 'data:<mime>;base64,<payload>' },
+      fileName: { type: 'string' },
+      clientRequestId: { type: 'string' },
+    },
+  },
+  ProviderSupportCaseAttachmentResult: { type: 'object', additionalProperties: true },
+  ProviderSupportCaseAttachmentPreview: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'A SHORT-LIVED url, minted after re-checking ownership. Never a storage path, and a ' +
+      'separate operation from the case read so a case fetch is not a file disclosure.',
+    properties: {
+      url: { type: 'string' },
+      expiresAt: { $ref: '#/components/schemas/UtcTimestamp' },
+      mimeType: { type: ['string', 'null'] },
+    },
+  },
+
+  ProviderReputationSummary: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'A RATING aggregate. NOT /v1/provider/earnings/summary, which a client classifier matched ' +
+      'this against on the word "summary" and which was rejected as false - one is a rating, the ' +
+      'other is money.',
+  },
+
+  ProviderOwnedReview: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'A review naming the caller, with its RESPONSE and MODERATION state. Distinct from ' +
+      'GET /v1/reviews/providers/{providerUid}, which is the public customer view and carries ' +
+      'neither.',
+  },
+
+  ProviderOwnedReviewList: {
+    type: 'array',
+    items: { $ref: '#/components/schemas/ProviderOwnedReview' },
+  },
+
+  ProviderReviewResponse: {
+    type: 'object',
+    required: ['body', 'clientRequestId'],
+    additionalProperties: false,
+    description:
+      'PUBLIC-FACING TEXT. The same moderation pass that applies on the legacy route applies ' +
+      'here on day one. ONE response per review: there is no edit and no withdraw, which is a ' +
+      'deliberate product position rather than a missing endpoint - a published reply that can ' +
+      'be silently rewritten after a customer has read it is a different product.',
+    properties: {
+      body: { type: 'string' },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+  ProviderReviewResponseResult: { type: 'object', additionalProperties: true },
+
+  ProviderReviewReport: {
+    type: 'object',
+    required: ['reason', 'clientRequestId'],
+    additionalProperties: false,
+    description:
+      'A request for REVIEW, not a removal. The reason vocabulary is CLOSED so a report carries ' +
+      'a code a moderator can triage on rather than prose somebody must read first.',
+    properties: {
+      reason: { type: 'string' },
+      details: { type: 'string' },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+  ProviderReviewReportResult: { type: 'object', additionalProperties: true },
+
+  ProviderReviewAppeal: {
+    type: 'object',
+    required: ['ground', 'clientRequestId'],
+    additionalProperties: false,
+    description:
+      'Keyed on the moderation CASE, not the review: the thing appealed is a DECISION, and one ' +
+      'review can carry more than one over time.',
+    properties: {
+      ground: { type: 'string' },
+      explanation: { type: 'string' },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+  ProviderReviewAppealResult: { type: 'object', additionalProperties: true },
+
+  ProviderEarningTransaction: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'One earning in full. The DETAIL the transactions list links to - and the operation this ' +
+      'cluster actually lacked, which the book did not name.',
+  },
+
+  ProviderAlertList: {
+    type: 'array',
+    description:
+      'Operational alerts the provider has not dismissed. How somebody learns something needs ' +
+      'attention before it costs them work.',
+    items: { type: 'object', additionalProperties: true },
+  },
+
+  ProviderAlertDismissal: {
+    type: 'object',
+    additionalProperties: true,
+    description: 'Dismissal is a set membership, so dismissing twice is the same end state.',
+    properties: { alertKey: { type: 'string' }, dismissed: { type: 'boolean' } },
+  },
+
+  ProviderCalendar: { type: 'object', additionalProperties: true },
+  ProviderPerformance: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'OPERATIONAL metrics - acceptance, punctuality, completion. Distinct from the reputation ' +
+      'summary, which is what customers SAID: a provider can be rated well and perform badly, ' +
+      'and collapsing the two would hide exactly the case somebody needs to act on.',
+  },
+  ProviderSchedule: { type: 'object', additionalProperties: true },
+  ProviderCatalogOfferings: {
+    type: 'array',
+    description:
+      'Active offerings and their specific services, as a provider sees them. Now unambiguously ' +
+      'INSIDE the canonical surface: the legacy path carried a `v1` segment of its own under a ' +
+      'different prefix, which was a version belonging to that subsystem and not to this contract.',
+    items: { type: 'object', additionalProperties: true },
+  },
+
+  ProviderProfilePhotoUpload: {
+    type: 'object',
+    required: ['file', 'clientRequestId'],
+    additionalProperties: false,
+    description:
+      'THE CHANNEL the profile PATCH refuses `photo` in favour of. A photo is a FILE with MIME, ' +
+      'magic-byte and size validation; the revision table carries jsonb strings, which is why it ' +
+      'was never submittable through the profile patch.',
+    properties: {
+      file: { type: 'string', description: 'data:<mime>;base64,<payload>' },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+  ProviderProfilePhotoResult: { type: 'object', additionalProperties: true },
+
+  ProviderAccountDeletionRequest: {
+    type: 'object',
+    additionalProperties: false,
+    description: 'A reason is optional and is recorded, not validated.',
+    properties: { reason: { type: ['string', 'null'], maxLength: 500 } },
+  },
+
+  ProviderAccountDeletionResult: {
+    type: 'object',
+    required: ['status'],
+    description:
+      'RECORDS AN INTENTION. Nothing is erased by this call - it writes a status, a reason and a ' +
+      'timestamp, which is why the canonical path says deletion-request rather than delete. ' +
+      'REFUSED with 409 while the provider holds any booking that is not COMPLETED, CANCELLED or ' +
+      'REJECTED: nobody deletes their way out of work a customer is waiting for. ' +
+      'IDEMPOTENT - an upsert keyed on the uid, so a second request confirms the first. ' +
+      'WHAT IS REMOVED AND WHAT IS RETAINED is not decided by this operation and is deliberately ' +
+      'not asserted here. See the contract entry note.',
+    properties: {
+      status: { type: 'string', enum: ['requested'] },
+      message: { type: ['string', 'null'] },
+    },
+  },
+
+  ProviderActivation: {
+    type: 'object',
+    required: [
+      'uid', 'state', 'nextStep', 'account', 'verification', 'documents',
+      'application', 'access', 'availableActions', 'checklist',
+      'compliance', 'documentSummary', 'certificationSummary', 'completion',
+    ],
+    description:
+      'The activation checklist for the CALLER\'s own account. A sibling of ProviderProfile, ' +
+      'not part of it: ProviderProfile is also what a customer receives for another provider, ' +
+      'and a compliance checklist does not belong in that shape. The uid is taken from the ' +
+      'token; there is no parameter with which to name another account. ' +
+      'The four nullable members are null when NOTHING WAS LOADED - a denied or unknown ' +
+      'account - and are never zeroed: an empty summary and an unloaded one are different ' +
+      'answers, and a client that renders the second as the first tells a refused provider ' +
+      'they have no outstanding requirements.',
+    properties: {
+      uid: { type: 'string' },
+      state: {
+        type: 'string',
+        enum: ['NOT_ELIGIBLE', 'PENDING_REQUIREMENTS', 'READY_FOR_ACTIVATION', 'ACTIVE', 'TEMPORARILY_RESTRICTED'],
+        description:
+          'The STORED activation state, never derived in this read. Approval starts ' +
+          'activation; it does not complete it.',
+      },
+      nextStep: {
+        type: 'object',
+        required: ['code', 'route', 'blocking'],
+        description:
+          'One precedence order, shared by every client, so the portal and the mobile app ' +
+          'cannot route the same provider differently.',
+        properties: {
+          code: { type: 'string' },
+          route: { type: 'string' },
+          blocking: { type: 'boolean' },
+        },
+      },
+      account: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: ['PENDING', 'ACTIVE', 'SUSPENDED', 'DISABLED', 'CLOSED', 'UNKNOWN'] },
+          role: { type: ['string', 'null'] },
+        },
+      },
+      verification: {
+        type: 'object',
+        properties: {
+          email: { type: 'string', enum: ['MISSING', 'PENDING', 'VERIFIED'] },
+          mobile: { type: 'string', enum: ['MISSING', 'PENDING', 'VERIFIED'] },
+          minimumRequirementMet: {
+            type: 'boolean',
+            description: 'At least one VERIFIED identifier. Absence of data is never verification.',
+          },
+        },
+      },
+      documents: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: ['NOT_STARTED', 'INCOMPLETE', 'UNDER_REVIEW', 'ACTION_REQUIRED', 'APPROVED'] },
+          required: { type: 'integer' },
+          approved: { type: 'integer' },
+          actionRequired: { type: 'integer' },
+        },
+      },
+      application: {
+        type: 'object',
+        properties: {
+          status: { type: 'string' },
+          submittedAt: { type: ['string', 'null'], format: 'date-time' },
+          reviewReference: {
+            type: ['string', 'null'],
+            description: 'A safe reference for a support conversation, never the internal case id.',
+          },
+        },
+      },
+      access: {
+        type: 'object',
+        additionalProperties: { type: 'boolean' },
+        description:
+          'Capability truth, one boolean per capability. A STATEMENT about state, never a ' +
+          'grant: every endpoint re-checks, and a capability true here that is not enforced ' +
+          'there is a bug in that endpoint rather than a licence.',
+      },
+      availableActions: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'Exactly the capabilities in `access` that are true, as action codes, sorted. ' +
+          'DERIVED from `access` rather than mapped by hand, so a capability added tomorrow ' +
+          'appears here the same day instead of being silently omitted.',
+      },
+      checklist: {
+        type: 'array',
+        description:
+          'Provider-actionable items ONLY, both phases, each with somewhere to go. ' +
+          'Servana\'s own review backlog is excluded - it is not something a provider can ' +
+          'act on, and showing it as a task is a complaint rather than an instruction.',
+        items: {
+          type: 'object',
+          properties: {
+            code: { type: 'string' },
+            label: { type: 'string' },
+            phase: { type: 'string', enum: ['approval', 'activation'] },
+            satisfied: { type: 'boolean' },
+            blocking: { type: 'boolean' },
+            route: { type: 'string' },
+          },
+        },
+      },
+      compliance: {
+        type: ['object', 'null'],
+        additionalProperties: true,
+        description:
+          'The compliance verdict - state, blockingRequirements, warnings, ' +
+          'affectedCapabilities. The SAME computation the capability decision above was made ' +
+          'from, returned rather than recomputed, so the two cannot disagree. Null when ' +
+          'nothing was loaded.',
+      },
+      documentSummary: {
+        type: ['object', 'null'],
+        properties: {
+          total: { type: 'integer' },
+          verified: { type: 'integer' },
+          actionRequired: { type: 'integer' },
+        },
+        description: 'Counts over the same document array the verdict was computed from.',
+      },
+      certificationSummary: {
+        type: ['object', 'null'],
+        properties: {
+          total: { type: 'integer' },
+          current: { type: 'integer' },
+        },
+      },
+      completion: {
+        type: ['object', 'null'],
+        description:
+          'Driven by the document CATALOG, not by the rows: a required document that has ' +
+          'never been submitted appears as `blocked`. A checklist built from rows alone shows ' +
+          'an empty screen to the provider who has everything left to do.',
+        properties: {
+          state: { type: 'string', enum: ['complete', 'incomplete'] },
+          requirements: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                label: { type: 'string' },
+                state: { type: 'string', enum: ['completed', 'pending', 'blocked'] },
+                blocking: { type: 'boolean' },
+                route: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+
   ProviderProfilePatch: {
     type: 'object',
     required: ['clientRequestId'],
