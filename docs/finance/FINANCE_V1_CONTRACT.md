@@ -248,6 +248,7 @@ refresh timer.
 
 | Endpoint | Auth | Idempotent | Domain service |
 | --- | --- | --- | --- |
+| `GET /api/v1/provider/earnings/transactions/:transactionId` | provider | yes | `services/finance/providerEarningsService.getEarningTransaction` |
 | `POST /api/v1/bookings/:bookingId/payment-intents` | authenticated | no | `services/finance/bookingPaymentService.startPaymentIntent` |
 | `GET /api/v1/bookings/:bookingId/payment` | authenticated | yes | `services/finance/bookingPaymentService.getBookingPayment` |
 | `POST /api/v1/bookings/:bookingId/refunds` | authenticated | no | `services/finance/bookingPaymentService.refundBookingPayment` |
@@ -270,6 +271,7 @@ a property of the code rather than an agreement between two implementations.
 
 | Legacy route | Disposition | Canonical successor | Note |
 | --- | --- | --- | --- |
+| `GET /api/provider/earnings/:id` | ALIAS_TEMPORARILY | `provider.earnings.transaction` | Same service. The legacy path sits directly under /earnings, where it shadows any future literal segment added beside it. |
 | `POST /api/:bookingId/paymongo/create` | ALIAS_TEMPORARILY | `bookings.payments.intent` | The live customer checkout call. Identical domain service — this entry adds the booking-scoped authorization and refuses a provider, which the legacy route does not do. Kept until Customer Web and Customer Mobile migrate. |
 | `GET /api/admin/finance/ledger/booking/:bookingId` | ROLE_SPECIFIC | `bookings.payments.get` | The admin revenue-recognition view over finance_ledger_entries. It answers a different question (what was recognised, when, by whom) and carries its own permission. Both now read the same underlying capture events. |
 | `POST /api/admin/finance/refunds` | ALIAS_TEMPORARILY | `bookings.refunds.create` | The admin portal opens refund reviews here today. Same table, same eligibility rule once migrated; this entry adds the customer-initiated path, which had no route at all. |
@@ -293,7 +295,7 @@ a property of the code rather than an agreement between two implementations.
 | Read a booking's payment and price breakdown | planned | planned | migrated | planned | planned | `bookings.payments.get` |
 | Refund a booking payment | planned | planned | n/a | n/a | legacy | `bookings.refunds.create` |
 | Provider earnings summary | n/a | n/a | legacy | migrated | n/a | `provider.earnings.summary` |
-| Provider earnings transactions | n/a | n/a | legacy | migrated | n/a | `provider.earnings.transactions` |
+| Provider earnings transactions | n/a | n/a | planned / legacy | planned / migrated | n/a | `provider.earnings.transaction`, `provider.earnings.transactions` |
 | Provider payouts | n/a | n/a | legacy | migrated | n/a | `provider.earnings.payouts` |
 | Admin ledger reconciliation | n/a | n/a | n/a | n/a | legacy | `admin.finance.reconciliation` |
 

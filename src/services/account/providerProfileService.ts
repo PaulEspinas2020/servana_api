@@ -250,6 +250,34 @@ export const patchProviderProfile = async (
   // and its audit trail; writing the columns here would be a second, weaker copy
   // of a review process.
   const compliance = await import('../providerProfileComplianceService');
+
+  /**
+   * Review-editable, but not through THIS channel.
+   *
+   * `providerMayEdit` above consults the field registry, which marks `photo` as
+   * `editable: 'review'` — correctly, because a provider may indeed propose a new
+   * one. It is submitted as a FILE through the photo-submission route, with the
+   * validation §44 requires, and the revision table carries jsonb strings.
+   *
+   * Without this, such a field passed the check above and was refused two
+   * statements later by the compliance service with `FIELD_NOT_EDITABLE`, a code
+   * this operation does not declare and no contract-gated client can branch on.
+   * Refusing here uses the DECLARED code and names where the field is actually
+   * changed, which is what this function's docblock already promised for
+   * identifier and operational fields.
+   */
+  const wrongChannel = keys.filter((key) => key in compliance.REVIEW_FIELD_CHANNELS);
+  if (wrongChannel.length) {
+    throw new ProviderProfileError(
+      'PROVIDER_FIELD_NOT_EDITABLE',
+      `Not submitted here: ${wrongChannel.join(', ')}. ` +
+        wrongChannel
+          .map((key) => `${key} is changed through ${compliance.REVIEW_FIELD_CHANNELS[key]}`)
+          .join('; ') +
+        '.',
+      422,
+    );
+  }
   await compliance.submitPublicProfileRevision(uid, {
     fields: patch,
     clientRequestId: String(clientRequestId),
@@ -393,10 +421,34 @@ export interface ProviderServiceDto {
  */
 export const listServices = async (uid: string): Promise<ProviderServiceDto[]> => {
   try {
+    /**
+     * `service_families`, NOT `services`, and the difference is a live defect.
+     *
+     * Migration 024 swapped the two tables: the old coarse families became
+     * `service_families`, and `catalog_services` — the 95 canonical bookable
+     * services — became `services`. Two id spaces, each with its own sequence
+     * after 025.
+     *
+     * `employee_services.service_id` was never remapped and still holds a FAMILY
+     * id. The baseline schema says so on the table itself ("Retained for
+     * provenance: employee_services ... still key on these ids"), and migration
+     * 029 proves it in SQL by joining
+     * `services s ON s.legacy_service_family_id = es.service_id`.
+     *
+     * Joining `services sv ON sv.id = es.service_id` therefore compared a family
+     * id against a different id space. As a LEFT JOIN it raised nothing: where
+     * the number happened to exist it returned a DIFFERENT service's name, and
+     * where it did not it returned null. A provider approved for one thing was
+     * shown the name of another, on a canonical route the mobile app has
+     * already migrated to.
+     *
+     * Same class as D-014 below, one level subtler — that was the right table
+     * and the wrong column, this was the right column and the wrong table.
+     */
     const { rows } = await dbQuery.query(
       `SELECT es.service_id, es.status, sv.name
          FROM ${s}.employee_services es
-         LEFT JOIN ${s}.services sv ON sv.id = es.service_id
+         LEFT JOIN ${s}.service_families sv ON sv.id = es.service_id
         WHERE es.employee_uid = $1
         ORDER BY sv.name ASC NULLS LAST`,
       [uid],

@@ -111,6 +111,51 @@ export interface OwnershipRule {
 
 export const OWNERSHIP_RULES: readonly OwnershipRule[] = Object.freeze([
   /**
+   * `catalog` — the provider-facing offerings read (TAB 10).
+   *
+   * There is no ownership relationship, and saying so is the point: the catalog
+   * is Servana's, not any provider's. What scopes the answer is VISIBILITY —
+   * only active, provider-visible offerings are returned — and the role check
+   * above it. §145 still wants the rule to exist so a later reader can tell a
+   * considered exemption from a forgotten check.
+   */
+  {
+    domain: 'catalog',
+    parameter: 'none — no object-scoped parameter',
+    predicate: 'active AND provider-visible offerings only; the catalog belongs to Servana',
+    enforcedBy: 'services/providerCatalogService',
+    provenBy: 'tests/provider-remainder-v1.test.ts',
+    refusal: '403 ROLE_REQUIRED (the role rung, since there is no object to own)',
+    distinguishesAbsentFromForbidden: false,
+  },
+  /**
+   * `provider-support` — the provider's OWN cases and the reviews naming them.
+   *
+   * Two object families share this domain and one rule covers both because they
+   * are scoped identically: every service function takes the caller uid as its
+   * FIRST argument and puts it in the WHERE clause beside the object id. A case
+   * id or a review id belonging to somebody else matches no row.
+   *
+   * That ordering matters more than it looks. Passing the id alone and comparing
+   * ownership afterwards would be a check somebody can forget to make; passing
+   * both into one statement is a scope that cannot be forgotten because there is
+   * no query without it.
+   *
+   * The v1 handlers additionally refuse a malformed id BEFORE any query, and
+   * they refuse it as NOT_FOUND rather than VALIDATION_FAILED — telling a caller
+   * which ids are well-formed is half of telling them which ones exist.
+   */
+  {
+    domain: 'provider-support',
+    parameter: 'caseId | reviewId',
+    predicate: 'provider_uid = $1 AND id = $2 (the caller uid is the FIRST argument to every service function)',
+    enforcedBy: 'services/providerSupportCaseService + services/providerReputationService',
+    provenBy: 'tests/provider-support-reviews-v1.test.ts',
+    refusal: '404 NOT_FOUND',
+    distinguishesAbsentFromForbidden: false,
+  },
+
+  /**
    * `admin-bookings` — and the honest answer is that there is NO ownership
    * relationship (TAB 06).
    *

@@ -7,11 +7,11 @@ Every route the app mounts outside `/api/v1`: **519**.
 
 | Disposition | Count | Meaning |
 |---|---:|---|
-| `ALIAS_TEMPORARILY` | 89 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
+| `ALIAS_TEMPORARILY` | 145 | A canonical v1 successor exists. Kept until every caller migrates; traffic is counted. |
 | `CANONICALIZE` | 11 | Should become canonical. No v1 successor built yet — owned by a later domain command. |
 | `ROLE_SPECIFIC` | 13 | Legitimately separate: different auth, action or payload — same domain service. |
 | `RETIRE` | 1 | No caller and no successor. Delete once telemetry confirms zero traffic. |
-| `KEEP` | 405 | Not a duplicate of anything canonical. Untouched by this command. |
+| `KEEP` | 349 | Not a duplicate of anything canonical. Untouched by this command. |
 
 ## Retirement criteria
 
@@ -27,7 +27,7 @@ build knows how to call.
 
 Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 
-## ALIAS_TEMPORARILY (89)
+## ALIAS_TEMPORARILY (145)
 
 | Method | Legacy path | Canonical successor | Why it is still here |
 |---|---|---|---|
@@ -70,6 +70,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `GET` | `/api/workers/:workerId/job-cards` | `/api/v1/provider/jobs` | ServanaWorker calls this. Takes the provider uid from the PATH; it is now behind verifyAuth + verifyOwnership, but the parameter remains a BOLA shape that v1 removes. Retirement gated on a ServanaWorker release. |
 | `GET` | `/api/workers/:uid/notification-preferences` | `/api/v1/settings/notification-preferences` | ServanaWorker. Same service, uid taken from the path instead of the token. |
 | `PUT` | `/api/workers/:uid/notification-preferences` | `/api/v1/settings/notification-preferences` | ServanaWorker. Same service. |
+| `POST` | `/api/:bookingId/mark-cash-paid` | `/api/v1/bookings/:bookingId/cash-collected` | Mounted directly under /api, unlike every sibling. Same service; this entry gives it a path consistent with /bookings/:bookingId/payment. |
 | `POST` | `/api/:bookingId/paymongo/create` | `/api/v1/bookings/:bookingId/payment-intents` | The live customer checkout call. Identical domain service — this entry adds the booking-scoped authorization and refuses a provider, which the legacy route does not do. Kept until Customer Web and Customer Mobile migrate. |
 | `GET` | `/api/additional/booking/:bookingId` | `/api/v1/bookings/:bookingId/additional-work` | Already booking-scoped and already the same service. The canonical path differs only in living under the booking it belongs to, which is what §60 asks for. |
 | `POST` | `/api/additional/request/:userId` | `/api/v1/bookings/:bookingId/additional-work` | The live Provider Web call. Its :userId segment is legacy and has never been treated as identity — the provider comes from the token in both paths, and both call the same additionalService instance. |
@@ -81,28 +82,80 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `POST` | `/api/chat/conversations/:id/read` | `/api/v1/conversations/:conversationId/read` | The live read-pointer call, which answers `{ success: true }` and nothing else. The canonical one returns the resulting unread count, so a client stops having to guess what its badge should now say. |
 | `POST` | `/api/chat/conversations/:id/messages/:msgId/report` | `/api/v1/conversations/:conversationId/messages/:messageId/report` | IDENTICAL domain call. This entry is a second URL onto one write, in the resource shape the rest of the conversations domain already uses. |
 | `GET` | `/api/provider/profile` | `/api/v1/provider/profile` | The live provider profile, built inline in a controller with a hand-written column list. Safe only for as long as nobody adds a column; the canonical route emits the fields the policy says this seat may read. |
+| `GET` | `/api/provider/profile-fields` | `/api/v1/provider/profile-fields` | Returns the same frozen registry constant. No per-provider data of any kind. |
+| `GET` | `/api/provider/public-profile-preview` | `/api/v1/provider/public-profile` | The provider previewing their own published profile. Same service. |
 | `POST` | `/api/provider/public-profile-revisions` | `/api/v1/provider/profile` | The live revision submit. IDENTICAL domain call - this is a second URL onto one workflow. |
 | `GET` | `/api/provider/document-types` | `/api/v1/provider/document-types` | The same static catalog constant. No per-caller data of any kind. |
 | `GET` | `/api/provider/documents` | `/api/v1/provider/documents` | The live document list. Same `worker_requirements` model - the command is explicit that provider_documents must not be invented, and it does not exist. |
 | `POST` | `/api/provider/documents` | `/api/v1/provider/documents` | The live submit for both provider clients. IDENTICAL domain call, and it carries the same post-commit `autoOnlineEngine.evaluateProvider` — submitting the last outstanding requirement is what makes a provider eligible to go online, so an endpoint that stored the file without re-evaluating would leave them blocked. |
 | `DELETE` | `/api/provider/documents/:documentId` | `/api/v1/provider/documents/:documentId` | IDENTICAL domain call, and it re-evaluates online eligibility for the same reason the upload does: withdrawing a requirement can make a provider ineligible, and skipping it would leave someone online against a document they just removed. |
 | `GET` | `/api/provider/documents/:documentId/preview` | `/api/v1/provider/documents/:documentId/preview` | Same authorization and the same short-lived grant. The `Cache-Control: private, no-store` and `Pragma: no-cache` headers are set by the handler rather than the route, so they travel with the only v1 response that contains a private storage URL. |
+| `GET` | `/api/provider/certifications` | `/api/v1/provider/certifications` | Same service, same projection. |
+| `POST` | `/api/provider/certifications` | `/api/v1/provider/certifications` | Same service. Identical validation and ownership checks. |
+| `GET` | `/api/provider/compliance` | `/api/v1/provider/activation` | Returns `calculateCompliance` verbatim, which this entry carries as `compliance` from the SAME computation - not a second call, so the two cannot disagree. |
+| `GET` | `/api/provider/calendar` | `/api/v1/provider/calendar` | Same service. A READ that must stay a read - the service docblock records an account-state read that once upserted. |
+| `GET` | `/api/provider/verification-timeline` | `/api/v1/provider/verification-timeline` | Same service. The limit is clamped to 100 there and here, by the same code. |
+| `POST` | `/api/provider/contact-changes` | `/api/v1/provider/contact-changes` | Same service, same recent-auth precondition. STEP ONE of two - see the confirm entry. |
+| `POST` | `/api/provider/contact-changes/confirm` | `/api/v1/provider/contact-changes/confirm` | Same service. STEP TWO of two - see the request entry. |
+| `GET` | `/api/provider/location/status` | `/api/v1/provider/presence` | Same state, read from the same place. The legacy path says "location" for what is really availability, which is the naming this entry corrects. |
+| `POST` | `/api/provider/location/go-online` | `/api/v1/provider/presence/online` | Same service, same source tag, and the same requireActiveProvider rung. |
+| `POST` | `/api/provider/location/go-offline` | `/api/v1/provider/presence/offline` | Same service. Mounted WITHOUT requireActiveProvider, and this entry matches that deliberately rather than by omission. |
 | `GET` | `/api/provider/earnings` | `/api/v1/provider/earnings/transactions` | The live earnings list. Same domain service now; the v1 shape adds the economic model, the payout block reason and minor-unit amounts. |
 | `GET` | `/api/provider/earnings/summary` | `/api/v1/provider/earnings/summary` | The live provider portal call, now delegating to the same domain service so the two paths return identical figures during migration rather than merely similar ones. |
+| `GET` | `/api/provider/earnings/:id` | `/api/v1/provider/earnings/transactions/:transactionId` | Same service. The legacy path sits directly under /earnings, where it shadows any future literal segment added beside it. |
 | `GET` | `/api/provider/ledger` | `/api/v1/provider/earnings/transactions` | A THIRD reading of the same columns, which used to hardcode every completed booking as "settled" and report failed payouts as money in hand. Superseded entirely. |
 | `GET` | `/api/provider/payouts` | `/api/v1/provider/earnings/payouts` | The live payouts list, now delegating to the same domain service. Both exclude the processor id, servana_share, payout_error and the admin hold fields by projection. |
+| `GET` | `/api/provider/performance` | `/api/v1/provider/performance` | Same computation, same scope. |
+| `GET` | `/api/provider/reputation/summary` | `/api/v1/provider/reputation/summary` | Same service, same aggregate. |
+| `GET` | `/api/provider/reviews` | `/api/v1/provider/reviews` | Same service. The provider view of reviews naming them. |
+| `GET` | `/api/provider/reviews/:reviewId` | `/api/v1/provider/reviews/:reviewId` | Same service. A review not naming the caller is a 404. |
+| `POST` | `/api/provider/reviews/:reviewId/response` | `/api/v1/provider/reviews/:reviewId/response` | Same service, same moderation pass. |
+| `POST` | `/api/provider/reviews/:reviewId/report` | `/api/v1/provider/reviews/:reviewId/report` | Same service, same closed reason vocabulary. |
+| `POST` | `/api/provider/review-moderation/:caseId/appeals` | `/api/v1/provider/review-moderation/:caseId/appeals` | Same service, same closed grounds vocabulary. |
+| `GET` | `/api/provider/support/case-categories` | `/api/v1/provider/support/case-categories` | Same service. A frozen list; no per-provider data. |
+| `GET` | `/api/provider/support/cases` | `/api/v1/provider/support/cases` | Same service. Scoped on the caller uid inside the query itself. |
+| `POST` | `/api/provider/support/cases` | `/api/v1/provider/support/cases` | Same service, same validation, same dedupe. |
+| `GET` | `/api/provider/support/cases/:caseId` | `/api/v1/provider/support/cases/:caseId` | Same service. Another provider case id is a 404, not a 403. |
+| `POST` | `/api/provider/support/cases/:caseId/messages` | `/api/v1/provider/support/cases/:caseId/messages` | Same service, same thread. |
+| `POST` | `/api/provider/support/cases/:caseId/withdraw` | `/api/v1/provider/support/cases/:caseId/withdraw` | Same service, same state guard. |
+| `POST` | `/api/provider/support/cases/:caseId/reopen` | `/api/v1/provider/support/cases/:caseId/reopen` | Same service. Published so a provider is not pushed into raising a duplicate. |
+| `POST` | `/api/provider/support/cases/:caseId/appeals` | `/api/v1/provider/support/cases/:caseId/appeals` | Same service. An appeal is a second DECISION, not a second case. |
+| `POST` | `/api/provider/support/cases/:caseId/attachments` | `/api/v1/provider/support/cases/:caseId/attachments` | Same service, same validation. |
+| `GET` | `/api/provider/support/cases/:caseId/attachments/:attachmentId/preview` | `/api/v1/provider/support/cases/:caseId/attachments/:attachmentId/preview` | Same service. Re-authorizes before minting a URL. |
 | `GET` | `/api/provider/notification-preferences` | `/api/v1/me/notification-preferences` | Provider Web. Same uid-keyed table - nothing about it is provider-specific, and the role gate on this path is the reason customers had no way to configure notifications they were already receiving. |
 | `PUT` | `/api/provider/notification-preferences` | `/api/v1/me/notification-preferences` | Provider Web sends a full replace. Both shapes reach one writer, so a provider who has not migrated keeps the exact behaviour they have. |
+| `GET` | `/api/provider/alerts` | `/api/v1/provider/alerts` | Same service, same projection. |
+| `DELETE` | `/api/provider/alerts/:key` | `/api/v1/provider/alerts/:alertKey` | Same service. The parameter is renamed :key -> :alertKey for readability; the value is identical. |
 | `GET` | `/api/worker/availability` | `/api/v1/provider/availability` | The live provider availability read. Same engine; the legacy shape bridges it to a web schedule. |
 | `PUT` | `/api/worker/availability` | `/api/v1/provider/availability` | The live write. IDENTICAL engine call, including its expectedVersion check. |
 | `GET` | `/api/worker/time-off` | `/api/v1/provider/time-off` | Same engine, same active-only filter. A cancelled period is history rather than a commitment and appears in neither. |
 | `POST` | `/api/worker/time-off` | `/api/v1/provider/time-off` | IDENTICAL engine call, and it carries the same bookingConflicts and conflictNotice. Time off is created even when it overlaps confirmed work - a provider who is ill must be able to record it - but the work is still theirs, and a response that did not say so would leave them assuming leave cancels their jobs. |
 | `DELETE` | `/api/worker/time-off/:id` | `/api/v1/provider/time-off/:timeOffId` | IDENTICAL engine call. Cancels rather than deletes; the row survives as history. |
-| `GET` | `/api/worker/services-overview` | `/api/v1/provider/services` | The live provider services screen. Same `employee_services` qualification; the canonical entry projects it keyed on services.id with the active flag matching actually selects on. |
+| `POST` | `/api/worker/profile/photo` | `/api/v1/provider/profile/photo` | Same service, same validation. |
+| `DELETE` | `/api/worker/profile/photo` | `/api/v1/provider/profile/photo` | Same service. Removing the photo is the other half of changing it, and a provider who can upload and not remove is stuck with whatever they last submitted. |
+| `GET` | `/api/provider/safety/emergency-config` | `/api/v1/provider/safety/emergency-config` | The SAME frozen object, now imported by both surfaces rather than declared twice. |
+| `GET` | `/api/provider/safety/incidents` | `/api/v1/provider/safety/incidents` | Same collection, scoped on the caller uid in the query itself. |
+| `POST` | `/api/provider/safety/incidents` | `/api/v1/provider/safety/incidents` | SAME implementation, DIFFERENT disposition on a duplicate: the legacy route answers 409 and keeps doing so, because five clients read it. |
+| `POST` | `/api/provider/activation/policy-acknowledgement` | `/api/v1/provider/activation/policy-acknowledgement` | Same service. Idempotent there and here, by the same COALESCE. |
+| `POST` | `/api/provider/account/delete` | `/api/v1/provider/account/deletion-request` | Same service. RENAMED on the canonical surface from `delete` to `deletion-request`, because that is what it does. |
+| `POST` | `/api/provider/safety/check-in` | `/api/v1/provider/safety/check-in` | Same service, same closed stage vocabulary. |
+| `GET` | `/api/worker/service-applications` | `/api/v1/provider/service-applications` | Same service. The legacy envelope wraps it as { success, applications }. |
+| `GET` | `/api/worker/service-applications/:applicationId` | `/api/v1/provider/service-applications/:applicationId` | Same service. Scoped on worker_uid in SQL, so another provider id is a 404. |
+| `POST` | `/api/worker/service-applications` | `/api/v1/provider/service-applications` | Same service, same replay lookup. |
+| `POST` | `/api/worker/service-applications/:applicationId/resubmit` | `/api/v1/provider/service-applications/:applicationId/resubmit` | Same service, same expectedVersion check. |
+| `DELETE` | `/api/worker/service-applications/:applicationId` | `/api/v1/provider/service-applications/:applicationId` | Same service. Scoped on worker_uid in SQL, so another provider id is a 404 rather than a withdrawable target. |
+| `PATCH` | `/api/worker/services/:serviceId/pause` | `/api/v1/provider/services/:serviceId/pause` | Same service. Writes the canonical capability grant as well as the legacy row. |
+| `PATCH` | `/api/worker/services/:serviceId/reactivate` | `/api/v1/provider/services/:serviceId/reactivate` | Same service. The matched pair of pause - migrate them together. |
+| `GET` | `/api/worker/services/:serviceId/eligibility` | `/api/v1/provider/services/:serviceId/eligibility` | Same service. Reads the canonical offering policy, not a copy of it. |
+| `GET` | `/api/worker/services-overview` | `/api/v1/provider/services/overview` | Same service, same projection. |
 | `POST` | `/api/provider/fcm-token` | `/api/v1/me/devices` | ServanaWorker and Provider Web. Multi-device already, and dual-written by the canonical service so a device registered either way stays reachable. |
 | `DELETE` | `/api/provider/fcm-token` | `/api/v1/me/devices` | Same operation, provider-gated. Both reach one service. |
 | `GET` | `/api/worker/job-cards/:bookingId` | `/api/v1/provider/jobs/:bookingId` | Provider Web. Same service and view function. |
 | `GET` | `/api/worker/job-cards` | `/api/v1/provider/jobs` | Provider Web calls this today. Same service, same view function, legacy envelope (a bare array). |
+| `GET` | `/api/provider/bookings/:bookingId/evidence` | `/api/v1/provider/jobs/:bookingId/evidence` | Same service. The path moves under /provider/jobs to sit with the transitions. |
+| `POST` | `/api/provider/bookings/:bookingId/evidence` | `/api/v1/provider/jobs/:bookingId/evidence` | SAME implementation after TAB 07 extracted it. clientRequestId is OPTIONAL there and REQUIRED here - demanding one on the legacy route would break shipped clients. |
+| `DELETE` | `/api/provider/bookings/:bookingId/evidence/:evidenceId` | `/api/v1/provider/jobs/:bookingId/evidence/:evidenceId` | Same service. Soft removal, scoped by worker uid inside the UPDATE. |
+| `GET` | `/api/provider/bookings/:bookingId/cancellation-eligibility` | `/api/v1/provider/jobs/:bookingId/cancellation-eligibility` | Same policy function, same context loader. Only the path and envelope differ. |
 | `POST` | `/api/provider/bookings/:bookingId/cancel` | `/api/v1/provider/jobs/:bookingId/cancel` | The live Provider Web / Provider Mobile cancel. It ALREADY runs the executor and the same providerCancellationWindow guard — this entry gives it a canonical path and a v1 error vocabulary, it does not give it a second implementation. |
 | `PUT` | `/api/worker/bookings/:bookingId/accept` | `/api/v1/provider/jobs/:bookingId/accept` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
 | `PUT` | `/api/worker/bookings/:bookingId/decline` | `/api/v1/provider/jobs/:bookingId/decline` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
@@ -110,7 +163,10 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 | `PUT` | `/api/worker/bookings/:bookingId/arrived` | `/api/v1/provider/jobs/:bookingId/arrived` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
 | `PUT` | `/api/worker/bookings/:bookingId/start` | `/api/v1/provider/jobs/:bookingId/start` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
 | `PUT` | `/api/worker/bookings/:bookingId/complete` | `/api/v1/provider/jobs/:bookingId/complete` | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
+| `POST` | `/api/worker/location` | `/api/v1/provider/location` | Same storage. The legacy body also carries isOnline and writes it through; this entry deliberately does not accept that field. |
+| `GET` | `/api/worker/schedule` | `/api/v1/provider/schedule` | Same service. Identity from the TOKEN on both - no uid is accepted from the path. |
 | `GET` | `/api/booking/:bookingId/provider-location` | `/api/v1/bookings/:bookingId/tracking` | The authenticated position route. Booking-scoped already, but answers in EVERY state — a customer could watch their provider on a booking cancelled last week. This entry adds the state and time-window rules §64 requires. |
+| `GET` | `/api/provider-catalog/v1/offerings` | `/api/v1/provider/catalog/offerings` | Same service. The legacy path carries its OWN v1 segment under a different prefix, which is what made it ambiguous whether it was inside the canonical surface. |
 | `POST` | `/api/admin/bookings/:id/reschedule` | `/api/v1/bookings/:bookingId/reschedule` | The admin-only predecessor, and the only reschedule that has ever existed. A bare UPDATE with no optimistic concurrency and no provider-calendar check — two admins moving one booking produced a silent winner. Kept until the portal migrates. |
 | `POST` | `/api/admin/bookings/:id/escalate` | `/api/v1/bookings/:bookingId/disputes` | The admin-only predecessor, and the only way to open a dispute before this. Writes the same booking_escalations row; it does not record a category, the opening role or the state snapshot §66 requires. Kept until the portal migrates. |
 | `POST` | `/api/admin/finance/refunds` | `/api/v1/bookings/:bookingId/refunds` | The admin portal opens refund reviews here today. Same table, same eligibility rule once migrated; this entry adds the customer-initiated path, which had no route at all. |
@@ -161,7 +217,7 @@ Measure with: `pm2 logs servana-prod | grep legacy-contract`.
 |---|---|---|---|
 | `GET` | `/api/workers/:uid/earnings-history` | `/api/v1/provider/earnings/transactions` | Takes the provider uid from the URL and has no auth, so it answers for anybody. No located caller in any of the five clients. Carried over from the planned placeholder this entry replaces; delete once telemetry confirms zero traffic. |
 
-## KEEP (405)
+## KEEP (349)
 
 Mounted, not superseded, not a duplicate. Listed so the inventory is complete and so a
 later domain command starts from a route list rather than from a grep.
@@ -207,7 +263,6 @@ later domain command starts from a route list rather than from a grep.
 | `GET` | `/api/workers/:uid/disbursement-history` | `src/routes/technician.routes.ts:189` |
 | `POST` | `/api/:bookingId/gcash-submit` | `src/routes/payment.routes.ts:8` |
 | `POST` | `/api/:bookingId/approve` | `src/routes/payment.routes.ts:9` |
-| `POST` | `/api/:bookingId/mark-cash-paid` | `src/routes/payment.routes.ts:10` |
 | `POST` | `/api/paymongo/webhook` | `src/routes/payment.routes.ts:12` |
 | `POST` | `/api/additional/:id/payment` | `src/routes/additional.routes.ts:30` |
 | `POST` | `/api/additional/:id/worker-decision` | `src/routes/additional.routes.ts:31` |
@@ -223,49 +278,17 @@ later domain command starts from a route list rather than from a grep.
 | `POST` | `/api/admin/disbursements/trigger` | `src/routes/disbursement.routes.ts:74` |
 | `GET` | `/api/provider/account-state` | `src/routes/provider.routes.ts:41` |
 | `POST` | `/api/provider/service-preference` | `src/routes/provider.routes.ts:43` |
-| `GET` | `/api/provider/profile-fields` | `src/routes/provider.routes.ts:49` |
-| `GET` | `/api/provider/public-profile-preview` | `src/routes/provider.routes.ts:50` |
-| `GET` | `/api/provider/certifications` | `src/routes/provider.routes.ts:57` |
-| `POST` | `/api/provider/certifications` | `src/routes/provider.routes.ts:58` |
-| `GET` | `/api/provider/compliance` | `src/routes/provider.routes.ts:59` |
-| `GET` | `/api/provider/calendar` | `src/routes/provider.routes.ts:63` |
-| `GET` | `/api/provider/verification-timeline` | `src/routes/provider.routes.ts:64` |
-| `POST` | `/api/provider/contact-changes` | `src/routes/provider.routes.ts:65` |
-| `POST` | `/api/provider/contact-changes/confirm` | `src/routes/provider.routes.ts:66` |
 | `GET` | `/api/provider/profile-photo-submissions` | `src/routes/provider.routes.ts:67` |
 | `GET` | `/api/provider/profile-photo-submissions/:submissionId/preview` | `src/routes/provider.routes.ts:68` |
-| `GET` | `/api/provider/location/status` | `src/routes/provider.routes.ts:71` |
-| `POST` | `/api/provider/location/go-online` | `src/routes/provider.routes.ts:72` |
-| `POST` | `/api/provider/location/go-offline` | `src/routes/provider.routes.ts:73` |
 | `GET` | `/api/provider/dashboard` | `src/routes/provider.routes.ts:76` |
-| `GET` | `/api/provider/earnings/:id` | `src/routes/provider.routes.ts:81` |
-| `GET` | `/api/provider/performance` | `src/routes/provider.routes.ts:85` |
-| `GET` | `/api/provider/reputation/summary` | `src/routes/provider.routes.ts:86` |
-| `GET` | `/api/provider/reviews` | `src/routes/provider.routes.ts:87` |
-| `GET` | `/api/provider/reviews/:reviewId` | `src/routes/provider.routes.ts:88` |
-| `POST` | `/api/provider/reviews/:reviewId/response` | `src/routes/provider.routes.ts:89` |
-| `POST` | `/api/provider/reviews/:reviewId/report` | `src/routes/provider.routes.ts:90` |
-| `POST` | `/api/provider/review-moderation/:caseId/appeals` | `src/routes/provider.routes.ts:91` |
 | `GET` | `/api/providers/me/review-status` | `src/routes/provider.routes.ts:94` |
 | `POST` | `/api/providers/me/submit-for-review` | `src/routes/provider.routes.ts:95` |
 | `GET` | `/api/provider/support/tickets` | `src/routes/provider.routes.ts:98` |
 | `POST` | `/api/provider/support/tickets` | `src/routes/provider.routes.ts:99` |
-| `GET` | `/api/provider/support/case-categories` | `src/routes/provider.routes.ts:102` |
-| `GET` | `/api/provider/support/cases` | `src/routes/provider.routes.ts:103` |
-| `POST` | `/api/provider/support/cases` | `src/routes/provider.routes.ts:104` |
-| `GET` | `/api/provider/support/cases/:caseId` | `src/routes/provider.routes.ts:105` |
-| `POST` | `/api/provider/support/cases/:caseId/messages` | `src/routes/provider.routes.ts:106` |
-| `POST` | `/api/provider/support/cases/:caseId/withdraw` | `src/routes/provider.routes.ts:107` |
-| `POST` | `/api/provider/support/cases/:caseId/reopen` | `src/routes/provider.routes.ts:108` |
-| `POST` | `/api/provider/support/cases/:caseId/appeals` | `src/routes/provider.routes.ts:109` |
-| `POST` | `/api/provider/support/cases/:caseId/attachments` | `src/routes/provider.routes.ts:110` |
-| `GET` | `/api/provider/support/cases/:caseId/attachments/:attachmentId/preview` | `src/routes/provider.routes.ts:111` |
 | `GET` | `/api/provider/notifications/unread-count` | `src/routes/provider.routes.ts:119` |
 | `POST` | `/api/provider/notifications/mark-all-read` | `src/routes/provider.routes.ts:120` |
 | `GET` | `/api/provider/notifications` | `src/routes/provider.routes.ts:121` |
 | `PATCH` | `/api/provider/notifications/:key/read` | `src/routes/provider.routes.ts:122` |
-| `GET` | `/api/provider/alerts` | `src/routes/provider.routes.ts:126` |
-| `DELETE` | `/api/provider/alerts/:key` | `src/routes/provider.routes.ts:127` |
 | `POST` | `/api/worker/requirements/upload` | `src/routes/provider.routes.ts:140` |
 | `GET` | `/api/worker/requirements` | `src/routes/provider.routes.ts:141` |
 | `DELETE` | `/api/worker/requirements/:id` | `src/routes/provider.routes.ts:142` |
@@ -277,11 +300,6 @@ later domain command starts from a route list rather than from a grep.
 | `POST` | `/api/worker/additional-work/:id/confirm-proceed` | `src/routes/provider.routes.ts:152` |
 | `GET` | `/api/worker/service-area` | `src/routes/provider.routes.ts:155` |
 | `PUT` | `/api/worker/service-area` | `src/routes/provider.routes.ts:156` |
-| `POST` | `/api/worker/profile/photo` | `src/routes/provider.routes.ts:159` |
-| `DELETE` | `/api/worker/profile/photo` | `src/routes/provider.routes.ts:160` |
-| `GET` | `/api/provider/safety/emergency-config` | `src/routes/provider.routes.ts:164` |
-| `GET` | `/api/provider/safety/incidents` | `src/routes/provider.routes.ts:165` |
-| `POST` | `/api/provider/safety/incidents` | `src/routes/provider.routes.ts:166` |
 | `GET` | `/api/provider/security` | `src/routes/provider.routes.ts:169` |
 | `POST` | `/api/provider/security/password` | `src/routes/provider.routes.ts:170` |
 | `POST` | `/api/provider/security/sessions/revoke-all` | `src/routes/provider.routes.ts:172` |
@@ -291,39 +309,21 @@ later domain command starts from a route list rather than from a grep.
 | `POST` | `/api/provider/payout` | `src/routes/provider.routes.ts:178` |
 | `GET` | `/api/provider/privacy` | `src/routes/provider.routes.ts:181` |
 | `POST` | `/api/provider/privacy/export` | `src/routes/provider.routes.ts:182` |
-| `POST` | `/api/provider/activation/policy-acknowledgement` | `src/routes/provider.routes.ts:187` |
 | `POST` | `/api/provider/account/deactivate` | `src/routes/provider.routes.ts:188` |
-| `POST` | `/api/provider/account/delete` | `src/routes/provider.routes.ts:189` |
 | `GET` | `/api/provider/support/unread-count` | `src/routes/provider.routes.ts:192` |
 | `GET` | `/api/provider/support/tickets/:ticketKey` | `src/routes/provider.routes.ts:193` |
 | `POST` | `/api/provider/support/tickets/:ticketKey/replies` | `src/routes/provider.routes.ts:194` |
 | `POST` | `/api/provider/support/tickets/:ticketKey/close` | `src/routes/provider.routes.ts:195` |
 | `POST` | `/api/provider/support/tickets/:ticketKey/reopen` | `src/routes/provider.routes.ts:196` |
-| `POST` | `/api/provider/safety/check-in` | `src/routes/provider.routes.ts:199` |
-| `GET` | `/api/worker/service-applications` | `src/routes/provider.routes.ts:202` |
-| `GET` | `/api/worker/service-applications/:applicationId` | `src/routes/provider.routes.ts:203` |
-| `POST` | `/api/worker/service-applications` | `src/routes/provider.routes.ts:204` |
-| `POST` | `/api/worker/service-applications/:applicationId/resubmit` | `src/routes/provider.routes.ts:205` |
-| `DELETE` | `/api/worker/service-applications/:applicationId` | `src/routes/provider.routes.ts:206` |
-| `PATCH` | `/api/worker/services/:serviceId/pause` | `src/routes/provider.routes.ts:209` |
-| `PATCH` | `/api/worker/services/:serviceId/reactivate` | `src/routes/provider.routes.ts:210` |
-| `GET` | `/api/worker/services/:serviceId/eligibility` | `src/routes/provider.routes.ts:211` |
-| `GET` | `/api/provider/bookings/:bookingId/evidence` | `src/routes/provider.routes.ts:232` |
-| `POST` | `/api/provider/bookings/:bookingId/evidence` | `src/routes/provider.routes.ts:233` |
-| `DELETE` | `/api/provider/bookings/:bookingId/evidence/:evidenceId` | `src/routes/provider.routes.ts:234` |
-| `GET` | `/api/provider/bookings/:bookingId/cancellation-eligibility` | `src/routes/provider.routes.ts:236` |
-| `POST` | `/api/worker/location` | `src/routes/provider.routes.ts:251` |
 | `GET` | `/api/worker/services` | `src/routes/provider.routes.ts:254` |
 | `DELETE` | `/api/worker/services/:serviceId` | `src/routes/provider.routes.ts:255` |
 | `GET` | `/api/admin/provider/reconciliation` | `src/routes/provider.routes.ts:258` |
 | `GET` | `/api/provider/bookings/:id` | `src/routes/provider.routes.ts:264` |
 | `GET` | `/api/provider/jobs/:id/tracking` | `src/routes/provider.routes.ts:265` |
 | `GET` | `/api/provider/additional-requests` | `src/routes/provider.routes.ts:270` |
-| `GET` | `/api/worker/schedule` | `src/routes/provider.routes.ts:281` |
 | `GET` | `/api/booking/:bookingId/provider` | `src/routes/provider.routes.ts:283` |
 | `GET` | `/api/location/address-suggestions` | `src/routes/location.routes.ts:9` |
 | `GET` | `/api/location/address-details/:placeId` | `src/routes/location.routes.ts:10` |
-| `GET` | `/api/provider-catalog/v1/offerings` | `src/routes/providerCatalog.routes.ts:14` |
 | `GET` | `/api/admin/provider-catalog/offerings` | `src/routes/providerCatalog.routes.ts:26` |
 | `POST` | `/api/admin/provider-catalog/offerings` | `src/routes/providerCatalog.routes.ts:31` |
 | `GET` | `/api/admin/provider-catalog/specific-services` | `src/routes/providerCatalog.routes.ts:38` |

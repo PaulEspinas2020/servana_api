@@ -223,9 +223,18 @@ describe('the fix did not reclassify anything else', () => {
      *
      * It comes OFF this list the moment production runs it, and the assertion
      * then goes red until somebody says so.
+     *
+     * `043-booking-evidence-client-request-id.sql` joins it for the same reason
+     * (TAB 07). It adds the replay key that stops a retried evidence upload
+     * filing a second photo, and it is likewise undeployed. Named here rather
+     * than allowed to hide in the bucket, which is what this exact-list
+     * assertion exists to prevent.
      */
     expect(checks.filter((c) => c.verdict === 'ABSENT').map((c) => c.file))
-      .toEqual(['038-telemetry-events.sql']);
+      .toEqual([
+        '038-telemetry-events.sql',
+        '043-booking-evidence-client-request-id.sql',
+      ]);
   });
 
   it('everything the baseline demonstrably has is still "present"', () => {

@@ -24,10 +24,13 @@ import { Request, Response } from 'express';
 import * as account from '../../../services/account/accountService';
 import * as addresses from '../../../services/account/addressBookService';
 import * as providerProfile from '../../../services/account/providerProfileService';
+import * as providerActivation from '../../../services/account/providerActivationProjection';
 import * as settings from '../../../services/account/accountSettingsService';
 import { getCompletion } from '../../../services/account/profileCompletionService';
 import { getUserRole } from '../../../chat/chat.repository';
 import * as compliance from '../../../services/providerProfileComplianceService';
+import * as contactChanges from '../../../services/providerContactChangeService';
+import * as providerActivationService from '../../../services/providerActivationService';
 import * as autoOnlineEngine from '../../../services/providerAutoOnlineEngine';
 import { ok, created, sendCaught } from '../envelope';
 import { ApiError, type V1ErrorCode } from '../errors';
@@ -66,15 +69,47 @@ const CODE: Record<string, V1ErrorCode> = {
   PROVIDER_NOT_FOUND: 'NOT_FOUND',
   PROVIDER_FIELD_NOT_EDITABLE: 'ACCOUNT_FIELD_NOT_WRITABLE',
   PROVIDER_FIELD_INVALID: 'VALIDATION_FAILED',
+  // The contact-change flow's own refusals, renamed rather than re-decided.
+  // RECENT_AUTH_REQUIRED must NOT collapse onto TOKEN_EXPIRED: a client that
+  // reads it as an expired session refreshes, succeeds, retries, and is refused
+  // identically forever.
+  RECENT_AUTH_REQUIRED: 'ACCOUNT_RECENT_AUTH_REQUIRED',
+  INVALID_EMAIL: 'VALIDATION_FAILED',
+  INVALID_MOBILE: 'VALIDATION_FAILED',
   SETTING_UNKNOWN: 'VALIDATION_FAILED',
   SETTING_NOT_WRITABLE: 'ACCOUNT_FIELD_NOT_WRITABLE',
   SETTING_INVALID: 'VALIDATION_FAILED',
 };
 
+/** statusCode-only refusals, for services that throw a status rather than a code. */
+const STATUS_CODE: Record<number, V1ErrorCode> = {
+  400: 'VALIDATION_FAILED',
+  401: 'UNAUTHENTICATED',
+  403: 'FORBIDDEN',
+  404: 'NOT_FOUND',
+  409: 'CONFLICT',
+  422: 'VALIDATION_FAILED',
+  429: 'RATE_LIMITED',
+};
+
 const asApiError = (error: unknown): unknown => {
-  const candidate = error as { code?: string; message?: string } | null;
+  const candidate = error as { code?: string; message?: string; statusCode?: number } | null;
   if (candidate?.code && CODE[candidate.code]) {
     return new ApiError(CODE[candidate.code], candidate.message);
+  }
+  /**
+   * The compliance and contact-change services predate the v1 code vocabulary
+   * and throw `Object.assign(new Error(msg), { statusCode })` with no `code` at
+   * all. Without this branch every one of those refusals — a 404 for a document
+   * that is not yours, a 422 for a malformed mobile number — reaches the client
+   * as INTERNAL 500, which is both a lie and unactionable.
+   *
+   * The message is NOT forwarded for a 5xx, and none is mapped here: §21 forbids
+   * leaking an internal exception string, and these services do put SQL-adjacent
+   * detail in some of theirs.
+   */
+  if (candidate?.statusCode && STATUS_CODE[candidate.statusCode]) {
+    return new ApiError(STATUS_CODE[candidate.statusCode], candidate.message);
   }
   return error;
 };
@@ -281,6 +316,171 @@ export const handlers: V1Handlers = {
       );
     } catch (error) {
       return sendCaught(res, req, 'provider.profile.patch', asApiError(error));
+    }
+  },
+
+  /**
+   * The caller's OWN activation checklist.
+   *
+   * `provider`, and the uid comes from the token — there is no parameter here
+   * with which to name another account, which is the whole of the authorization
+   * argument. The role rung is the one the parity gate insisted on: this entry
+   * supersedes `/api/provider/compliance`, which is provider-gated, so anything
+   * looser would have been a weaker route to the same compliance detail.
+   *
+   * A provider who cannot work still reaches it — `requireProviderRole` admits
+   * suspended, unapproved and mid-activation accounts, which are exactly the
+   * ones that need the explanation.
+   */
+  'provider.activation.get': async (req: Request, res: Response) => {
+    try {
+      return ok(res, req, await providerActivation.getProviderActivation(uidOf(req)));
+    } catch (error) {
+      return sendCaught(res, req, 'provider.activation.get', asApiError(error));
+    }
+  },
+
+  /**
+   * The profile field registry. Static per deployment — it reads no row.
+   *
+   * A separate resource rather than part of the profile read precisely because
+   * it is a constant: merging them would make an infinitely cacheable answer
+   * uncacheable in order to save one call.
+   */
+  'provider.fieldRegistry.get': async (req: Request, res: Response) => {
+    try {
+      return ok(res, req, {
+        version: 1,
+        fields: compliance.PROFILE_FIELD_REGISTRY,
+      });
+    } catch (error) {
+      return sendCaught(res, req, 'provider.fieldRegistry.get', asApiError(error));
+    }
+  },
+
+  /**
+   * The caller's OWN public profile, plus any revision awaiting review.
+   *
+   * `self` only. The uid comes from the token and there is no parameter naming
+   * another account — which matters more here than usual, because the response
+   * carries `pendingRevision`: unreviewed text and the moderator's reason for
+   * refusing it. That is not public, and this is not the customer-facing
+   * provider profile however similar the two names look.
+   */
+  'provider.publicProfile.preview': async (req: Request, res: Response) => {
+    try {
+      return ok(res, req, await compliance.getPublicProfile(uidOf(req)));
+    } catch (error) {
+      return sendCaught(res, req, 'provider.publicProfile.preview', asApiError(error));
+    }
+  },
+
+  /** The caller's certifications. The LIST, which the activation read counts. */
+  'provider.certifications.list': async (req: Request, res: Response) => {
+    try {
+      return ok(res, req, await compliance.listCertifications(uidOf(req)));
+    } catch (error) {
+      return sendCaught(res, req, 'provider.certifications.list', asApiError(error));
+    }
+  },
+
+  /**
+   * Submit a certification for review.
+   *
+   * Every field is passed through to the compliance service, which owns the
+   * ownership checks on `relatedDocumentId` and `renewalOfId` and the
+   * clientRequestId dedupe. Re-validating here would be a second, weaker copy.
+   */
+  'provider.certifications.create': async (req: Request, res: Response) => {
+    try {
+      const body = bodyOf(req);
+      return ok(res, req, await compliance.submitCertification(uidOf(req), {
+        certificationType: String(body.certificationType ?? ''),
+        issuingAuthority: String(body.issuingAuthority ?? ''),
+        credentialLast4: body.credentialLast4 == null ? null : String(body.credentialLast4),
+        issueDate: body.issueDate == null ? null : String(body.issueDate),
+        expiresAt: body.expiresAt == null ? null : String(body.expiresAt),
+        relatedDocumentId: Number(body.relatedDocumentId),
+        renewalOfId: body.renewalOfId == null ? null : String(body.renewalOfId),
+        clientRequestId: String(body.clientRequestId ?? ''),
+      }));
+    } catch (error) {
+      return sendCaught(res, req, 'provider.certifications.create', asApiError(error));
+    }
+  },
+
+  /** What has happened to the caller's documents and activation, newest first. */
+  'provider.verificationTimeline.get': async (req: Request, res: Response) => {
+    try {
+      const raw = Number(req.query.limit);
+      // Clamped HERE as well as in the service. Two clamps of the same bound is
+      // not duplication of policy — the service's is the authority and this one
+      // keeps a NaN from reaching it as a silent default.
+      const limit = Number.isFinite(raw) ? Math.max(1, Math.min(100, Math.trunc(raw))) : 50;
+      return ok(res, req, await compliance.getVerificationTimeline(uidOf(req), limit));
+    } catch (error) {
+      return sendCaught(res, req, 'provider.verificationTimeline.get', asApiError(error));
+    }
+  },
+
+  /**
+   * Start a change of verified email or mobile.
+   *
+   * The DECODED token is passed, not just the uid, and that is load-bearing:
+   * `assertRecentAuth` reads Firebase `auth_time` to demand a fresh interactive
+   * sign-in before an account's recovery address may be changed. Passing only
+   * the uid would have dropped that check silently — privilege escalation
+   * arriving as a migration, on the one operation that decides how an account
+   * is recovered.
+   */
+  'provider.contactChanges.request': async (req: Request, res: Response) => {
+    try {
+      const body = bodyOf(req);
+      const decoded = (req as any).user;
+      return ok(res, req, await contactChanges.requestContactChange(uidOf(req), decoded, {
+        kind: String(body.kind ?? '') as contactChanges.ContactKind,
+        target: String(body.target ?? ''),
+        clientRequestId: String(body.clientRequestId ?? ''),
+      }));
+    } catch (error) {
+      return sendCaught(res, req, 'provider.contactChanges.request', asApiError(error));
+    }
+  },
+
+  /**
+   * Complete a contact change with the code sent to the new address.
+   *
+   * Recent auth is asserted AGAIN rather than assumed from step one: the two
+   * calls are minutes apart and the window can close between them.
+   */
+  'provider.contactChanges.confirm': async (req: Request, res: Response) => {
+    try {
+      const body = bodyOf(req);
+      const decoded = (req as any).user;
+      return ok(res, req, await contactChanges.confirmContactChange(uidOf(req), decoded, {
+        requestId: String(body.requestId ?? ''),
+        code: String(body.code ?? ''),
+      }));
+    } catch (error) {
+      return sendCaught(res, req, 'provider.contactChanges.confirm', asApiError(error));
+    }
+  },
+
+  /**
+   * Record acceptance of the provider agreement.
+   *
+   * `policyVersion` is RECORDED, not validated — refusing an unknown value would
+   * block acceptance whenever the document is revised before the app is, and a
+   * provider who cannot accept cannot work.
+   */
+  'provider.activation.acknowledgePolicy': async (req: Request, res: Response) => {
+    try {
+      const raw = bodyOf(req).policyVersion;
+      const version =
+        typeof raw === 'string' && raw.trim() && raw.trim().length <= 64 ? raw.trim() : null;
+      return ok(res, req, await providerActivationService.acknowledgeProviderPolicy(uidOf(req), { version }));
+    } catch (error) {
+      return sendCaught(res, req, 'provider.activation.acknowledgePolicy', asApiError(error));
     }
   },
 

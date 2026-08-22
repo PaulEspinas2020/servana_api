@@ -35,7 +35,11 @@ import {
   previewActivationEligibility,
   getActivationRequirements,
 } from "./providerActivationService";
-import { calculateCompliance } from "./providerProfileComplianceService";
+import {
+  computeCompliance,
+  loadComplianceInputs,
+  type ComplianceInputs,
+} from "./providerProfileComplianceService";
 
 const s = db.schema;
 
@@ -250,9 +254,56 @@ const APPLICATION_FROM_CASE: Record<string, ApplicationState> = {
   suspended: "UNDER_REVIEW",
 };
 
+/**
+ * The account state PLUS the compliance inputs the computation already loaded.
+ *
+ * ## Why this exists
+ *
+ * `getProviderAccountState` has always called `calculateCompliance` — it needs
+ * `complianceCurrent` to decide four capabilities — and then discarded
+ * everything except that one boolean. The canonical activation projection needs
+ * the compliance verdict, the document list and the certification list, all of
+ * which that call already loaded and threw away.
+ *
+ * Without this, the projection would call `calculateCompliance` a second time,
+ * and since that function fans out to `listDocuments` and `listCertifications`,
+ * one activation read would issue six queries to answer questions the first
+ * three already answered. Returning what was loaded is cheaper than loading it
+ * again, and — the part that matters more — it makes it IMPOSSIBLE for the
+ * projection's document summary to disagree with the compliance verdict printed
+ * beside it, because both are computed from one array.
+ *
+ * `getProviderAccountState` below is unchanged on the wire: it returns
+ * `.state` and nothing else, so `/api/provider/account-state` and every one of
+ * its five clients see exactly the response they saw before.
+ */
+export interface ProviderAccountStateDetailed {
+  state: ProviderAccountState;
+  /**
+   * The compliance verdict, or null when it could not be computed — a denied
+   * account, or a compliance projection that threw. Null is not "compliant";
+   * every reader must treat it as unknown.
+   */
+  compliance: ReturnType<typeof computeCompliance> | null;
+  /**
+   * The rows the verdict was computed from, or null on a denied account where
+   * nothing was loaded. Deliberately not defaulted to empty arrays: an empty
+   * document list and an unloaded one mean different things, and a projection
+   * that confuses them reports "no documents required" to a provider it never
+   * looked up.
+   */
+  inputs: ComplianceInputs | null;
+}
+
 export async function getProviderAccountState(
   uid: string
 ): Promise<ProviderAccountState> {
+  return (await getProviderAccountStateDetailed(uid)).state;
+}
+
+export async function getProviderAccountStateDetailed(
+  uid: string
+): Promise<ProviderAccountStateDetailed> {
   const { rows } = await dbQuery.query(
     `SELECT uid, role, account_status, email, email_normalized,
             phone_number, phone_normalized,
@@ -266,7 +317,7 @@ export async function getProviderAccountState(
 
   // No row is a genuinely unknown actor. Deny everything but support.
   if (!rows.length) {
-    return denied("UNKNOWN", null, "ROLE_NOT_PERMITTED");
+    return bare(denied("UNKNOWN", null, "ROLE_NOT_PERMITTED"));
   }
 
   const row = rows[0];
@@ -290,11 +341,11 @@ export async function getProviderAccountState(
     operational = "UNKNOWN"; // somebody wrote a value we do not understand
   }
 
-  if (operational === "CLOSED") return denied(operational, role, "ACCOUNT_CLOSED");
-  if (operational === "DISABLED") return denied(operational, role, "ACCOUNT_DISABLED");
-  if (operational === "UNKNOWN") return denied(operational, role, "ACCOUNT_DISABLED");
+  if (operational === "CLOSED") return bare(denied(operational, role, "ACCOUNT_CLOSED"));
+  if (operational === "DISABLED") return bare(denied(operational, role, "ACCOUNT_DISABLED"));
+  if (operational === "UNKNOWN") return bare(denied(operational, role, "ACCOUNT_DISABLED"));
   if (!isProviderRole(role)) {
-    return denied(operational, role, "ROLE_NOT_PERMITTED");
+    return bare(denied(operational, role, "ROLE_NOT_PERMITTED"));
   }
 
   // ── D2 verification ───────────────────────────────────────────────────────
@@ -419,7 +470,8 @@ export async function getProviderAccountState(
   // ── Capabilities ──────────────────────────────────────────────────────────
   const suspended = operational === "SUSPENDED";
   const fullyActive = activation === "ACTIVE" && operational === "ACTIVE";
-  const compliance = await calculateCompliance(uid).catch(() => null);
+  const complianceInputs = await loadComplianceInputs(uid).catch(() => null);
+  const compliance = complianceInputs === null ? null : computeCompliance(complianceInputs);
   // This endpoint is an advisory UI contract used by both provider clients.
   // During the controlled 009 migration rollout, an unavailable Command 24
   // projection must not make the existing portal appear suspended. Actual
@@ -488,7 +540,7 @@ export async function getProviderAccountState(
     // take the whole response down either.
     .catch(() => []);
 
-  return {
+  const state: ProviderAccountState = {
     account: { status: operational, role },
     verification: { email, mobile, minimumRequirementMet },
     profile: { status: profileStatus, completionPercent, missingFields },
@@ -509,7 +561,19 @@ export async function getProviderAccountState(
     checklist: [...approvalItems, ...activationItems],
     nextStep: { code: next, route: ROUTES[next], blocking: next !== "OPERATIONAL" },
   };
+
+  return { state, compliance, inputs: complianceInputs };
 }
+
+/**
+ * A denial carries no compliance and no inputs, because none were loaded.
+ *
+ * Null rather than an empty verdict: "we did not look" and "we looked and found
+ * nothing outstanding" are different answers, and a projection that renders the
+ * first as the second tells a refused provider they are compliant.
+ */
+const bare = (state: ProviderAccountState): ProviderAccountStateDetailed =>
+  ({ state, compliance: null, inputs: null });
 
 /** Terminal denial. Support stays reachable — §19 forbids dead ends. */
 function denied(

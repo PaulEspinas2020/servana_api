@@ -18,23 +18,23 @@
 
 | | |
 | --- | --- |
-| Capabilities | 62 |
-| Canonical endpoints mounted | 114 |
+| Capabilities | 76 |
+| Canonical endpoints mounted | 171 |
 | Canonical endpoints planned | 1 |
-| Legacy mappings tracked | 126 |
-| Converged (one route family) | 54 |
+| Legacy mappings tracked | 184 |
+| Converged (one route family) | 68 |
 | Role-split over ONE service | 4 |
 | Single-surface | 4 |
 | **Divergent (forked truth)** | **0** |
 | Broken (names a missing endpoint) | 0 |
-| Surface × capability cells on canonical | 35 |
-| Surface × capability cells still legacy | 91 |
+| Surface × capability cells on canonical | 33 |
+| Surface × capability cells still legacy | 93 |
 
 **0 divergent capabilities.** Every capability whose
 endpoints span more than one route family names exactly one domain service — the
 role split is a permission boundary, never a second implementation.
 
-**35 cells on canonical.** Each one is derived from that client's published manifest — the endpoints it calls, generated from its own source with a file:line per call site — and never asserted here by hand. A client with no manifest reads legacy, planned or n/a regardless of what it may already have shipped, because nothing in this repository has verified it; see src/api/v1/client-manifests/.
+**33 cells on canonical.** Each one is derived from that client's published manifest — the endpoints it calls, generated from its own source with a file:line per call site — and never asserted here by hand. A client with no manifest reads legacy, planned or n/a regardless of what it may already have shipped, because nothing in this repository has verified it; see src/api/v1/client-manifests/.
 
 ## 2. Legend
 
@@ -66,15 +66,19 @@ direction of whoever wrote it.
 | What is left before my account is usable | SHARED | planned | planned | **migrated** | planned | — |
 | Read and change my customer profile | SHARED | legacy | legacy | — | — | planned |
 | Read and change my account record | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | ⚠ mixed | planned |
+| Find out why I cannot work yet, and what to do about it | SHARED | — | — | planned | planned | — |
 | Read and change my availability, and book time off | SHARED | — | — | ⚠ mixed | legacy | — |
+| Attest a credential, and see what became of it | SHARED | — | — | planned | planned | — |
+| Change the verified email or mobile my account recovers through | SHARED | — | — | planned | planned | — |
 | Submit, read, preview and withdraw my documents | SHARED | — | — | ⚠ mixed | ⚠ mixed | — |
-| Read and change my provider profile | SHARED | — | — | legacy | **migrated** | planned |
+| Read and change my provider profile | SHARED | — | — | ⚠ mixed | ⚠ mixed | planned |
 | Read the services I am approved for | SHARED | — | — | **migrated** | planned | — |
 | Read my security posture | SHARED | planned | planned | planned | planned | planned |
 | Read and change my settings | SHARED | planned | planned | **migrated** | planned | planned |
 | Operate the booking queue | SINGLE_SURFACE | — | — | — | — | legacy |
 | Register, sign in, and end a session | SHARED | legacy | ⚠ mixed | legacy | ⚠ mixed | legacy |
 | Recover an account and verify a contact | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | ⚠ mixed | legacy |
+| Record that cash changed hands | SHARED | — | — | planned | planned | — |
 | Read booking-code state | SHARED | planned | planned | **migrated** | **migrated** | planned |
 | Read a booking | SHARED | ⚠ mixed | ⚠ mixed | ⚠ mixed | planned | planned |
 | Move a booking through its state machine | ROLE_SPLIT_SHARED_SERVICE | — | — | **migrated** | ⚠ mixed | legacy |
@@ -83,9 +87,19 @@ direction of whoever wrote it.
 | Search services | ROLE_SPLIT_SHARED_SERVICE | ⚠ mixed | planned | — | — | — |
 | Ask whether this client build may still run | SHARED | planned | — | planned | — | — |
 | Fetch the contract this process implements | SHARED | planned | planned | planned | planned | planned |
+| Find out whether I may cancel, and why not | SHARED | — | — | planned | planned | — |
+| Prove the work happened | SHARED | — | — | planned | planned | — |
 | Read the support cases I raised on a booking | SHARED | planned | planned | — | — | — |
+| Ask for my account to be deleted | SHARED | — | — | planned | planned | — |
+| See the offerings I could apply for | SHARED | — | — | planned | planned | — |
 | A provider's own job queue | SHARED | — | — | **migrated** | **migrated** | — |
+| See my alerts, calendar, performance and schedule | SHARED | — | — | planned | planned | — |
+| Say whether I am working, where I am, and that I am safe | SHARED | — | — | planned | planned | — |
+| Change the photo customers see | SHARED | — | — | planned | planned | — |
 | Read a provider's public profile | SHARED | planned | planned | — | — | planned |
+| See what customers said about me, and answer it | SHARED | — | — | planned | planned | — |
+| Decide what work I am offered | SHARED | — | — | planned | planned | — |
+| Raise a case with Servana, and follow it | SHARED | — | — | planned | planned | — |
 | Resolve a refund review | SINGLE_SURFACE | — | — | — | — | legacy |
 | Read the reschedule history of a booking | SHARED | planned | planned | planned | **migrated** | planned |
 | Report that the product is working | SINGLE_SURFACE | — | — | planned | — | — |
@@ -103,7 +117,7 @@ direction of whoever wrote it.
 | Reschedule | SHARED | planned | planned | — | — | legacy |
 | Tracking | SHARED | legacy | legacy | **migrated** | **migrated** | planned |
 | Provider earnings summary | SHARED | — | — | legacy | **migrated** | — |
-| Provider earnings transactions | SHARED | — | — | legacy | **migrated** | — |
+| Provider earnings transactions | SHARED | — | — | ⚠ mixed | ⚠ mixed | — |
 | Start or resume a booking payment | SHARED | legacy | legacy | — | — | planned |
 | Read a booking's payment and price breakdown | SHARED | planned | planned | **migrated** | planned | planned |
 | Provider payouts | SHARED | — | — | legacy | **migrated** | — |
@@ -219,6 +233,25 @@ Legacy still aliased for this capability:
 
 No role split. One identity record for every account, and the ROLE-specific data is deliberately not here — `/me` carries a pointer to which extensions exist, not their contents. A `/me` that carried the provider compliance state would be fetched by every screen, used by almost none, and cached everywhere.
 
+### Find out why I cannot work yet, and what to do about it
+
+- key: `accountPolicy:providerActivation` · declared in `services/account/accountPolicy`
+- verdict: **SHARED** · domain service: `services/account/providerActivationProjection, services/providerActivationService, services/providerProfileComplianceService`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/activation/policy-acknowledgement`
+  - `GET /api/v1/provider/activation`
+  - `GET /api/v1/provider/verification-timeline`
+
+Legacy still aliased for this capability:
+  - `GET /api/provider/account-state`
+  - `GET /api/provider/compliance`
+  - `GET /api/provider/verification-timeline`
+  - `POST /api/provider/activation/policy-acknowledgement`
+
+DELIBERATELY not folded into providerProfile, and that separation is the whole design. The ProviderProfile schema serves two seats - the provider reading their own, and a CUSTOMER reading somebody else's - so an activation checklist added to it would be declared, in the published contract, as travelling on the endpoint customers read. Rendering a provider card and driving an onboarding checklist are different purposes over different data, and separate capabilities let authorization, retention and caching differ per purpose instead of all three being set by whichever purpose is laxest. No role split within the capability: both provider surfaces perform the identical operation and receive the identical DTO. Auth is `provider`, which is STRICTER than the account-state route it supersedes and equal to the compliance route it also supersedes - the parity gate refused the looser first draft, because compliance detail must not become reachable one rung lower as a side effect of a migration. The discovery property survives: requireProviderRole admits every provider role including suspended and unapproved, so the caller who needs to know why they cannot work still gets the checklist, and a non-provider receives the branchable ROLE_REQUIRED. The uid comes from the token and no parameter can name another account.
+
 ### Read and change my availability, and book time off
 
 - key: `accountPolicy:providerAvailability` · declared in `services/account/accountPolicy`
@@ -240,6 +273,38 @@ Legacy still aliased for this capability:
   - `PUT /api/worker/availability`
 
 No role split. The canonical route reads and writes the SAME engine matching consumes, which is the release gate: a provider editing one source while matching reads another is a provider who is unbookable for reasons nobody can see.
+
+### Attest a credential, and see what became of it
+
+- key: `accountPolicy:providerCertifications` · declared in `services/account/accountPolicy`
+- verdict: **SHARED** · domain service: `services/providerProfileComplianceService`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/certifications`
+  - `GET /api/v1/provider/certifications`
+
+Legacy still aliased for this capability:
+  - `GET /api/provider/certifications`
+  - `POST /api/provider/certifications`
+
+No role split. Separate from providerDocuments because the two are a FILE and an ASSERTION ABOUT a file, and they fail differently: a document can be unreadable, a certification can be expired or revoked while its document is perfectly legible. The submission carries only the last four digits of a credential, masked at write time, so the full number never reaches this table or this wire.
+
+### Change the verified email or mobile my account recovers through
+
+- key: `accountPolicy:providerContactChanges` · declared in `services/account/accountPolicy`
+- verdict: **SHARED** · domain service: `services/providerContactChangeService`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/contact-changes/confirm`
+  - `POST /api/v1/provider/contact-changes`
+
+Legacy still aliased for this capability:
+  - `POST /api/provider/contact-changes`
+  - `POST /api/provider/contact-changes/confirm`
+
+No role split, and deliberately its OWN capability rather than part of the profile: this is the only provider-facing operation that changes how an account is recovered, and it is the only one demanding a FRESH interactive sign-in rather than a valid session. Folding it into providerProfile would have put an operation with a stricter precondition behind the same name as one without, which is how a precondition gets dropped in a migration. Two steps, one capability: a canonical request whose confirm is still legacy is one flow split across two contracts.
 
 ### Submit, read, preview and withdraw my documents
 
@@ -266,15 +331,19 @@ Provider-only, and it must stay that way. The projection carries review STATE an
 ### Read and change my provider profile
 
 - key: `accountPolicy:providerProfile` · declared in `services/account/accountPolicy`
-- verdict: **SHARED** · domain service: `services/account/providerProfileService`
+- verdict: **SHARED** · domain service: `services/account/providerProfileService, services/providerProfileComplianceService`
 - route families: `/provider`
 
 Canonical:
+  - `GET /api/v1/provider/profile-fields`
   - `GET /api/v1/provider/profile`
   - `PATCH /api/v1/provider/profile`
+  - `GET /api/v1/provider/public-profile`
 
 Legacy still aliased for this capability:
   - `GET /api/provider/profile`
+  - `GET /api/provider/profile-fields`
+  - `GET /api/provider/public-profile-preview`
   - `POST /api/provider/public-profile-revisions`
 
 Role-specific by DATA and by WORKFLOW. A provider profile field is classified, and editing a reviewable one submits a revision rather than writing a column — the compliance service owns that, and the canonical PATCH delegates to it instead of reimplementing it.
@@ -382,6 +451,20 @@ Legacy still aliased for this capability:
   - `POST /api/auth/verify-email-otp`
 
 No role split. Recovery answers identically whatever the account turns out to be — a route that behaved differently for a provider would tell an unauthenticated caller which addresses belong to providers.
+
+### Record that cash changed hands
+
+- key: `core:bookingCashSettlement` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/paymentService`
+- route families: `/bookings`
+
+Canonical:
+  - `POST /api/v1/bookings/:bookingId/cash-collected`
+
+Legacy still aliased for this capability:
+  - `POST /api/:bookingId/mark-cash-paid`
+
+ROLE-SPLIT by MEMBERSHIP rather than by role name, and that is the whole design. Authorization resolves the caller relationship to THIS booking and then refuses the CUSTOMER - a customer declaring their own cash payment is not evidence of anything - while admitting the assigned provider and admin, the latter for support-assisted recovery. Declaring a provider-only role would have looked stricter and locked admin out of that path. Idempotent by construction: paid_at is COALESCE(paid_at, NOW()), so a repeat never moves the moment money changed hands.
 
 ### Read booking-code state
 
@@ -532,6 +615,38 @@ Legacy still aliased for this capability:
 
 No role split. Every client generates types from the same document, so a per-surface projection would defeat the point — the value is that all five are reading one contract. AUTHENTICATED rather than public, unlike buildProvenance: four fields of provenance exist to be checkable by somebody holding no credential, but a full API surface is a map, and every client that wants it already holds a token. The same digest also rides on every /api/v1 response in x-contract-sha256, so a client asks "am I stale?" without calling this at all.
 
+### Find out whether I may cancel, and why not
+
+- key: `core:jobCancellationEligibility` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/booking/bookingPolicies`
+- route families: `/provider`
+
+Canonical:
+  - `GET /api/v1/provider/jobs/:bookingId/cancellation-eligibility`
+
+Legacy still aliased for this capability:
+  - `GET /api/provider/bookings/:bookingId/cancellation-eligibility`
+
+No role split. A READ of the same policy function the cancel transition itself calls, so a Cancel button and the POST behind it cannot disagree about the window and the client never calculates the rule. Separate from the transition capability because it grants nothing and changes nothing: it exists so a refusal can be EXPLAINED before the provider commits to the action, rather than arriving as a bare error afterwards.
+
+### Prove the work happened
+
+- key: `core:jobEvidence` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/bookingEvidenceService`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/jobs/:bookingId/evidence`
+  - `DELETE /api/v1/provider/jobs/:bookingId/evidence/:evidenceId`
+  - `GET /api/v1/provider/jobs/:bookingId/evidence`
+
+Legacy still aliased for this capability:
+  - `DELETE /api/provider/bookings/:bookingId/evidence/:evidenceId`
+  - `GET /api/provider/bookings/:bookingId/evidence`
+  - `POST /api/provider/bookings/:bookingId/evidence`
+
+No role split: the ASSIGNED provider only, scoped by worker_uid inside every statement rather than by a check above it. Held apart from settlement and from cancellation eligibility because the three answer to three different services, and a capability spanning several is one that cannot be retired or reasoned about as a unit — which is exactly what cross-platform-convergence refused when this was first declared as one. Evidence is what a DISPUTE is decided on, which is why the canonical write requires a replay key that the legacy route only accepts optionally.
+
 ### Read the support cases I raised on a booking
 
 - key: `core:postServiceSupportRead` · declared in `api/v1/convergence (core)`
@@ -545,6 +660,34 @@ Legacy still aliased for this capability:
   - none
 
 No role split. The read beside the TAB 12 write, owner-scoped in SQL and over the same service.
+
+### Ask for my account to be deleted
+
+- key: `core:providerAccountLifecycle` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `controllers/providerController`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/account/deletion-request`
+
+Legacy still aliased for this capability:
+  - `POST /api/provider/account/delete`
+
+No role split. Alone in its capability because it is the only provider-facing operation that ends the relationship, and because it does NOT do what its legacy name says: it records an intention and erases nothing. What is removed and what is retained is a legal decision about retention rather than an API one, and this capability exists so that question has somewhere to be answered rather than being implied by an endpoint called delete.
+
+### See the offerings I could apply for
+
+- key: `core:providerCatalogOfferings` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/providerCatalogService`
+- route families: `/provider`
+
+Canonical:
+  - `GET /api/v1/provider/catalog/offerings`
+
+Legacy still aliased for this capability:
+  - `GET /api/provider-catalog/v1/offerings`
+
+No role split, and its OWN capability rather than part of catalogBrowse — which was the first draft, and which cross-platform-convergence refused. The public catalog is served by catalogPublicService to anyone; this is providerCatalogService answering a narrower question for an authenticated provider, filtered to active and provider-visible offerings. Two services behind one capability is one nobody can retire or reason about as a unit, which is exactly what the gate said.
 
 ### A provider's own job queue
 
@@ -563,6 +706,72 @@ Legacy still aliased for this capability:
 
 Genuinely role-specific. "The jobs assigned to me" has no customer equivalent: the query is scoped by worker uid, the card carries earnings and travel fields a customer must never see, and the customer-facing answer to "my bookings" is a different question over a different scope. It reads the same bookings and the same canonical state; it is a provider PROJECTION, not a provider truth.
 
+### See my alerts, calendar, performance and schedule
+
+- key: `core:providerOperationalReads` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `controllers/providerCalendarController, controllers/providerController, controllers/providerLocationAccessController`
+- route families: `/provider`
+
+Canonical:
+  - `DELETE /api/v1/provider/alerts/:alertKey`
+  - `GET /api/v1/provider/alerts`
+  - `GET /api/v1/provider/calendar`
+  - `GET /api/v1/provider/performance`
+  - `GET /api/v1/provider/schedule`
+
+Legacy still aliased for this capability:
+  - `DELETE /api/provider/alerts/:key`
+  - `GET /api/provider/alerts`
+  - `GET /api/provider/calendar`
+  - `GET /api/provider/performance`
+  - `GET /api/worker/schedule`
+
+No role split. Held as one capability because these are the four operational reads a provider opens the app to check, and they retire together or not at all: an alert that says "you have a booking tomorrow" is only useful beside the calendar that shows it. Named at the controller because that is where the projections still live - lifting six thin reads into services would be six chances to change a projection by accident on routes whose only requirement is that the canonical answer equals the legacy one.
+
+### Say whether I am working, where I am, and that I am safe
+
+- key: `core:providerPresenceAndSafety` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/providerOperationalAvailabilityService, services/providerSafetyService, services/technicianService`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/location`
+  - `GET /api/v1/provider/presence`
+  - `POST /api/v1/provider/presence/offline`
+  - `POST /api/v1/provider/presence/online`
+  - `POST /api/v1/provider/safety/check-in`
+  - `GET /api/v1/provider/safety/emergency-config`
+  - `POST /api/v1/provider/safety/incidents`
+  - `GET /api/v1/provider/safety/incidents`
+
+Legacy still aliased for this capability:
+  - `GET /api/provider/location/status`
+  - `GET /api/provider/safety/emergency-config`
+  - `GET /api/provider/safety/incidents`
+  - `POST /api/provider/location/go-offline`
+  - `POST /api/provider/location/go-online`
+  - `POST /api/provider/safety/check-in`
+  - `POST /api/provider/safety/incidents`
+  - `POST /api/worker/location`
+
+No role split. Presence and safety are held as ONE capability because they share a failure mode rather than a screen: both are things a provider does on a doorstep, on a link that drops, where a refusal the client renders as an error is worse than the duplicate it was avoiding. That is why the incident write REPLAYS instead of refusing and the check-in is append-only with `none-accepted` declared. Location is the most sensitive data this product holds, and nothing here widened who can read it: a provider reads their own, admin reads it, and a customer reaches it only through a booking they own while it is live.
+
+### Change the photo customers see
+
+- key: `core:providerProfilePhoto` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `controllers/providerController`
+- route families: `/provider`
+
+Canonical:
+  - `DELETE /api/v1/provider/profile/photo`
+  - `POST /api/v1/provider/profile/photo`
+
+Legacy still aliased for this capability:
+  - `DELETE /api/worker/profile/photo`
+  - `POST /api/worker/profile/photo`
+
+No role split, and its own capability rather than part of the profile because it is the CHANNEL the profile PATCH refuses `photo` in favour of. TAB 01 found the two allow-lists disagreeing about whether a photo was submittable through the revision workflow; it is not, because a photo is a FILE with MIME, magic-byte and size validation and the revision table carries jsonb strings. Declaring it separately is what makes that refusal point at something.
+
 ### Read a provider's public profile
 
 - key: `core:providerPublicProfile` · declared in `api/v1/convergence (core)`
@@ -576,6 +785,92 @@ Legacy still aliased for this capability:
   - none
 
 No role split. One public projection, and the disclosure rules are the provider disclosure policy — not a per-caller decision made at the route.
+
+### See what customers said about me, and answer it
+
+- key: `core:providerReputation` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/providerReputationService`
+- route families: `/provider`
+
+Canonical:
+  - `GET /api/v1/provider/reputation/summary`
+  - `POST /api/v1/provider/review-moderation/:caseId/appeals`
+  - `GET /api/v1/provider/reviews/:reviewId`
+  - `GET /api/v1/provider/reviews`
+  - `POST /api/v1/provider/reviews/:reviewId/report`
+  - `POST /api/v1/provider/reviews/:reviewId/response`
+
+Legacy still aliased for this capability:
+  - `GET /api/provider/reputation/summary`
+  - `GET /api/provider/reviews`
+  - `GET /api/provider/reviews/:reviewId`
+  - `POST /api/provider/review-moderation/:caseId/appeals`
+  - `POST /api/provider/reviews/:reviewId/report`
+  - `POST /api/provider/reviews/:reviewId/response`
+
+No role split, and distinct from the customer-facing review reads (/v1/reviews/providers/:providerUid) because this surface carries RESPONSE and MODERATION state, neither of which is public. The write half is what v1 lacked entirely: a provider could be reviewed canonically and could not answer. A response is public-facing text, so the moderation that applies today applies to the canonical route on day one rather than being added afterwards.
+
+### Decide what work I am offered
+
+- key: `core:providerServiceCatalogue` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/serviceApplicationService, services/technicianService`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/service-applications`
+  - `GET /api/v1/provider/service-applications/:applicationId`
+  - `GET /api/v1/provider/service-applications`
+  - `POST /api/v1/provider/service-applications/:applicationId/resubmit`
+  - `DELETE /api/v1/provider/service-applications/:applicationId`
+  - `GET /api/v1/provider/services/:serviceId/eligibility`
+  - `GET /api/v1/provider/services/overview`
+  - `PATCH /api/v1/provider/services/:serviceId/pause`
+  - `PATCH /api/v1/provider/services/:serviceId/reactivate`
+
+Legacy still aliased for this capability:
+  - `DELETE /api/worker/service-applications/:applicationId`
+  - `GET /api/worker/service-applications`
+  - `GET /api/worker/service-applications/:applicationId`
+  - `GET /api/worker/services-overview`
+  - `GET /api/worker/services/:serviceId/eligibility`
+  - `PATCH /api/worker/services/:serviceId/pause`
+  - `PATCH /api/worker/services/:serviceId/reactivate`
+  - `POST /api/worker/service-applications`
+  - `POST /api/worker/service-applications/:applicationId/resubmit`
+
+No role split. One capability rather than two because a read and a write here act on the SAME row: a pause and an approval both change what matching offers, and splitting them would let a pause be published canonically while the reactivate that undoes it stayed legacy. Held separately from providerProfile because a service list looked like part of a profile and is not - it is the input to matching, and it is the only provider-facing surface whose state decides earnings. `provider.services.list` stays in the account capability: it is the four-field chip, and the overview here is the management screen.
+
+### Raise a case with Servana, and follow it
+
+- key: `core:providerSupportCases` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/providerSupportCaseService`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/support/cases/:caseId/appeals`
+  - `POST /api/v1/provider/support/cases/:caseId/attachments`
+  - `GET /api/v1/provider/support/cases/:caseId/attachments/:attachmentId/preview`
+  - `POST /api/v1/provider/support/cases`
+  - `GET /api/v1/provider/support/cases/:caseId`
+  - `GET /api/v1/provider/support/cases`
+  - `POST /api/v1/provider/support/cases/:caseId/reopen`
+  - `POST /api/v1/provider/support/cases/:caseId/messages`
+  - `POST /api/v1/provider/support/cases/:caseId/withdraw`
+  - `GET /api/v1/provider/support/case-categories`
+
+Legacy still aliased for this capability:
+  - `GET /api/provider/support/case-categories`
+  - `GET /api/provider/support/cases`
+  - `GET /api/provider/support/cases/:caseId`
+  - `GET /api/provider/support/cases/:caseId/attachments/:attachmentId/preview`
+  - `POST /api/provider/support/cases`
+  - `POST /api/provider/support/cases/:caseId/appeals`
+  - `POST /api/provider/support/cases/:caseId/attachments`
+  - `POST /api/provider/support/cases/:caseId/messages`
+  - `POST /api/provider/support/cases/:caseId/reopen`
+  - `POST /api/provider/support/cases/:caseId/withdraw`
+
+No role split. Held apart from the CUSTOMER post-service support cases (bookings/:bookingId/support-cases, services/reviews/postServiceSupportService) and from customer CONVERSATIONS, and the separation is the point rather than an accident of naming. A provider case is with Servana, is not bound to a booking, and is authorized by OWNERSHIP of the case; a conversation is authorized by MEMBERSHIP of a booking and read by a customer. A client classifier already matched this thread onto /v1/conversations/:id/messages on the word "messages" and was wrong. Three things share the words "support case" in this product and they are three resources.
 
 ### Resolve a refund review
 
@@ -840,10 +1135,12 @@ No role split. Provider Web and Provider Mobile call the same path and receive t
 - route families: `/provider`
 
 Canonical:
+  - `GET /api/v1/provider/earnings/transactions/:transactionId`
   - `GET /api/v1/provider/earnings/transactions`
 
 Legacy still aliased for this capability:
   - `GET /api/provider/earnings`
+  - `GET /api/provider/earnings/:id`
   - `GET /api/provider/ledger`
 
 No role split. Replaces three legacy shapes — `/provider/earnings`, `/provider/ledger` and the job-card earnings fields — that read the same columns and answered in three vocabularies.

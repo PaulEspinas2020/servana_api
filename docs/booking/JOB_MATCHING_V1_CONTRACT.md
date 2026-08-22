@@ -25,6 +25,10 @@ endpoint remains, §3 states why the authorization differs — never the truth.
 |---|---|---|---|---|---|---|
 | `GET /api/v1/provider/jobs` | implemented | · | · | `migrated` | `migrated` | · |
 | `GET /api/v1/provider/jobs/:bookingId` | implemented | · | · | `migrated` | `migrated` | · |
+| `GET /api/v1/provider/jobs/:bookingId/evidence` | implemented | · | · | `planned` | `planned` | · |
+| `POST /api/v1/provider/jobs/:bookingId/evidence` | implemented | · | · | `planned` | `planned` | · |
+| `DELETE /api/v1/provider/jobs/:bookingId/evidence/:evidenceId` | implemented | · | · | `planned` | `planned` | · |
+| `GET /api/v1/provider/jobs/:bookingId/cancellation-eligibility` | implemented | · | · | `planned` | `planned` | · |
 | `POST /api/v1/provider/jobs/:bookingId/accept` | implemented | · | · | `migrated` | `migrated` | · |
 | `POST /api/v1/provider/jobs/:bookingId/decline` | implemented | · | · | `migrated` | `migrated` | · |
 | `POST /api/v1/provider/jobs/:bookingId/en-route` | implemented | · | · | `migrated` | `migrated` | · |
@@ -45,6 +49,10 @@ alias is live. Shared surfaces move additively until every client has migrated.
 |---|---|
 | `GET /provider/jobs` | `services/technicianService.getJobCardsByWorker + controllers/jobCardView.formatJobCard` |
 | `GET /provider/jobs/:bookingId` | `services/technicianService.getJobCardByWorker + controllers/jobCardView.formatJobCard` |
+| `GET /provider/jobs/:bookingId/evidence` | `services/bookingEvidenceService.listEvidence + blockingRequirements` |
+| `POST /provider/jobs/:bookingId/evidence` | `services/bookingEvidenceService.submitEvidence` |
+| `DELETE /provider/jobs/:bookingId/evidence/:evidenceId` | `services/bookingEvidenceService.removeEvidence` |
+| `GET /provider/jobs/:bookingId/cancellation-eligibility` | `services/booking/bookingPolicies.evaluateCancellation` |
 | `POST /provider/jobs/:bookingId/accept` | `services/booking/transitionExecutor.transitionBooking (PROVIDER_ACCEPT)` |
 | `POST /provider/jobs/:bookingId/decline` | `services/booking/transitionExecutor.transitionBooking (PROVIDER_DECLINE)` |
 | `POST /provider/jobs/:bookingId/en-route` | `services/booking/transitionExecutor.transitionBooking (PROVIDER_EN_ROUTE)` |
@@ -108,6 +116,10 @@ timeline entry with an empty description.
 | `GET /api/worker/job-cards` | `GET /api/v1/provider/jobs` | ALIAS_TEMPORARILY | Provider Web calls this today. Same service, same view function, legacy envelope (a bare array). |
 | `GET /api/workers/:workerId/job-cards` | `GET /api/v1/provider/jobs` | ALIAS_TEMPORARILY | ServanaWorker calls this. Takes the provider uid from the PATH; it is now behind verifyAuth + verifyOwnership, but the parameter remains a BOLA shape that v1 removes. Retirement gated on a ServanaWorker release. |
 | `GET /api/worker/job-cards/:bookingId` | `GET /api/v1/provider/jobs/:bookingId` | ALIAS_TEMPORARILY | Provider Web. Same service and view function. |
+| `GET /api/provider/bookings/:bookingId/evidence` | `GET /api/v1/provider/jobs/:bookingId/evidence` | ALIAS_TEMPORARILY | Same service. The path moves under /provider/jobs to sit with the transitions. |
+| `POST /api/provider/bookings/:bookingId/evidence` | `POST /api/v1/provider/jobs/:bookingId/evidence` | ALIAS_TEMPORARILY | SAME implementation after TAB 07 extracted it. clientRequestId is OPTIONAL there and REQUIRED here - demanding one on the legacy route would break shipped clients. |
+| `DELETE /api/provider/bookings/:bookingId/evidence/:evidenceId` | `DELETE /api/v1/provider/jobs/:bookingId/evidence/:evidenceId` | ALIAS_TEMPORARILY | Same service. Soft removal, scoped by worker uid inside the UPDATE. |
+| `GET /api/provider/bookings/:bookingId/cancellation-eligibility` | `GET /api/v1/provider/jobs/:bookingId/cancellation-eligibility` | ALIAS_TEMPORARILY | Same policy function, same context loader. Only the path and envelope differ. |
 | `PUT /api/worker/bookings/:bookingId/accept` | `POST /api/v1/provider/jobs/:bookingId/accept` | ALIAS_TEMPORARILY | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
 | `PUT /api/worker/bookings/:bookingId/decline` | `POST /api/v1/provider/jobs/:bookingId/decline` | ALIAS_TEMPORARILY | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |
 | `PUT /api/worker/bookings/:bookingId/en-route` | `POST /api/v1/provider/jobs/:bookingId/en-route` | ALIAS_TEMPORARILY | The live provider action. Still writes status directly via technicianService; Phase B of the executor migration. Authorization is equivalent — both resolve the provider from the token and check the CURRENT assignment. |

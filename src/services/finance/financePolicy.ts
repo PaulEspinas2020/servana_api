@@ -950,7 +950,14 @@ export const FINANCE_CAPABILITIES: readonly FinanceCapability[] = Object.freeze(
   {
     key: 'earningsTransactions',
     title: 'Provider earnings transactions',
-    contractIds: ['provider.earnings.transactions'],
+    contractIds: [
+      // TAB 10: the single-transaction DETAIL the list links to. Held in the
+      // SAME capability as the list because they are one screen and one
+      // service, and retiring the list without the detail would leave a row
+      // a provider can see and cannot open.
+      'provider.earnings.transaction',
+      'provider.earnings.transactions',
+    ],
     domainModule: 'services/finance/providerEarningsService',
     surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
     roleSplitRationale:

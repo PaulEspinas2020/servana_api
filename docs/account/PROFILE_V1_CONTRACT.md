@@ -282,6 +282,14 @@ see.
 
 | Endpoint | Auth | Idempotent | Domain service |
 | --- | --- | --- | --- |
+| `GET /api/v1/provider/alerts` | provider | yes | `controllers/providerController.getProviderAlerts` |
+| `DELETE /api/v1/provider/alerts/:alertKey` | provider | no | `controllers/providerController.dismissAlert` |
+| `GET /api/v1/provider/calendar` | provider | yes | `controllers/providerCalendarController.getCalendar → services/providerCalendarService.getProviderCalendar` |
+| `GET /api/v1/provider/performance` | provider | yes | `controllers/providerController.getProviderPerformanceMetrics` |
+| `POST /api/v1/provider/profile/photo` | provider | no | `controllers/providerController.uploadWorkerProfilePhoto` |
+| `DELETE /api/v1/provider/profile/photo` | provider | no | `controllers/providerController.deleteWorkerProfilePhoto` |
+| `GET /api/v1/provider/schedule` | provider | yes | `controllers/providerLocationAccessController.getMySchedule` |
+| `POST /api/v1/provider/account/deletion-request` | provider | yes | `controllers/providerController.requestProviderDeletion` |
 | `PATCH /api/v1/me` | authenticated | yes | `services/account/accountService.patchAccount` |
 | `GET /api/v1/me/settings` | authenticated | yes | `services/account/accountSettingsService.getSettings` |
 | `PATCH /api/v1/me/settings` | authenticated | yes | `services/account/accountSettingsService.patchSettings` |
@@ -296,6 +304,15 @@ see.
 | `POST /api/v1/customer/addresses/:addressId/default` | authenticated | yes | `services/account/addressBookService.setDefaultAddress` |
 | `GET /api/v1/provider/profile` | provider | yes | `services/account/providerProfileService.getProviderProfile` |
 | `PATCH /api/v1/provider/profile` | provider | no | `services/account/providerProfileService.patchProviderProfile` |
+| `GET /api/v1/provider/activation` | provider | yes | `services/account/providerActivationProjection.getProviderActivation` |
+| `GET /api/v1/provider/profile-fields` | provider | yes | `services/providerProfileComplianceService.PROFILE_FIELD_REGISTRY` |
+| `GET /api/v1/provider/public-profile` | provider | yes | `services/providerProfileComplianceService.getPublicProfile` |
+| `GET /api/v1/provider/certifications` | provider | yes | `services/providerProfileComplianceService.listCertifications` |
+| `POST /api/v1/provider/certifications` | provider | no | `services/providerProfileComplianceService.submitCertification` |
+| `GET /api/v1/provider/verification-timeline` | provider | yes | `services/providerProfileComplianceService.getVerificationTimeline` |
+| `POST /api/v1/provider/contact-changes` | provider | no | `services/providerContactChangeService.requestContactChange` |
+| `POST /api/v1/provider/contact-changes/confirm` | provider | no | `services/providerContactChangeService.confirmContactChange` |
+| `POST /api/v1/provider/activation/policy-acknowledgement` | provider | yes | `services/providerActivationService.acknowledgeProviderPolicy` |
 | `GET /api/v1/providers/:providerUid/profile` | authenticated | yes | `services/account/providerProfileService.getProviderProfile` |
 | `GET /api/v1/provider/documents` | provider | yes | `services/account/providerProfileService.listDocuments` |
 | `GET /api/v1/provider/document-types` | provider | yes | `services/providerProfileComplianceService.DOCUMENT_TYPE_CATALOG` |
@@ -317,6 +334,14 @@ route can only be documented as superseded if it is also being measured.
 
 | Legacy route | Disposition | Canonical successor | Why it is still there |
 | --- | --- | --- | --- |
+| `GET /api/provider/alerts` | ALIAS_TEMPORARILY | `provider.alerts.list` | Same service, same projection. |
+| `DELETE /api/provider/alerts/:key` | ALIAS_TEMPORARILY | `provider.alerts.dismiss` | Same service. The parameter is renamed :key -> :alertKey for readability; the value is identical. |
+| `GET /api/provider/calendar` | ALIAS_TEMPORARILY | `provider.calendar.get` | Same service. A READ that must stay a read - the service docblock records an account-state read that once upserted. |
+| `GET /api/provider/performance` | ALIAS_TEMPORARILY | `provider.performance.get` | Same computation, same scope. |
+| `POST /api/worker/profile/photo` | ALIAS_TEMPORARILY | `provider.profilePhoto.upload` | Same service, same validation. |
+| `DELETE /api/worker/profile/photo` | ALIAS_TEMPORARILY | `provider.profilePhoto.delete` | Same service. Removing the photo is the other half of changing it, and a provider who can upload and not remove is stuck with whatever they last submitted. |
+| `GET /api/worker/schedule` | ALIAS_TEMPORARILY | `provider.schedule.get` | Same service. Identity from the TOKEN on both - no uid is accepted from the path. |
+| `POST /api/provider/account/delete` | ALIAS_TEMPORARILY | `provider.account.requestDeletion` | Same service. RENAMED on the canonical surface from `delete` to `deletion-request`, because that is what it does. |
 | `PUT /api/user/updateprofile` | ALIAS_TEMPORARILY | `me.patch` | The live profile write for every client. Same writer - this entry delegates to `user.service.updateUserProfile` rather than touching the columns, so the two paths cannot grow different rules. It additionally REFUSES unwritable fields by name instead of stripping them silently. |
 | `GET /api/provider/account-state` | KEEP | `me.completion.get` | NOT a duplicate. Account state answers "what may this provider do RIGHT NOW" - suspended, pending, active - and is what gates the app. Completion answers "what is left to fill in". A suspended provider can be 100% complete, and a pending one can be active-eligible and missing a photo. |
 | `GET /api/user/profile` | ALIAS_TEMPORARILY | `customer.profile.get` | The live customer profile aggregate. It returns the credential row joined to the profile row; this entry returns the customer EXTENSION only, because the identity half is `/me` and duplicating it is how two endpoints come to disagree about a name. |
@@ -330,6 +355,16 @@ route can only be documented as superseded if it is also being measured.
 | `GET /api/provider/profile` | ALIAS_TEMPORARILY | `provider.profile.get` | The live provider profile, built inline in a controller with a hand-written column list. Safe only for as long as nobody adds a column; the canonical route emits the fields the policy says this seat may read. |
 | `GET /api/provider/profile-center` | ROLE_SPECIFIC | `provider.profile.get` | The compliance view: revision history, review state, field-level edit affordances. A genuinely different question, and it already reads the same field registry this entry projects from. |
 | `POST /api/provider/public-profile-revisions` | ALIAS_TEMPORARILY | `provider.profile.patch` | The live revision submit. IDENTICAL domain call - this is a second URL onto one workflow. |
+| `GET /api/provider/account-state` | ALIAS_TEMPORARILY | `provider.activation.get` | The live discovery endpoint. FULLY subsumed: every key it returns - account, verification, profile, documents, application, activation, access, checklist, nextStep - is carried here, from the same service, unchanged. |
+| `GET /api/provider/compliance` | ALIAS_TEMPORARILY | `provider.activation.get` | Returns `calculateCompliance` verbatim, which this entry carries as `compliance` from the SAME computation - not a second call, so the two cannot disagree. |
+| `GET /api/provider/profile-fields` | ALIAS_TEMPORARILY | `provider.fieldRegistry.get` | Returns the same frozen registry constant. No per-provider data of any kind. |
+| `GET /api/provider/public-profile-preview` | ALIAS_TEMPORARILY | `provider.publicProfile.preview` | The provider previewing their own published profile. Same service. |
+| `GET /api/provider/certifications` | ALIAS_TEMPORARILY | `provider.certifications.list` | Same service, same projection. |
+| `POST /api/provider/certifications` | ALIAS_TEMPORARILY | `provider.certifications.create` | Same service. Identical validation and ownership checks. |
+| `GET /api/provider/verification-timeline` | ALIAS_TEMPORARILY | `provider.verificationTimeline.get` | Same service. The limit is clamped to 100 there and here, by the same code. |
+| `POST /api/provider/contact-changes` | ALIAS_TEMPORARILY | `provider.contactChanges.request` | Same service, same recent-auth precondition. STEP ONE of two - see the confirm entry. |
+| `POST /api/provider/contact-changes/confirm` | ALIAS_TEMPORARILY | `provider.contactChanges.confirm` | Same service. STEP TWO of two - see the request entry. |
+| `POST /api/provider/activation/policy-acknowledgement` | ALIAS_TEMPORARILY | `provider.activation.acknowledgePolicy` | Same service. Idempotent there and here, by the same COALESCE. |
 | `GET /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.list` | The live document list. Same `worker_requirements` model - the command is explicit that provider_documents must not be invented, and it does not exist. |
 | `GET /api/provider/document-types` | ALIAS_TEMPORARILY | `provider.documents.types` | The same static catalog constant. No per-caller data of any kind. |
 | `POST /api/provider/documents` | ALIAS_TEMPORARILY | `provider.documents.create` | The live submit for both provider clients. IDENTICAL domain call, and it carries the same post-commit `autoOnlineEngine.evaluateProvider` — submitting the last outstanding requirement is what makes a provider eligible to go online, so an endpoint that stored the file without re-evaluating would leave them blocked. |
@@ -357,7 +392,10 @@ route can only be documented as superseded if it is also being measured.
 | Read my security posture | planned | planned | planned | planned | planned |
 | Read and change my customer profile | legacy | legacy | — | — | planned |
 | Manage my saved addresses | legacy | legacy | — | — | — |
-| Read and change my provider profile | — | — | legacy | migrated | planned |
+| Read and change my provider profile | — | — | legacy | planned | planned |
+| Find out why I cannot work yet, and what to do about it | — | — | planned | planned | — |
+| Attest a credential, and see what became of it | — | — | planned | planned | — |
+| Change the verified email or mobile my account recovers through | — | — | planned | planned | — |
 | Submit, read, preview and withdraw my documents | — | — | legacy | legacy | — |
 | Read and change my availability, and book time off | — | — | legacy | legacy | — |
 | Read the services I am approved for | — | — | migrated | planned | — |
@@ -393,6 +431,18 @@ No role split. Five legacy routes with five shapes — query-param ids, a POST t
 **Read and change my provider profile** (`services/account/providerProfileService`)
 
 Role-specific by DATA and by WORKFLOW. A provider profile field is classified, and editing a reviewable one submits a revision rather than writing a column — the compliance service owns that, and the canonical PATCH delegates to it instead of reimplementing it.
+
+**Find out why I cannot work yet, and what to do about it** (`services/account/providerActivationProjection`)
+
+DELIBERATELY not folded into providerProfile, and that separation is the whole design. The ProviderProfile schema serves two seats - the provider reading their own, and a CUSTOMER reading somebody else's - so an activation checklist added to it would be declared, in the published contract, as travelling on the endpoint customers read. Rendering a provider card and driving an onboarding checklist are different purposes over different data, and separate capabilities let authorization, retention and caching differ per purpose instead of all three being set by whichever purpose is laxest. No role split within the capability: both provider surfaces perform the identical operation and receive the identical DTO. Auth is `provider`, which is STRICTER than the account-state route it supersedes and equal to the compliance route it also supersedes - the parity gate refused the looser first draft, because compliance detail must not become reachable one rung lower as a side effect of a migration. The discovery property survives: requireProviderRole admits every provider role including suspended and unapproved, so the caller who needs to know why they cannot work still gets the checklist, and a non-provider receives the branchable ROLE_REQUIRED. The uid comes from the token and no parameter can name another account.
+
+**Attest a credential, and see what became of it** (`services/providerProfileComplianceService`)
+
+No role split. Separate from providerDocuments because the two are a FILE and an ASSERTION ABOUT a file, and they fail differently: a document can be unreadable, a certification can be expired or revoked while its document is perfectly legible. The submission carries only the last four digits of a credential, masked at write time, so the full number never reaches this table or this wire.
+
+**Change the verified email or mobile my account recovers through** (`services/providerContactChangeService`)
+
+No role split, and deliberately its OWN capability rather than part of the profile: this is the only provider-facing operation that changes how an account is recovered, and it is the only one demanding a FRESH interactive sign-in rather than a valid session. Folding it into providerProfile would have put an operation with a stricter precondition behind the same name as one without, which is how a precondition gets dropped in a migration. Two steps, one capability: a canonical request whose confirm is still legacy is one flow split across two contracts.
 
 **Submit, read, preview and withdraw my documents** (`services/providerProfileComplianceService`)
 
