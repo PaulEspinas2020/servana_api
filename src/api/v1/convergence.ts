@@ -47,6 +47,7 @@ import {
 } from './contract';
 import { RETIREMENT_CRITERIA } from './legacyTelemetry';
 import { SCHEMAS } from './openapi';
+import { BUCKETS, V1_RATE_LIMITS, type BucketName } from './rateLimitPolicy';
 
 import { ACCOUNT_CAPABILITIES } from '../../services/account/accountPolicy';
 import { EXPERIENCE_CAPABILITIES } from '../../services/booking/experiencePolicy';
@@ -984,6 +985,79 @@ export const requestContractOf = (entry: ContractEntry): RequestContract => {
   };
 };
 
+// ─── The rate-limit contract (TAB 09) ─────────────────────────────────────────
+
+/**
+ * What throttles an operation, published where a client will read it.
+ *
+ * ## The gap this closes
+ *
+ * `rateLimitPolicy.ts` already holds all of this — every bucket's key, window,
+ * budget and purpose, plus the reason any endpoint has no per-account bucket —
+ * and it renders into a Markdown table in `AUTH_V1_CONTRACT.md` §8. What it did
+ * not do was reach the machine-readable manifest a client is told to pin, so a
+ * client could not tell a THROTTLE from a REFUSAL without reading prose.
+ *
+ * That is the same shape as the request-body gap TAB 03 closed: the information
+ * existed, in a form a document renders, and not in the artifact clients
+ * consume.
+ *
+ * ## Why the buckets are RESOLVED rather than named
+ *
+ * Publishing `['perAccountLogin', 'perIp']` would tell a client which counters
+ * exist and nothing about what they permit. A client backing off needs the
+ * window and the budget, so the spec travels with the name and the client never
+ * has to look a second thing up.
+ *
+ * `skipSuccessfulRequests` matters more than it looks: on the login bucket only
+ * FAILED attempts count, so a client must not treat a successful sign-in as
+ * having spent budget.
+ */
+export interface PublishedRateLimit {
+  bucket: BucketName;
+  /** `identifier` falls back to the IP when the body carries none. */
+  key: 'identifier' | 'ip';
+  windowMs: number;
+  max: number;
+  skipSuccessfulRequests: boolean;
+  purpose: string;
+}
+
+export interface RateLimitContract {
+  limits: PublishedRateLimit[];
+  /**
+   * Present when an endpoint deliberately has NO per-account bucket, carrying
+   * the reason. An absent bucket and a considered exemption look identical from
+   * outside, and this is what tells them apart.
+   */
+  noAccountBucket: string | null;
+}
+
+export const rateLimitContractOf = (entryId: string): RateLimitContract | null => {
+  const policy = V1_RATE_LIMITS[entryId];
+  if (!policy) return null;
+  return {
+    limits: policy.buckets.map((bucket) => {
+      const spec = BUCKETS[bucket];
+      if (!spec) {
+        throw new Error(
+          `rate-limit policy for ${entryId} names bucket '${bucket}', which is not in BUCKETS. ` +
+          'The manifest will not publish a budget it could not resolve.',
+        );
+      }
+      return {
+        bucket,
+        key: spec.key,
+        windowMs: spec.windowMs,
+        max: spec.max,
+        skipSuccessfulRequests: spec.skipSuccessfulRequests,
+        purpose: spec.purpose,
+      };
+    }),
+    noAccountBucket: policy.noAccountBucket ?? null,
+  };
+};
+
 // ─── The canonical call manifest (§133, §138) ─────────────────────────────────
 
 export interface ManifestEntry {
@@ -1005,6 +1079,14 @@ export interface ManifestEntry {
    * them apart from the field list alone.
    */
   replayMechanism: string[] | null;
+  /**
+   * What throttles this operation, or null when nothing does.
+   *
+   * Published so a client can tell a THROTTLE from a REFUSAL and back off
+   * correctly rather than treating a 429 as a failure. A 429 on a v1 route
+   * carries `error.code: RATE_LIMITED` and `retryable: true`.
+   */
+  rateLimit: RateLimitContract | null;
   surfaces: ClientSurface[];
   callers: Record<ClientSurface, string>;
   supersedes: string[];
@@ -1039,6 +1121,7 @@ export const canonicalManifest = (): ManifestEntryWithBody[] => {
       responseSchema: e.responseSchema,
       ...requestContractOf(e),
       replayMechanism: e.replayMechanism ? [...e.replayMechanism] : null,
+      rateLimit: rateLimitContractOf(e.id),
       surfaces: CLIENT_SURFACES.filter((s) => e.callers[s] !== 'n/a'),
       callers: Object.fromEntries(
         CLIENT_SURFACES.map((s) => [s, e.callers[s]]),

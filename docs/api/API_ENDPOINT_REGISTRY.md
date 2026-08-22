@@ -1666,7 +1666,7 @@ Creates an account from an email + password, or from a Firebase ID token.
 
 One sign-in for every identifier and every surface: email or mobile + password, or a Firebase ID token.
 
-> Mobile + password works only for an account that also has an email: Firebase is the password authority and its password grant is keyed on email. An account with a mobile and no email gets PASSWORD_NOT_AVAILABLE and must use the token path — stated, not guessed.
+> Mobile + password works only for an account that also has an email: Firebase is the password authority and its password grant is keyed on email. An account with a mobile and no email gets PASSWORD_NOT_AVAILABLE and must use the token path — stated, not guessed. REQUIRED FIELDS ARE CONDITIONAL, and the published requiredBody is empty for an honest reason rather than a missing one: this endpoint accepts EITHER identifier plus password OR idToken, so no single field is required by every valid call. A client gate built on requiredBody alone would therefore pass an EMPTY body - read allowedBody and the schema description, which name the two groups. identifier, never email: the field accepts a Philippine mobile number in any form a person types as well as an address, and naming it for one channel would be the client asserting a constraint this backend does not enforce.
 
 - **Domain service** — `services/authLoginService → services/auth.service.loggedInUser \| firebaseFunctions.firebaseAuthLogin`
 - **Error codes** — `ACCOUNT_DISABLED`, `ACCOUNT_LINK_REQUIRED`, `ACCOUNT_UNVERIFIED`, `AUDIENCE_MISMATCH`, `INTERNAL`, `INVALID_CREDENTIALS`, `PASSWORD_NOT_AVAILABLE`, `RATE_LIMITED`, `VALIDATION_FAILED`
@@ -1680,6 +1680,8 @@ One sign-in for every identifier and every surface: email or mobile + password, 
 ### `POST /api/v1/auth/refresh`
 
 Exchanges a refresh token for a fresh session.
+
+> THE PRECONDITION, STATED ON THE ENTRY because a client reads this and not the alias note: this endpoint is CALLABLE WITHOUT A VALID ACCESS TOKEN, and must remain so. `auth: "public"` is the declaration of that. A caller reaches refresh precisely because the token they would otherwise present has expired, so demanding one would be circular and the route would be unusable at the only moment it is needed. The provider mobile client deliberately did NOT migrate its refresh for exactly this reason - it runs on a transport that sends no Authorization header - and that decision is correct against this contract rather than a workaround for it. Build the refresh call on a transport with no auth interceptor. The credential is `refreshToken` in the BODY, and Google validates it; this backend never treats an expired ID token as an input here. RATE LIMITING is per-IP only, and the reason is published on the entry rather than inferred: the body carries no identifier, so there is nothing to key an account bucket on, and keying on the unverified token subject would let a caller pick their own counter.
 
 - **Domain service** — `services/tokenRefreshService.refreshIdToken`
 - **Error codes** — `INTERNAL`, `RATE_LIMITED`, `REFRESH_TOKEN_INVALID`, `REFRESH_UNAVAILABLE`, `VALIDATION_FAILED`

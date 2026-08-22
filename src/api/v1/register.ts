@@ -39,7 +39,7 @@ import requireProviderRole from '../../middleware/requireProviderRole';
 import requireCapability from '../../middleware/requireCapability';
 import requireActiveProvider from '../../middleware/requireActiveProvider';
 import { ContractEntry, IMPLEMENTED, V1_CONTRACT, HttpMethod } from './contract';
-import { fail } from './envelope';
+import { fail, requestIdOf } from './envelope';
 import { contractDigest, CONTRACT_DIGEST_HEADER } from './contractDigest';
 import { V1ErrorCode } from './errors';
 import { V1Handler, V1Handlers } from './types';
@@ -138,6 +138,62 @@ const LEGACY_TO_V1_CODE: Record<string, V1ErrorCode> = {
   PROVIDER_DISABLED: 'PROVIDER_DISABLED',
   ROLE_NOT_PERMITTED: 'ROLE_REQUIRED',
 };
+
+/**
+ * The v1 envelope, applied to a RATE LIMIT refusal (TAB 09).
+ *
+ * ## The measured defect
+ *
+ * `routeHealth.ts` defines a well-formed v1 error as one whose `error.code` AND
+ * `error.requestId` are both strings. `rateLimitBody` emits `error.code`,
+ * `error.message`, `error.fieldErrors` and `error.retryable` — and no
+ * `requestId`, because it is shared with the legacy tree where nothing mints
+ * one.
+ *
+ * So every 429 on a v1 route violated the envelope that route publishes, in
+ * exactly the way every 401 did before `v1AuthEnvelope` was written. The
+ * consequence is the same and slightly worse: a throttle is the one refusal an
+ * operator most often has to correlate to a log line, and without a request id
+ * there is nothing to correlate on. The client is already retrying when it
+ * happens.
+ *
+ * ## Why this ADDS rather than replaces
+ *
+ * `rateLimitBody`'s own docblock explains that it emits two layouts at once on
+ * purpose: a flat `message` for clients already installed, and a nested
+ * `error.code` for clients following the canonical contract. Replacing the body
+ * with `fail()`'s shape would drop the flat field and break the first group —
+ * the exact trade that docblock refused.
+ *
+ * So this stamps ONE field in. Nothing is removed, no shape changes, and a body
+ * that already carries a `requestId` is left alone.
+ */
+export const v1RateLimitEnvelope = (inner: RequestHandler): RequestHandler =>
+  function v1RateLimitEnvelopeWrapper(req, res, next) {
+    const originalJson = res.json.bind(res);
+    let restored = false;
+    const restore = () => {
+      if (!restored) { res.json = originalJson; restored = true; }
+    };
+
+    res.json = ((body: any) => {
+      restore();
+      if (
+        res.statusCode === 429
+        && body && typeof body === 'object'
+        && body.error && typeof body.error === 'object'
+        && typeof body.error.requestId !== 'string'
+      ) {
+        return originalJson({
+          ...body,
+          error: { ...body.error, requestId: requestIdOf(req) },
+        });
+      }
+      return originalJson(body);
+    }) as Response['json'];
+
+    return inner(req, res, ((err?: unknown) => { restore(); next(err as any); }) as NextFunction);
+  };
 
 export const v1AuthEnvelope = (inner: RequestHandler): RequestHandler =>
   function v1AuthEnvelopeWrapper(req, res, next) {
@@ -510,7 +566,9 @@ export const V1_MIDDLEWARE: V1Middleware = (() => {
 
   for (const [id, policy] of Object.entries(V1_RATE_LIMITS)) {
     if (!policy.buckets.length) continue;
-    byId.set(id, policy.buckets.map((bucket) => BUCKET_MIDDLEWARE[bucket]));
+    // Wrapped so a 429 on a v1 route carries the requestId its own envelope
+    // promises. See v1RateLimitEnvelope.
+    byId.set(id, policy.buckets.map((bucket) => v1RateLimitEnvelope(BUCKET_MIDDLEWARE[bucket])));
   }
 
   for (const [id, permission] of Object.entries(V1_PERMISSIONS)) {
