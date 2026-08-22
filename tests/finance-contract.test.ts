@@ -77,7 +77,13 @@ describe('the finance domain contract', () => {
       'GET /api/v1/bookings/:bookingId/payment',
       'GET /api/v1/provider/earnings/payouts',
       'GET /api/v1/provider/earnings/summary',
+      // TAB 10. The single-transaction DETAIL, and a genuine ADDITION to the
+      // declared finance architecture rather than a stretch of it: it delegates
+      // to services/finance/providerEarningsService like its six siblings, and
+      // it is the row the transactions list links to. Retiring the list without
+      // it would leave a provider a row they can see and cannot open.
       'GET /api/v1/provider/earnings/transactions',
+      'GET /api/v1/provider/earnings/transactions/:transactionId',
       'POST /api/v1/bookings/:bookingId/payment-intents',
       'POST /api/v1/bookings/:bookingId/refunds',
     ]);

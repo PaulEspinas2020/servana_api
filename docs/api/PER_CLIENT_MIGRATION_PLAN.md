@@ -14,7 +14,7 @@
 > [`CROSS_CLIENT_MIGRATION_PLAN.md`](CROSS_CLIENT_MIGRATION_PLAN.md), which is
 > hand-written because an argument is not derivable. This is what each client
 > actually has to change, and it is generated because a hand-maintained list of
-> 161 endpoints across five clients is stale the day after it is written.
+> 171 endpoints across five clients is stale the day after it is written.
 
 ## How to read this
 
@@ -87,17 +87,19 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 50 |
-| Already on canonical | 22 |
+| Capabilities that apply | 54 |
+| Already on canonical | 21 |
 | Still on a legacy route | 1 |
-| Partially migrated | 8 |
-| No equivalent called today | 19 |
+| Partially migrated | 9 |
+| No equivalent called today | 23 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
 | Additional work | ⚠ mixed | `GET /api/additional/booking/:bookingId`, `POST /api/additional/request/:userId` | `POST /api/v1/bookings/:bookingId/additional-work`, `GET /api/v1/bookings/:bookingId/additional-work` |
+| Ask for my account to be deleted | planned | `POST /api/provider/account/delete` | `POST /api/v1/provider/account/deletion-request` |
 | Attach a file to a conversation | planned | `POST /api/chat/attachments/upload` | `POST /api/v1/conversations/:conversationId/attachments` |
 | Attest a credential, and see what became of it | planned | `GET /api/provider/certifications`, `POST /api/provider/certifications` | `POST /api/v1/provider/certifications`, `GET /api/v1/provider/certifications` |
+| Change the photo customers see | planned | `DELETE /api/worker/profile/photo`, `POST /api/worker/profile/photo` | `DELETE /api/v1/provider/profile/photo`, `POST /api/v1/provider/profile/photo` |
 | Change the verified email or mobile my account recovers through | planned | `POST /api/provider/contact-changes`, `POST /api/provider/contact-changes/confirm` | `POST /api/v1/provider/contact-changes/confirm`, `POST /api/v1/provider/contact-changes` |
 | Decide what work I am offered | planned | `DELETE /api/worker/service-applications/:applicationId`, `GET /api/worker/service-applications`, `GET /api/worker/service-applications/:applicationId`, `GET /api/worker/services-overview`, `GET /api/worker/services/:serviceId/eligibility`, `PATCH /api/worker/services/:serviceId/pause`, `PATCH /api/worker/services/:serviceId/reactivate`, `POST /api/worker/service-applications`, `POST /api/worker/service-applications/:applicationId/resubmit` | `POST /api/v1/provider/service-applications`, `GET /api/v1/provider/service-applications/:applicationId`, `GET /api/v1/provider/service-applications`, `POST /api/v1/provider/service-applications/:applicationId/resubmit`, `DELETE /api/v1/provider/service-applications/:applicationId`, `GET /api/v1/provider/services/:serviceId/eligibility`, `GET /api/v1/provider/services/overview`, `PATCH /api/v1/provider/services/:serviceId/pause`, `PATCH /api/v1/provider/services/:serviceId/reactivate` |
 | Fetch the contract this process implements | planned | _no legacy equivalent — this is new_ | `GET /api/v1/openapi.json` |
@@ -105,6 +107,7 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Find out why I cannot work yet, and what to do about it | planned | `GET /api/provider/account-state`, `GET /api/provider/compliance`, `GET /api/provider/verification-timeline`, `POST /api/provider/activation/policy-acknowledgement` | `POST /api/v1/provider/activation/policy-acknowledgement`, `GET /api/v1/provider/activation`, `GET /api/v1/provider/verification-timeline` |
 | Move a booking through its state machine | ⚠ mixed | `POST /api/admin/bookings/:id/assign`, `POST /api/admin/bookings/:id/reassign`, `PUT /api/worker/bookings/:bookingId/accept`, `PUT /api/worker/bookings/:bookingId/arrived`, `PUT /api/worker/bookings/:bookingId/complete`, `PUT /api/worker/bookings/:bookingId/decline`, `PUT /api/worker/bookings/:bookingId/en-route`, `PUT /api/worker/bookings/:bookingId/start` | `POST /api/v1/provider/jobs/:bookingId/accept`, `POST /api/v1/provider/jobs/:bookingId/decline`, `POST /api/v1/provider/jobs/:bookingId/en-route`, `POST /api/v1/provider/jobs/:bookingId/arrived`, `POST /api/v1/provider/jobs/:bookingId/start`, `POST /api/v1/provider/jobs/:bookingId/complete`, `POST /api/v1/admin/bookings/:bookingId/assign`, `POST /api/v1/admin/bookings/:bookingId/reassign` |
 | Prove the work happened | planned | `DELETE /api/provider/bookings/:bookingId/evidence/:evidenceId`, `GET /api/provider/bookings/:bookingId/evidence`, `POST /api/provider/bookings/:bookingId/evidence` | `POST /api/v1/provider/jobs/:bookingId/evidence`, `DELETE /api/v1/provider/jobs/:bookingId/evidence/:evidenceId`, `GET /api/v1/provider/jobs/:bookingId/evidence` |
+| Provider earnings transactions | ⚠ mixed | `GET /api/provider/earnings`, `GET /api/provider/earnings/:id`, `GET /api/provider/ledger` | `GET /api/v1/provider/earnings/transactions/:transactionId`, `GET /api/v1/provider/earnings/transactions` |
 | Raise a case with Servana, and follow it | planned | `GET /api/provider/support/case-categories`, `GET /api/provider/support/cases`, `GET /api/provider/support/cases/:caseId`, `GET /api/provider/support/cases/:caseId/attachments/:attachmentId/preview`, `POST /api/provider/support/cases`, `POST /api/provider/support/cases/:caseId/appeals`, `POST /api/provider/support/cases/:caseId/attachments`, `POST /api/provider/support/cases/:caseId/messages`, `POST /api/provider/support/cases/:caseId/reopen`, `POST /api/provider/support/cases/:caseId/withdraw` | `POST /api/v1/provider/support/cases/:caseId/appeals`, `POST /api/v1/provider/support/cases/:caseId/attachments`, `GET /api/v1/provider/support/cases/:caseId/attachments/:attachmentId/preview`, `POST /api/v1/provider/support/cases`, `GET /api/v1/provider/support/cases/:caseId`, `GET /api/v1/provider/support/cases`, `POST /api/v1/provider/support/cases/:caseId/reopen`, `POST /api/v1/provider/support/cases/:caseId/messages`, `POST /api/v1/provider/support/cases/:caseId/withdraw`, `GET /api/v1/provider/support/case-categories` |
 | Read a booking | planned | `GET /api/:id`, `GET /api/:id/timeline`, `GET /api/users/:userId/bookings` | `GET /api/v1/bookings`, `GET /api/v1/bookings/:bookingId`, `GET /api/v1/bookings/:bookingId/timeline`, `GET /api/v1/bookings/:bookingId/transitions` |
 | Read a booking's payment and price breakdown | planned | _no legacy equivalent — this is new_ | `GET /api/v1/bookings/:bookingId/payment` |
@@ -120,6 +123,8 @@ An alias this client blocks needs **14 days** of observed silence before it may 
 | Register, sign in, and end a session | ⚠ mixed | `POST /api/auth/admin-signin`, `POST /api/auth/firebase-login`, `POST /api/auth/logout`, `POST /api/auth/provider/register`, `POST /api/auth/refresh`, `POST /api/auth/signin`, `POST /api/auth/signup` | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` |
 | Report a message to moderation | planned | `POST /api/chat/conversations/:id/messages/:msgId/report` | `POST /api/v1/conversations/:conversationId/messages/:messageId/report` |
 | Say whether I am working, where I am, and that I am safe | planned | `GET /api/provider/location/status`, `GET /api/provider/safety/emergency-config`, `GET /api/provider/safety/incidents`, `POST /api/provider/location/go-offline`, `POST /api/provider/location/go-online`, `POST /api/provider/safety/check-in`, `POST /api/provider/safety/incidents`, `POST /api/worker/location` | `POST /api/v1/provider/location`, `GET /api/v1/provider/presence`, `POST /api/v1/provider/presence/offline`, `POST /api/v1/provider/presence/online`, `POST /api/v1/provider/safety/check-in`, `GET /api/v1/provider/safety/emergency-config`, `POST /api/v1/provider/safety/incidents`, `GET /api/v1/provider/safety/incidents` |
+| See my alerts, calendar, performance and schedule | planned | `DELETE /api/provider/alerts/:key`, `GET /api/provider/alerts`, `GET /api/provider/calendar`, `GET /api/provider/performance`, `GET /api/worker/schedule` | `DELETE /api/v1/provider/alerts/:alertKey`, `GET /api/v1/provider/alerts`, `GET /api/v1/provider/calendar`, `GET /api/v1/provider/performance`, `GET /api/v1/provider/schedule` |
+| See the offerings I could apply for | planned | `GET /api/provider-catalog/v1/offerings` | `GET /api/v1/provider/catalog/offerings` |
 | See what customers said about me, and answer it | planned | `GET /api/provider/reputation/summary`, `GET /api/provider/reviews`, `GET /api/provider/reviews/:reviewId`, `POST /api/provider/review-moderation/:caseId/appeals`, `POST /api/provider/reviews/:reviewId/report`, `POST /api/provider/reviews/:reviewId/response` | `GET /api/v1/provider/reputation/summary`, `POST /api/v1/provider/review-moderation/:caseId/appeals`, `GET /api/v1/provider/reviews/:reviewId`, `GET /api/v1/provider/reviews`, `POST /api/v1/provider/reviews/:reviewId/report`, `POST /api/v1/provider/reviews/:reviewId/response` |
 | Submit, read, preview and withdraw my documents | ⚠ mixed | `DELETE /api/provider/documents/:documentId`, `GET /api/provider/document-types`, `GET /api/provider/documents`, `GET /api/provider/documents/:documentId/preview`, `POST /api/provider/documents` | `POST /api/v1/provider/documents`, `DELETE /api/v1/provider/documents/:documentId`, `GET /api/v1/provider/documents`, `GET /api/v1/provider/documents/:documentId/preview`, `GET /api/v1/provider/document-types` |
 | What is left before my account is usable | planned | _no legacy equivalent — this is new_ | `GET /api/v1/me/completion` |
@@ -194,20 +199,22 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 
 | | |
 | --- | --- |
-| Capabilities that apply | 53 |
+| Capabilities that apply | 57 |
 | Already on canonical | 12 |
-| Still on a legacy route | 16 |
-| Partially migrated | 6 |
-| No equivalent called today | 19 |
+| Still on a legacy route | 15 |
+| Partially migrated | 7 |
+| No equivalent called today | 23 |
 
 | Capability | Today | Calls now | Move to |
 | --- | --- | --- | --- |
 | Advance the read pointer | legacy | `POST /api/chat/conversations/:id/read` | `POST /api/v1/conversations/:conversationId/read` |
+| Ask for my account to be deleted | planned | `POST /api/provider/account/delete` | `POST /api/v1/provider/account/deletion-request` |
 | Ask whether this client build may still run | planned | _no legacy equivalent — this is new_ | `GET /api/v1/client-config` |
 | Attach a file to a conversation | planned | `POST /api/chat/attachments/upload` | `POST /api/v1/conversations/:conversationId/attachments` |
 | Attest a credential, and see what became of it | planned | `GET /api/provider/certifications`, `POST /api/provider/certifications` | `POST /api/v1/provider/certifications`, `GET /api/v1/provider/certifications` |
 | Booking codes (OTP) | planned | `POST /api/:bookingId/resend-otp`, `POST /api/:id/confirm-otp` | `POST /api/v1/bookings/:bookingId/otp/request`, `POST /api/v1/bookings/:bookingId/otp/verify` |
 | Browse the service catalog | legacy | `GET /api/:serviceId/options-with-addons`, `GET /api/catalog`, `GET /api/catalog/services`, `GET /api/catalog/services/:serviceId`, `GET /api/catalog/services/:serviceId/serviceability`, `GET /api/catalog/summary`, `GET /api/services/:serviceId/level2`, `GET /api/services/:serviceId/options-with-addons`, `GET /api/services/full` | `GET /api/v1/catalog`, `GET /api/v1/catalog/summary`, `GET /api/v1/catalog/categories`, `GET /api/v1/catalog/categories/:categoryId`, `GET /api/v1/catalog/categories/:categoryId/subcategories`, `GET /api/v1/catalog/subcategories/:subcategoryId`, `GET /api/v1/catalog/subcategories/:subcategoryId/services`, `GET /api/v1/catalog/services`, `GET /api/v1/catalog/services/:serviceId`, `GET /api/v1/catalog/services/:serviceId/serviceability` |
+| Change the photo customers see | planned | `DELETE /api/worker/profile/photo`, `POST /api/worker/profile/photo` | `DELETE /api/v1/provider/profile/photo`, `POST /api/v1/provider/profile/photo` |
 | Change the verified email or mobile my account recovers through | planned | `POST /api/provider/contact-changes`, `POST /api/provider/contact-changes/confirm` | `POST /api/v1/provider/contact-changes/confirm`, `POST /api/v1/provider/contact-changes` |
 | Decide what work I am offered | planned | `DELETE /api/worker/service-applications/:applicationId`, `GET /api/worker/service-applications`, `GET /api/worker/service-applications/:applicationId`, `GET /api/worker/services-overview`, `GET /api/worker/services/:serviceId/eligibility`, `PATCH /api/worker/services/:serviceId/pause`, `PATCH /api/worker/services/:serviceId/reactivate`, `POST /api/worker/service-applications`, `POST /api/worker/service-applications/:applicationId/resubmit` | `POST /api/v1/provider/service-applications`, `GET /api/v1/provider/service-applications/:applicationId`, `GET /api/v1/provider/service-applications`, `POST /api/v1/provider/service-applications/:applicationId/resubmit`, `DELETE /api/v1/provider/service-applications/:applicationId`, `GET /api/v1/provider/services/:serviceId/eligibility`, `GET /api/v1/provider/services/overview`, `PATCH /api/v1/provider/services/:serviceId/pause`, `PATCH /api/v1/provider/services/:serviceId/reactivate` |
 | Dismiss one notification | planned | `DELETE /api/provider/notifications/:key` | `DELETE /api/v1/notifications/:key` |
@@ -222,7 +229,7 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Page through a conversation transcript | legacy | `GET /api/chat/conversations/:id/messages` | `GET /api/v1/conversations/:conversationId/messages` |
 | Prove the work happened | planned | `DELETE /api/provider/bookings/:bookingId/evidence/:evidenceId`, `GET /api/provider/bookings/:bookingId/evidence`, `POST /api/provider/bookings/:bookingId/evidence` | `POST /api/v1/provider/jobs/:bookingId/evidence`, `DELETE /api/v1/provider/jobs/:bookingId/evidence/:evidenceId`, `GET /api/v1/provider/jobs/:bookingId/evidence` |
 | Provider earnings summary | legacy | `GET /api/provider/earnings/summary` | `GET /api/v1/provider/earnings/summary` |
-| Provider earnings transactions | legacy | `GET /api/provider/earnings`, `GET /api/provider/ledger` | `GET /api/v1/provider/earnings/transactions` |
+| Provider earnings transactions | ⚠ mixed | `GET /api/provider/earnings`, `GET /api/provider/earnings/:id`, `GET /api/provider/ledger` | `GET /api/v1/provider/earnings/transactions/:transactionId`, `GET /api/v1/provider/earnings/transactions` |
 | Provider payouts | legacy | `GET /api/provider/payouts` | `GET /api/v1/provider/earnings/payouts` |
 | Raise a case with Servana, and follow it | planned | `GET /api/provider/support/case-categories`, `GET /api/provider/support/cases`, `GET /api/provider/support/cases/:caseId`, `GET /api/provider/support/cases/:caseId/attachments/:attachmentId/preview`, `POST /api/provider/support/cases`, `POST /api/provider/support/cases/:caseId/appeals`, `POST /api/provider/support/cases/:caseId/attachments`, `POST /api/provider/support/cases/:caseId/messages`, `POST /api/provider/support/cases/:caseId/reopen`, `POST /api/provider/support/cases/:caseId/withdraw` | `POST /api/v1/provider/support/cases/:caseId/appeals`, `POST /api/v1/provider/support/cases/:caseId/attachments`, `GET /api/v1/provider/support/cases/:caseId/attachments/:attachmentId/preview`, `POST /api/v1/provider/support/cases`, `GET /api/v1/provider/support/cases/:caseId`, `GET /api/v1/provider/support/cases`, `POST /api/v1/provider/support/cases/:caseId/reopen`, `POST /api/v1/provider/support/cases/:caseId/messages`, `POST /api/v1/provider/support/cases/:caseId/withdraw`, `GET /api/v1/provider/support/case-categories` |
 | Read a booking | ⚠ mixed | `GET /api/:id`, `GET /api/:id/timeline`, `GET /api/users/:userId/bookings` | `GET /api/v1/bookings`, `GET /api/v1/bookings/:bookingId`, `GET /api/v1/bookings/:bookingId/timeline`, `GET /api/v1/bookings/:bookingId/transitions` |
@@ -240,6 +247,8 @@ An alias this client blocks needs **90 days** of observed silence before it may 
 | Report a message to moderation | planned | `POST /api/chat/conversations/:id/messages/:msgId/report` | `POST /api/v1/conversations/:conversationId/messages/:messageId/report` |
 | Report that the product is working | planned | _no legacy equivalent — this is new_ | `POST /api/v1/telemetry` |
 | Say whether I am working, where I am, and that I am safe | planned | `GET /api/provider/location/status`, `GET /api/provider/safety/emergency-config`, `GET /api/provider/safety/incidents`, `POST /api/provider/location/go-offline`, `POST /api/provider/location/go-online`, `POST /api/provider/safety/check-in`, `POST /api/provider/safety/incidents`, `POST /api/worker/location` | `POST /api/v1/provider/location`, `GET /api/v1/provider/presence`, `POST /api/v1/provider/presence/offline`, `POST /api/v1/provider/presence/online`, `POST /api/v1/provider/safety/check-in`, `GET /api/v1/provider/safety/emergency-config`, `POST /api/v1/provider/safety/incidents`, `GET /api/v1/provider/safety/incidents` |
+| See my alerts, calendar, performance and schedule | planned | `DELETE /api/provider/alerts/:key`, `GET /api/provider/alerts`, `GET /api/provider/calendar`, `GET /api/provider/performance`, `GET /api/worker/schedule` | `DELETE /api/v1/provider/alerts/:alertKey`, `GET /api/v1/provider/alerts`, `GET /api/v1/provider/calendar`, `GET /api/v1/provider/performance`, `GET /api/v1/provider/schedule` |
+| See the offerings I could apply for | planned | `GET /api/provider-catalog/v1/offerings` | `GET /api/v1/provider/catalog/offerings` |
 | See what customers said about me, and answer it | planned | `GET /api/provider/reputation/summary`, `GET /api/provider/reviews`, `GET /api/provider/reviews/:reviewId`, `POST /api/provider/review-moderation/:caseId/appeals`, `POST /api/provider/reviews/:reviewId/report`, `POST /api/provider/reviews/:reviewId/response` | `GET /api/v1/provider/reputation/summary`, `POST /api/v1/provider/review-moderation/:caseId/appeals`, `GET /api/v1/provider/reviews/:reviewId`, `GET /api/v1/provider/reviews`, `POST /api/v1/provider/reviews/:reviewId/report`, `POST /api/v1/provider/reviews/:reviewId/response` |
 | Send a message | legacy | `POST /api/chat/conversations/:id/messages` | `POST /api/v1/conversations/:conversationId/messages` |
 | Submit, read, preview and withdraw my documents | ⚠ mixed | `DELETE /api/provider/documents/:documentId`, `GET /api/provider/document-types`, `GET /api/provider/documents`, `GET /api/provider/documents/:documentId/preview`, `POST /api/provider/documents` | `POST /api/v1/provider/documents`, `DELETE /api/v1/provider/documents/:documentId`, `GET /api/v1/provider/documents`, `GET /api/v1/provider/documents/:documentId/preview`, `GET /api/v1/provider/document-types` |

@@ -111,6 +111,24 @@ export interface OwnershipRule {
 
 export const OWNERSHIP_RULES: readonly OwnershipRule[] = Object.freeze([
   /**
+   * `catalog` — the provider-facing offerings read (TAB 10).
+   *
+   * There is no ownership relationship, and saying so is the point: the catalog
+   * is Servana's, not any provider's. What scopes the answer is VISIBILITY —
+   * only active, provider-visible offerings are returned — and the role check
+   * above it. §145 still wants the rule to exist so a later reader can tell a
+   * considered exemption from a forgotten check.
+   */
+  {
+    domain: 'catalog',
+    parameter: 'none — no object-scoped parameter',
+    predicate: 'active AND provider-visible offerings only; the catalog belongs to Servana',
+    enforcedBy: 'services/providerCatalogService',
+    provenBy: 'tests/provider-remainder-v1.test.ts',
+    refusal: '403 ROLE_REQUIRED (the role rung, since there is no object to own)',
+    distinguishesAbsentFromForbidden: false,
+  },
+  /**
    * `provider-support` — the provider's OWN cases and the reviews naming them.
    *
    * Two object families share this domain and one rule covers both because they

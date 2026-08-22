@@ -282,6 +282,14 @@ see.
 
 | Endpoint | Auth | Idempotent | Domain service |
 | --- | --- | --- | --- |
+| `GET /api/v1/provider/alerts` | provider | yes | `controllers/providerController.getProviderAlerts` |
+| `DELETE /api/v1/provider/alerts/:alertKey` | provider | no | `controllers/providerController.dismissAlert` |
+| `GET /api/v1/provider/calendar` | provider | yes | `controllers/providerCalendarController.getCalendar → services/providerCalendarService.getProviderCalendar` |
+| `GET /api/v1/provider/performance` | provider | yes | `controllers/providerController.getProviderPerformanceMetrics` |
+| `POST /api/v1/provider/profile/photo` | provider | no | `controllers/providerController.uploadWorkerProfilePhoto` |
+| `DELETE /api/v1/provider/profile/photo` | provider | no | `controllers/providerController.deleteWorkerProfilePhoto` |
+| `GET /api/v1/provider/schedule` | provider | yes | `controllers/providerLocationAccessController.getMySchedule` |
+| `POST /api/v1/provider/account/deletion-request` | provider | yes | `controllers/providerController.requestProviderDeletion` |
 | `PATCH /api/v1/me` | authenticated | yes | `services/account/accountService.patchAccount` |
 | `GET /api/v1/me/settings` | authenticated | yes | `services/account/accountSettingsService.getSettings` |
 | `PATCH /api/v1/me/settings` | authenticated | yes | `services/account/accountSettingsService.patchSettings` |
@@ -326,6 +334,14 @@ route can only be documented as superseded if it is also being measured.
 
 | Legacy route | Disposition | Canonical successor | Why it is still there |
 | --- | --- | --- | --- |
+| `GET /api/provider/alerts` | ALIAS_TEMPORARILY | `provider.alerts.list` | Same service, same projection. |
+| `DELETE /api/provider/alerts/:key` | ALIAS_TEMPORARILY | `provider.alerts.dismiss` | Same service. The parameter is renamed :key -> :alertKey for readability; the value is identical. |
+| `GET /api/provider/calendar` | ALIAS_TEMPORARILY | `provider.calendar.get` | Same service. A READ that must stay a read - the service docblock records an account-state read that once upserted. |
+| `GET /api/provider/performance` | ALIAS_TEMPORARILY | `provider.performance.get` | Same computation, same scope. |
+| `POST /api/worker/profile/photo` | ALIAS_TEMPORARILY | `provider.profilePhoto.upload` | Same service, same validation. |
+| `DELETE /api/worker/profile/photo` | ALIAS_TEMPORARILY | `provider.profilePhoto.delete` | Same service. Removing the photo is the other half of changing it, and a provider who can upload and not remove is stuck with whatever they last submitted. |
+| `GET /api/worker/schedule` | ALIAS_TEMPORARILY | `provider.schedule.get` | Same service. Identity from the TOKEN on both - no uid is accepted from the path. |
+| `POST /api/provider/account/delete` | ALIAS_TEMPORARILY | `provider.account.requestDeletion` | Same service. RENAMED on the canonical surface from `delete` to `deletion-request`, because that is what it does. |
 | `PUT /api/user/updateprofile` | ALIAS_TEMPORARILY | `me.patch` | The live profile write for every client. Same writer - this entry delegates to `user.service.updateUserProfile` rather than touching the columns, so the two paths cannot grow different rules. It additionally REFUSES unwritable fields by name instead of stripping them silently. |
 | `GET /api/provider/account-state` | KEEP | `me.completion.get` | NOT a duplicate. Account state answers "what may this provider do RIGHT NOW" - suspended, pending, active - and is what gates the app. Completion answers "what is left to fill in". A suspended provider can be 100% complete, and a pending one can be active-eligible and missing a photo. |
 | `GET /api/user/profile` | ALIAS_TEMPORARILY | `customer.profile.get` | The live customer profile aggregate. It returns the credential row joined to the profile row; this entry returns the customer EXTENSION only, because the identity half is `/me` and duplicating it is how two endpoints come to disagree about a name. |

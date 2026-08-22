@@ -309,6 +309,7 @@ jest.mock('../src/services/finance/bookingPaymentService', () => {
   };
 });
 jest.mock('../src/services/finance/providerEarningsService', () => {
+  // TAB 10: the single-transaction detail.
   const actual = jest.requireActual('../src/services/finance/providerEarningsService');
   return {
     EarningsRangeError: actual.EarningsRangeError,
@@ -320,6 +321,9 @@ jest.mock('../src/services/finance/providerEarningsService', () => {
       currency: 'PHP', payoutWindowHours: 72,
     })),
     listEarningsTransactions: jest.fn(async () => []),
+    // TAB 10: the single-transaction DETAIL, which is what this cluster
+    // actually lacked a successor for.
+    getEarningTransaction: jest.fn(async () => ({ id: 7, bookingId: 4242, amount: '500.00' })),
     listProviderPayouts: jest.fn(async () => []),
   };
 });
@@ -901,6 +905,35 @@ jest.mock('../src/services/paymentService', () => ({
  * conversation, a customer support case, an earnings summary) is asserted in
  * `tests/provider-support-reviews-v1.test.ts`.
  */
+/**
+ * TAB 10. The remainder routes run the LEGACY controllers through an adapter, so
+ * the controller module itself is what has to answer. Mocked at the controller
+ * for that reason — that the adapter republishes the controller's own body
+ * unchanged is asserted in `tests/provider-remainder-v1.test.ts`.
+ */
+jest.mock('../src/controllers/providerController', () => ({
+  __esModule: true,
+  getProviderAlerts: (_q: any, r: any) => r.status(200).json({ status: 'success', data: [] }),
+  dismissAlert: (_q: any, r: any) => r.status(200).json({ status: 'success', data: { dismissed: true } }),
+  getProviderPerformanceMetrics: (_q: any, r: any) => r.status(200).json({ status: 'success', data: {} }),
+  uploadWorkerProfilePhoto: (_q: any, r: any) => r.status(201).json({ status: 'success', data: { photoUrl: null } }),
+  deleteWorkerProfilePhoto: (_q: any, r: any) => r.status(200).json({ status: 'success', data: { removed: true } }),
+  requestProviderDeletion: (_q: any, r: any) =>
+    r.status(200).json({ status: 'success', data: null, message: 'Deletion request submitted.' }),
+}));
+jest.mock('../src/controllers/providerCalendarController', () => ({
+  __esModule: true,
+  getCalendar: (_q: any, r: any) => r.status(200).json({ status: 'success', data: { events: [] } }),
+}));
+jest.mock('../src/controllers/providerLocationAccessController', () => ({
+  __esModule: true,
+  getMySchedule: (_q: any, r: any) => r.status(200).json({ status: 'success', data: [] }),
+}));
+jest.mock('../src/controllers/providerCatalogController', () => ({
+  __esModule: true,
+  getOfferingsForProvider: (_q: any, r: any) => r.status(200).json({ status: 'success', data: [] }),
+}));
+
 jest.mock('../src/services/providerSupportCaseService', () => ({
   __esModule: true,
   listCategories: jest.fn().mockResolvedValue([]),
@@ -1267,6 +1300,31 @@ describe('every implemented contract entry is reachable at its declared path', (
       call('GET', '/api/v1/provider/presence', { role: 'provider' }),
     'provider.support.categories': () =>
       call('GET', '/api/v1/provider/support/case-categories', { role: 'provider' }),
+    'provider.earnings.transaction': () =>
+      call('GET', '/api/v1/provider/earnings/transactions/7', { role: 'provider' }),
+    'provider.alerts.list': () =>
+      call('GET', '/api/v1/provider/alerts', { role: 'provider' }),
+    'provider.alerts.dismiss': () =>
+      call('DELETE', '/api/v1/provider/alerts/payout-delayed', { role: 'provider' }),
+    'provider.calendar.get': () =>
+      call('GET', '/api/v1/provider/calendar', { role: 'provider' }),
+    'provider.performance.get': () =>
+      call('GET', '/api/v1/provider/performance', { role: 'provider' }),
+    'provider.profilePhoto.upload': () =>
+      call('POST', '/api/v1/provider/profile/photo', {
+        role: 'provider',
+        body: { file: 'data:image/png;base64,AAAA', clientRequestId: 'client-request-id-000001' },
+      }),
+    'provider.profilePhoto.delete': () =>
+      call('DELETE', '/api/v1/provider/profile/photo', { role: 'provider' }),
+    'provider.schedule.get': () =>
+      call('GET', '/api/v1/provider/schedule', { role: 'provider' }),
+    'provider.catalog.offerings': () =>
+      call('GET', '/api/v1/provider/catalog/offerings', { role: 'provider' }),
+    'provider.account.requestDeletion': () =>
+      call('POST', '/api/v1/provider/account/deletion-request', {
+        role: 'provider', body: { reason: 'Moving abroad' },
+      }),
     'provider.support.cases.list': () =>
       call('GET', '/api/v1/provider/support/cases', { role: 'provider' }),
     'provider.support.cases.create': () =>

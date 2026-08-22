@@ -15,10 +15,10 @@
 
 | | |
 | --- | --- |
-| Mounted endpoints | 161 |
+| Mounted endpoints | 171 |
 | `public` | 22 |
 | `authenticated` | 61 |
-| `provider` | 72 |
+| `provider` | 82 |
 | `admin` | 6 |
 | Object-scoped | 59 |
 | Object-scoped WITH an ownership rule | 59 |
@@ -46,6 +46,14 @@ role; the whole point is that one customer must not read another's booking.
 A booking carries an address and a time when somebody will be at home. A leak of
 it is not a data-protection abstraction — it is telling a stranger where a person
 lives and when they will be there. OWASP puts this first in the API top ten.
+
+### `catalog` — `:none — no object-scoped parameter`
+
+- predicate: active AND provider-visible offerings only; the catalog belongs to Servana
+- enforced by: `services/providerCatalogService`
+- proven by: `tests/provider-remainder-v1.test.ts`
+- a non-owner receives: 403 ROLE_REQUIRED (the role rung, since there is no object to own)
+- distinguishes absent from forbidden: **no**
 
 ### `provider-support` — `:caseId | reviewId`
 
@@ -222,10 +230,15 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `notifications.markAllRead` | POST /notifications/read-all | `authenticated` | · ● ● ● | — |
 | `notifications.markRead` | PATCH /notifications/:key/read | `authenticated` | · ● ● ● | — |
 | `notifications.unreadCount` | GET /notifications/unread-count | `authenticated` | · ● ● ● | — |
+| `provider.account.requestDeletion` | POST /provider/account/deletion-request | `provider` | · · ● · | — |
 | `provider.activation.acknowledgePolicy` | POST /provider/activation/policy-acknowledgement | `provider` | · · ● · | — |
 | `provider.activation.get` | GET /provider/activation | `provider` | · · ● · | — |
+| `provider.alerts.dismiss` | DELETE /provider/alerts/:alertKey | `provider` | · · ● · | — |
+| `provider.alerts.list` | GET /provider/alerts | `provider` | · · ● · | — |
 | `provider.availability.get` | GET /provider/availability | `provider` | · · ● · | — |
 | `provider.availability.patch` | PATCH /provider/availability | `provider` | · · ● · | — |
+| `provider.calendar.get` | GET /provider/calendar | `provider` | · · ● · | — |
+| `provider.catalog.offerings` | GET /provider/catalog/offerings | `provider` | · · ● · | — |
 | `provider.certifications.create` | POST /provider/certifications | `provider` | · · ● · | — |
 | `provider.certifications.list` | GET /provider/certifications | `provider` | · · ● · | — |
 | `provider.contactChanges.confirm` | POST /provider/contact-changes/confirm | `provider` | · · ● · | — |
@@ -237,6 +250,7 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `provider.documents.types` | GET /provider/document-types | `provider` | · · ● · | — |
 | `provider.earnings.payouts` | GET /provider/earnings/payouts | `provider` | · · ● · | — |
 | `provider.earnings.summary` | GET /provider/earnings/summary | `provider` | · · ● · | — |
+| `provider.earnings.transaction` | GET /provider/earnings/transactions/:transactionId | `provider` | · · ● · | — |
 | `provider.earnings.transactions` | GET /provider/earnings/transactions | `provider` | · · ● · | — |
 | `provider.fieldRegistry.get` | GET /provider/profile-fields | `provider` | · · ● · | — |
 | `provider.jobs.accept` | POST /provider/jobs/:bookingId/accept | `provider` | · · ● · | ✔ bookingId |
@@ -253,11 +267,14 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `provider.jobs.list` | GET /provider/jobs | `provider` | · · ● · | — |
 | `provider.jobs.start` | POST /provider/jobs/:bookingId/start | `provider` | · · ● · | ✔ bookingId |
 | `provider.location.report` | POST /provider/location | `provider` | · · ● · | — |
+| `provider.performance.get` | GET /provider/performance | `provider` | · · ● · | — |
 | `provider.presence.get` | GET /provider/presence | `provider` | · · ● · | — |
 | `provider.presence.goOffline` | POST /provider/presence/offline | `provider` | · · ● · | — |
 | `provider.presence.goOnline` | POST /provider/presence/online | `provider` | · · ● · | — |
 | `provider.profile.get` | GET /provider/profile | `provider` | · · ● · | — |
 | `provider.profile.patch` | PATCH /provider/profile | `provider` | · · ● · | — |
+| `provider.profilePhoto.delete` | DELETE /provider/profile/photo | `provider` | · · ● · | — |
+| `provider.profilePhoto.upload` | POST /provider/profile/photo | `provider` | · · ● · | — |
 | `provider.publicProfile.get` | GET /providers/:providerUid/profile | `authenticated` | · ● ● ● | — |
 | `provider.publicProfile.preview` | GET /provider/public-profile | `provider` | · · ● · | — |
 | `provider.reputation.summary` | GET /provider/reputation/summary | `provider` | · · ● · | — |
@@ -270,6 +287,7 @@ Columns are anonymous, customer, provider, admin. `●` = the auth chain admits 
 | `provider.safety.emergencyConfig` | GET /provider/safety/emergency-config | `provider` | · · ● · | — |
 | `provider.safety.incidents.create` | POST /provider/safety/incidents | `provider` | · · ● · | — |
 | `provider.safety.incidents.list` | GET /provider/safety/incidents | `provider` | · · ● · | — |
+| `provider.schedule.get` | GET /provider/schedule | `provider` | · · ● · | — |
 | `provider.serviceApplications.create` | POST /provider/service-applications | `provider` | · · ● · | — |
 | `provider.serviceApplications.get` | GET /provider/service-applications/:applicationId | `provider` | · · ● · | — |
 | `provider.serviceApplications.list` | GET /provider/service-applications | `provider` | · · ● · | — |
@@ -323,8 +341,8 @@ An `INCONCLUSIVE` result **fails** a smoke step. It is not a pass.
 
 ## 6. Smoke credentials (§150)
 
-80 of 161 endpoints are probeable; the other
-81 are writes and are never probed, because a POST to
+86 of 171 endpoints are probeable; the other
+85 are writes and are never probed, because a POST to
 `/bookings/:id/cancel` on production enters the same state machine a real
 customer's booking uses.
 

@@ -19,7 +19,7 @@ so a route can only be DOCUMENTED as superseded if it is also being COUNTED.
 There is no second list to keep in step: add a legacy mapping to the contract
 and it starts reporting on the next boot.
 
-**149 distinct legacy routes** are on the watch list today.
+**159 distinct legacy routes** are on the watch list today.
 
 Per route, per one-hour window:
 

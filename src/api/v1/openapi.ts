@@ -3407,6 +3407,87 @@ export const SCHEMAS: Record<string, unknown> = {
   },
   ProviderReviewAppealResult: { type: 'object', additionalProperties: true },
 
+  ProviderEarningTransaction: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'One earning in full. The DETAIL the transactions list links to - and the operation this ' +
+      'cluster actually lacked, which the book did not name.',
+  },
+
+  ProviderAlertList: {
+    type: 'array',
+    description:
+      'Operational alerts the provider has not dismissed. How somebody learns something needs ' +
+      'attention before it costs them work.',
+    items: { type: 'object', additionalProperties: true },
+  },
+
+  ProviderAlertDismissal: {
+    type: 'object',
+    additionalProperties: true,
+    description: 'Dismissal is a set membership, so dismissing twice is the same end state.',
+    properties: { alertKey: { type: 'string' }, dismissed: { type: 'boolean' } },
+  },
+
+  ProviderCalendar: { type: 'object', additionalProperties: true },
+  ProviderPerformance: {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'OPERATIONAL metrics - acceptance, punctuality, completion. Distinct from the reputation ' +
+      'summary, which is what customers SAID: a provider can be rated well and perform badly, ' +
+      'and collapsing the two would hide exactly the case somebody needs to act on.',
+  },
+  ProviderSchedule: { type: 'object', additionalProperties: true },
+  ProviderCatalogOfferings: {
+    type: 'array',
+    description:
+      'Active offerings and their specific services, as a provider sees them. Now unambiguously ' +
+      'INSIDE the canonical surface: the legacy path carried a `v1` segment of its own under a ' +
+      'different prefix, which was a version belonging to that subsystem and not to this contract.',
+    items: { type: 'object', additionalProperties: true },
+  },
+
+  ProviderProfilePhotoUpload: {
+    type: 'object',
+    required: ['file', 'clientRequestId'],
+    additionalProperties: false,
+    description:
+      'THE CHANNEL the profile PATCH refuses `photo` in favour of. A photo is a FILE with MIME, ' +
+      'magic-byte and size validation; the revision table carries jsonb strings, which is why it ' +
+      'was never submittable through the profile patch.',
+    properties: {
+      file: { type: 'string', description: 'data:<mime>;base64,<payload>' },
+      clientRequestId: { type: 'string', minLength: 16, maxLength: 128 },
+    },
+  },
+  ProviderProfilePhotoResult: { type: 'object', additionalProperties: true },
+
+  ProviderAccountDeletionRequest: {
+    type: 'object',
+    additionalProperties: false,
+    description: 'A reason is optional and is recorded, not validated.',
+    properties: { reason: { type: ['string', 'null'], maxLength: 500 } },
+  },
+
+  ProviderAccountDeletionResult: {
+    type: 'object',
+    required: ['status'],
+    description:
+      'RECORDS AN INTENTION. Nothing is erased by this call - it writes a status, a reason and a ' +
+      'timestamp, which is why the canonical path says deletion-request rather than delete. ' +
+      'REFUSED with 409 while the provider holds any booking that is not COMPLETED, CANCELLED or ' +
+      'REJECTED: nobody deletes their way out of work a customer is waiting for. ' +
+      'IDEMPOTENT - an upsert keyed on the uid, so a second request confirms the first. ' +
+      'WHAT IS REMOVED AND WHAT IS RETAINED is not decided by this operation and is deliberately ' +
+      'not asserted here. See the contract entry note.',
+    properties: {
+      status: { type: 'string', enum: ['requested'] },
+      message: { type: ['string', 'null'] },
+    },
+  },
+
   ProviderActivation: {
     type: 'object',
     required: [

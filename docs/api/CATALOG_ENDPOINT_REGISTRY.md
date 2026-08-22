@@ -2,7 +2,7 @@
 
 > GENERATED from `src/api/v1/contract.ts` by `npm run api:docs`. Do not edit by hand.
 
-**12 canonical catalog and search endpoints.** All public, all read-only.
+**13 canonical catalog and search endpoints.** All public, all read-only.
 
 Mutation lives on `/api/admin/catalog/*` behind `verifyAuth → verifyRoles([1]) →
 requirePermission`. There is no write handler on the public surface and there must not be —
@@ -17,6 +17,7 @@ server-side authorization is not satisfiable on an unauthenticated route.
 | `GET` | `/api/v1/catalog/services` | `CatalogServiceList` | `INTERNAL` |
 | `GET` | `/api/v1/catalog/services/:serviceId/serviceability` | `CatalogServiceability` | `INTERNAL`, `VALIDATION_FAILED` |
 | `GET` | `/api/v1/catalog/services/:serviceId` | `CatalogServiceDetail` | `CATALOG_SERVICE_NOT_FOUND`, `INTERNAL`, `VALIDATION_FAILED` |
+| `GET` | `/api/v1/provider/catalog/offerings` | `ProviderCatalogOfferings` | `INTERNAL`, `PROVIDER_ROLE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `UNAUTHENTICATED` |
 | `GET` | `/api/v1/search` | `SearchResults` | `INTERNAL`, `VALIDATION_FAILED` |
 | `GET` | `/api/v1/catalog/search` | `SearchResults` | `INTERNAL`, `VALIDATION_FAILED` |
 | `GET` | `/api/v1/catalog/categories` | `CategorySummaryList` | `INTERNAL` |
@@ -53,6 +54,7 @@ to both and means different things to each.
 | `GET /api/v1/catalog/services` | `services/catalogPublicService.listPublicServices` |
 | `GET /api/v1/catalog/services/:serviceId/serviceability` | `services/catalogPublicService.getServiceability` |
 | `GET /api/v1/catalog/services/:serviceId` | `services/catalogPublicService.getServiceDetail` |
+| `GET /api/v1/provider/catalog/offerings` | `services/providerCatalogService.getOfferingsForProvider` |
 | `GET /api/v1/search` | `services/catalogSearchService.searchCatalog` |
 | `GET /api/v1/catalog/search` | `services/catalogSearchService.searchCatalog` |
 | `GET /api/v1/catalog/categories` | `services/catalogPublicService.listCategories` |
@@ -70,6 +72,7 @@ to both and means different things to each.
 | `/api/v1/catalog/services` | · | · | — | — | — |
 | `/api/v1/catalog/services/:serviceId/serviceability` | · | · | — | — | — |
 | `/api/v1/catalog/services/:serviceId` | · | · | — | — | — |
+| `/api/v1/provider/catalog/offerings` | — | — | · | · | — |
 | `/api/v1/search` | ⏳ | · | — | — | — |
 | `/api/v1/catalog/search` | · | · | — | — | — |
 | `/api/v1/catalog/categories` | · | · | — | — | — |
@@ -90,6 +93,7 @@ Legend: ✅ migrated · ⏳ still on a legacy route · · planned · — not app
 | `GET` | `/api/catalog/services` | `ALIAS_TEMPORARILY` | `/api/v1/catalog/services` |
 | `GET` | `/api/catalog/services/:serviceId/serviceability` | `CANONICALIZE` | `/api/v1/catalog/services/:serviceId/serviceability` |
 | `GET` | `/api/catalog/services/:serviceId` | `ALIAS_TEMPORARILY` | `/api/v1/catalog/services/:serviceId` |
+| `GET` | `/api/provider-catalog/v1/offerings` | `ALIAS_TEMPORARILY` | `/api/v1/provider/catalog/offerings` |
 | `GET` | `/api/services/full` | `CANONICALIZE` | `/api/v1/search` |
 | `GET` | `/api/services/:serviceId/level2` | `CANONICALIZE` | `/api/v1/catalog/categories/:categoryId/subcategories` |
 | `GET` | `/api/services/:serviceId/options-with-addons` | `CANONICALIZE` | `/api/v1/catalog/subcategories/:subcategoryId/services` |

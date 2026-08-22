@@ -6082,6 +6082,1055 @@
         "description": "Keyed on the moderation CASE id, not the review id, and the distinction matters: the thing being appealed is a DECISION, and one review can carry more than one over time. Keying on the review would make the second appeal ambiguous about which decision it contested."
       }
     },
+    "/api/v1/provider/earnings/transactions/{transactionId}": {
+      "get": {
+        "operationId": "provider.earnings.transaction",
+        "summary": "One earning transaction in full.",
+        "tags": [
+          "finance"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/finance/providerEarningsService.getEarningTransaction",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/earnings/:id",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "finance",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "transactionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "The transaction id from the transactions list"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderEarningTransaction"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "THE ACTUAL GAP in this cluster. The book records /api/provider/earnings - the LIST - as the missing per-booking ledger, but that path already delegates to the same canonicalEarningsTransactions the v1 list uses, so it was never missing. What had no successor was /api/provider/earnings/:id, the single-transaction DETAIL, which the book does not name. Measuring the cluster found it; reading the book would not have. capability canViewEarnings is carried because the legacy chain carries it: a provider whose application is not APPROVED holds the role and must not read earnings, and a successor that dropped the rung would be privilege escalation arriving as a migration."
+      }
+    },
+    "/api/v1/provider/alerts": {
+      "get": {
+        "operationId": "provider.alerts.list",
+        "summary": "Operational alerts the provider has not dismissed.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "controllers/providerController.getProviderAlerts",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/alerts",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderAlertList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "PROMOTED. Alerts are how a provider learns something needs attention before it costs them work, so leaving them legacy would keep the one surface that explains a restriction on the old contract while the restriction itself became canonical."
+      }
+    },
+    "/api/v1/provider/alerts/{alertKey}": {
+      "delete": {
+        "operationId": "provider.alerts.dismiss",
+        "summary": "Dismiss one alert.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "controllers/providerController.dismissAlert",
+        "x-legacy": [
+          {
+            "method": "DELETE",
+            "path": "/api/provider/alerts/:key",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "alertKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The alert key from the list"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderAlertDismissal"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provider/calendar": {
+      "get": {
+        "operationId": "provider.calendar.get",
+        "summary": "The provider's bookings and time off, as a calendar.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "controllers/providerCalendarController.getCalendar → services/providerCalendarService.getProviderCalendar",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/calendar",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderCalendar"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "PROMOTED. A read path that must not write: the calendar service already carries a note about a sibling read that once upserted a row, and publishing it canonically is the moment to restate that rather than the moment to forget it."
+      }
+    },
+    "/api/v1/provider/performance": {
+      "get": {
+        "operationId": "provider.performance.get",
+        "summary": "The provider's own performance metrics.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "controllers/providerController.getProviderPerformanceMetrics",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider/performance",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderPerformance"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "PROMOTED. Distinct from the reputation summary (TAB 08): performance is operational - acceptance, punctuality, completion - and reputation is what customers said. A provider can be rated well and perform badly, and collapsing them would hide exactly the case somebody needs to act on."
+      }
+    },
+    "/api/v1/provider/profile/photo": {
+      "post": {
+        "operationId": "provider.profilePhoto.upload",
+        "summary": "Submit a new profile photo for review.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "controllers/providerController.uploadWorkerProfilePhoto",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/worker/profile/photo",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderProfilePhotoUpload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderProfilePhotoResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "UNSUPPORTED_MEDIA_TYPE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "THIS IS THE CHANNEL TAB 01 NAMED. `photo` is marked editable: review in the profile field registry, and PATCH /provider/profile refuses it by name pointing here - the defect TAB 01 found was that the two allow-lists disagreed about which. A photo is a FILE with MIME, magic-byte and size validation, and the revision table carries jsonb strings, which is why it was never submittable through the profile patch."
+      },
+      "delete": {
+        "operationId": "provider.profilePhoto.delete",
+        "summary": "Remove the current profile photo.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": false,
+        "x-domain-service": "controllers/providerController.deleteWorkerProfilePhoto",
+        "x-legacy": [
+          {
+            "method": "DELETE",
+            "path": "/api/worker/profile/photo",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderProfilePhotoResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "A NINTH operation this cluster carries that the book does not list - the book names /api/worker/profile/photo as one path, and it holds both POST and DELETE. Counting paths has undercounted every cluster in this programme."
+      }
+    },
+    "/api/v1/provider/schedule": {
+      "get": {
+        "operationId": "provider.schedule.get",
+        "summary": "The provider's own schedule.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "controllers/providerLocationAccessController.getMySchedule",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/worker/schedule",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderSchedule"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "PROMOTED. Sits in the location-access controller because the same module answers \"where is this provider\" for a customer tracking a booking they own; this route is the provider asking about THEMSELVES and accepts no uid parameter at all."
+      }
+    },
+    "/api/v1/provider/catalog/offerings": {
+      "get": {
+        "operationId": "provider.catalog.offerings",
+        "summary": "Active offerings and their specific services, as a provider sees them.",
+        "tags": [
+          "catalog"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "services/providerCatalogService.getOfferingsForProvider",
+        "x-legacy": [
+          {
+            "method": "GET",
+            "path": "/api/provider-catalog/v1/offerings",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "catalog",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderCatalogOfferings"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "THE MANDATE ASKED whether this is inside or outside the canonical surface, because the legacy path carries a v1 segment of its own under a different prefix - /api/provider-catalog/v1/... - which is a version number belonging to that subsystem and NOT to this contract. It is now unambiguously inside: one /api/v1 prefix, one version, and the old path is an alias. Two things called v1 in one URL space is a question somebody has to stop and answer every time they read it."
+      }
+    },
+    "/api/v1/provider/account/deletion-request": {
+      "post": {
+        "operationId": "provider.account.requestDeletion",
+        "summary": "Request permanent deletion of the provider account.",
+        "tags": [
+          "account"
+        ],
+        "x-implemented": true,
+        "x-idempotent": true,
+        "x-domain-service": "controllers/providerController.requestProviderDeletion",
+        "x-legacy": [
+          {
+            "method": "POST",
+            "path": "/api/provider/account/delete",
+            "disposition": "ALIAS_TEMPORARILY"
+          }
+        ],
+        "x-callers": {
+          "customerMobile": "n/a",
+          "customerWeb": "n/a",
+          "providerMobile": "planned",
+          "providerWeb": "planned",
+          "admin": "n/a"
+        },
+        "x-observability-owner": "account",
+        "security": [
+          {
+            "firebaseIdToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderAccountDeletionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ProviderAccountDeletionResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "$ref": "#/components/schemas/PageMeta"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "TOKEN_EXPIRED | TOKEN_REVOKED | UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PROVIDER_ROLE_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "INTERNAL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "ERASURE BEHAVIOUR, since the mandate asks for it explicitly and the honest answer has three parts. WHAT THIS DOES: it RECORDS AN INTENTION. Nothing is erased by this call. It writes deletionStatus, a reason and a timestamp, and that is the whole of its effect - which is why the canonical path says deletion-request rather than delete. THE PRECONDITION: refused with 409 while the provider holds any booking that is not COMPLETED, CANCELLED or REJECTED. A provider cannot delete their way out of work a customer is waiting for. IDEMPOTENT by construction - an upsert keyed on the uid - so a second request confirms the first rather than queueing another. WHAT IS REMOVED AND WHAT IS RETAINED IS NOT DECIDED HERE, and this contract will not invent it. The legacy handler promises deletion \"within 30 days\" in a MESSAGE STRING: no client can branch on it, and no scheduled job in this repository executes it. That is recorded as an open question with an owner rather than dressed up as a policy. Booking and payment records almost certainly must survive an account deletion for tax and audit reasons, which makes the retention schedule a legal decision rather than an API one - RA 10173 requires a stated retention period, and stating one on this operation without that decision would be worse than stating none."
+      }
+    },
     "/api/v1/notifications": {
       "get": {
         "operationId": "notifications.list",
@@ -24878,6 +25927,112 @@
         "type": "object",
         "additionalProperties": true
       },
+      "ProviderEarningTransaction": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "One earning in full. The DETAIL the transactions list links to - and the operation this cluster actually lacked, which the book did not name."
+      },
+      "ProviderAlertList": {
+        "type": "array",
+        "description": "Operational alerts the provider has not dismissed. How somebody learns something needs attention before it costs them work.",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "ProviderAlertDismissal": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Dismissal is a set membership, so dismissing twice is the same end state.",
+        "properties": {
+          "alertKey": {
+            "type": "string"
+          },
+          "dismissed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ProviderCalendar": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "ProviderPerformance": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "OPERATIONAL metrics - acceptance, punctuality, completion. Distinct from the reputation summary, which is what customers SAID: a provider can be rated well and perform badly, and collapsing the two would hide exactly the case somebody needs to act on."
+      },
+      "ProviderSchedule": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "ProviderCatalogOfferings": {
+        "type": "array",
+        "description": "Active offerings and their specific services, as a provider sees them. Now unambiguously INSIDE the canonical surface: the legacy path carried a `v1` segment of its own under a different prefix, which was a version belonging to that subsystem and not to this contract.",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "ProviderProfilePhotoUpload": {
+        "type": "object",
+        "required": [
+          "file",
+          "clientRequestId"
+        ],
+        "additionalProperties": false,
+        "description": "THE CHANNEL the profile PATCH refuses `photo` in favour of. A photo is a FILE with MIME, magic-byte and size validation; the revision table carries jsonb strings, which is why it was never submittable through the profile patch.",
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "data:<mime>;base64,<payload>"
+          },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128
+          }
+        }
+      },
+      "ProviderProfilePhotoResult": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "ProviderAccountDeletionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "A reason is optional and is recorded, not validated.",
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500
+          }
+        }
+      },
+      "ProviderAccountDeletionResult": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "description": "RECORDS AN INTENTION. Nothing is erased by this call - it writes a status, a reason and a timestamp, which is why the canonical path says deletion-request rather than delete. REFUSED with 409 while the provider holds any booking that is not COMPLETED, CANCELLED or REJECTED: nobody deletes their way out of work a customer is waiting for. IDEMPOTENT - an upsert keyed on the uid, so a second request confirms the first. WHAT IS REMOVED AND WHAT IS RETAINED is not decided by this operation and is deliberately not asserted here. See the contract entry note.",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "requested"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ProviderActivation": {
         "type": "object",
         "required": [
@@ -27315,6 +28470,6 @@
     }
   ],
   "x-generated-from": "src/api/v1/contract.ts",
-  "x-implemented-count": 161,
-  "x-total-count": 162
+  "x-implemented-count": 171,
+  "x-total-count": 172
 }

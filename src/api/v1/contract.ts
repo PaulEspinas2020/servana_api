@@ -2010,6 +2010,287 @@ export const V1_CONTRACT: ContractEntry[] = [
   },
 
   // ───────────────────────────────────────────────────────────────────────────
+  // The remainder (TAB 10)
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: 'provider.earnings.transaction',
+    domain: 'finance',
+    method: 'get',
+    path: '/provider/earnings/transactions/:transactionId',
+    summary: "One earning transaction in full.",
+    auth: 'provider',
+    capability: 'canViewEarnings',
+    idempotent: true,
+    responseSchema: 'ProviderEarningTransaction',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND'],
+    params: [
+      { name: 'transactionId', type: 'integer', description: 'The transaction id from the transactions list' },
+    ],
+    status: 'implemented',
+    domainService: 'services/finance/providerEarningsService.getEarningTransaction',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/earnings/:id',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. The legacy path sits directly under /earnings, where it shadows any future literal segment added beside it.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'finance',
+    notes:
+      'THE ACTUAL GAP in this cluster. The book records /api/provider/earnings - the LIST - as the missing per-booking ledger, but that path already delegates to the same canonicalEarningsTransactions the v1 list uses, so it was never missing. What had no successor was /api/provider/earnings/:id, the single-transaction DETAIL, which the book does not name. Measuring the cluster found it; reading the book would not have. capability canViewEarnings is carried because the legacy chain carries it: a provider whose application is not APPROVED holds the role and must not read earnings, and a successor that dropped the rung would be privilege escalation arriving as a migration.',
+  },
+  {
+    id: 'provider.alerts.list',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/alerts',
+    summary: "Operational alerts the provider has not dismissed.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderAlertList',
+    errors: [],
+    status: 'implemented',
+    domainService: 'controllers/providerController.getProviderAlerts',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/alerts',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same projection.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'PROMOTED. Alerts are how a provider learns something needs attention before it costs them work, so leaving them legacy would keep the one surface that explains a restriction on the old contract while the restriction itself became canonical.',
+  },
+  {
+    id: 'provider.alerts.dismiss',
+    domain: 'account',
+    method: 'delete',
+    path: '/provider/alerts/:alertKey',
+    summary: "Dismiss one alert.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      'Dismissing an already-dismissed alert reaches the same end state - the key is either in the dismissed set or it is not, and adding it twice is one membership.',
+    responseSchema: 'ProviderAlertDismissal',
+    errors: ['VALIDATION_FAILED', 'NOT_FOUND'],
+    params: [
+      { name: 'alertKey', type: 'string', description: 'The alert key from the list' },
+    ],
+    status: 'implemented',
+    domainService: 'controllers/providerController.dismissAlert',
+    legacy: [
+      {
+        method: 'delete',
+        path: '/api/provider/alerts/:key',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. The parameter is renamed :key -> :alertKey for readability; the value is identical.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+  },
+  {
+    id: 'provider.calendar.get',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/calendar',
+    summary: "The provider's bookings and time off, as a calendar.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderCalendar',
+    errors: [],
+    status: 'implemented',
+    domainService: 'controllers/providerCalendarController.getCalendar → services/providerCalendarService.getProviderCalendar',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/calendar',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. A READ that must stay a read - the service docblock records an account-state read that once upserted.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'PROMOTED. A read path that must not write: the calendar service already carries a note about a sibling read that once upserted a row, and publishing it canonically is the moment to restate that rather than the moment to forget it.',
+  },
+  {
+    id: 'provider.performance.get',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/performance',
+    summary: "The provider's own performance metrics.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderPerformance',
+    errors: [],
+    status: 'implemented',
+    domainService: 'controllers/providerController.getProviderPerformanceMetrics',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider/performance',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same computation, same scope.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'PROMOTED. Distinct from the reputation summary (TAB 08): performance is operational - acceptance, punctuality, completion - and reputation is what customers said. A provider can be rated well and perform badly, and collapsing them would hide exactly the case somebody needs to act on.',
+  },
+  {
+    id: 'provider.profilePhoto.upload',
+    domain: 'account',
+    method: 'post',
+    path: '/provider/profile/photo',
+    summary: "Submit a new profile photo for review.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['client-request-id'],
+    replayGuard:
+      'A clientRequestId, so a retry on a lossy link submits one photo for review rather than two.',
+    requestSchema: 'ProviderProfilePhotoUpload',
+    responseSchema: 'ProviderProfilePhotoResult',
+    errors: ['VALIDATION_FAILED', 'UNSUPPORTED_MEDIA_TYPE'],
+    status: 'implemented',
+    domainService: 'controllers/providerController.uploadWorkerProfilePhoto',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/worker/profile/photo',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service, same validation.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'THIS IS THE CHANNEL TAB 01 NAMED. `photo` is marked editable: review in the profile field registry, and PATCH /provider/profile refuses it by name pointing here - the defect TAB 01 found was that the two allow-lists disagreed about which. A photo is a FILE with MIME, magic-byte and size validation, and the revision table carries jsonb strings, which is why it was never submittable through the profile patch.',
+  },
+  {
+    id: 'provider.profilePhoto.delete',
+    domain: 'account',
+    method: 'delete',
+    path: '/provider/profile/photo',
+    summary: "Remove the current profile photo.",
+    auth: 'provider',
+    idempotent: false,
+    replayMechanism: ['state-predicate'],
+    replayGuard:
+      'Removing an already-removed photo reaches the same end state; there is nothing to remove twice.',
+    responseSchema: 'ProviderProfilePhotoResult',
+    errors: ['NOT_FOUND'],
+    status: 'implemented',
+    domainService: 'controllers/providerController.deleteWorkerProfilePhoto',
+    legacy: [
+      {
+        method: 'delete',
+        path: '/api/worker/profile/photo',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Removing the photo is the other half of changing it, and a provider ' +
+          'who can upload and not remove is stuck with whatever they last submitted.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'A NINTH operation this cluster carries that the book does not list - the book names /api/worker/profile/photo as one path, and it holds both POST and DELETE. Counting paths has undercounted every cluster in this programme.',
+  },
+  {
+    id: 'provider.schedule.get',
+    domain: 'account',
+    method: 'get',
+    path: '/provider/schedule',
+    summary: "The provider's own schedule.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderSchedule',
+    errors: [],
+    status: 'implemented',
+    domainService: 'controllers/providerLocationAccessController.getMySchedule',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/worker/schedule',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. Identity from the TOKEN on both - no uid is accepted from the path.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'PROMOTED. Sits in the location-access controller because the same module answers "where is this provider" for a customer tracking a booking they own; this route is the provider asking about THEMSELVES and accepts no uid parameter at all.',
+  },
+  {
+    id: 'provider.catalog.offerings',
+    domain: 'catalog',
+    method: 'get',
+    path: '/provider/catalog/offerings',
+    summary: "Active offerings and their specific services, as a provider sees them.",
+    auth: 'provider',
+    idempotent: true,
+    responseSchema: 'ProviderCatalogOfferings',
+    errors: [],
+    status: 'implemented',
+    domainService: 'services/providerCatalogService.getOfferingsForProvider',
+    legacy: [
+      {
+        method: 'get',
+        path: '/api/provider-catalog/v1/offerings',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. The legacy path carries its OWN v1 segment under a different prefix, which is what made it ambiguous whether it was inside the canonical surface.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'catalog',
+    notes:
+      'THE MANDATE ASKED whether this is inside or outside the canonical surface, because the legacy path carries a v1 segment of its own under a different prefix - /api/provider-catalog/v1/... - which is a version number belonging to that subsystem and NOT to this contract. It is now unambiguously inside: one /api/v1 prefix, one version, and the old path is an alias. Two things called v1 in one URL space is a question somebody has to stop and answer every time they read it.',
+  },
+  {
+    id: 'provider.account.requestDeletion',
+    domain: 'account',
+    method: 'post',
+    path: '/provider/account/deletion-request',
+    summary: "Request permanent deletion of the provider account.",
+    auth: 'provider',
+    idempotent: true,
+    requestSchema: 'ProviderAccountDeletionRequest',
+    responseSchema: 'ProviderAccountDeletionResult',
+    errors: ['VALIDATION_FAILED', 'CONFLICT'],
+    status: 'implemented',
+    domainService: 'controllers/providerController.requestProviderDeletion',
+    legacy: [
+      {
+        method: 'post',
+        path: '/api/provider/account/delete',
+        disposition: 'ALIAS_TEMPORARILY',
+        note:
+          'Same service. RENAMED on the canonical surface from `delete` to `deletion-request`, because that is what it does.',
+      },
+    ],
+    callers: { customerMobile: 'n/a', customerWeb: 'n/a', providerMobile: 'planned', providerWeb: 'planned', admin: 'n/a' },
+    observability: 'account',
+    notes:
+      'ERASURE BEHAVIOUR, since the mandate asks for it explicitly and the honest answer has three parts. WHAT THIS DOES: it RECORDS AN INTENTION. Nothing is erased by this call. It writes deletionStatus, a reason and a timestamp, and that is the whole of its effect - which is why the canonical path says deletion-request rather than delete. THE PRECONDITION: refused with 409 while the provider holds any booking that is not COMPLETED, CANCELLED or REJECTED. A provider cannot delete their way out of work a customer is waiting for. IDEMPOTENT by construction - an upsert keyed on the uid - so a second request confirms the first rather than queueing another. WHAT IS REMOVED AND WHAT IS RETAINED IS NOT DECIDED HERE, and this contract will not invent it. The legacy handler promises deletion "within 30 days" in a MESSAGE STRING: no client can branch on it, and no scheduled job in this repository executes it. That is recorded as an open question with an owner rather than dressed up as a policy. Booking and payment records almost certainly must survive an account deletion for tax and audit reasons, which makes the retention schedule a legal decision rather than an API one - RA 10173 requires a stated retention period, and stating one on this operation without that decision would be worse than stating none.',
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Notifications
   // ───────────────────────────────────────────────────────────────────────────
   {

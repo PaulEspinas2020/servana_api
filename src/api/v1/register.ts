@@ -428,6 +428,7 @@ import { handlers as providerServiceHandlers } from './domains/providerServices'
 import { handlers as providerPresenceHandlers } from './domains/providerPresence';
 import { handlers as providerEvidenceHandlers } from './domains/providerEvidence';
 import { handlers as providerSupportHandlers } from './domains/providerSupport';
+import { handlers as providerRemainderHandlers } from './domains/providerRemainder';
 import { handlers as notificationHandlers } from './domains/notifications';
 import { handlers as reviewHandlers } from './domains/reviews';
 import { handlers as settingsHandlers } from './domains/settings';
@@ -462,6 +463,7 @@ export const V1_HANDLERS: V1Handlers = {
   ...providerPresenceHandlers,
   ...providerEvidenceHandlers,
   ...providerSupportHandlers,
+  ...providerRemainderHandlers,
   ...notificationHandlers,
   ...reviewHandlers,
   ...settingsHandlers,

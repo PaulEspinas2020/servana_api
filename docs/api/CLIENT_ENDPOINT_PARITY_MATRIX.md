@@ -18,23 +18,23 @@
 
 | | |
 | --- | --- |
-| Capabilities | 72 |
-| Canonical endpoints mounted | 161 |
+| Capabilities | 76 |
+| Canonical endpoints mounted | 171 |
 | Canonical endpoints planned | 1 |
-| Legacy mappings tracked | 174 |
-| Converged (one route family) | 64 |
+| Legacy mappings tracked | 184 |
+| Converged (one route family) | 68 |
 | Role-split over ONE service | 4 |
 | Single-surface | 4 |
 | **Divergent (forked truth)** | **0** |
 | Broken (names a missing endpoint) | 0 |
-| Surface × capability cells on canonical | 34 |
-| Surface × capability cells still legacy | 92 |
+| Surface × capability cells on canonical | 33 |
+| Surface × capability cells still legacy | 93 |
 
 **0 divergent capabilities.** Every capability whose
 endpoints span more than one route family names exactly one domain service — the
 role split is a permission boundary, never a second implementation.
 
-**34 cells on canonical.** Each one is derived from that client's published manifest — the endpoints it calls, generated from its own source with a file:line per call site — and never asserted here by hand. A client with no manifest reads legacy, planned or n/a regardless of what it may already have shipped, because nothing in this repository has verified it; see src/api/v1/client-manifests/.
+**33 cells on canonical.** Each one is derived from that client's published manifest — the endpoints it calls, generated from its own source with a file:line per call site — and never asserted here by hand. A client with no manifest reads legacy, planned or n/a regardless of what it may already have shipped, because nothing in this repository has verified it; see src/api/v1/client-manifests/.
 
 ## 2. Legend
 
@@ -90,8 +90,12 @@ direction of whoever wrote it.
 | Find out whether I may cancel, and why not | SHARED | — | — | planned | planned | — |
 | Prove the work happened | SHARED | — | — | planned | planned | — |
 | Read the support cases I raised on a booking | SHARED | planned | planned | — | — | — |
+| Ask for my account to be deleted | SHARED | — | — | planned | planned | — |
+| See the offerings I could apply for | SHARED | — | — | planned | planned | — |
 | A provider's own job queue | SHARED | — | — | **migrated** | **migrated** | — |
+| See my alerts, calendar, performance and schedule | SHARED | — | — | planned | planned | — |
 | Say whether I am working, where I am, and that I am safe | SHARED | — | — | planned | planned | — |
+| Change the photo customers see | SHARED | — | — | planned | planned | — |
 | Read a provider's public profile | SHARED | planned | planned | — | — | planned |
 | See what customers said about me, and answer it | SHARED | — | — | planned | planned | — |
 | Decide what work I am offered | SHARED | — | — | planned | planned | — |
@@ -113,7 +117,7 @@ direction of whoever wrote it.
 | Reschedule | SHARED | planned | planned | — | — | legacy |
 | Tracking | SHARED | legacy | legacy | **migrated** | **migrated** | planned |
 | Provider earnings summary | SHARED | — | — | legacy | **migrated** | — |
-| Provider earnings transactions | SHARED | — | — | legacy | **migrated** | — |
+| Provider earnings transactions | SHARED | — | — | ⚠ mixed | ⚠ mixed | — |
 | Start or resume a booking payment | SHARED | legacy | legacy | — | — | planned |
 | Read a booking's payment and price breakdown | SHARED | planned | planned | **migrated** | planned | planned |
 | Provider payouts | SHARED | — | — | legacy | **migrated** | — |
@@ -657,6 +661,34 @@ Legacy still aliased for this capability:
 
 No role split. The read beside the TAB 12 write, owner-scoped in SQL and over the same service.
 
+### Ask for my account to be deleted
+
+- key: `core:providerAccountLifecycle` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `controllers/providerController`
+- route families: `/provider`
+
+Canonical:
+  - `POST /api/v1/provider/account/deletion-request`
+
+Legacy still aliased for this capability:
+  - `POST /api/provider/account/delete`
+
+No role split. Alone in its capability because it is the only provider-facing operation that ends the relationship, and because it does NOT do what its legacy name says: it records an intention and erases nothing. What is removed and what is retained is a legal decision about retention rather than an API one, and this capability exists so that question has somewhere to be answered rather than being implied by an endpoint called delete.
+
+### See the offerings I could apply for
+
+- key: `core:providerCatalogOfferings` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `services/providerCatalogService`
+- route families: `/provider`
+
+Canonical:
+  - `GET /api/v1/provider/catalog/offerings`
+
+Legacy still aliased for this capability:
+  - `GET /api/provider-catalog/v1/offerings`
+
+No role split, and its OWN capability rather than part of catalogBrowse — which was the first draft, and which cross-platform-convergence refused. The public catalog is served by catalogPublicService to anyone; this is providerCatalogService answering a narrower question for an authenticated provider, filtered to active and provider-visible offerings. Two services behind one capability is one nobody can retire or reason about as a unit, which is exactly what the gate said.
+
 ### A provider's own job queue
 
 - key: `core:providerJobQueue` · declared in `api/v1/convergence (core)`
@@ -673,6 +705,28 @@ Legacy still aliased for this capability:
   - `GET /api/workers/:workerId/job-cards`
 
 Genuinely role-specific. "The jobs assigned to me" has no customer equivalent: the query is scoped by worker uid, the card carries earnings and travel fields a customer must never see, and the customer-facing answer to "my bookings" is a different question over a different scope. It reads the same bookings and the same canonical state; it is a provider PROJECTION, not a provider truth.
+
+### See my alerts, calendar, performance and schedule
+
+- key: `core:providerOperationalReads` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `controllers/providerCalendarController, controllers/providerController, controllers/providerLocationAccessController`
+- route families: `/provider`
+
+Canonical:
+  - `DELETE /api/v1/provider/alerts/:alertKey`
+  - `GET /api/v1/provider/alerts`
+  - `GET /api/v1/provider/calendar`
+  - `GET /api/v1/provider/performance`
+  - `GET /api/v1/provider/schedule`
+
+Legacy still aliased for this capability:
+  - `DELETE /api/provider/alerts/:key`
+  - `GET /api/provider/alerts`
+  - `GET /api/provider/calendar`
+  - `GET /api/provider/performance`
+  - `GET /api/worker/schedule`
+
+No role split. Held as one capability because these are the four operational reads a provider opens the app to check, and they retire together or not at all: an alert that says "you have a booking tomorrow" is only useful beside the calendar that shows it. Named at the controller because that is where the projections still live - lifting six thin reads into services would be six chances to change a projection by accident on routes whose only requirement is that the canonical answer equals the legacy one.
 
 ### Say whether I am working, where I am, and that I am safe
 
@@ -701,6 +755,22 @@ Legacy still aliased for this capability:
   - `POST /api/worker/location`
 
 No role split. Presence and safety are held as ONE capability because they share a failure mode rather than a screen: both are things a provider does on a doorstep, on a link that drops, where a refusal the client renders as an error is worse than the duplicate it was avoiding. That is why the incident write REPLAYS instead of refusing and the check-in is append-only with `none-accepted` declared. Location is the most sensitive data this product holds, and nothing here widened who can read it: a provider reads their own, admin reads it, and a customer reaches it only through a booking they own while it is live.
+
+### Change the photo customers see
+
+- key: `core:providerProfilePhoto` · declared in `api/v1/convergence (core)`
+- verdict: **SHARED** · domain service: `controllers/providerController`
+- route families: `/provider`
+
+Canonical:
+  - `DELETE /api/v1/provider/profile/photo`
+  - `POST /api/v1/provider/profile/photo`
+
+Legacy still aliased for this capability:
+  - `DELETE /api/worker/profile/photo`
+  - `POST /api/worker/profile/photo`
+
+No role split, and its own capability rather than part of the profile because it is the CHANNEL the profile PATCH refuses `photo` in favour of. TAB 01 found the two allow-lists disagreeing about whether a photo was submittable through the revision workflow; it is not, because a photo is a FILE with MIME, magic-byte and size validation and the revision table carries jsonb strings. Declaring it separately is what makes that refusal point at something.
 
 ### Read a provider's public profile
 
@@ -1065,10 +1135,12 @@ No role split. Provider Web and Provider Mobile call the same path and receive t
 - route families: `/provider`
 
 Canonical:
+  - `GET /api/v1/provider/earnings/transactions/:transactionId`
   - `GET /api/v1/provider/earnings/transactions`
 
 Legacy still aliased for this capability:
   - `GET /api/provider/earnings`
+  - `GET /api/provider/earnings/:id`
   - `GET /api/provider/ledger`
 
 No role split. Replaces three legacy shapes — `/provider/earnings`, `/provider/ledger` and the job-card earnings fields — that read the same columns and answered in three vocabularies.

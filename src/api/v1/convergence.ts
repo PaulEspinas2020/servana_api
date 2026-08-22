@@ -337,6 +337,76 @@ export const CORE_CAPABILITIES: readonly CapabilityRecord[] = Object.freeze([
       'toProviderProjection / toAdminProjection), not different truths.',
   },
   {
+    key: 'providerCatalogOfferings',
+    title: 'See the offerings I could apply for',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['provider.catalog.offerings'],
+    domainModule: 'services/providerCatalogService',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split, and its OWN capability rather than part of catalogBrowse — which was the '
+      + 'first draft, and which cross-platform-convergence refused. The public catalog is served '
+      + 'by catalogPublicService to anyone; this is providerCatalogService answering a narrower '
+      + 'question for an authenticated provider, filtered to active and provider-visible '
+      + 'offerings. Two services behind one capability is one nobody can retire or reason about '
+      + 'as a unit, which is exactly what the gate said.',
+  },
+  {
+    key: 'providerOperationalReads',
+    title: 'See my alerts, calendar, performance and schedule',
+    source: 'api/v1/convergence (core)',
+    contractIds: [
+      'provider.alerts.dismiss',
+      'provider.alerts.list',
+      'provider.calendar.get',
+      'provider.performance.get',
+      'provider.schedule.get',
+    ],
+    // Reached by the alerts and performance entries. This capability composes
+    // FOUR controllers — alerts and performance here, the calendar and the
+    // schedule in their own — and the declared module names the one most of it
+    // goes through rather than pretending they are one file.
+    domainModule: 'controllers/providerController',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split. Held as one capability because these are the four operational reads a '
+      + 'provider opens the app to check, and they retire together or not at all: an alert that '
+      + 'says "you have a booking tomorrow" is only useful beside the calendar that shows it. '
+      + 'Named at the controller because that is where the projections still live - lifting six '
+      + 'thin reads into services would be six chances to change a projection by accident on '
+      + 'routes whose only requirement is that the canonical answer equals the legacy one.',
+  },
+  {
+    key: 'providerProfilePhoto',
+    title: 'Change the photo customers see',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['provider.profilePhoto.delete', 'provider.profilePhoto.upload'],
+    domainModule: 'controllers/providerController',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split, and its own capability rather than part of the profile because it is the '
+      + 'CHANNEL the profile PATCH refuses `photo` in favour of. TAB 01 found the two allow-lists '
+      + 'disagreeing about whether a photo was submittable through the revision workflow; it is '
+      + 'not, because a photo is a FILE with MIME, magic-byte and size validation and the '
+      + 'revision table carries jsonb strings. Declaring it separately is what makes that '
+      + 'refusal point at something.',
+  },
+  {
+    key: 'providerAccountLifecycle',
+    title: 'Ask for my account to be deleted',
+    source: 'api/v1/convergence (core)',
+    contractIds: ['provider.account.requestDeletion'],
+    domainModule: 'controllers/providerController',
+    surfaces: Object.freeze(['providerMobile', 'providerWeb'] as ClientSurface[]),
+    roleSplitRationale:
+      'No role split. Alone in its capability because it is the only provider-facing operation '
+      + 'that ends the relationship, and because it does NOT do what its legacy name says: it '
+      + 'records an intention and erases nothing. What is removed and what is retained is a '
+      + 'legal decision about retention rather than an API one, and this capability exists so '
+      + 'that question has somewhere to be answered rather than being implied by an endpoint '
+      + 'called delete.',
+  },
+  {
     key: 'providerSupportCases',
     title: 'Raise a case with Servana, and follow it',
     source: 'api/v1/convergence (core)',
